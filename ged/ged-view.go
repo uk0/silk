@@ -1,0 +1,1038 @@
+package ged
+
+import (
+	"silk/core"
+	"silk/graph"
+	"silk/gui"
+	"silk/paint"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+)
+
+// clipItem stores copied widget info for paste operations.
+type clipItem struct {
+	factoryName string
+	x, y, w, h float64
+	name        string
+}
+
+// clipboard holds the items from the most recent copy operation.
+var clipboard []clipItem
+
+// RunCallback is called when F5 is pressed. Set by the host application.
+var RunCallback func()
+
+// PreviewCallback is called when Ctrl+R is pressed. Set by the host application.
+var PreviewCallback func()
+
+// SwitchToDesignCallback is called when Ctrl+1 is pressed. Set by the host application.
+var SwitchToDesignCallback func()
+
+// SwitchToEditCallback is called when Ctrl+2 is pressed. Set by the host application.
+var SwitchToEditCallback func()
+
+// QuickOpenCallback is called when Ctrl+P is pressed. Set by the host application.
+var QuickOpenCallback func()
+
+// ShowCodePanelCallback is called after a widget is double-clicked on the
+// canvas. The host application should bring the code panel tab to the front
+// so the user can see and edit the widget's event handler code.
+var ShowCodePanelCallback func()
+
+// alignGuide represents a single alignment guide line shown during drag.
+type alignGuide struct {
+	x1, y1, x2, y2 float64
+	snap            bool // true if the dragged widget snapped to this guide
+}
+
+// Alignment callbacks — set by the host application (design.go) so the
+// GedView can trigger alignment operations defined in package main.
+var (
+	AlignLeftCallback    func()
+	AlignRightCallback   func()
+	AlignTopCallback     func()
+	AlignBottomCallback  func()
+	AlignCenterHCallback func()
+	AlignCenterVCallback func()
+	DistributeHCallback  func()
+	DistributeVCallback  func()
+)
+
+// SelectionCallback is called when the GedView's selection changes.
+type SelectionCallback func(items []graph.IItem)
+
+type GedView struct {
+	graph.GraphView
+	selCallbacks []SelectionCallback
+	snapEnabled  bool
+	gridSize     float64
+
+	// Alignment guide state for drag operations
+	alignGuides  []alignGuide
+	isDragging   bool
+	dragOriginX  float64
+	dragOriginY  float64
+
+	// Space+Drag pan state
+	spacePanReady bool
+	isPanning     bool
+	panStartX     float64
+	panStartY     float64
+}
+
+func NewGedView() *GedView {
+	p := new(GedView)
+	p.Init(p)
+	return p
+}
+
+// AddSelectionCallback registers an additional callback invoked when the
+// canvas selection changes. This allows external components (like the code
+// panel) to react to selection changes without replacing existing callbacks.
+func (this *GedView) AddSelectionCallback(cb SelectionCallback) {
+	this.selCallbacks = append(this.selCallbacks, cb)
+}
+
+func (this *GedView) Init(self gui.IWidget) {
+	this.GraphView.Init(self)
+	this.snapEnabled = true
+	this.gridSize = 5.0
+	this.SetScene(NewGedScene())
+	this.SetZoomFactor(1)
+	this.SetPageMarginVisible(false)
+	this.AddStandardTools()
+	this.SetPropertyConfigName("ged")
+
+	// Update the status bar when selection changes, then dispatch to
+	// additional callbacks (e.g. the code panel).
+	this.SigSelectionChanged(func(s interface{}, sel *graph.Selection) {
+		frame := gui.FindOwnerFrame(this)
+		if frame == nil {
+			return
+		}
+		sb := frame.StatusBar()
+		if sb == nil {
+			return
+		}
+		count := sel.Count()
+		if count == 0 {
+			sb.ShowMessage("Ready")
+		} else if count == 1 {
+			item := sel.ItemList()[0]
+			if fw, ok := item.(*FakeWidget); ok {
+				name := fw.WidgetFactoryName()
+				if idx := strings.LastIndex(name, "."); idx >= 0 {
+					name = name[idx+1:]
+				}
+				w, h := fw.Width(), fw.Height()
+				sb.ShowMessage(fmt.Sprintf("Selected: %s (%.0fx%.0f mm)", name, w, h))
+			} else {
+				sb.ShowMessage("Selected: 1 item")
+			}
+		} else {
+			sb.ShowMessage(fmt.Sprintf("Selected: %d items", count))
+		}
+
+		// Dispatch to additional selection callbacks
+		items := sel.ItemList()
+		for _, cb := range this.selCallbacks {
+			cb(items)
+		}
+	})
+}
+
+func (this *GedView) GedScene() *GedScene {
+	p, _ := this.Scene().(*GedScene)
+	return p
+}
+
+// snapToGrid rounds coordinates to the nearest grid point when snap is enabled.
+func (this *GedView) snapToGrid(x, y float64) (float64, float64) {
+	if !this.snapEnabled {
+		return x, y
+	}
+	gs := this.gridSize
+	return math.Round(x/gs) * gs, math.Round(y/gs) * gs
+}
+
+// SetSnapEnabled toggles snap-to-grid behavior.
+func (this *GedView) SetSnapEnabled(enabled bool) {
+	this.snapEnabled = enabled
+}
+
+// SnapEnabled returns whether snap-to-grid is active.
+func (this *GedView) SnapEnabled() bool {
+	return this.snapEnabled
+}
+
+// SetGridSize sets the snap grid spacing in mm.
+func (this *GedView) SetGridSize(size float64) {
+	if size > 0 {
+		this.gridSize = size
+	}
+}
+
+// GridSize returns the current snap grid spacing in mm.
+func (this *GedView) GridSize() float64 {
+	return this.gridSize
+}
+
+func (this *GedView) OnDragEnter(x, y float64, dnd gui.IDndContext) {
+	core.Debug("(this *GedView) OnDragEnter(x, y float64, dnd gui.IDndContext)")
+	//this.MapToScene(x, y)
+
+	if dnd.HasFormat("text/plain") {
+		dnd.SetAction(gui.DndCopy)
+	}
+}
+
+func (this *GedView) OnDragLeave() {
+
+}
+
+func (this *GedView) OnDragMove(x, y float64, dnd gui.IDndContext) {
+	if !dnd.HasFormat("text/plain") {
+		dnd.SetAction(gui.DndIgnore)
+		return
+	}
+	dnd.SetAction(gui.DndCopy)
+	return
+	//
+}
+
+func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
+	factoryName, ok := dnd.Data("text/plain").(string)
+	if !ok {
+		dnd.SetAction(gui.DndIgnore)
+		return
+	}
+	item, err := NewFakeWidgetFromFactory(factoryName)
+	if err != nil {
+		gui.ShowMessageBox(this, gui.LoadIcon("error"), "failed", err.Error(), []string{"@ok"})
+		return
+	}
+	x1, y1 := this.MapToScene(x, y)
+	x1, y1 = this.snapToGrid(x1, y1)
+
+	// Use type-specific default sizes instead of a fixed 30x8 mm
+	w, h := defaultSizeForWidget(factoryName)
+	item.SetBounds(x1, y1, w, h)
+
+	// Call Layout so the embedded widget gets the correct pixel size
+	item.Layout()
+
+	//item.SetParent(this.Scene())
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(item, this.Scene())
+	this.Scene().PushCommand(cmd)
+
+	this.Self().Update()
+}
+
+// defaultSizeForWidget returns sensible default sizes (in mm) for dropped widgets.
+func defaultSizeForWidget(factoryName string) (w, h float64) {
+	shortName := factoryName
+	if idx := strings.LastIndex(factoryName, "."); idx >= 0 {
+		shortName = factoryName[idx+1:]
+	}
+	switch strings.ToLower(shortName) {
+	case "button":
+		return 25, 7
+	case "label":
+		return 30, 5
+	case "edit":
+		return 40, 6
+	case "checkbox", "radiobutton":
+		return 30, 6
+	case "combobox":
+		return 35, 6
+	case "spinbox":
+		return 25, 6
+	case "progressbar":
+		return 40, 5
+	case "slider":
+		return 40, 5
+	case "table", "treeview", "listwidget":
+		return 50, 30
+	case "vbox", "hbox":
+		return 40, 25
+	case "groupbox":
+		return 45, 30
+	case "tabwidget", "stackedwidget":
+		return 50, 30
+	case "splitter":
+		return 50, 25
+	case "toolbar":
+		return 50, 7
+	case "statusbar":
+		return 50, 6
+	case "dialog", "form":
+		return 60, 40
+	case "gridlayout", "formlayout":
+		return 45, 25
+	case "scrollarea":
+		return 45, 30
+	case "linechart", "barchart", "scatterplot":
+		return 60, 35
+	case "piechart":
+		return 40, 35
+	case "gauge":
+		return 35, 30
+	case "toggleswitch":
+		return 30, 7
+	case "searchbox":
+		return 40, 7
+	case "numberinput":
+		return 30, 7
+	case "datepicker":
+		return 35, 7
+	case "colorpicker":
+		return 30, 7
+	case "rating":
+		return 40, 6
+	case "dropdownbutton":
+		return 30, 7
+	case "switchgroup":
+		return 50, 7
+	case "imageview":
+		return 40, 30
+	case "tag":
+		return 20, 6
+	case "badge":
+		return 15, 15
+	case "avatar":
+		return 12, 12
+	case "breadcrumb":
+		return 50, 6
+	case "link":
+		return 25, 5
+	case "labelseparator":
+		return 50, 5
+	case "placeholder":
+		return 50, 30
+	case "timeline":
+		return 40, 40
+	case "card":
+		return 50, 35
+	case "accordion":
+		return 50, 35
+	case "notificationpanel":
+		return 50, 40
+	default:
+		return 30, 8
+	}
+}
+
+// widgetEvents maps factory names to the list of events that can be bound.
+var widgetEvents = map[string][]string{
+	"gui.Button":      {"OnClick"},
+	"gui.Edit":        {"OnChanged", "OnSubmit"},
+	"gui.CheckBox":    {"OnToggled"},
+	"gui.Slider":      {"OnValueChanged"},
+	"gui.SpinBox":     {"OnValueChanged"},
+	"gui.ComboBox":    {"OnSelected"},
+	"gui.RadioButton": {"OnChanged"},
+	"gui.ProgressBar": {},
+	"gui.Label":       {},
+}
+
+// OnRightUp shows a context menu when the user right-clicks on the canvas.
+func (this *GedView) OnRightUp(x, y float64) {
+	sx, sy := this.MapToScene(x, y)
+	item := this.Scene().FindItemAt(sx, sy, nil)
+
+	menu := gui.NewMenu(true)
+
+	if item != nil && item != this.Scene() {
+		// Select the item if not already selected
+		if !this.Selection().Contains(item) {
+			this.Selection().Clear()
+			this.Selection().Add(item)
+		}
+
+		// "Properties" menu item
+		btnProps := menu.AddButton1("属性...", nil)
+		btnProps.Action().BindFunc0(func() {
+			this.showPropertyDialog(item)
+		})
+
+		// "Bind Event" submenu with per-widget-type events and current bindings
+		fake, isFake := item.(*FakeWidget)
+		eventMenu, _ := menu.AddSubMenu("绑定事件", nil, nil)
+
+		if isFake {
+			factoryName := fake.WidgetFactoryName()
+			events := widgetEvents[factoryName]
+			handlers := fake.EventHandlers()
+
+			if len(events) > 0 {
+				for _, evt := range events {
+					evtName := evt
+					// Show current binding status
+					label := evtName + ": (未绑定)"
+					if handlers != nil {
+						if h, ok := handlers[evtName]; ok && h != "" {
+							label = evtName + ": " + h + " ✓"
+						}
+					}
+					btn := eventMenu.AddButton1(label, nil)
+					btn.Action().BindFunc0(func() {
+						this.bindEvent(item, evtName)
+					})
+				}
+			} else {
+				noEvt := eventMenu.AddButton1("(无可用事件)", nil)
+				_ = noEvt
+			}
+
+			// Add "Remove Binding" option if there are active bindings
+			if len(handlers) > 0 {
+				eventMenu.AddSeparator()
+				for evtKey, handlerVal := range handlers {
+					ek := evtKey
+					hv := handlerVal
+					removeBtn := eventMenu.AddButton1("移除: "+ek+" → "+hv, nil)
+					removeBtn.Action().BindFunc0(func() {
+						fake.RemoveEventHandler(ek)
+					})
+				}
+			}
+		} else {
+			// Fallback: generic events for unknown widget types
+			for _, evt := range []string{"OnClick", "OnChanged", "OnSubmit", "OnSelected"} {
+				evtName := evt
+				btn := eventMenu.AddButton1(evtName, nil)
+				btn.Action().BindFunc0(func() {
+					this.bindEvent(item, evtName)
+				})
+			}
+		}
+
+		// "View Code" menu item -- triggers selection callbacks so the code
+		// panel picks up this widget if it hasn't already.
+		btnCode := menu.AddButton1("查看代码", nil)
+		btnCode.Action().BindFunc0(func() {
+			this.Selection().Clear()
+			this.Selection().Add(item)
+		})
+
+		menu.AddSeparator()
+
+		// "Set Name" menu item
+		btnName := menu.AddButton1("设置名称...", nil)
+		btnName.Action().BindFunc0(func() {
+			this.renameItem(item)
+		})
+
+		// "Lock/Unlock" menu item
+		if isFake {
+			lockLabel := "锁定"
+			if fake.IsLocked() {
+				lockLabel = "解锁"
+			}
+			btnLock := menu.AddButton1(lockLabel, nil)
+			btnLock.Action().BindFunc0(func() {
+				fake.SetLocked(!fake.IsLocked())
+				this.Self().Update()
+			})
+		}
+
+		menu.AddSeparator()
+
+		// "Delete" menu item
+		btnDelete := menu.AddButton1("删除", nil)
+		btnDelete.Action().BindFunc0(func() {
+			this.DeleteSelectedItems()
+		})
+
+	} else {
+		// Right-click on empty canvas
+		btnFormProps := menu.AddButton1("表单属性...", nil)
+		btnFormProps.Action().BindFunc0(func() {
+			this.showPropertyDialog(this.Scene())
+		})
+	}
+
+	// Show popup menu at click position
+	gx, gy := this.MapToGlobal(x, y)
+	menu.ShowAsPopup(gx, gy, true)
+}
+
+// showPropertyDialog displays a property dialog for the selected item.
+func (this *GedView) showPropertyDialog(obj interface{}) {
+	core.Debug("showPropertyDialog for:", obj)
+	// The property sheet is typically a tool view bound elsewhere;
+	// trigger a selection change so the property sheet picks it up.
+	if item, ok := obj.(graph.IItem); ok {
+		if !this.Selection().Contains(item) {
+			this.Selection().Clear()
+			this.Selection().Add(item)
+		}
+	}
+}
+
+// bindEvent shows an input dialog asking for a handler function name, then
+// stores the binding on the FakeWidget.
+func (this *GedView) bindEvent(item graph.IItem, eventName string) {
+	name, ok := gui.ShowInputBox(this, nil, "绑定事件",
+		"处理函数名称 ("+eventName+"):", "on"+eventName)
+	if ok && name != "" {
+		if fake, ok := item.(*FakeWidget); ok {
+			fake.SetEventHandler(eventName, name)
+		}
+	}
+}
+
+// DeleteSelectedItems removes all currently selected items from the scene.
+func (this *GedView) DeleteSelectedItems() {
+	sel := this.Selection()
+	for _, item := range sel.ItemList() {
+		item.Detach()
+	}
+	sel.Clear()
+	this.Self().Update()
+}
+
+// renameItem shows an input dialog to set the widget name of a FakeWidget.
+func (this *GedView) renameItem(item graph.IItem) {
+	if fake, ok := item.(*FakeWidget); ok {
+		name, ok := gui.ShowInputBox(this, nil, "设置名称", "控件名称:", fake.WidgetName())
+		if ok {
+			fake.SetWidgetName(name)
+			this.Self().Update()
+		}
+	}
+}
+
+// Double-click detection state.
+var lastClickTime time.Time
+var lastClickX, lastClickY float64
+
+// OnLeftDown grabs focus, detects double-clicks for text editing, then
+// delegates to GraphView for normal tool handling.
+func (this *GedView) OnLeftDown(x, y float64) {
+	// Space+Drag pan: intercept before any tool processing
+	if this.spacePanReady {
+		this.isPanning = true
+		this.panStartX = x
+		this.panStartY = y
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(lastClickTime) < 400*time.Millisecond {
+		dx := x - lastClickX
+		dy := y - lastClickY
+		if dx*dx+dy*dy < 25 { // within 5 px
+			this.onDoubleClick(x, y)
+			lastClickTime = time.Time{} // reset to avoid triple-click
+			return
+		}
+	}
+	lastClickTime = now
+	lastClickX, lastClickY = x, y
+
+	this.SetFocus()
+	this.GraphView.OnLeftDown(x, y)
+
+	// Record drag origin in scene coordinates for alignment guide computation
+	sx, sy := this.MapToScene(x, y)
+	this.dragOriginX = sx
+	this.dragOriginY = sy
+	this.isDragging = true
+	this.alignGuides = nil
+}
+
+// onDoubleClick opens the code panel for the double-clicked widget and scrolls
+// to its event handler. The selection callbacks notify the code panel, which
+// loads the widget's code template and scrolls to the handler section.
+func (this *GedView) onDoubleClick(x, y float64) {
+	sx, sy := this.MapToScene(x, y)
+	item := this.Scene().FindItemAt(sx, sy, nil)
+	if item == nil {
+		return
+	}
+
+	fake, ok := item.(*FakeWidget)
+	if !ok {
+		return
+	}
+
+	// Select the widget so the code panel picks it up via selection callbacks.
+	this.Selection().Clear()
+	this.Selection().Add(fake)
+
+	// Notify any registered code-panel callbacks to focus and scroll.
+	for _, cb := range this.selCallbacks {
+		cb([]graph.IItem{fake})
+	}
+
+	// Bring the code panel to the front so the user can see the handler code.
+	if ShowCodePanelCallback != nil {
+		ShowCodePanelCallback()
+	}
+}
+
+// getWidgetText returns the text of a widget if it has a Text() method.
+func getWidgetText(w gui.IWidget) string {
+	if w == nil {
+		return ""
+	}
+	if t, ok := w.(interface{ Text() string }); ok {
+		return t.Text()
+	}
+	return ""
+}
+
+// setWidgetText sets the text of a widget if it has a SetText(string) method.
+func setWidgetText(w gui.IWidget, text string) {
+	if w == nil {
+		return
+	}
+	if t, ok := w.(interface{ SetText(string) }); ok {
+		t.SetText(text)
+	}
+}
+
+// OnKeyUp resets Space pan readiness when the Space key is released.
+func (this *GedView) OnKeyUp(key int) {
+	if key == gui.KeySpace {
+		this.spacePanReady = false
+		if this.isPanning {
+			this.isPanning = false
+		}
+	}
+}
+
+// OnKeyDown handles keyboard shortcuts for the GED editor.
+func (this *GedView) OnKeyDown(key int, repeat bool) {
+	ctrl := gui.IsKeyDown(gui.KeyCtrl)
+	alt := gui.IsKeyDown(gui.KeyMenu)
+
+	// Space key enables pan mode
+	if key == gui.KeySpace && !ctrl && !alt {
+		this.spacePanReady = true
+		return
+	}
+
+	switch {
+	// Tab / Shift+Tab: cycle widget selection
+	case key == gui.KeyTab:
+		if gui.IsKeyDown(gui.KeyShift) {
+			this.selectPrevWidget()
+		} else {
+			this.selectNextWidget()
+		}
+
+	case key == gui.KeyDelete || key == gui.KeyBackSpace:
+		this.DeleteSelectedItems()
+
+	case ctrl && (key == 'Z' || key == 'z'):
+		if stack := this.Scene().UndoStack(); stack != nil {
+			stack.Undo()
+			this.Self().Update()
+		}
+
+	case ctrl && (key == 'Y' || key == 'y'):
+		if stack := this.Scene().UndoStack(); stack != nil {
+			stack.Redo()
+			this.Self().Update()
+		}
+
+	case ctrl && (key == 'A' || key == 'a'):
+		this.selectAllItems()
+
+	case ctrl && (key == 'S' || key == 's'):
+		this.GedScene().Save()
+
+	case ctrl && (key == 'C' || key == 'c'):
+		this.CopySelected()
+
+	case ctrl && (key == 'V' || key == 'v'):
+		this.PasteItems()
+
+	case ctrl && (key == 'X' || key == 'x'):
+		this.CopySelected()
+		this.DeleteSelectedItems()
+
+	case ctrl && (key == 'P' || key == 'p'):
+		if QuickOpenCallback != nil {
+			QuickOpenCallback()
+		}
+
+	case ctrl && (key == 'R' || key == 'r'):
+		if PreviewCallback != nil {
+			PreviewCallback()
+		}
+
+	case key == gui.KeyF5:
+		if RunCallback != nil {
+			RunCallback()
+		}
+
+	case ctrl && key == '1':
+		if SwitchToDesignCallback != nil {
+			SwitchToDesignCallback()
+		}
+
+	case ctrl && key == '2':
+		if SwitchToEditCallback != nil {
+			SwitchToEditCallback()
+		}
+
+	// Alt+key alignment shortcuts
+	case alt && (key == 'L' || key == 'l'):
+		if AlignLeftCallback != nil {
+			AlignLeftCallback()
+		}
+	case alt && (key == 'R' || key == 'r'):
+		if AlignRightCallback != nil {
+			AlignRightCallback()
+		}
+	case alt && (key == 'T' || key == 't'):
+		if AlignTopCallback != nil {
+			AlignTopCallback()
+		}
+	case alt && (key == 'B' || key == 'b'):
+		if AlignBottomCallback != nil {
+			AlignBottomCallback()
+		}
+	case alt && (key == 'C' || key == 'c'):
+		if AlignCenterHCallback != nil {
+			AlignCenterHCallback()
+		}
+	case alt && (key == 'M' || key == 'm'):
+		if AlignCenterVCallback != nil {
+			AlignCenterVCallback()
+		}
+	case alt && (key == 'H' || key == 'h'):
+		if DistributeHCallback != nil {
+			DistributeHCallback()
+		}
+	case alt && (key == 'V' || key == 'v'):
+		if DistributeVCallback != nil {
+			DistributeVCallback()
+		}
+	}
+}
+
+// sortedWidgetList returns the scene children sorted by Y then X (top-to-bottom, left-to-right).
+func (this *GedView) sortedWidgetList() []graph.IItem {
+	children := this.Scene().Children()
+	if len(children) == 0 {
+		return nil
+	}
+	// Copy and sort
+	sorted := make([]graph.IItem, len(children))
+	copy(sorted, children)
+	for i := 1; i < len(sorted); i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && (sorted[j].Y() > key.Y() || (sorted[j].Y() == key.Y() && sorted[j].X() > key.X())) {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+	return sorted
+}
+
+// selectNextWidget selects the next widget on the canvas in tab order.
+func (this *GedView) selectNextWidget() {
+	sorted := this.sortedWidgetList()
+	if len(sorted) == 0 {
+		return
+	}
+	sel := this.Selection()
+	items := sel.ItemList()
+	idx := -1
+	if len(items) == 1 {
+		for i, it := range sorted {
+			if it == items[0] {
+				idx = i
+				break
+			}
+		}
+	}
+	next := (idx + 1) % len(sorted)
+	sel.Clear()
+	sel.Add(sorted[next])
+	this.Self().Update()
+}
+
+// selectPrevWidget selects the previous widget on the canvas in tab order.
+func (this *GedView) selectPrevWidget() {
+	sorted := this.sortedWidgetList()
+	if len(sorted) == 0 {
+		return
+	}
+	sel := this.Selection()
+	items := sel.ItemList()
+	idx := 0
+	if len(items) == 1 {
+		for i, it := range sorted {
+			if it == items[0] {
+				idx = i
+				break
+			}
+		}
+	}
+	prev := (idx - 1 + len(sorted)) % len(sorted)
+	sel.Clear()
+	sel.Add(sorted[prev])
+	this.Self().Update()
+}
+
+// selectAllItems adds every scene child to the selection.
+func (this *GedView) selectAllItems() {
+	sel := this.Selection()
+	for _, item := range this.Scene().Children() {
+		sel.Add(item)
+	}
+	this.Self().Update()
+}
+
+// CopySelected stores info about the selected FakeWidgets into the clipboard.
+func (this *GedView) CopySelected() {
+	clipboard = nil
+	sel := this.Selection()
+	for _, item := range sel.ItemList() {
+		if fake, ok := item.(*FakeWidget); ok {
+			clipboard = append(clipboard, clipItem{
+				factoryName: fake.WidgetFactoryName(),
+				x:           fake.X(),
+				y:           fake.Y(),
+				w:           fake.Width(),
+				h:           fake.Height(),
+				name:        fake.WidgetName(),
+			})
+		}
+	}
+}
+
+// PasteItems creates new FakeWidgets from the clipboard, slightly offset.
+func (this *GedView) PasteItems() {
+	if len(clipboard) == 0 {
+		return
+	}
+	sel := this.Selection()
+	sel.Clear()
+	for _, ci := range clipboard {
+		item, err := NewFakeWidgetFromFactory(ci.factoryName)
+		if err != nil {
+			continue
+		}
+		px, py := this.snapToGrid(ci.x+2, ci.y+2)
+		item.SetBounds(px, py, ci.w, ci.h)
+		item.SetWidgetName(ci.name)
+		item.Layout()
+
+		cmd := graph.NewAddCommand()
+		cmd.AddItem(item, this.Scene())
+		this.Scene().PushCommand(cmd)
+		sel.Add(item)
+	}
+	this.Self().Update()
+}
+
+func (this *GedView) OpenFile(filename string) error {
+	return this.GedScene().OpenFile(filename)
+}
+
+// ---------------------------------------------------------------------------
+// Alignment guide system (Qt Creator-style snap lines during drag)
+// ---------------------------------------------------------------------------
+
+const alignTolerance = 1.5 // mm — snap distance for alignment guides
+
+// computeAlignGuides calculates alignment guides between the dragged item(s)
+// and all other items in the scene. dx, dy is the proposed movement delta.
+func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
+	this.alignGuides = nil
+	if len(sel) == 0 {
+		return
+	}
+
+	scene := this.GedScene()
+	if scene == nil {
+		return
+	}
+
+	sceneW, sceneH := scene.Size()
+	allItems := scene.Children()
+
+	// Build a set of selected items for fast lookup
+	selSet := make(map[graph.IItem]bool, len(sel))
+	for _, s := range sel {
+		selSet[s] = true
+	}
+
+	// For each selected item, compute proposed edges and compare with others
+	for _, dragging := range sel {
+		px := dragging.X() + dx
+		py := dragging.Y() + dy
+		pw := dragging.Width()
+		ph := dragging.Height()
+
+		propLeft := px
+		propRight := px + pw
+		propCenterX := px + pw/2
+		propTop := py
+		propBottom := py + ph
+		propCenterY := py + ph/2
+
+		for _, other := range allItems {
+			if selSet[other] {
+				continue
+			}
+
+			ox, oy := other.X(), other.Y()
+			ow, oh := other.Width(), other.Height()
+			oLeft := ox
+			oRight := ox + ow
+			oCenterX := ox + ow/2
+			oTop := oy
+			oBottom := oy + oh
+			oCenterY := oy + oh/2
+
+			// Vertical guides (x-axis alignment)
+			xEdges := [][2]float64{
+				{propLeft, oLeft},
+				{propLeft, oRight},
+				{propRight, oLeft},
+				{propRight, oRight},
+				{propCenterX, oCenterX},
+			}
+			for _, pair := range xEdges {
+				if math.Abs(pair[0]-pair[1]) < alignTolerance {
+					this.alignGuides = append(this.alignGuides, alignGuide{
+						x1: pair[1], y1: 0,
+						x2: pair[1], y2: sceneH,
+						snap: true,
+					})
+				}
+			}
+
+			// Horizontal guides (y-axis alignment)
+			yEdges := [][2]float64{
+				{propTop, oTop},
+				{propTop, oBottom},
+				{propBottom, oTop},
+				{propBottom, oBottom},
+				{propCenterY, oCenterY},
+			}
+			for _, pair := range yEdges {
+				if math.Abs(pair[0]-pair[1]) < alignTolerance {
+					this.alignGuides = append(this.alignGuides, alignGuide{
+						x1: 0, y1: pair[1],
+						x2: sceneW, y2: pair[1],
+						snap: true,
+					})
+				}
+			}
+		}
+	}
+}
+
+// drawAlignGuides renders the active alignment guide lines.
+// Called in scene-mm coordinate space.
+func (this *GedView) drawAlignGuides(g paint.Painter) {
+	if len(this.alignGuides) == 0 {
+		return
+	}
+
+	// Semi-transparent blue, hairline width (0 = 1px regardless of zoom)
+	g.SetPen1(paint.Color{66, 133, 244, 180}, 0)
+
+	for _, guide := range this.alignGuides {
+		g.MoveTo(guide.x1, guide.y1)
+		g.LineTo(guide.x2, guide.y2)
+		g.Stroke()
+	}
+}
+
+// Draw overrides GraphView.Draw to add alignment guide overlay.
+func (this *GedView) Draw(g paint.Painter) {
+	this.GraphView.Draw(g)
+
+	if len(this.alignGuides) == 0 {
+		return
+	}
+
+	// Clip to the page area so guides don't bleed into the padding region
+	g.Save()
+	pw, ph := this.PageSizePx(true, this.ZoomFactor())
+	pLeft, pTop := this.PageOriginPx()
+	g.Rectangle(pLeft-this.ScrollX(), pTop-this.ScrollY(), pw, ph)
+	g.Clip()
+
+	// Re-enter scene coordinate space to draw the guides
+	x0, y0 := this.SceneOriginPx()
+	g.Translate(x0-this.ScrollX(), y0-this.ScrollY())
+	pageScale := gui.ScreenDpmm() * this.ZoomFactor()
+	g.Scale(pageScale, pageScale)
+	this.drawAlignGuides(g)
+	g.Restore()
+}
+
+// OnMouseMove overrides GraphView.OnMouseMove to compute alignment guides
+// while dragging selected items.
+func (this *GedView) OnMouseMove(x, y float64) {
+	// Space+Drag pan: adjust scroll offset
+	if this.isPanning {
+		dx := x - this.panStartX
+		dy := y - this.panStartY
+		this.SetScrollX(this.ScrollX() - dx)
+		this.SetScrollY(this.ScrollY() - dy)
+		this.panStartX = x
+		this.panStartY = y
+		this.Self().Update()
+		return
+	}
+
+	this.GraphView.OnMouseMove(x, y)
+
+	// Update cursor for resize handles when not dragging
+	if !this.isDragging {
+		sx, sy := this.MapToScene(x, y)
+		decor, handle := this.FindHandleAt(sx, sy)
+		if decor != nil && handle != 0 {
+			gui.SetOverrideCursor(decor.HandleCursor(handle))
+		} else {
+			gui.SetOverrideCursor(nil)
+		}
+	}
+
+	if !this.isDragging {
+		return
+	}
+
+	sel := this.Selection()
+	if sel == nil || sel.Count() == 0 {
+		this.alignGuides = nil
+		return
+	}
+
+	sx, sy := this.MapToScene(x, y)
+	dx := sx - this.dragOriginX
+	dy := sy - this.dragOriginY
+
+	this.computeAlignGuides(sel.ItemList(), dx, dy)
+}
+
+// OnLeftUp overrides GraphView.OnLeftUp to clear alignment guides when
+// the drag ends.
+func (this *GedView) OnLeftUp(x, y float64) {
+	// End Space+Drag pan
+	if this.isPanning {
+		this.isPanning = false
+		return
+	}
+
+	this.GraphView.OnLeftUp(x, y)
+	this.isDragging = false
+	this.alignGuides = nil
+	this.Self().Update()
+}

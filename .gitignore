@@ -1,0 +1,82 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+bin/
+resources/
+
+# Claude Code
+.claude/
+CLAUDE.md
+*_article
+
+# GitHub (CI/workflows managed separately)
+.github/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# Private data
+userdata/
+session/
+*.session
+
+# Docs (local only)
+docs/
+
+# Office documents
+*.docx
+*.doc
+*.xlsx
+*.csv
+
+# Proxy
+proxy/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+
+# Legacy/embedded repos
+Package/
+sqlite3/
+
+# Article output
+silk_go_gui_framework/
+
+# Node modules (article generation)
+node_modules/
+package.json
+package-lock.json
+
+# Build artifacts
+design
+silk
+/local/
+*.autosave
+templates/
+
+# Compiled binary outputs in examples
+examples/*/main
+examples/*/example

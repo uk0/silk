@@ -1,0 +1,189 @@
+package core
+
+import (
+	//"fmt"
+	"reflect"
+)
+
+type _ICall interface {
+	Call(v ...interface{}) (ret interface{})
+}
+
+// 回调
+type ICallback interface {
+	Target() interface{}
+	Bind(dst interface{})
+	Call(v ...interface{}) (ret interface{})
+}
+
+// 单回调, 可以绑定到一个函数, 该函数最多有2个输入参数和1个输出参数
+type Callback struct {
+	dst interface{}
+}
+
+// 当前绑定的目标
+func (this *Callback) Target() interface{} {
+	return this.dst
+}
+
+// 绑定新目标, 可以为nil
+// Callback不能绑定多个目标, 如果多次绑定, 则之前的目标自动解绑
+func (this *Callback) Bind(dst interface{}) {
+	if dst == nil {
+		this.dst = nil
+		return
+	}
+	if ic, ok := dst.(_ICall); ok {
+		this.dst = ic
+		return
+	}
+	tpy := reflect.TypeOf(dst)
+	if tpy.Kind() != reflect.Func {
+		Panic("callback is not a func: ", ObjInfo(dst))
+	}
+	if tpy.NumIn() > 2 {
+		Panic("unsupported argurment count: ", ObjInfo(dst))
+	}
+	if tpy.NumOut() > 1 {
+		Panic("unsupported return count: ", ObjInfo(dst))
+	}
+
+	this.dst = dst
+}
+
+// 以0至2个输入参数调用
+func (this Callback) Call(v ...interface{}) (ret interface{}) {
+	n := len(v)
+	if n >= 2 {
+		return this.call2(v[0], v[1])
+	}
+	if n == 1 {
+		return this.call2(v[0], nil)
+	}
+	return this.call2(nil, nil)
+}
+
+//// 以0个输入参数调用
+//func (this Callback) Call0() (ret interface{}) {
+//	return this.Call2(nil, nil)
+//}
+
+//// 以1个输入参数调用
+//func (this Callback) Call1(a interface{}) (ret interface{}) {
+//	return this.Call2(a, nil)
+//}
+
+// 以2个输入参数调用
+func (this Callback) call2(a, b interface{}) (ret interface{}) {
+	//Trace(reflect.TypeOf(this.dst))
+	if ic, ok := this.dst.(_ICall); ok {
+		return ic.Call(a, b)
+	}
+	switch x := this.dst.(type) {
+	case nil:
+	case func():
+		x()
+	case func(interface{}):
+		x(a)
+	case func(interface{}, interface{}):
+		x(a, b)
+	case func() interface{}:
+		ret = x()
+	case func(interface{}) interface{}:
+		ret = x(a)
+	case func(interface{}, interface{}) interface{}:
+		ret = x(a, b)
+	default:
+		tpy := reflect.TypeOf(this.dst)
+		if tpy.Kind() != reflect.Func {
+			panic("callback is not a func")
+		}
+		Trace(tpy)
+		dst := reflect.ValueOf(this.dst)
+		switch tpy.NumOut() {
+		case 0:
+			switch tpy.NumIn() {
+			case 0:
+				panic("internal error")
+			case 1:
+				dst.Call([]reflect.Value{reflect.ValueOf(a)})
+			case 2:
+				dst.Call([]reflect.Value{reflect.ValueOf(a),
+					reflect.ValueOf(b)})
+			default:
+				panic("unsupported argurment count")
+			}
+		case 1:
+			switch tpy.NumIn() {
+			case 0:
+				ret = dst.Call(nil)[0].Interface()
+			case 1:
+				ret = dst.Call([]reflect.Value{reflect.ValueOf(a)})[0].Interface()
+			case 2:
+				ret = dst.Call([]reflect.Value{reflect.ValueOf(a),
+					reflect.ValueOf(b)})[0].Interface()
+			default:
+				panic("unsupported argurment count")
+			}
+		default:
+			panic("unsupported argurment count")
+		}
+	}
+	return ret
+}
+
+/*
+
+注: 因为golang不能获得func的唯一地址, 所以多回调的机制有缺陷, 以后再考虑
+
+// 多回调
+type Callbacks struct {
+	list []Callback
+}
+
+// 增加一个回调
+// 注: 由于Go语言本身的问题, 暂时不能支持Remove功能
+func (this *Callbacks) Add(a interface{}) {
+	var cb Callback
+	cb.Bind(a)
+	this.list = append(this.list, cb)
+}
+
+// 清除所有回调
+func (this *Callbacks) Clear() {
+	this.list = nil
+}
+
+// 以0至2个输入参数调用
+func (this Callbacks) Call(v ...interface{}) (ret interface{}) {
+	for _, cb := range this.list {
+		ret = cb.Call(v...)
+	}
+	return
+}
+
+//// 以0个输入参数调用
+//func (this Callbacks) Call0() (ret interface{}) {
+//	for _, cb := range this.list {
+//		ret = cb.Call0()
+//	}
+//	return
+//}
+
+//// 以1个输入参数调用
+//func (this Callbacks) Call1(a interface{}) (ret interface{}) {
+//	for _, cb := range this.list {
+//		ret = cb.Call1(a)
+//	}
+//	return
+//}
+
+//// 以2个输入参数调用
+//func (this Callbacks) Call2(a, b interface{}) (ret interface{}) {
+//	for _, cb := range this.list {
+//		ret = cb.Call2(a, b)
+//	}
+//	return
+//}
+
+*/

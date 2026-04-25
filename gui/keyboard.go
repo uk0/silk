@@ -1,0 +1,78 @@
+package gui
+
+const (
+	KeyBackSpace = 0x08
+
+	KeyTab      = 0x09
+	KeyEnter    = 0x0D
+	KeyShift    = 0x10
+	KeyCtrl     = 0x11
+	KeyMenu     = 0x12
+	KeyPause    = 0x13
+	KeyCapsLock = 0x14
+	KeyEsc      = 0x1B
+	KeySpace    = 0x20
+
+	KeyPageUp   = 0x21
+	KeyPageDown = 0x22
+	KeyEnd      = 0x23
+	KeyHome     = 0x24
+
+	KeyLeft  = 0x25
+	KeyUp    = 0x26
+	KeyRight = 0x27
+	KeyDown  = 0x28
+
+	KeyPrint       = 0x2A
+	KeyPrintScreen = 0x2C
+
+	KeyInsert = 0x2D
+	KeyDelete = 0x2E
+
+	KeyLWin = 0x5B
+	KeyRWin = 0x5C
+
+	KeyNumPad0 = 0x60
+	KeyNumPad1 = 0x61
+	KeyNumPad2 = 0x62
+	KeyNumPad3 = 0x63
+	KeyNumPad4 = 0x64
+	KeyNumPad5 = 0x65
+	KeyNumPad6 = 0x66
+	KeyNumPad7 = 0x67
+	KeyNumPad8 = 0x68
+	KeyNumPad9 = 0x69
+
+	KeyMultiply = 0x6A
+	KeyAdd      = 0x6B
+	KeySubtract = 0x6D
+	KeyDivide   = 0x6F
+	KeyDecimal  = 0x6E
+
+	KeyF1  = 0x70
+	KeyF2  = 0x71
+	KeyF3  = 0x72
+	KeyF4  = 0x73
+	KeyF5  = 0x74
+	KeyF6  = 0x75
+	KeyF7  = 0x76
+	KeyF8  = 0x77
+	KeyF9  = 0x78
+	KeyF10 = 0x79
+	KeyF11 = 0x7A
+	KeyF12 = 0x7B
+	KeyF13 = 0x7C
+	KeyF14 = 0x7D
+	KeyF15 = 0x7E
+	KeyF16 = 0x7F
+
+	KeyNumLock    = 0x90
+	KeyScrollLock = 0x91
+
+	KeyLShift = 0xA0
+	KeyRShift = 0xA1
+	KeyLCtrl  = 0xA2
+	KeyRCtrl  = 0xA3
+	KeyLMenu  = 0xA4
+	KeyRMenu  = 0xA5
+)
