@@ -8,12 +8,12 @@ import (
 )
 
 func NewWin32Surface(dc uintptr) *Surface {
-	s := C.cairo_win32_surface_create((*_Ctype_struct_HDC__)(unsafe.Pointer(dc)))
+	s := C.cairo_win32_surface_create((*C.struct_HDC__)(unsafe.Pointer(dc)))
 	return (*Surface)(s)
 }
 
 func NewWin32PrintingSurface(dc uintptr) *Surface {
-	s := C.cairo_win32_printing_surface_create((*_Ctype_struct_HDC__)(unsafe.Pointer(dc)))
+	s := C.cairo_win32_printing_surface_create((*C.struct_HDC__)(unsafe.Pointer(dc)))
 	return (*Surface)(s)
 }
 

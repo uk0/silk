@@ -561,6 +561,26 @@ func (this *Window) mapToGlobal(x, y float64) (x1, y1 float64) {
 	return float64(x0), float64(y0)
 }
 
+// setPopupGlobalPos positions a popup widget at global screen coordinates.
+// On Windows we move the HWND directly via SetWindowPos. Unlike GLFW on
+// macOS, Win32 honors SetWindowPos even on hidden windows, so no
+// pending-position trick is needed.
+func setPopupGlobalPos(popup IWidget, gx, gy float64) {
+	win := popup.Window()
+	if win != nil && win.NakedWindow().hWnd != 0 {
+		hWnd := win.NakedWindow().hWnd
+		win32.SetWindowPos(hWnd, 0, int(math.Round(gx)), int(math.Round(gy)),
+			0, 0, win32.SWP_NOSIZE|win32.SWP_NOZORDER|win32.SWP_NOACTIVATE)
+		return
+	}
+	// Fallback: use parent's coordinate space
+	pp := popup.Parent()
+	if pp != nil {
+		gx, gy = pp.MapFromGlobal(gx, gy)
+	}
+	popup.SetPos(gx, gy)
+}
+
 func (this *Window) IsValid() bool {
 	return this.hWnd != 0
 }
