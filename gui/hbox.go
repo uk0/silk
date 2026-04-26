@@ -48,38 +48,43 @@ func (this *HBox) AddWidget(iw IWidget) {
 }
 
 func (this *HBox) Layout() {
-	children := this.Self().Children()
-	if len(children) == 0 {
+	// No children → nothing to do, avoid pool acquisition entirely.
+	if this.NakedWidget().child == nil {
 		return
 	}
 
-	// Phase 0: filter visible children
-	var visible []IWidget
-	for _, c := range children {
-		if c.IsVisible() {
-			visible = append(visible, c)
-		}
-	}
+	scratch := acquireLayoutScratch()
+
+	// Phase 0: filter visible children using a non-allocating walk over the
+	// circular linked child list. Captured into scratch.visible / scratch.hints
+	// so phases 1-3 can reuse them by index.
+	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
+		scratch.visible = append(scratch.visible, c)
+		scratch.hints = append(scratch.hints, c.SizeHints())
+		return true
+	})
+
+	visible := scratch.visible
+	hints := scratch.hints
 	n := len(visible)
 	if n == 0 {
+		releaseLayoutScratch(scratch)
 		return
 	}
 
 	w, h := this.Self().Size()
 	cx, cy, cw, ch := this.padding.Apply(0, 0, w, h)
 	if cw <= 0 || ch <= 0 {
+		releaseLayoutScratch(scratch)
 		return
 	}
 
-	// Phase 1: collect hints, classify children
-	hints := make([]SizeHints, n)
+	// Phase 1: classify children (hints already collected in phase 0).
 	var fixedTotal float64
 	var totalStretch int
 
-	for i, c := range visible {
-		hi := c.SizeHints()
-		hints[i] = hi
-
+	for i := 0; i < n; i++ {
+		hi := hints[i]
 		if hi.Stretch > 0 {
 			// Stretchable child — participates in proportional distribution
 			totalStretch += hi.Stretch
@@ -106,34 +111,45 @@ func (this *HBox) Layout() {
 		remaining = 0
 	}
 
-	// Phase 2: distribute space
-	widths := make([]float64, n)
-	for i, hi := range hints {
+	// Phase 2: distribute space. Reuse scratch.sizes as the widths buffer.
+	// Grow it to length n; existing capacity is reused without allocation
+	// when n <= cap (typical case after the first call).
+	if cap(scratch.sizes) >= n {
+		scratch.sizes = scratch.sizes[:n]
+	} else {
+		scratch.sizes = make([]float64, n)
+	}
+	widths := scratch.sizes
+	for i := 0; i < n; i++ {
+		hi := hints[i]
+		var v float64
 		if hi.Stretch > 0 {
 			// Proportional allocation based on stretch weight
-			widths[i] = remaining * float64(hi.Stretch) / float64(totalStretch)
+			v = remaining * float64(hi.Stretch) / float64(totalStretch)
 		} else {
-			widths[i] = hi.Width
-			if widths[i] <= 0 {
-				widths[i] = hi.MinWidth
+			v = hi.Width
+			if v <= 0 {
+				v = hi.MinWidth
 			}
-			if widths[i] <= 0 {
-				widths[i] = 32
+			if v <= 0 {
+				v = 32
 			}
 		}
 
 		// Clamp to min/max
-		if hi.MinWidth > 0 && widths[i] < hi.MinWidth {
-			widths[i] = hi.MinWidth
+		if hi.MinWidth > 0 && v < hi.MinWidth {
+			v = hi.MinWidth
 		}
-		if hi.MaxWidth > 0 && widths[i] > hi.MaxWidth {
-			widths[i] = hi.MaxWidth
+		if hi.MaxWidth > 0 && v > hi.MaxWidth {
+			v = hi.MaxWidth
 		}
+		widths[i] = v
 	}
 
 	// Phase 3: position children
 	xOff := cx
-	for i, c := range visible {
+	for i := 0; i < n; i++ {
+		c := visible[i]
 		hi := hints[i]
 		childW := widths[i]
 
@@ -159,6 +175,9 @@ func (this *HBox) Layout() {
 		c.SetBounds(xOff, childY, childW, childH)
 		xOff += childW + this.spacing
 	}
+
+	// Manual release: defer would add overhead on this hot path.
+	releaseLayoutScratch(scratch)
 }
 
 func (this *HBox) Draw(g paint.Painter) {
@@ -166,14 +185,12 @@ func (this *HBox) Draw(g paint.Painter) {
 }
 
 func (this *HBox) SizeHints() SizeHints {
-	children := this.Self().Children()
+	// Walk the linked list directly without materializing []IWidget. Each
+	// child's SizeHints() is consulted exactly once and accumulated inline.
 	n := 0
 	var totalW, maxH float64
 
-	for _, c := range children {
-		if !c.IsVisible() {
-			continue
-		}
+	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
 		hi := c.SizeHints()
 		w := hi.Width
 		if w <= 0 {
@@ -182,7 +199,8 @@ func (this *HBox) SizeHints() SizeHints {
 		totalW += w
 		maxH = math.Max(maxH, hi.Height)
 		n++
-	}
+		return true
+	})
 
 	if n > 1 {
 		totalW += float64(n-1) * this.spacing

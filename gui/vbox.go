@@ -48,38 +48,42 @@ func (this *VBox) AddWidget(iw IWidget) {
 }
 
 func (this *VBox) Layout() {
-	children := this.Self().Children()
-	if len(children) == 0 {
+	if this.NakedWidget().child == nil {
 		return
 	}
 
-	// Phase 0: filter visible children
-	var visible []IWidget
-	for _, c := range children {
-		if c.IsVisible() {
-			visible = append(visible, c)
-		}
-	}
+	scratch := acquireLayoutScratch()
+
+	// Phase 0: filter visible children + collect hints in a single linked-list
+	// walk. Buffers come from sync.Pool so this is allocation-free on the hot
+	// path once steady-state.
+	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
+		scratch.visible = append(scratch.visible, c)
+		scratch.hints = append(scratch.hints, c.SizeHints())
+		return true
+	})
+
+	visible := scratch.visible
+	hints := scratch.hints
 	n := len(visible)
 	if n == 0 {
+		releaseLayoutScratch(scratch)
 		return
 	}
 
 	w, h := this.Self().Size()
 	cx, cy, cw, ch := this.padding.Apply(0, 0, w, h)
 	if cw <= 0 || ch <= 0 {
+		releaseLayoutScratch(scratch)
 		return
 	}
 
-	// Phase 1: collect hints, classify children
-	hints := make([]SizeHints, n)
+	// Phase 1: classify children (hints already collected in phase 0).
 	var fixedTotal float64
 	var totalStretch int
 
-	for i, c := range visible {
-		hi := c.SizeHints()
-		hints[i] = hi
-
+	for i := 0; i < n; i++ {
+		hi := hints[i]
 		if hi.Stretch > 0 {
 			totalStretch += hi.Stretch
 		} else {
@@ -104,33 +108,42 @@ func (this *VBox) Layout() {
 		remaining = 0
 	}
 
-	// Phase 2: distribute space
-	heights := make([]float64, n)
-	for i, hi := range hints {
+	// Phase 2: distribute space. Reuse scratch.sizes for the heights buffer.
+	if cap(scratch.sizes) >= n {
+		scratch.sizes = scratch.sizes[:n]
+	} else {
+		scratch.sizes = make([]float64, n)
+	}
+	heights := scratch.sizes
+	for i := 0; i < n; i++ {
+		hi := hints[i]
+		var v float64
 		if hi.Stretch > 0 {
-			heights[i] = remaining * float64(hi.Stretch) / float64(totalStretch)
+			v = remaining * float64(hi.Stretch) / float64(totalStretch)
 		} else {
-			heights[i] = hi.Height
-			if heights[i] <= 0 {
-				heights[i] = hi.MinHeight
+			v = hi.Height
+			if v <= 0 {
+				v = hi.MinHeight
 			}
-			if heights[i] <= 0 {
-				heights[i] = 32
+			if v <= 0 {
+				v = 32
 			}
 		}
 
 		// Clamp to min/max
-		if hi.MinHeight > 0 && heights[i] < hi.MinHeight {
-			heights[i] = hi.MinHeight
+		if hi.MinHeight > 0 && v < hi.MinHeight {
+			v = hi.MinHeight
 		}
-		if hi.MaxHeight > 0 && heights[i] > hi.MaxHeight {
-			heights[i] = hi.MaxHeight
+		if hi.MaxHeight > 0 && v > hi.MaxHeight {
+			v = hi.MaxHeight
 		}
+		heights[i] = v
 	}
 
 	// Phase 3: position children
 	yOff := cy
-	for i, c := range visible {
+	for i := 0; i < n; i++ {
+		c := visible[i]
 		hi := hints[i]
 		childH := heights[i]
 
@@ -155,6 +168,8 @@ func (this *VBox) Layout() {
 		c.SetBounds(childX, yOff, childW, childH)
 		yOff += childH + this.spacing
 	}
+
+	releaseLayoutScratch(scratch)
 }
 
 func (this *VBox) Draw(g paint.Painter) {
@@ -162,14 +177,12 @@ func (this *VBox) Draw(g paint.Painter) {
 }
 
 func (this *VBox) SizeHints() SizeHints {
-	children := this.Self().Children()
+	// Walk the linked list directly; avoids the slice allocation that
+	// Widget.Children() would perform.
 	n := 0
 	var totalH, maxW float64
 
-	for _, c := range children {
-		if !c.IsVisible() {
-			continue
-		}
+	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
 		hi := c.SizeHints()
 		h := hi.Height
 		if h <= 0 {
@@ -178,7 +191,8 @@ func (this *VBox) SizeHints() SizeHints {
 		totalH += h
 		maxW = math.Max(maxW, hi.Width)
 		n++
-	}
+		return true
+	})
 
 	if n > 1 {
 		totalH += float64(n-1) * this.spacing

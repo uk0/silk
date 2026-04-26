@@ -25,6 +25,14 @@ type Label struct {
 	font      paint.Font
 	align     TextAlign
 	wrap      bool
+
+	// SizeHints cache. Inputs: text + font + theme revision.
+	// Cache hits avoid 2 cairo extents allocations per Label.
+	cachedHints  SizeHints
+	hintText     string
+	hintFont     paint.Font
+	hintThemeRev uint64
+	hintsValid   bool
 }
 
 func NewLabel(text string) *Label {
@@ -43,6 +51,7 @@ func (this *Label) SetText(s string) {
 		return
 	}
 	this.text = s
+	this.hintsValid = false
 	this.Self().Update()
 }
 
@@ -53,6 +62,7 @@ func (this *Label) SetTextColor(c paint.Color) {
 
 func (this *Label) SetFont(f paint.Font) {
 	this.font = f
+	this.hintsValid = false
 	this.Self().Update()
 }
 
@@ -120,11 +130,28 @@ func (this *Label) Draw(g paint.Painter) {
 
 func (this *Label) SizeHints() SizeHints {
 	f := this.effectiveFont()
+
+	// Fast path: cache key is (text, font pointer, theme revision). The text
+	// string is compared by value (cheap when interned literals), font by
+	// pointer identity. Theme revision catches font/style changes that the
+	// label inherits from Theme().
+	if this.hintsValid &&
+		this.hintText == this.text &&
+		this.hintFont == f &&
+		this.hintThemeRev == themeRev {
+		return this.cachedHints
+	}
+
 	fe := f.FontExtents()
 	ext := f.TextExtents(this.text)
-	w := ext.Width
-	h := fe.Height
-	return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
+	hints := SizeHints{Width: ext.Width, Height: fe.Height, Policy: GrowHorizontal | GrowVertical}
+
+	this.hintText = this.text
+	this.hintFont = f
+	this.hintThemeRev = themeRev
+	this.cachedHints = hints
+	this.hintsValid = true
+	return hints
 }
 
 func (this *Label) Align() TextAlign {

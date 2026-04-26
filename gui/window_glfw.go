@@ -79,6 +79,10 @@ var (
 type Window struct {
 	glfwWin    *glfw.Window
 	backBuffer paint.Pixmap
+	// backPainter is reused across paint cycles so we don't pay the
+	// allocation + cairo_create cost every frame. It must be invalidated
+	// whenever backBuffer is reallocated (e.g. on resize) — see paint().
+	backPainter paint.Painter
 	backWidth  int
 	backHeight int
 	widget      IWidget
@@ -87,6 +91,24 @@ type Window struct {
 	glTexture   uint32
 	dirty   bool
 	enabled bool
+
+	// Dirty region tracking. fullDirty=true (the default) means the next
+	// paint redraws the whole window. dirtyRegion accumulates partial
+	// invalidations in logical (widget) coordinates; once the user opts
+	// into partial repaints by calling MarkDirtyRect instead of Update,
+	// the paint pass will use Cairo's clip rect to skip unchanged pixels.
+	dirtyRegion geom.Rect
+	fullDirty   bool
+
+	// PBO (Pixel Buffer Object) state for async texture streaming. The PBO
+	// is sized to match the texture; uploadTextureViaPBO orphans + remaps
+	// it each frame so the driver can DMA the previous frame's data while
+	// the CPU writes the next.
+	pbo          uint32
+	pboSize      int
+	pboTexW      int32
+	pboTexH      int32
+	pboAvailable bool
 
 	mouseEntered bool
 	autoCaptured bool
@@ -258,6 +280,13 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	}
 	initGL()
 
+	// Enable vsync so SwapBuffers blocks until the display retrace.
+	// On 60Hz this caps painting at 60fps; on ProMotion / 120Hz / 144Hz
+	// monitors it adapts to the display's actual refresh rate. Combined
+	// with the WaitEvents-based MainLoop this gives smooth pacing
+	// without burning CPU between frames.
+	glfw.SwapInterval(1)
+
 	// Set up callbacks
 	gw.SetSizeCallback(onWindowResize)
 	gw.SetPosCallback(onWindowMove)
@@ -289,6 +318,26 @@ func (this *Window) destroy() {
 		gl.DeleteTextures(1, &this.glTexture)
 		this.glTexture = 0
 	}
+	if this.pbo != 0 {
+		// glfwWin.MakeContextCurrent already happened above when we deleted
+		// the texture (glTexture > 0 path). If glTexture was 0 there's
+		// nothing else to free anyway, so guard with a glfwWin nil check.
+		if this.glfwWin != nil {
+			this.glfwWin.MakeContextCurrent()
+		}
+		gl.DeleteBuffers(1, &this.pbo)
+		this.pbo = 0
+		this.pboSize = 0
+		this.pboTexW = 0
+		this.pboTexH = 0
+	}
+	// Drop painter and back buffer in a defined order: painter first, so
+	// the cairo Context releases its surface reference before we drop the
+	// surface. Both have finalizers that handle the underlying C resources;
+	// dropping the references here just makes the destruction order
+	// deterministic instead of GC-driven.
+	this.backPainter = nil
+	this.backBuffer = nil
 	this.widget = nil
 	if this.glfwWin != nil {
 		delete(winMap, this.glfwWin)
@@ -342,19 +391,73 @@ func (this *Window) paint() {
 	fbw, fbh := this.glfwWin.GetFramebufferSize()
 
 	// Reuse the back buffer when dimensions haven't changed.
-	// Only allocate a new pixmap when the framebuffer size differs.
-	// Clear to the form background before each paint to prevent ghost artifacts.
+	// Only allocate a new pixmap when the framebuffer size differs. A size
+	// change invalidates any partial dirty region — there's no valid prior
+	// content to preserve outside it. Also drop the cached painter, which
+	// is bound to the previous surface.
 	if this.backBuffer == nil || this.backWidth != fbw || this.backHeight != fbh {
 		this.backBuffer = paint.NewPixmap(fbw, fbh)
 		this.backWidth = fbw
 		this.backHeight = fbh
+		this.fullDirty = true
+		this.dirtyRegion = geom.Rect{}
+		this.backPainter = nil
 	}
 	backBuffer := this.backBuffer
-	backPainter := backBuffer.NewPainter()
-	// Clear the entire surface to avoid ghost artifacts from previous frame
-	backPainter.SetOperator(paint.OpClear)
-	backPainter.Paint()
-	backPainter.SetOperator(paint.OpOver)
+	// Reuse the painter when possible. Reset its state to a known baseline:
+	// drain the save stack, clear any clip, reset the CTM, and re-apply the
+	// default pen/brush so we match what NewPainter() would have produced.
+	// Without the pen/brush reset, the first widget of the new frame would
+	// inherit the last widget of the previous frame's stroke style.
+	var backPainter paint.Painter
+	if this.backPainter != nil {
+		backPainter = this.backPainter
+		backPainter.RestoreTo(0)
+		backPainter.ResetClip()
+		backPainter.ResetMatrix()
+		backPainter.SetPen(paint.NewPen(paint.Color{0, 0, 0, 255}, 1))
+		backPainter.SetBrush(nil)
+	} else {
+		backPainter = backBuffer.NewPainter()
+		this.backPainter = backPainter
+	}
+
+	// Decide whether to clip to a dirty subrect. We clip when:
+	//   - fullDirty is false
+	//   - dirtyRegion is non-empty
+	//   - the region is meaningfully smaller than the window (otherwise the
+	//     overhead of clip setup outweighs any savings)
+	useClip := false
+	var clipX, clipY, clipW, clipH float64
+	if !this.fullDirty &&
+		this.dirtyRegion.Width > 0 && this.dirtyRegion.Height > 0 {
+		// Inflate by 1 logical pixel each side: anti-aliasing and 1px borders
+		// straddle their nominal coordinate, so a tight rect can leave fringes.
+		r := this.dirtyRegion.ExpandCopy(1)
+		// Intersect with the window rect.
+		r = r.IntersectCopy(geom.Rect{X: 0, Y: 0, Width: width, Height: height})
+		if r.Width > 0 && r.Height > 0 &&
+			r.Area() < width*height*0.85 {
+			clipX, clipY, clipW, clipH = r.X, r.Y, r.Width, r.Height
+			useClip = true
+		}
+	}
+
+	if useClip {
+		// Clip to physical-pixel rect first, then clear only inside the clip.
+		// This preserves the unchanged pixels from the previous frame.
+		backPainter.Rectangle(clipX*float64(sx), clipY*float64(sy),
+			clipW*float64(sx), clipH*float64(sy))
+		backPainter.Clip()
+		backPainter.SetOperator(paint.OpClear)
+		backPainter.Paint()
+		backPainter.SetOperator(paint.OpOver)
+	} else {
+		// Full redraw: clear the entire surface.
+		backPainter.SetOperator(paint.OpClear)
+		backPainter.Paint()
+		backPainter.SetOperator(paint.OpOver)
+	}
 
 	// Scale Cairo context: logical coords -> physical pixels.
 	// Wrap the widget tree draw in panic recovery so a single broken widget
@@ -390,9 +493,17 @@ func (this *Window) paint() {
 	}
 	stride := backBuffer.Stride()
 
-	// Upload to OpenGL texture at physical resolution
+	// Upload to OpenGL texture at physical resolution. We try a PBO upload
+	// first (allows the driver to DMA the previous frame async with this
+	// frame's CPU work) and fall back to glTexImage2D if PBOs are unsupported
+	// or fail at runtime.
 	if this.glTexture == 0 {
 		gl.GenTextures(1, &this.glTexture)
+		// Enable PBO path for newly created textures. Disabled per-window
+		// permanently if uploadTextureViaPBO fails.
+		this.pboAvailable = true
+		this.pboTexW = 0
+		this.pboTexH = 0
 	}
 	gl.BindTexture(gl.TEXTURE_2D, this.glTexture)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
@@ -400,15 +511,22 @@ func (this *Window) paint() {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 
-	gl.PixelStorei(gl.UNPACK_ROW_LENGTH, int32(stride/4))
-	// Cairo stores ARGB32 as BGRA in memory on little-endian
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
-		int32(this.backWidth), int32(this.backHeight),
-		0, gl.BGRA, gl.UNSIGNED_BYTE, dataPtr)
+	uploaded := false
+	if this.pboAvailable {
+		uploaded = this.uploadTextureViaPBO(int32(this.backWidth),
+			int32(this.backHeight), stride, dataPtr)
+	}
+	if !uploaded {
+		gl.PixelStorei(gl.UNPACK_ROW_LENGTH, int32(stride/4))
+		// Cairo stores ARGB32 as BGRA in memory on little-endian
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
+			int32(this.backWidth), int32(this.backHeight),
+			0, gl.BGRA, gl.UNSIGNED_BYTE, dataPtr)
+	}
 
 	glErr := gl.GetError()
 	if glErr != gl.NO_ERROR {
-		core.Warn("GL error after TexImage2D: ", glErr)
+		core.Warn("GL error after texture upload: ", glErr)
 	}
 
 	// Ensure GL state is set up for this context
@@ -427,6 +545,8 @@ func (this *Window) paint() {
 	gl.Flush()
 	this.glfwWin.SwapBuffers()
 	this.dirty = false
+	this.fullDirty = false
+	this.dirtyRegion = geom.Rect{}
 }
 
 func (this *Window) Close() {
@@ -604,10 +724,50 @@ func setPopupGlobalPos(popup IWidget, gx, gy float64) {
 
 func (this *Window) Update() {
 	this.dirty = true
+	this.fullDirty = true
+	this.dirtyRegion = geom.Rect{}
 }
 
 func (this *Window) UpdateRect(x, y, width, height float64) {
+	// Per task spec: keep full-redraw semantics for the legacy Widget.Update
+	// path. Callers wanting partial-region invalidation should call
+	// MarkDirtyRect directly. This avoids regressing widgets whose visual
+	// extent (shadows, focus halos, hover glows) is wider than their Bounds.
 	this.dirty = true
+	this.fullDirty = true
+	this.dirtyRegion = geom.Rect{}
+}
+
+// MarkDirtyRect grows the pending dirty area by the given logical rect.
+// Coalesces consecutive calls into a single bounding rect — there is at
+// most one accumulated region per frame. If MarkFullDirty was called this
+// frame the call is a no-op (the whole window is already going to repaint).
+//
+// Coordinates are widget-local (the same coordinate system widget Bounds()
+// uses). The paint pass converts to physical pixels via the content scale.
+func (this *Window) MarkDirtyRect(x, y, w, h float64) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	this.dirty = true
+	if this.fullDirty {
+		return
+	}
+	r := geom.Rect{X: x, Y: y, Width: w, Height: h}
+	if this.dirtyRegion.Width == 0 || this.dirtyRegion.Height == 0 {
+		this.dirtyRegion = r
+	} else {
+		this.dirtyRegion = this.dirtyRegion.UniteCopy(r)
+	}
+}
+
+// MarkFullDirty marks the entire window for redraw, discarding any
+// accumulated partial dirty rect. Used when a global change (theme,
+// resize, scroll) invalidates everything.
+func (this *Window) MarkFullDirty() {
+	this.dirty = true
+	this.fullDirty = true
+	this.dirtyRegion = geom.Rect{}
 }
 
 func (this *Window) mapFromGlobal(x, y float64) (x1, y1 float64) {
@@ -1070,7 +1230,16 @@ func markAllWindowsDirty() {
 }
 
 // MainLoop runs the GLFW event loop.
-// Uses WaitEventsTimeout for a ~60fps cap that sleeps when idle, saving CPU.
+//
+// Frame-pacing strategy:
+//   - SwapInterval(1) is enabled per-window in create(), so SwapBuffers blocks
+//     until the next display retrace. On ProMotion / 120Hz / 144Hz displays
+//     this adapts to the panel's actual refresh rate instead of a hard 60fps.
+//   - When the UI is idle (no animations, no live perf overlay) we use a long
+//     wait timeout so timers still fire (idle timer = 47ms) and the loop can
+//     react to off-thread wake-ups, but the CPU stays asleep most of the time.
+//   - When animations are running or the perf overlay is live we use the
+//     classic ~16ms tick so redraws happen smoothly.
 func MainLoop() {
 	core.Debug("MainLoop()")
 	defer func() {
@@ -1085,10 +1254,15 @@ func MainLoop() {
 	}
 
 	for !shouldQuit {
-		// Wait for events with a timeout of ~16ms (60fps cap).
-		// This replaces PollEvents+Sleep(4ms) -- it blocks when idle
-		// (saving CPU) and wakes immediately when events arrive.
-		glfw.WaitEventsTimeout(1.0 / 60.0)
+		// Tick rate selection. The 47ms idle-timer interval is the longest
+		// quiescent loop we can afford without breaking blinking cursors and
+		// hover-stop detection.
+		needsTick := GlobalPerfStats.IsVisible() || HasActiveAnimations()
+		if needsTick {
+			glfw.WaitEventsTimeout(1.0 / 60.0)
+		} else {
+			glfw.WaitEventsTimeout(0.047)
+		}
 		processTimers()
 
 		// When the perf overlay is visible we request a repaint every
@@ -1875,7 +2049,15 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	}()
 
 	for this.inModal && !shouldQuit {
-		glfw.WaitEventsTimeout(1.0 / 60.0)
+		// Same wait strategy as MainLoop: short timeout when continuous
+		// redraw is needed, longer (47ms idle-timer interval) otherwise.
+		// SwapInterval(1) handles vsync.
+		needsTick := GlobalPerfStats.IsVisible() || HasActiveAnimations()
+		if needsTick {
+			glfw.WaitEventsTimeout(1.0 / 60.0)
+		} else {
+			glfw.WaitEventsTimeout(0.047)
+		}
 		processTimers()
 
 		// Paint non-popup windows first, then popups on top

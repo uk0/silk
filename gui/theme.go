@@ -17,10 +17,21 @@ const (
 
 var currentThemeMode ThemeMode = ThemeLight
 
+// themeRev is bumped whenever the active theme changes. Widgets that cache
+// SizeHints derived from theme metrics (Font, ButtonMargin, IconSize, etc.)
+// compare against the captured revision to detect staleness without paying for
+// repeated cairo TextExtents/FontExtents calls on every layout pass.
+var themeRev uint64
+
+// ThemeRev returns the current theme revision counter. Caches that depend on
+// theme-derived values should capture this and re-validate by comparison.
+func ThemeRev() uint64 { return themeRev }
+
 // SetThemeMode switches between light and dark themes.
 func SetThemeMode(mode ThemeMode) {
 	currentThemeMode = mode
 	defaultThemeSingleton = nil // Force re-creation
+	themeRev++
 }
 
 // CurrentThemeMode returns the active theme mode.

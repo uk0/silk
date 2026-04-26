@@ -34,6 +34,24 @@ type Button struct {
 	subPopup   IWidget
 	syncTime   time.Time
 	cbSubPopup func(IButton)
+
+	// SizeHints cache. Validity is determined by comparing the captured key
+	// fields below against the current widget/theme state on each call. The
+	// cache eliminates ~4 cairo allocations per Button.SizeHints() (the two
+	// font extents calls plus their backing scaledFont machinery), which
+	// dominates layout cost when many buttons are children of an HBox/VBox.
+	//
+	// Cache key inputs:
+	//   hintActionMTime — covers SetText/SetIcon/SetEnabled/SetChecked
+	//   hintTextVis     — covers SetTextVisible (does not flow through Action)
+	//   hintParent      — covers IsInPopupMenu transitions on reparent
+	//   hintThemeRev    — covers SetThemeMode font/margin changes
+	cachedHints     SizeHints
+	hintActionMTime time.Time
+	hintParent      IWidget
+	hintThemeRev    uint64
+	hintTextVis     bool
+	hintsValid      bool
 }
 
 func init() {
@@ -145,6 +163,45 @@ func (this *Button) IsEnabled() bool {
 }
 
 func (this *Button) SizeHints() SizeHints {
+	// Fast path: check cache. SizeHints depends on
+	//   1. Action.MTime (text/icon/enabled/checked changes)
+	//   2. textVisible local flag
+	//   3. parent (controls IsInPopupMenu via IMenu type assertion)
+	//   4. theme revision (font, margins, icon size)
+	// Resolved IsTextVisible / IsIconVisible / IsInPopupMenu collapse to
+	// (action state, textVisible, parent), so the cache key above is closed.
+	if this.hintsValid {
+		var mtime time.Time
+		if this.action != nil {
+			mtime = this.action.MTime()
+		}
+		if mtime.Equal(this.hintActionMTime) &&
+			this.hintThemeRev == themeRev &&
+			this.hintParent == this.parent &&
+			this.hintTextVis == this.textVisible {
+			return this.cachedHints
+		}
+	}
+
+	hints := this.computeSizeHints()
+
+	if this.action != nil {
+		this.hintActionMTime = this.action.MTime()
+	} else {
+		this.hintActionMTime = time.Time{}
+	}
+	this.hintThemeRev = themeRev
+	this.hintParent = this.parent
+	this.hintTextVis = this.textVisible
+	this.cachedHints = hints
+	this.hintsValid = true
+	return hints
+}
+
+// computeSizeHints performs the original (uncached) computation. Pulled out
+// of SizeHints() so the cache wrapper stays small and the slow path remains
+// auditable.
+func (this *Button) computeSizeHints() SizeHints {
 	t := Theme()
 
 	if this.IsTextVisible() {
@@ -179,6 +236,13 @@ func (this *Button) SizeHints() SizeHints {
 		//core.Debug(w, h)
 		return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
 	}
+}
+
+// invalidateHints marks the SizeHints cache stale. Called by setters that
+// don't flow through Action.MTime (SetTextVisible) and could otherwise leave
+// the cache pointing at obsolete metrics.
+func (this *Button) invalidateHints() {
+	this.hintsValid = false
 }
 
 func (this *Button) SetSubPopup(iw IWidget) {
@@ -330,7 +394,11 @@ func (this *Button) IsTextVisible() bool {
 }
 
 func (this *Button) SetTextVisible(b bool) {
+	if this.textVisible == b {
+		return
+	}
 	this.textVisible = b
+	this.invalidateHints()
 }
 
 func (this *Button) IsIconVisible() bool {
