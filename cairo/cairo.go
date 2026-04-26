@@ -1,6 +1,5 @@
 package cairo
 
-// #cgo pkg-config: cairo
 // #include <cairo/cairo.h>
 // #include <stdlib.h>
 // #include <memory.h>
