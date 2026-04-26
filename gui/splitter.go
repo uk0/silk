@@ -92,8 +92,7 @@ func (this *Splitter) normalizeSizes(n int) []float64 {
 }
 
 func (this *Splitter) Layout() {
-	children := this.Self().Children()
-	n := len(children)
+	n := this.NakedWidget().childCount()
 	if n == 0 {
 		return
 	}
@@ -115,11 +114,12 @@ func (this *Splitter) Layout() {
 			available = 0
 		}
 		yOff := 0.0
-		for i, c := range children {
+		this.NakedWidget().eachChild(func(i int, c IWidget) bool {
 			ch := available * sizes[i] / total
 			c.SetBounds(0, yOff, w, ch)
 			yOff += ch + this.handleSize
-		}
+			return true
+		})
 	} else {
 		// Horizontal: children side by side
 		available := w - handlesTotal
@@ -127,18 +127,19 @@ func (this *Splitter) Layout() {
 			available = 0
 		}
 		xOff := 0.0
-		for i, c := range children {
+		this.NakedWidget().eachChild(func(i int, c IWidget) bool {
 			cw := available * sizes[i] / total
 			c.SetBounds(xOff, 0, cw, h)
 			xOff += cw + this.handleSize
-		}
+			return true
+		})
 	}
 }
 
 // handleRect returns the bounding rect of handle at index i (between child i and child i+1).
+// Computes geometry from cached sizes without materializing the child list.
 func (this *Splitter) handleRect(i int) (hx, hy, hw, hh float64) {
-	children := this.Self().Children()
-	n := len(children)
+	n := this.NakedWidget().childCount()
 	if i < 0 || i >= n-1 {
 		return
 	}
@@ -183,14 +184,52 @@ func (this *Splitter) handleRect(i int) (hx, hy, hw, hh float64) {
 }
 
 // hitTestHandle returns the handle index at point (x, y), or -1 if none.
+// Walks handles inline rather than calling handleRect repeatedly so the
+// child-count fetch and total computation happen once per call.
 func (this *Splitter) hitTestHandle(x, y float64) int {
-	children := this.Self().Children()
-	n := len(children)
+	n := this.NakedWidget().childCount()
+	if n < 2 {
+		return -1
+	}
+
+	w, h := this.Self().Size()
+	sizes := this.normalizeSizes(n)
+
+	var total float64
+	for _, s := range sizes {
+		total += s
+	}
+
+	handlesTotal := float64(n-1) * this.handleSize
+
+	if this.vertical {
+		available := h - handlesTotal
+		if available < 0 {
+			available = 0
+		}
+		yOff := 0.0
+		for i := 0; i < n-1; i++ {
+			yOff += available * sizes[i] / total
+			// handle is at [yOff, yOff+handleSize) in y
+			if y >= yOff && y < yOff+this.handleSize && x >= 0 && x < w {
+				return i
+			}
+			yOff += this.handleSize
+		}
+		return -1
+	}
+
+	available := w - handlesTotal
+	if available < 0 {
+		available = 0
+	}
+	xOff := 0.0
 	for i := 0; i < n-1; i++ {
-		hx, hy, hw, hh := this.handleRect(i)
-		if x >= hx && x < hx+hw && y >= hy && y < hy+hh {
+		xOff += available * sizes[i] / total
+		if x >= xOff && x < xOff+this.handleSize && y >= 0 && y < h {
 			return i
 		}
+		xOff += this.handleSize
 	}
 	return -1
 }
@@ -215,8 +254,7 @@ func (this *Splitter) OnLeftDown(x, y float64) {
 
 func (this *Splitter) OnMouseMove(x, y float64) {
 	if this.dragging >= 0 {
-		children := this.Self().Children()
-		n := len(children)
+		n := this.NakedWidget().childCount()
 		sizes := this.normalizeSizes(n)
 
 		var total float64
@@ -292,8 +330,7 @@ func (this *Splitter) Cursor() *Cursor {
 }
 
 func (this *Splitter) Draw(g paint.Painter) {
-	children := this.Self().Children()
-	n := len(children)
+	n := this.NakedWidget().childCount()
 	t := Theme()
 
 	// Draw handles between children
@@ -317,20 +354,20 @@ func (this *Splitter) Draw(g paint.Painter) {
 }
 
 func (this *Splitter) SizeHints() SizeHints {
-	children := this.Self().Children()
-	n := len(children)
+	n := this.NakedWidget().childCount()
 	if n == 0 {
 		return SizeHints{}
 	}
 
 	var totalW, totalH, maxW, maxH float64
-	for _, c := range children {
+	this.NakedWidget().eachChild(func(_ int, c IWidget) bool {
 		hi := c.SizeHints()
 		totalW += hi.Width
 		totalH += hi.Height
 		maxW = math.Max(maxW, hi.Width)
 		maxH = math.Max(maxH, hi.Height)
-	}
+		return true
+	})
 
 	handlesTotal := float64(n-1) * this.handleSize
 

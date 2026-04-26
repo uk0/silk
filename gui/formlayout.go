@@ -97,8 +97,20 @@ func (this *FormLayout) Layout() {
 		widgetW = 0
 	}
 
-	// Determine row heights
-	heights := make([]float64, n)
+	// Pooled scratch for row heights — reuse the generic layoutScratch sizes
+	// buffer (it's an []float64 already). This eliminates the per-call
+	// `make([]float64, n)`.
+	scratch := acquireLayoutScratch()
+	if cap(scratch.sizes) >= n {
+		scratch.sizes = scratch.sizes[:n]
+		for i := range scratch.sizes {
+			scratch.sizes[i] = 0
+		}
+	} else {
+		scratch.sizes = make([]float64, n)
+	}
+	heights := scratch.sizes
+
 	var fixedTotal float64
 	var flexCount int
 
@@ -142,6 +154,8 @@ func (this *FormLayout) Layout() {
 
 		yOff += rh + this.spacing
 	}
+
+	releaseLayoutScratch(scratch)
 }
 
 func (this *FormLayout) Draw(g paint.Painter) {

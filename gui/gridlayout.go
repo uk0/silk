@@ -116,8 +116,12 @@ func (this *GridLayout) Layout() {
 		return
 	}
 
-	// Resolve column widths
-	colW := make([]float64, maxCols)
+	// Use a pooled scratch buffer for column widths, row heights, and the
+	// cumulative offset arrays. This avoids 4 allocations per Layout() call.
+	scratch := acquireGridScratch()
+
+	colW := growF64(scratch.colW, maxCols)
+	scratch.colW = colW
 	var fixedW float64
 	var flexCols int
 	for i := 0; i < maxCols; i++ {
@@ -147,7 +151,8 @@ func (this *GridLayout) Layout() {
 	}
 
 	// Resolve row heights
-	rowH := make([]float64, maxRows)
+	rowH := growF64(scratch.rowH, maxRows)
+	scratch.rowH = rowH
 	var fixedH float64
 	var flexRows int
 	for i := 0; i < maxRows; i++ {
@@ -176,15 +181,17 @@ func (this *GridLayout) Layout() {
 		}
 	}
 
-	// Compute cumulative X positions for columns
-	colX := make([]float64, maxCols)
+	// Compute cumulative X positions for columns (pooled).
+	colX := growF64(scratch.colX, maxCols)
+	scratch.colX = colX
 	colX[0] = x0
 	for i := 1; i < maxCols; i++ {
 		colX[i] = colX[i-1] + colW[i-1] + this.spacing
 	}
 
-	// Compute cumulative Y positions for rows
-	rowY := make([]float64, maxRows)
+	// Compute cumulative Y positions for rows (pooled).
+	rowY := growF64(scratch.rowY, maxRows)
+	scratch.rowY = rowY
 	rowY[0] = y0
 	for i := 1; i < maxRows; i++ {
 		rowY[i] = rowY[i-1] + rowH[i-1] + this.spacing
@@ -218,6 +225,8 @@ func (this *GridLayout) Layout() {
 
 		c.widget.SetBounds(cx, cy, cw, ch)
 	}
+
+	releaseGridScratch(scratch)
 }
 
 func (this *GridLayout) Draw(g paint.Painter) {
@@ -231,9 +240,12 @@ func (this *GridLayout) SizeHints() SizeHints {
 
 	maxRows, maxCols := this.gridDimensions()
 
-	// For each column, find max child width; for each row, find max child height
-	colW := make([]float64, maxCols)
-	rowH := make([]float64, maxRows)
+	// Pooled scratch — colW + rowH only; no offset arrays needed here.
+	scratch := acquireGridScratch()
+	colW := growF64(scratch.colW, maxCols)
+	scratch.colW = colW
+	rowH := growF64(scratch.rowH, maxRows)
+	scratch.rowH = rowH
 
 	for _, c := range this.cells {
 		hi := c.widget.SizeHints()
@@ -270,5 +282,6 @@ func (this *GridLayout) SizeHints() SizeHints {
 	totalW += float64(maxCols-1)*this.spacing + this.padding.L + this.padding.R
 	totalH += float64(maxRows-1)*this.spacing + this.padding.T + this.padding.B
 
+	releaseGridScratch(scratch)
 	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
 }
