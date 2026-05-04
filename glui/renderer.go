@@ -26,10 +26,20 @@ type Renderer struct {
 
 	// Current shader+texture key. When this changes we flush the current
 	// batch before starting a new one.
-	curKind   batchKind
-	curTex    uint32
+	curKind batchKind
+	curTex  uint32
 
 	frameW, frameH float32
+
+	// Modelview transform stack. xform is the current top of stack and is
+	// applied inside project() before clip-space conversion.
+	xform  matrix3
+	xstack []matrix3
+
+	// Clip stack. curClip is the active GL scissor; clipStack holds the
+	// previous states pushed by PushClip().
+	curClip   clipState
+	clipStack []clipState
 }
 
 type batchKind uint8
@@ -53,35 +63,55 @@ func (c *Context) Begin(fbW, fbH float32) *Renderer {
 	r.curTex = 0
 	r.frameW = fbW
 	r.frameH = fbH
+
+	// Reset transform stack to identity for this frame.
+	r.xform = identityMatrix3()
+	r.xstack = r.xstack[:0]
+
+	// Reset clip stack — prior-frame scissor state must not leak.
+	r.curClip = clipState{}
+	r.clipStack = r.clipStack[:0]
+	gl.Disable(gl.SCISSOR_TEST)
+
 	return r
 }
 
 // End flushes any pending batch and uploads to the GPU.
 func (r *Renderer) End() {
 	r.flush()
+	// Make sure scissor is off for whatever runs after us.
+	gl.Disable(gl.SCISSOR_TEST)
 	rendererPool.put(r)
 }
 
 // project converts a point in logical (top-left origin, Y-down) coordinates
-// to clip space [-1, 1] with Y-up.
+// to clip space [-1, 1] with Y-up. The current modelview transform is
+// applied first.
 func (r *Renderer) project(x, y float32) (cx, cy float32) {
-	cx = (x/r.frameW)*2 - 1
-	cy = 1 - (y/r.frameH)*2
+	// Apply modelview transform (column-major affine, last row implicit).
+	tx := r.xform[0]*x + r.xform[3]*y + r.xform[6]
+	ty := r.xform[1]*x + r.xform[4]*y + r.xform[7]
+	// Project to clip space.
+	cx = (tx/r.frameW)*2 - 1
+	cy = 1 - (ty/r.frameH)*2
 	return
 }
 
 // pushQuad emits 4 vertices + 6 indices forming a quad with the given
-// shared color. Used for solid rects, glyphs, and image blits.
+// shared color. Each corner is projected through the current transform
+// independently so the quad survives rotation/skew correctly.
 func (r *Renderer) pushQuad(x, y, w, h float32, u0, v0, u1, v1 float32, col Color) {
 	base := uint16(len(r.verts))
 	x0, y0 := r.project(x, y)
-	x1, y1 := r.project(x+w, y+h)
+	x1, y1 := r.project(x+w, y)
+	x2, y2 := r.project(x+w, y+h)
+	x3, y3 := r.project(x, y+h)
 
 	r.verts = append(r.verts,
 		vertex{x0, y0, u0, v0, col.R, col.G, col.B, col.A},
-		vertex{x1, y0, u1, v0, col.R, col.G, col.B, col.A},
-		vertex{x1, y1, u1, v1, col.R, col.G, col.B, col.A},
-		vertex{x0, y1, u0, v1, col.R, col.G, col.B, col.A},
+		vertex{x1, y1, u1, v0, col.R, col.G, col.B, col.A},
+		vertex{x2, y2, u1, v1, col.R, col.G, col.B, col.A},
+		vertex{x3, y3, u0, v1, col.R, col.G, col.B, col.A},
 	)
 	r.indices = append(r.indices,
 		base, base+1, base+2,

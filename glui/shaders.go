@@ -100,15 +100,16 @@ void main() {
 }
 `
 
+// Glyph fragment: samples a single-channel coverage atlas and modulates the
+// vertex color. We use the red channel rather than alpha for forward
+// compatibility with both LUMINANCE (GL 2.1 raster fonts) and R8/SDF atlases.
 const glyphFragSrc = `
 #version 120
 varying vec2 v_uv;
 varying vec4 v_color;
-uniform sampler2D u_atlas;
-uniform float u_smoothness; // ~0.04..0.08 depending on font size
+uniform sampler2D u_tex;
 void main() {
-    float d = texture2D(u_atlas, v_uv).r;
-    float a = smoothstep(0.5 - u_smoothness, 0.5 + u_smoothness, d);
+    float a = texture2D(u_tex, v_uv).r;
     gl_FragColor = vec4(v_color.rgb, v_color.a * a);
 }
 `
