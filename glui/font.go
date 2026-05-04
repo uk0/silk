@@ -167,10 +167,14 @@ func (f *Font) upload() {
 		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	} else {
 		gl.BindTexture(gl.TEXTURE_2D, f.texture)
 	}
+
+	// UNPACK_ALIGNMENT is global GL state — if some other code flips it
+	// to the default 4, a subsequent non-4-aligned atlas upload would
+	// skew the glyph rows. Set it every upload as defence-in-depth.
+	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 
 	gl.TexImage2D(
 		gl.TEXTURE_2D, 0, gl.LUMINANCE,
