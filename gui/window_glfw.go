@@ -634,6 +634,11 @@ func (this *Window) paintGlui() {
 	} else {
 		this.gluiPainter.BindRenderer(r)
 	}
+	// Advance the painter's frame clock + run cache eviction. Must come
+	// after BindRenderer (which preserves the texture maps) and before
+	// DrawWidgetAll so every Draw* call below stamps the new frame's
+	// counter on its cache hits.
+	this.gluiPainter.BeginFrame()
 
 	func() {
 		defer func() {

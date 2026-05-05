@@ -3,6 +3,7 @@ package glui
 import (
 	"image"
 	"math"
+	"sort"
 
 	"silk/geom"
 	"silk/glui/path"
@@ -82,14 +83,29 @@ type CairoCompat struct {
 	//
 	// Lives on CairoCompat (not Renderer) so it survives BindRenderer and
 	// the corresponding GL context is the same Window that created glui.Context.
-	pixmapTextures map[paint.Pixmap]*Texture
+	//
+	// Each entry tracks its last-used frame so BeginFrame can evict stale
+	// textures (e.g. theme-change icons that the new theme no longer paints).
+	pixmapTextures map[paint.Pixmap]*pixmapEntry
 
 	// iconTextures caches per-(icon, size) renders. icon.Pixmap(size)
 	// allocates a fresh *cairoSurface every call, so a pixmap-pointer cache
 	// alone would miss every frame and leak GL textures unboundedly. We
 	// short-circuit at the icon layer instead — same icon at the same size
 	// always maps to the same texture.
-	iconTextures map[iconCacheKey]*Texture
+	iconTextures map[iconCacheKey]*pixmapEntry
+
+	// frameCount is incremented once per BeginFrame() and stamps the lastUsed
+	// field on cache hits + misses. It survives BindRenderer because GL
+	// textures live on the same context across frames.
+	frameCount uint64
+}
+
+// pixmapEntry pairs a cached GL texture with the last frame on which it was
+// touched. Used by BeginFrame's eviction pass to free stale uploads.
+type pixmapEntry struct {
+	tex      *Texture
+	lastUsed uint64
 }
 
 // iconCacheKey is comparable: paint.Icon is an interface whose concrete type
@@ -124,8 +140,8 @@ func NewCairoCompat(r *Renderer) *CairoCompat {
 		penColor:       paint.Color{R: 0, G: 0, B: 0, A: 255},
 		brushColor:     paint.Color{R: 0, G: 0, B: 0, A: 255},
 		fontCache:      NewFontCache(),
-		pixmapTextures: make(map[paint.Pixmap]*Texture),
-		iconTextures:   make(map[iconCacheKey]*Texture),
+		pixmapTextures: make(map[paint.Pixmap]*pixmapEntry),
+		iconTextures:   make(map[iconCacheKey]*pixmapEntry),
 	}
 	c.ctm.InitIdentity()
 	return c
@@ -157,6 +173,132 @@ func (c *CairoCompat) BindRenderer(r *Renderer) {
 // Cairo surface — widgets never read this in the standard set, so a nil
 // is safe and avoids inventing a fake.
 func (c *CairoCompat) Target() paint.Surface { return nil }
+
+// --- Cache lifecycle --------------------------------------------------
+
+// cacheEvictAfterFrames is the LRU threshold used by BeginFrame: an entry
+// last touched more than this many frames ago is freed. At ~60 FPS this is
+// roughly 5 seconds of inactivity, which comfortably keeps theme-change
+// icons alive across a transient redraw flurry but reclaims memory before a
+// long-running designer session balloons.
+const cacheEvictAfterFrames uint64 = 60 * 5
+
+// cacheHardCap caps each map (pixmaps, icons) independently. Widget-heavy
+// scenes can pile up a few hundred unique pixmaps; 256 keeps the cache
+// useful while preventing pathological growth from e.g. a screen-recording
+// widget that uploads a fresh frame on every paint. Per-map (not combined)
+// because the two caches have very different access patterns and conflating
+// them would let an icon flood evict useful pixmaps and vice versa.
+const cacheHardCap = 256
+
+// BeginFrame advances the cache LRU clock and evicts stale entries. Hosts
+// MUST call this once per frame before any DrawWidgetAll / Draw* call so
+// the lastUsed stamps inside the upload helpers track frame-relative time.
+//
+// Eviction policy:
+//   - Entries last touched more than cacheEvictAfterFrames ago are freed
+//     immediately. The GL texture is released via Texture.Free() so the
+//     driver can reclaim VRAM.
+//   - When either map exceeds cacheHardCap after the time-based pass, the
+//     oldest 25% are freed (LRU). This is a safety valve, not the primary
+//     mechanism — most workloads should see only the time-based pass fire.
+//
+// BeginFrame must run on the same GL context that uploaded the textures —
+// gl.DeleteTextures is context-affine. Window.paintGlui() satisfies this by
+// calling MakeContextCurrent before BeginFrame.
+func (c *CairoCompat) BeginFrame() {
+	c.frameCount++
+
+	// Time-based eviction. A subtle wraparound case: frameCount started at
+	// zero, so on early frames (frameCount < cacheEvictAfterFrames) the
+	// subtraction would underflow uint64. Skip the pass entirely until we
+	// have enough history — the hard cap still protects against bursty
+	// uploads during startup.
+	if c.frameCount > cacheEvictAfterFrames {
+		threshold := c.frameCount - cacheEvictAfterFrames
+		for k, e := range c.pixmapTextures {
+			if e.lastUsed < threshold {
+				e.tex.Free()
+				delete(c.pixmapTextures, k)
+			}
+		}
+		for k, e := range c.iconTextures {
+			if e.lastUsed < threshold {
+				e.tex.Free()
+				delete(c.iconTextures, k)
+			}
+		}
+	}
+
+	c.enforceCacheCapacity()
+}
+
+// enforceCacheCapacity is the LRU safety valve. Called from upload paths
+// (so the cap holds even when BeginFrame is not yet wired up) and from
+// BeginFrame's eviction tail. When either map is over cap, drops the oldest
+// 25% by lastUsed.
+//
+// The 25% bulk-evict is intentional: trimming one entry at a time would
+// thrash the cache when the workload is genuinely above the cap. Burning
+// the next 25% gives the system breathing room before the next eviction.
+func (c *CairoCompat) enforceCacheCapacity() {
+	if len(c.pixmapTextures) > cacheHardCap {
+		c.evictOldestPixmaps(len(c.pixmapTextures) / 4)
+	}
+	if len(c.iconTextures) > cacheHardCap {
+		c.evictOldestIcons(len(c.iconTextures) / 4)
+	}
+}
+
+// evictOldestPixmaps drops the n least-recently-used entries from the
+// pixmap cache. n <= 0 is a no-op.
+func (c *CairoCompat) evictOldestPixmaps(n int) {
+	if n <= 0 || len(c.pixmapTextures) == 0 {
+		return
+	}
+	type kv struct {
+		k paint.Pixmap
+		u uint64
+	}
+	all := make([]kv, 0, len(c.pixmapTextures))
+	for k, e := range c.pixmapTextures {
+		all = append(all, kv{k, e.lastUsed})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].u < all[j].u })
+	if n > len(all) {
+		n = len(all)
+	}
+	for i := 0; i < n; i++ {
+		e := c.pixmapTextures[all[i].k]
+		e.tex.Free()
+		delete(c.pixmapTextures, all[i].k)
+	}
+}
+
+// evictOldestIcons drops the n least-recently-used entries from the icon
+// cache. n <= 0 is a no-op.
+func (c *CairoCompat) evictOldestIcons(n int) {
+	if n <= 0 || len(c.iconTextures) == 0 {
+		return
+	}
+	type kv struct {
+		k iconCacheKey
+		u uint64
+	}
+	all := make([]kv, 0, len(c.iconTextures))
+	for k, e := range c.iconTextures {
+		all = append(all, kv{k, e.lastUsed})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].u < all[j].u })
+	if n > len(all) {
+		n = len(all)
+	}
+	for i := 0; i < n; i++ {
+		e := c.iconTextures[all[i].k]
+		e.tex.Free()
+		delete(c.iconTextures, all[i].k)
+	}
+}
 
 // --- State management -------------------------------------------------
 
@@ -734,16 +876,21 @@ func (c *CairoCompat) DrawGlyph(glyph *paint.Glyph)    {}
 
 // uploadPixmap returns a GL texture for pm, uploading on first sight.
 // Returns nil if pm is nil/empty or its bytes can't be retrieved.
+//
+// Stamps lastUsed on every hit AND miss so BeginFrame's LRU eviction sees
+// recently-touched entries as alive even when they predate the current frame.
 func (c *CairoCompat) uploadPixmap(pm paint.Pixmap) *Texture {
 	if pm == nil {
 		return nil
 	}
-	if tex, ok := c.pixmapTextures[pm]; ok {
-		return tex
+	if e, ok := c.pixmapTextures[pm]; ok {
+		e.lastUsed = c.frameCount
+		return e.tex
 	}
 	tex := c.uploadPixmapNoCache(pm)
 	if tex != nil {
-		c.pixmapTextures[pm] = tex
+		c.pixmapTextures[pm] = &pixmapEntry{tex: tex, lastUsed: c.frameCount}
+		c.enforceCacheCapacity()
 	}
 	return tex
 }
@@ -898,8 +1045,11 @@ func (c *CairoCompat) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool
 		return
 	}
 	key := iconCacheKey{ico: ico, size: size}
-	tex, ok := c.iconTextures[key]
-	if !ok {
+	var tex *Texture
+	if e, ok := c.iconTextures[key]; ok {
+		e.lastUsed = c.frameCount
+		tex = e.tex
+	} else {
 		pm := ico.Pixmap(size)
 		if pm == nil {
 			return
@@ -908,7 +1058,8 @@ func (c *CairoCompat) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool
 		if tex == nil {
 			return
 		}
-		c.iconTextures[key] = tex
+		c.iconTextures[key] = &pixmapEntry{tex: tex, lastUsed: c.frameCount}
+		c.enforceCacheCapacity()
 	}
 	tint := Color{1, 1, 1, 1}
 	if grayed {

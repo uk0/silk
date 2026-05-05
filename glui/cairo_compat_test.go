@@ -2,9 +2,12 @@ package glui
 
 import (
 	"image"
+	"io"
+	"silk/cairo"
 	"silk/geom"
 	"silk/paint"
 	"testing"
+	"unsafe"
 )
 
 // All CairoCompat tests reuse the off-GL test renderer from
@@ -368,5 +371,214 @@ func TestUnpremultiplyRGBA(t *testing.T) {
 		if dst.Pix[i] != v {
 			t.Errorf("dst.Pix[%d] = %d, want %d", i, dst.Pix[i], v)
 		}
+	}
+}
+
+// --- Cache eviction tests ---------------------------------------------
+//
+// All cache-eviction tests bypass the upload path by inserting fake
+// entries directly into the cache maps. Texture entries with id=0 are GL
+// no-ops on Free() (see image.go) so the tests stay GL-free under
+// `go test -short`. The lifecycle methods we exercise (BeginFrame,
+// enforceCacheCapacity) accept synthetic frameCount values, so a single
+// test can simulate a many-second run without a real frame loop.
+
+// fakePixmapKey is a minimal paint.Pixmap stub used as a comparable map
+// key in eviction tests. The cache code only ever uses the value as an
+// identity token (map key + tex/lastUsed lookup) — the upload helpers are
+// bypassed by inserting entries directly. So every method may return its
+// zero value; satisfying the interface is the only requirement.
+type fakePixmapKey struct {
+	w, h int
+}
+
+func (p *fakePixmapKey) SurfaceType() cairo.SurfaceType   { return 0 }
+func (p *fakePixmapKey) NewPainter() paint.Painter        { return nil }
+func (p *fakePixmapKey) Flush()                           {}
+func (p *fakePixmapKey) Format() paint.Format             { return paint.FormatARGB32 }
+func (p *fakePixmapKey) Width() int                       { return p.w }
+func (p *fakePixmapKey) Height() int                      { return p.h }
+func (p *fakePixmapKey) Stride() int                      { return p.w * 4 }
+func (p *fakePixmapKey) DataPtr() unsafe.Pointer          { return nil }
+func (p *fakePixmapKey) WritePNGToStream(w io.Writer) error { return nil }
+func (p *fakePixmapKey) WritePNG(filename string) error     { return nil }
+func (p *fakePixmapKey) Image() (image.Image, error)        { return nil, nil }
+func (p *fakePixmapKey) SetData(src []uint8) error          { return nil }
+func (p *fakePixmapKey) SetImage(img image.Image) error     { return nil }
+
+// fakeIcon is a minimal paint.Icon stub for icon-cache tests. IsAir is
+// false (otherwise DrawIcon* skips the cache); Pixmap is unused because
+// the eviction tests insert entries directly without going through the
+// upload path.
+type fakeIcon struct{ id int }
+
+func (i *fakeIcon) AvailableSize() []int          { return nil }
+func (i *fakeIcon) IsAir() bool                   { return false }
+func (i *fakeIcon) Pixmap(size int) paint.Pixmap  { return nil }
+
+// TestCacheBeginFrameEvictsStaleEntries: an entry whose lastUsed is older
+// than cacheEvictAfterFrames must be freed and removed.
+func TestCacheBeginFrameEvictsStaleEntries(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+
+	// Insert an entry stamped at frame 0.
+	pm := &fakePixmapKey{w: 4, h: 4}
+	c.pixmapTextures[pm] = &pixmapEntry{
+		tex:      &Texture{id: 0, width: 4, height: 4},
+		lastUsed: 0,
+	}
+
+	// Fast-forward the frame counter past the eviction window. BeginFrame's
+	// pass evicts anything stamped before (frameCount - cacheEvictAfterFrames).
+	c.frameCount = cacheEvictAfterFrames + 5
+
+	// One BeginFrame() call should now sweep the stale entry.
+	c.BeginFrame()
+	if _, ok := c.pixmapTextures[pm]; ok {
+		t.Fatalf("BeginFrame failed to evict stale entry (lastUsed=0, frameCount=%d)", c.frameCount)
+	}
+}
+
+// TestCacheBeginFramePreservesRecent: an entry touched on the current
+// frame must NOT be evicted, even when other stale entries are also
+// present.
+func TestCacheBeginFramePreservesRecent(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+
+	// Pre-warm the frame counter.
+	c.frameCount = cacheEvictAfterFrames * 2
+
+	stalePm := &fakePixmapKey{w: 4, h: 4}
+	freshPm := &fakePixmapKey{w: 8, h: 8}
+	c.pixmapTextures[stalePm] = &pixmapEntry{
+		tex:      &Texture{id: 0, width: 4, height: 4},
+		lastUsed: 0,
+	}
+	c.pixmapTextures[freshPm] = &pixmapEntry{
+		tex:      &Texture{id: 0, width: 8, height: 8},
+		lastUsed: c.frameCount,
+	}
+
+	c.BeginFrame()
+
+	if _, ok := c.pixmapTextures[stalePm]; ok {
+		t.Fatal("BeginFrame did not evict stale entry")
+	}
+	if _, ok := c.pixmapTextures[freshPm]; !ok {
+		t.Fatal("BeginFrame evicted a fresh entry — should be kept")
+	}
+}
+
+// TestCacheBeginFrameEarlyFramesNoEvict: in the first cacheEvictAfterFrames
+// frames the time-based pass is skipped (subtraction would underflow). This
+// test guards the lower-bound check.
+func TestCacheBeginFrameEarlyFramesNoEvict(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+
+	pm := &fakePixmapKey{w: 4, h: 4}
+	c.pixmapTextures[pm] = &pixmapEntry{
+		tex:      &Texture{id: 0, width: 4, height: 4},
+		lastUsed: 0,
+	}
+
+	// frameCount stays well under the eviction window.
+	for i := 0; i < 10; i++ {
+		c.BeginFrame()
+	}
+
+	if _, ok := c.pixmapTextures[pm]; !ok {
+		t.Fatal("early-frame BeginFrame evicted entries; eviction must wait until frameCount > cacheEvictAfterFrames")
+	}
+}
+
+// TestCacheHardCapEvictsOldest25Pct: when the pixmap map exceeds
+// cacheHardCap, enforceCacheCapacity drops the oldest 25%.
+func TestCacheHardCapEvictsOldest25Pct(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+
+	// Insert cacheHardCap+1 entries with descending lastUsed so the oldest
+	// is the first inserted. The keys are distinct *fakePixmapKey pointers.
+	keys := make([]*fakePixmapKey, cacheHardCap+1)
+	for i := range keys {
+		keys[i] = &fakePixmapKey{w: i + 1, h: 1}
+		c.pixmapTextures[keys[i]] = &pixmapEntry{
+			tex:      &Texture{id: 0, width: i + 1, height: 1},
+			lastUsed: uint64(i), // older entries have smaller lastUsed
+		}
+	}
+
+	if len(c.pixmapTextures) != cacheHardCap+1 {
+		t.Fatalf("setup: have %d entries, want %d", len(c.pixmapTextures), cacheHardCap+1)
+	}
+
+	c.enforceCacheCapacity()
+
+	// 25% of (cacheHardCap+1) should now be gone.
+	wantDropped := (cacheHardCap + 1) / 4
+	wantRemaining := (cacheHardCap + 1) - wantDropped
+	if got := len(c.pixmapTextures); got != wantRemaining {
+		t.Fatalf("after enforceCacheCapacity have %d entries, want %d (dropped %d)",
+			got, wantRemaining, wantDropped)
+	}
+
+	// The oldest keys (lowest lastUsed = first inserted) must be the ones
+	// removed.
+	for i := 0; i < wantDropped; i++ {
+		if _, ok := c.pixmapTextures[keys[i]]; ok {
+			t.Errorf("oldest key %d (lastUsed=%d) should have been evicted", i, i)
+		}
+	}
+	// And the newest must remain.
+	for i := wantDropped; i < len(keys); i++ {
+		if _, ok := c.pixmapTextures[keys[i]]; !ok {
+			t.Errorf("recent key %d (lastUsed=%d) should NOT have been evicted", i, i)
+		}
+	}
+}
+
+// TestCacheHardCapAtBoundary: exactly cacheHardCap entries → no eviction.
+// Off-by-one regression guard for enforceCacheCapacity's `> cap` predicate.
+func TestCacheHardCapAtBoundary(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	for i := 0; i < cacheHardCap; i++ {
+		k := &fakePixmapKey{w: i + 1, h: 1}
+		c.pixmapTextures[k] = &pixmapEntry{
+			tex:      &Texture{id: 0, width: 1, height: 1},
+			lastUsed: uint64(i),
+		}
+	}
+	c.enforceCacheCapacity()
+	if got := len(c.pixmapTextures); got != cacheHardCap {
+		t.Fatalf("at-boundary cache size = %d, want %d (cap not respected)", got, cacheHardCap)
+	}
+}
+
+// TestCacheHardCapIcon: the icon map has its own independent cap. Verifies
+// the LRU sort + delete also works against iconCacheKey keys.
+func TestCacheHardCapIcon(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	for i := 0; i <= cacheHardCap; i++ {
+		k := iconCacheKey{ico: &fakeIcon{id: i}, size: 16}
+		c.iconTextures[k] = &pixmapEntry{
+			tex:      &Texture{id: 0, width: 16, height: 16},
+			lastUsed: uint64(i),
+		}
+	}
+	c.enforceCacheCapacity()
+	if got := len(c.iconTextures); got > cacheHardCap {
+		t.Fatalf("icon cache stayed above cap: have %d, cap %d", got, cacheHardCap)
+	}
+}
+
+// TestCacheBindRendererPreservesFrameCount: BindRenderer resets the
+// per-frame state but MUST keep the cache + frame counter alive — otherwise
+// the eviction pass would never trigger across frame boundaries.
+func TestCacheBindRendererPreservesFrameCount(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	c.frameCount = 1000
+	r2 := newAdapterTestRenderer()
+	c.BindRenderer(r2)
+	if c.frameCount != 1000 {
+		t.Fatalf("BindRenderer reset frameCount to %d; eviction LRU now broken across frames", c.frameCount)
 	}
 }
