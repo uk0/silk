@@ -9,13 +9,13 @@ import (
 // batch kind to catch regressions in vertex emission. Doesn't validate
 // pixel output — just asserts no panic and that vertex buffers grow.
 //
-// Uses newTestRenderer (transform_test.go) which has no GL context, so we
-// avoid:
-//   - Cross-kind transitions (would trigger flush → gl.BufferData → nil)
-//   - PushClip / PopClip (calls gl.Scissor / gl.Enable)
-//   - End() (calls gl.Disable)
-// Cross-kind paths and clip are exercised with a real GL context in
-// the standalone glui_demo.
+// Uses newTestRenderer (transform_test.go) which has no GL context. flush()
+// drains buffers safely without ctx since the radial-gradient work, so
+// cross-kind transitions no longer crash here — but the smoke test stays
+// minimal for clarity, exercising one batch kind so the assertions read
+// against a stable vertex layout. PushClip/PopClip and End() still need a
+// real GL context (gl.Scissor / gl.Enable / gl.Disable); those paths are
+// covered by the standalone glui_demo.
 func TestPublicAPISmoke(t *testing.T) {
 	r := newTestRenderer()
 

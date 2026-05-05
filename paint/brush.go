@@ -58,10 +58,11 @@ func (g *LinearGradient) AddStop(offset float32, c Color) {
 }
 
 // RadialGradient is a brush that interpolates colour radially from a centre
-// point at radius R0 (inner) to R1 (outer). Backend support is identical
-// to LinearGradient — Cairo treats it as a solid first-stop colour, and
-// the glui pure-OpenGL bridge currently approximates it with the start
-// stop only (TODO: shader path for radial fills).
+// point at radius R0 (inner) to R1 (outer). Both Cairo and glui render
+// every stop: Cairo via cairo_pattern_create_radial; glui via a fragment
+// shader that computes per-pixel distance from the centre and samples the
+// shared 256×1 colour ramp texture (FillRadialGradientRect). Non-rect
+// paths still fall back to a solid fill of the inner stop.
 type RadialGradient struct {
 	Cx, Cy, R0, R1 float32
 	Stops          []GradientStop

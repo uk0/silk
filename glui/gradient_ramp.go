@@ -25,6 +25,84 @@ type GradientStop struct {
 // help for HDR pipelines we don't support today.
 const gradientRampSize = 256
 
+// FillRadialGradientRect paints rc with a radial gradient centred at
+// (cx, cy) — given in the same logical coordinate space as rc — fading
+// from radius r0 (innermost stop) to r1 (outermost stop). Stops define
+// the colour ramp sampled by the fragment shader; the same 256×1 ramp
+// texture cache as FillMultiGradientRect is reused, so two rects with
+// identical stop lists share the GL texture.
+//
+// The vertex shader receives per-corner offsets (worldX-cx, worldY-cy)
+// in v_uv. GL's barycentric interpolation linearly fills the rect with
+// position offsets, so length(v_uv) at any fragment is the true distance
+// from the centre — no projection-aware adjustment needed beyond the
+// usual NDC project() call on a_pos.
+//
+// Degenerate cases:
+//   - empty stop list: no-op (matches Cairo behaviour).
+//   - single stop: solid fill of that colour.
+//   - r1 <= r0: shader collapses to a hard step at r0; the outer-most
+//     stop fills the rect minus a tiny disc at the centre.
+//
+// Like FillGradientRect, a change in r0/r1 forces a flush before the new
+// quad joins the batch — uniforms are per-program global, so two rects
+// with different radii cannot share a draw call. Same-radii rects with
+// the same texture (i.e. matching stop hash) batch into one DrawElements.
+func (r *Renderer) FillRadialGradientRect(rc Rect, cx, cy, r0, r1 float32, stops []GradientStop) {
+	if len(stops) == 0 {
+		return
+	}
+	if len(stops) == 1 {
+		r.FillRect(rc, stops[0].Color)
+		return
+	}
+
+	// Resolve the ramp texture. Off-GL (test) renderers leave ctx==nil; we
+	// still emit vertices so state-transition tests can observe the path.
+	tex := uint32(0)
+	if r.ctx != nil {
+		t := r.ctx.uploadGradientRamp(stops)
+		if t != nil {
+			tex = t.id
+		}
+	}
+
+	// A new radii pair must flush even when kind/tex are unchanged because
+	// u_radii is a uniform-global on the program. setBatch alone wouldn't
+	// notice the change.
+	if r.curKind != kindGradientRadial || r.curTex != tex || r.radR0 != r0 || r.radR1 != r1 {
+		r.flush()
+		r.curKind = kindGradientRadial
+		r.curTex = tex
+		r.radR0 = r0
+		r.radR1 = r1
+	}
+
+	base := uint16(len(r.verts))
+	x0, y0 := r.project(rc.X, rc.Y)
+	x1, y1 := r.project(rc.X+rc.W, rc.Y)
+	x2, y2 := r.project(rc.X+rc.W, rc.Y+rc.H)
+	x3, y3 := r.project(rc.X, rc.Y+rc.H)
+
+	// Pack each corner's offset from the gradient centre into v_uv. The
+	// fragment shader takes length(v_uv) per pixel.
+	u0, v0 := rc.X-cx, rc.Y-cy
+	u1, v1 := rc.X+rc.W-cx, rc.Y-cy
+	u2, v2 := rc.X+rc.W-cx, rc.Y+rc.H-cy
+	u3, v3 := rc.X-cx, rc.Y+rc.H-cy
+
+	r.verts = append(r.verts,
+		vertex{x0, y0, u0, v0, 1, 1, 1, 1, 0, 0, 0, 0},
+		vertex{x1, y1, u1, v1, 1, 1, 1, 1, 0, 0, 0, 0},
+		vertex{x2, y2, u2, v2, 1, 1, 1, 1, 0, 0, 0, 0},
+		vertex{x3, y3, u3, v3, 1, 1, 1, 1, 0, 0, 0, 0},
+	)
+	r.indices = append(r.indices,
+		base, base+1, base+2,
+		base, base+2, base+3,
+	)
+}
+
 // FillMultiGradientRect paints rc with a linear gradient defined by an
 // arbitrary number of colour stops. The gradient axis runs left-to-right
 // when vertical is false, top-to-bottom when true.

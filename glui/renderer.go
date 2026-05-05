@@ -48,18 +48,26 @@ type Renderer struct {
 	// emitted (FillGradientRect handles that comparison directly).
 	gradStart Color
 	gradEnd   Color
+
+	// Active radial-gradient inner/outer radii in logical points. Bound as
+	// the u_radii vec2 on gradientRadialProg at flush time. Like the linear
+	// gradient pair above these are uniform-globals — a change in either
+	// component forces a flush before the next quad joins the batch.
+	radR0 float32
+	radR1 float32
 }
 
 type batchKind uint8
 
 const (
-	kindNone         batchKind = iota
-	kindRect                   // solid + rounded rectangles, AA via SDF
-	kindPath                   // arbitrary triangulated paths
-	kindImage                  // textured quad
-	kindGlyph                  // text from atlas
-	kindGradient               // two-stop linear gradient quads
-	kindGradientRamp           // multi-stop gradient via 1-D ramp texture
+	kindNone           batchKind = iota
+	kindRect                     // solid + rounded rectangles, AA via SDF
+	kindPath                     // arbitrary triangulated paths
+	kindImage                    // textured quad
+	kindGlyph                    // text from atlas
+	kindGradient                 // two-stop linear gradient quads
+	kindGradientRamp             // multi-stop gradient via 1-D ramp texture
+	kindGradientRadial           // radial multi-stop gradient
 )
 
 // Begin starts a new frame. fbW/fbH are in points (logical units).
@@ -73,6 +81,8 @@ func (c *Context) Begin(fbW, fbH float32) *Renderer {
 	r.curTex = 0
 	r.frameW = fbW
 	r.frameH = fbH
+	r.radR0 = 0
+	r.radR1 = 0
 
 	// Reset transform stack to identity for this frame.
 	r.xform = identityMatrix3()
@@ -251,8 +261,19 @@ func (r *Renderer) setBatch(kind batchKind, tex uint32) {
 }
 
 // flush uploads the accumulated vertices/indices and issues a draw call.
+//
+// Off-GL test renderers (newAdapterTestRenderer / newTestRenderer) leave
+// ctx == nil. We treat that as a "drain only" mode: the vertex/index
+// buffers are cleared so the next batch starts fresh, but no GL calls
+// fire. This keeps batch-transition tests honest — they can observe that
+// the buffer drained between calls without needing a real GL context.
 func (r *Renderer) flush() {
 	if r.curKind == kindNone || len(r.indices) == 0 {
+		return
+	}
+	if r.ctx == nil {
+		r.verts = r.verts[:0]
+		r.indices = r.indices[:0]
 		return
 	}
 
@@ -306,6 +327,11 @@ func (r *Renderer) flush() {
 	if r.curKind == kindGradient {
 		prog.Set4f("u_color0", r.gradStart.R, r.gradStart.G, r.gradStart.B, r.gradStart.A)
 		prog.Set4f("u_color1", r.gradEnd.R, r.gradEnd.G, r.gradEnd.B, r.gradEnd.A)
+	}
+	// Radial gradient: pass (R0, R1) so the fragment shader can map per-
+	// pixel distance to a 0..1 ramp index.
+	if r.curKind == kindGradientRadial {
+		prog.Set2f("u_radii", r.radR0, r.radR1)
 	}
 
 	gl.DrawElements(gl.TRIANGLES, int32(len(r.indices)), gl.UNSIGNED_SHORT, unsafe.Pointer(uintptr(0)))

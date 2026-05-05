@@ -203,3 +203,53 @@ void main() {
     gl_FragColor = c * v_color;
 }
 `
+
+// gradientRadialVertSrc shares the 48-byte vertex layout with the linear
+// gradient programs. The renderer packs each vertex's (worldX-Cx,
+// worldY-Cy) — i.e. the offset from the gradient centre in logical
+// points — into a_uv. The fragment shader takes the length of this
+// vector to recover per-pixel distance from the centre.
+//
+// Because GL does perspective-correct interpolation over a flat 2-D quad,
+// the interpolated v_uv at any fragment is exactly that fragment's offset
+// from the centre — no projection-aware adjustment needed.
+const gradientRadialVertSrc = `
+#version 120
+attribute vec2 a_pos;
+attribute vec2 a_uv;
+attribute vec4 a_color;
+attribute vec4 a_corner;
+varying vec2 v_uv;
+varying vec4 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`
+
+// gradientRadialFragSrc samples the same 256×1 ramp texture as the linear
+// ramp path, but parameterises t by Euclidean distance from the centre
+// rather than along an axis. u_radii.xy carries (R0, R1); we map the
+// pixel's distance into [0,1] over [R0, R1] and clamp at both ends to
+// match Cairo's PAD extend behaviour for radial gradients.
+//
+// A degenerate R0 == R1 (zero-spread radial) collapses to a hard step at
+// R0; the clamp(div, 0, 1) before the ternary ensures we don't divide by
+// zero — when (R1-R0) is zero we substitute 1.0 so the ratio is bounded.
+const gradientRadialFragSrc = `
+#version 120
+varying vec2 v_uv;
+varying vec4 v_color;
+uniform sampler2D u_tex;
+uniform vec2 u_radii;
+void main() {
+    float dist = length(v_uv);
+    float r0 = u_radii.x;
+    float r1 = u_radii.y;
+    float span = max(r1 - r0, 1e-4);
+    float t = clamp((dist - r0) / span, 0.0, 1.0);
+    vec4 c = texture2D(u_tex, vec2(t, 0.5));
+    gl_FragColor = c * v_color;
+}
+`

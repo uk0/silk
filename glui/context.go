@@ -14,12 +14,13 @@ import (
 // thread.
 type Context struct {
 	// Shader programs for the six core draw kinds.
-	rectProg         *shader.Program // solid + bordered rectangles, rounded corners
-	pathProg         *shader.Program // arbitrary paths via triangle fan
-	imageProg        *shader.Program // textured quads
-	glyphProg        *shader.Program // SDF glyph atlas blits
-	gradientProg     *shader.Program // two-stop linear gradient quads (uniforms)
-	gradientRampProg *shader.Program // multi-stop gradient via 1-D ramp texture
+	rectProg           *shader.Program // solid + bordered rectangles, rounded corners
+	pathProg           *shader.Program // arbitrary paths via triangle fan
+	imageProg          *shader.Program // textured quads
+	glyphProg          *shader.Program // SDF glyph atlas blits
+	gradientProg       *shader.Program // two-stop linear gradient quads (uniforms)
+	gradientRampProg   *shader.Program // multi-stop gradient via 1-D ramp texture
+	gradientRadialProg *shader.Program // radial gradient via ramp texture + per-pixel distance
 
 	// Shared streaming VBO + EBO. All draw kinds append into this buffer
 	// and flush on material change. 256KB initial size, grown geometrically.
@@ -96,6 +97,12 @@ func (c *Context) Init() error {
 	c.gradientRampProg = prog
 	c.gradientRamps = make(map[uint64]*Texture)
 
+	prog, err = shader.Compile(gradientRadialVertSrc, gradientRadialFragSrc)
+	if err != nil {
+		return err
+	}
+	c.gradientRadialProg = prog
+
 	// Streaming buffers — reused every frame, GL_DYNAMIC_DRAW so the driver
 	// can keep them in mappable memory.
 	gl.GenBuffers(1, &c.vbo)
@@ -139,6 +146,9 @@ func (c *Context) Destroy() {
 	}
 	if c.gradientRampProg != nil {
 		c.gradientRampProg.Delete()
+	}
+	if c.gradientRadialProg != nil {
+		c.gradientRadialProg.Delete()
 	}
 	for _, tex := range c.gradientRamps {
 		tex.Free()

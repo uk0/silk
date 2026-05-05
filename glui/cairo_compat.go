@@ -31,7 +31,9 @@ import (
 //     based fast path; gradients with three or more stops upload a 256-
 //     pixel 1-D ramp texture and sample it per fragment. Non-rect paths
 //     still fall back to a solid fill of the start-stop colour.
-//   - Radial gradients are not GPU-accelerated yet (treated as solid).
+//   - Radial gradients use the radial-gradient shader against axis-
+//     aligned rect paths and fall back to a solid inner-stop fill on any
+//     other shape — same gating policy as linear gradients.
 //   - SetOperator / blend modes (we always run SRC_OVER)
 //   - Clip-by-path (only axis-aligned bounding-box clip is supported —
 //     proper stencil-buffer path clipping is a TODO)
@@ -86,6 +88,21 @@ type CairoCompat struct {
 	// gradients (which still go through gradientStart/gradientEnd) so the
 	// fast uniform path can stay in use for the common case.
 	gradientStops []GradientStop
+
+	// Active radial-gradient brush state. radialActive flags whether
+	// SetBrush most recently selected a *paint.RadialGradient. When set,
+	// fillCurrentPath routes axis-aligned rectangle paths through
+	// Renderer.FillRadialGradientRect. radialCx/Cy are in the same logical
+	// coordinate space the path is built in. radialR0/R1 give inner/outer
+	// radii; radialStops is always populated (Cairo radial gradients carry
+	// at least two stops, so there's no two-stop fast path here — the
+	// shader cost is identical at any stop count).
+	radialActive bool
+	radialCx     float32
+	radialCy     float32
+	radialR0     float32
+	radialR1     float32
+	radialStops  []GradientStop
 
 	// Logical CTM mirrored from the renderer. We need read access to it
 	// for GetMatrix() and to resolve hairline pens (width=0). Renderer.xform
@@ -169,6 +186,12 @@ type cairoCompatState struct {
 	gradientEnd      paint.Color
 	gradientVertical bool
 	gradientStops    []GradientStop
+	radialActive     bool
+	radialCx         float32
+	radialCy         float32
+	radialR0         float32
+	radialR1         float32
+	radialStops      []GradientStop
 }
 
 // Compile-time interface satisfaction. If a paint.Painter method goes
@@ -371,6 +394,12 @@ func (c *CairoCompat) Save() int {
 		gradientEnd:      c.gradientEnd,
 		gradientVertical: c.gradientVertical,
 		gradientStops:    c.gradientStops,
+		radialActive:     c.radialActive,
+		radialCx:         c.radialCx,
+		radialCy:         c.radialCy,
+		radialR0:         c.radialR0,
+		radialR1:         c.radialR1,
+		radialStops:      c.radialStops,
 	})
 	c.r.Save()
 	return depth
@@ -407,6 +436,12 @@ func (c *CairoCompat) Restore() int {
 	c.gradientEnd = s.gradientEnd
 	c.gradientVertical = s.gradientVertical
 	c.gradientStops = s.gradientStops
+	c.radialActive = s.radialActive
+	c.radialCx = s.radialCx
+	c.radialCy = s.radialCy
+	c.radialR0 = s.radialR0
+	c.radialR1 = s.radialR1
+	c.radialStops = s.radialStops
 	// Pop clips pushed *deeper* than the new stack depth. clipPushedAt is
 	// tagged with the Save depth in effect at Clip-time; a clip at depth K
 	// belongs to the Save scope at depth K, so it must pop when we Restore
@@ -667,6 +702,18 @@ func (c *CairoCompat) fillCurrentPath() {
 				end := paintColorToGlui(c.gradientEnd)
 				c.r.FillGradientRect(rc, start, end, c.gradientVertical)
 			}
+			return
+		}
+	}
+
+	// Radial gradient fast path: same single-axis-aligned-rect gate as the
+	// linear gradient. Centre and radii are taken straight from the brush;
+	// non-rect paths fall through to the solid-fill triangulation below
+	// using brushColor (set to the inner stop in SetBrush) so the shape
+	// still renders something visible.
+	if c.radialActive {
+		if rc, ok := c.singleAxisAlignedRectPath(); ok {
+			c.r.FillRadialGradientRect(rc, c.radialCx, c.radialCy, c.radialR0, c.radialR1, c.radialStops)
 			return
 		}
 	}
@@ -1009,6 +1056,10 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 	c.gradientEnd = paint.Color{}
 	c.gradientVertical = false
 	c.gradientStops = c.gradientStops[:0]
+	c.radialActive = false
+	c.radialCx, c.radialCy = 0, 0
+	c.radialR0, c.radialR1 = 0, 0
+	c.radialStops = c.radialStops[:0]
 
 	switch p := br.(type) {
 	case *paint.SolidBrush:
@@ -1063,11 +1114,42 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 		} else {
 			c.brushColor = paint.Color{}
 		}
+	case *paint.RadialGradient:
+		stops := p.Stops
+		if len(stops) >= 2 {
+			c.radialActive = true
+			c.radialCx = p.Cx
+			c.radialCy = p.Cy
+			c.radialR0 = p.R0
+			c.radialR1 = p.R1
+			// Snapshot stops to insulate the renderer from later mutations
+			// of the user's *paint.RadialGradient (same defensive copy as
+			// the linear-gradient branch).
+			if cap(c.radialStops) >= len(stops) {
+				c.radialStops = c.radialStops[:len(stops)]
+			} else {
+				c.radialStops = make([]GradientStop, len(stops))
+			}
+			for i, s := range stops {
+				c.radialStops[i] = GradientStop{
+					Position: s.Offset,
+					Color:    paintColorToGlui(s.Color),
+				}
+			}
+			// Fallback solid colour for non-rect paths uses the inner stop
+			// (offset 0) — matches the visual hint of the gradient centre
+			// when the shader path can't apply.
+			c.brushColor = stops[0].Color
+		} else if len(stops) == 1 {
+			c.brushColor = stops[0].Color
+		} else {
+			c.brushColor = paint.Color{}
+		}
 	case nil:
 		c.brushColor = paint.Color{}
 	default:
-		// Pixmap brushes / radial gradients aren't shader-handled yet. Fall
-		// back to transparent rather than rendering with stale colour.
+		// Pixmap brushes aren't shader-handled yet. Fall back to transparent
+		// rather than rendering with stale colour.
 		c.brushColor = paint.Color{}
 	}
 }
@@ -1080,6 +1162,10 @@ func (c *CairoCompat) SetBrush1(cr paint.Color) {
 	c.gradientEnd = paint.Color{}
 	c.gradientVertical = false
 	c.gradientStops = c.gradientStops[:0]
+	c.radialActive = false
+	c.radialCx, c.radialCy = 0, 0
+	c.radialR0, c.radialR1 = 0, 0
+	c.radialStops = c.radialStops[:0]
 }
 
 // --- Font / Text ------------------------------------------------------
