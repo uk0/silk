@@ -582,3 +582,108 @@ func TestCacheBindRendererPreservesFrameCount(t *testing.T) {
 		t.Fatalf("BindRenderer reset frameCount to %d; eviction LRU now broken across frames", c.frameCount)
 	}
 }
+
+// --- Extension-pen detection tests ------------------------------------
+//
+// SetPen examines the incoming Pen for paint.DashedPen and paint.CappedPen
+// to populate dash/cap/join state. Plain pens (NewPen) leave defaults intact;
+// styled pens (NewStyledPen) light up dashed strokes and round caps in the
+// downstream Polyline call.
+
+// TestCairoCompatDashedPenDetected: a styled pen with a dash pattern must
+// land in CairoCompat.penDash via the DashedPen type assertion.
+func TestCairoCompatDashedPenDetected(t *testing.T) {
+	r := newAdapterTestRenderer()
+	c := NewCairoCompat(r)
+
+	pen := paint.NewStyledPen(paint.Color{R: 255}, 2,
+		[]float64{5, 3}, 0, paint.LineCapButt, paint.LineJoinMiter)
+	c.SetPen(pen)
+
+	if len(c.penDash) != 2 || c.penDash[0] != 5 || c.penDash[1] != 3 {
+		t.Errorf("dash not propagated: got %v", c.penDash)
+	}
+}
+
+// TestCairoCompatCappedPenDetected: a styled pen with non-default cap/join
+// must populate penLineCap/penLineJoin via the CappedPen assertion.
+func TestCairoCompatCappedPenDetected(t *testing.T) {
+	r := newAdapterTestRenderer()
+	c := NewCairoCompat(r)
+
+	pen := paint.NewStyledPen(paint.Color{R: 0}, 1,
+		nil, 0, paint.LineCapRound, paint.LineJoinRound)
+	c.SetPen(pen)
+
+	if c.penLineCap != paint.LineCapRound {
+		t.Errorf("cap not propagated")
+	}
+	if c.penLineJoin != paint.LineJoinRound {
+		t.Errorf("join not propagated")
+	}
+}
+
+// TestCairoCompatPenExtensionsScopedBySaveRestore: a styled pen set inside
+// a Save/Restore block must not leak into the outer scope. The dash + cap
+// fields should both revert with the rest of pen state.
+func TestCairoCompatPenExtensionsScopedBySaveRestore(t *testing.T) {
+	r := newAdapterTestRenderer()
+	c := NewCairoCompat(r)
+
+	pen1 := paint.NewStyledPen(paint.Color{R: 255}, 1,
+		[]float64{4, 4}, 0, paint.LineCapButt, paint.LineJoinMiter)
+	c.SetPen(pen1)
+	c.Save()
+
+	pen2 := paint.NewStyledPen(paint.Color{G: 255}, 1,
+		nil, 0, paint.LineCapRound, paint.LineJoinBevel)
+	c.SetPen(pen2)
+
+	c.Restore()
+
+	if len(c.penDash) != 2 {
+		t.Errorf("dash not restored: %v", c.penDash)
+	}
+	if c.penLineCap != paint.LineCapButt {
+		t.Errorf("cap not restored")
+	}
+}
+
+// TestCairoCompatPlainPenLeavesDefaults: a non-styled paint.NewPen must NOT
+// flip cap/join into round just because penLineCap defaults somewhere; this
+// guards the type-assertion branch from accidentally widening to plain pens.
+func TestCairoCompatPlainPenLeavesDefaults(t *testing.T) {
+	r := newAdapterTestRenderer()
+	c := NewCairoCompat(r)
+
+	c.SetPen(paint.NewPen(paint.Color{R: 1}, 2))
+	if c.penLineCap != paint.LineCapButt {
+		t.Errorf("plain pen flipped LineCap to %v, want Butt", c.penLineCap)
+	}
+	if c.penLineJoin != paint.LineJoinMiter {
+		t.Errorf("plain pen flipped LineJoin to %v, want Miter", c.penLineJoin)
+	}
+	if len(c.penDash) != 0 {
+		t.Errorf("plain pen produced phantom dash: %v", c.penDash)
+	}
+}
+
+// TestCairoCompatSetPen1ResetsExtensions: after SetPen leaves dash + cap
+// state on the painter, calling SetPen1 (the simple-color/width path) must
+// clear them. Otherwise a stroke after a SetPen1 reuses the previous pen's
+// dash pattern, which is a silent visual regression.
+func TestCairoCompatSetPen1ResetsExtensions(t *testing.T) {
+	r := newAdapterTestRenderer()
+	c := NewCairoCompat(r)
+
+	c.SetPen(paint.NewStyledPen(paint.Color{R: 1}, 2,
+		[]float64{2, 2}, 1, paint.LineCapRound, paint.LineJoinBevel))
+	c.SetPen1(paint.Color{B: 1}, 3)
+
+	if len(c.penDash) != 0 {
+		t.Errorf("SetPen1 left stale dash: %v", c.penDash)
+	}
+	if c.penLineCap != paint.LineCapButt || c.penLineJoin != paint.LineJoinMiter {
+		t.Errorf("SetPen1 left stale cap/join: cap=%v join=%v", c.penLineCap, c.penLineJoin)
+	}
+}

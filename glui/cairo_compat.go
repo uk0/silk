@@ -59,6 +59,16 @@ type CairoCompat struct {
 	brushColor paint.Color
 	font       paint.Font
 
+	// Pen extension state captured from paint.DashedPen / paint.CappedPen
+	// when SetPen sees a Pen that implements those optional interfaces. Plain
+	// solid pens leave these at their defaults so strokeCurrentPath produces
+	// the historical CapButt + JoinMiter solid-line output.
+	penDash       []float64
+	penDashOffset float64
+	penLineCap    paint.LineCap
+	penLineJoin   paint.LineJoin
+	penMiterLimit float64
+
 	// Active linear-gradient brush state. gradientActive flags whether
 	// SetBrush most recently selected a *paint.LinearGradient. When set,
 	// fillCurrentPath routes axis-aligned rectangle paths through
@@ -145,6 +155,11 @@ type cairoCompatState struct {
 	subsLen          int
 	penColor         paint.Color
 	penWidth         float32
+	penDash          []float64
+	penDashOffset    float64
+	penLineCap       paint.LineCap
+	penLineJoin      paint.LineJoin
+	penMiterLimit    float64
 	brushColor       paint.Color
 	font             paint.Font
 	ctm              geom.Mat3x2
@@ -168,6 +183,9 @@ func NewCairoCompat(r *Renderer) *CairoCompat {
 		r:              r,
 		penWidth:       1,
 		penColor:       paint.Color{R: 0, G: 0, B: 0, A: 255},
+		penLineCap:     paint.LineCapButt,
+		penLineJoin:    paint.LineJoinMiter,
+		penMiterLimit:  10,
 		brushColor:     paint.Color{R: 0, G: 0, B: 0, A: 255},
 		fontCache:      NewFontCache(),
 		pixmapTextures: make(map[paint.Pixmap]*pixmapEntry),
@@ -339,6 +357,11 @@ func (c *CairoCompat) Save() int {
 		subsLen:          len(c.pathSubs),
 		penColor:         c.penColor,
 		penWidth:         c.penWidth,
+		penDash:          c.penDash,
+		penDashOffset:    c.penDashOffset,
+		penLineCap:       c.penLineCap,
+		penLineJoin:      c.penLineJoin,
+		penMiterLimit:    c.penMiterLimit,
 		brushColor:       c.brushColor,
 		font:             c.font,
 		ctm:              c.ctm,
@@ -371,6 +394,11 @@ func (c *CairoCompat) Restore() int {
 
 	c.penColor = s.penColor
 	c.penWidth = s.penWidth
+	c.penDash = s.penDash
+	c.penDashOffset = s.penDashOffset
+	c.penLineCap = s.penLineCap
+	c.penLineJoin = s.penLineJoin
+	c.penMiterLimit = s.penMiterLimit
 	c.brushColor = s.brushColor
 	c.font = s.font
 	c.ctm = s.ctm
@@ -740,17 +768,38 @@ func (c *CairoCompat) strokeCurrentPath() {
 		width = 1
 	}
 	col := paintColorToGlui(c.penColor)
-	// JoinMiter + CapButt are the Cairo defaults and the only style data
-	// we can derive from paint.Pen — the Pen interface in this codebase
-	// exposes Width() and Color() only (see paint/pen.go); LineCap and
-	// LineJoin are not part of the API. Widgets that want a different
-	// join/cap need to either upgrade the Pen interface or call a glui-
-	// native stroke directly via PainterAdapter.
+	// Translate captured extension state into a glui StrokeStyle. When the
+	// Pen didn't implement DashedPen or CappedPen, SetPen left the fields
+	// at their CapButt + JoinMiter + solid defaults, so the legacy plain-
+	// pen behaviour is preserved without a dedicated branch here.
 	style := StrokeStyle{
-		Width: width,
-		Color: col,
-		Join:  JoinMiter,
-		Cap:   CapButt,
+		Width:      width,
+		Color:      col,
+		MiterLimit: float32(c.penMiterLimit),
+	}
+	switch c.penLineCap {
+	case paint.LineCapRound:
+		style.Cap = CapRound
+	case paint.LineCapSquare:
+		style.Cap = CapSquare
+	default:
+		style.Cap = CapButt
+	}
+	switch c.penLineJoin {
+	case paint.LineJoinRound:
+		style.Join = JoinRound
+	case paint.LineJoinBevel:
+		style.Join = JoinBevel
+	default:
+		style.Join = JoinMiter
+	}
+	if len(c.penDash) > 0 {
+		dash32 := make([]float32, len(c.penDash))
+		for i, d := range c.penDash {
+			dash32[i] = float32(d)
+		}
+		style.Dash = dash32
+		style.DashOffset = float32(c.penDashOffset)
 	}
 	for i, start := range c.pathSubs {
 		end := len(c.pathPts)
@@ -909,15 +958,46 @@ func (c *CairoCompat) SetPen(pen paint.Pen) {
 	if pen == nil {
 		c.penColor = paint.Color{}
 		c.penWidth = 0
+		c.penDash = nil
+		c.penDashOffset = 0
+		c.penLineCap = paint.LineCapButt
+		c.penLineJoin = paint.LineJoinMiter
+		c.penMiterLimit = 10
 		return
 	}
 	c.penColor = pen.Color()
 	c.penWidth = float32(pen.Width())
+
+	// Reset extensions to defaults; the capability-interface assertions below
+	// override them when the Pen carries the relevant data.
+	c.penDash = nil
+	c.penDashOffset = 0
+	c.penLineCap = paint.LineCapButt
+	c.penLineJoin = paint.LineJoinMiter
+	c.penMiterLimit = 10
+
+	if dp, ok := pen.(paint.DashedPen); ok {
+		c.penDash = dp.Dash()
+		c.penDashOffset = dp.DashOffset()
+	}
+	if cp, ok := pen.(paint.CappedPen); ok {
+		c.penLineCap = cp.LineCap()
+		c.penLineJoin = cp.LineJoin()
+		c.penMiterLimit = cp.MiterLimit()
+	}
 }
 
 func (c *CairoCompat) SetPen1(cr paint.Color, width float64) {
 	c.penColor = cr
 	c.penWidth = float32(width)
+	// SetPen1 is the "simple" path (Color + width only); reset the
+	// extension state so a previously-styled SetPen() doesn't bleed dash or
+	// cap settings into the next stroke.
+	c.penDash = nil
+	c.penDashOffset = 0
+	c.penLineCap = paint.LineCapButt
+	c.penLineJoin = paint.LineJoinMiter
+	c.penMiterLimit = 10
 }
 
 func (c *CairoCompat) SetBrush(br paint.Brush) {
