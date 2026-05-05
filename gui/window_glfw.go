@@ -616,12 +616,22 @@ func (this *Window) paintGlui() {
 
 	r := this.gluiCtx.Begin(float32(width), float32(height))
 
-	// Smoke-test pattern. Replaced by widget-tree visitor in the next pass.
-	r.FillRect(glui.Rect{X: 20, Y: 20, W: 200, H: 80}, glui.RGBA8(60, 130, 230, 255))
-	r.FillRoundedRect(glui.Rect{X: 240, Y: 20, W: 200, H: 80}, 12, glui.RGBA8(40, 180, 100, 255))
-	r.StrokeRect(glui.Rect{X: 460, Y: 20, W: 200, H: 80}, 2, glui.RGBA8(220, 60, 60, 255))
-	r.FillCircle(120, 180, 40, glui.RGBA8(240, 180, 40, 255))
-	r.Line(20, 260, 660, 260, 2, glui.RGBA8(120, 120, 140, 255))
+	// Bridge the renderer through the paint.Painter facade so the existing
+	// 62-widget set — which calls paint.Painter methods inside every Draw()
+	// — can render through the GPU pipeline without modifications. Full
+	// fidelity to Cairo's path/blend semantics is a non-goal; widgets that
+	// need exotic operators or pattern brushes degrade gracefully (see
+	// CairoCompat documentation for the supported subset).
+	painter := glui.NewCairoCompat(r)
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				core.Warn("paint panic in DrawWidgetAll (glui):", rec)
+			}
+		}()
+		DrawWidgetAll(this.widget, painter, 0, 0, 0, 0, width, height)
+	}()
 
 	r.End()
 	this.glfwWin.SwapBuffers()
