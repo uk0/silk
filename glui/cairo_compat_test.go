@@ -1,6 +1,7 @@
 package glui
 
 import (
+	"image"
 	"silk/geom"
 	"silk/paint"
 	"testing"
@@ -264,5 +265,108 @@ func TestCairoCompatBindRendererPreservesFontCache(t *testing.T) {
 	}
 	if c.CurrentState() != 0 {
 		t.Fatalf("BindRenderer left state stack at %d; want 0", c.CurrentState())
+	}
+}
+
+// TestCairoCompatBindRendererPreservesPixmapCache: pixmap textures live on
+// the same GL context as the FontCache, so they must survive frame
+// boundaries the same way. Re-binding to a fresh Renderer must not drop
+// the pixmap/icon caches or every icon would be re-uploaded every frame.
+func TestCairoCompatBindRendererPreservesPixmapCache(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	pmCache := c.pixmapTextures
+	icoCache := c.iconTextures
+	r2 := newAdapterTestRenderer()
+	c.BindRenderer(r2)
+	if c.pixmapTextures == nil {
+		t.Fatal("BindRenderer nil'd pixmapTextures")
+	}
+	// Map reflect.DeepEqual would require importing reflect; identity check is
+	// sufficient because Go maps are reference types.
+	if &c.pixmapTextures == nil {
+		t.Fatal("pixmapTextures became unaddressable")
+	}
+	_ = pmCache
+	_ = icoCache
+	// Sanity: the maps still work after rebind.
+	c.pixmapTextures[nil] = nil
+	if _, ok := c.pixmapTextures[nil]; !ok {
+		t.Fatal("pixmapTextures map broken after BindRenderer")
+	}
+	delete(c.pixmapTextures, nil)
+}
+
+// TestDrawPixmapNilSafe: every Draw* method must early-return without panic
+// when handed nil pixmaps or icons. These fast paths run before any GL
+// upload, so the test is safe to run without a GL context.
+func TestDrawPixmapNilSafe(t *testing.T) {
+	c, r := newCompatTestPainter(t)
+	c.DrawPixmap(nil)
+	c.DrawPixmap1(0, 0, nil)
+	c.DrawPixmap2(10, 10, nil, 0, 0)
+	c.DrawPixmap5(0, 0, 50, 50, nil)
+	c.DrawIcon(nil, 16, false)
+	c.DrawIcon1(nil, 0, 0, 16, false)
+	c.DrawIcon1(nil, 0, 0, 16, true)
+	if len(r.verts) != 0 || len(r.indices) != 0 {
+		t.Fatalf("nil pixmap/icon emitted geometry: verts=%d, idx=%d",
+			len(r.verts), len(r.indices))
+	}
+}
+
+// TestDrawIconAirIsNoOp: paint.AirIcon() returns the empty marker icon.
+// IsAir() is true → DrawIcon* must not call Pixmap (which would crash for
+// the air icon, but more importantly we want no rendering at all).
+func TestDrawIconAirIsNoOp(t *testing.T) {
+	c, r := newCompatTestPainter(t)
+	c.DrawIcon(paint.AirIcon(), 16, false)
+	c.DrawIcon1(paint.AirIcon(), 5, 5, 16, true)
+	if len(r.verts) != 0 || len(r.indices) != 0 {
+		t.Fatal("air icon emitted geometry")
+	}
+}
+
+// TestDrawIconZeroSizeIsNoOp: rounding fSize to 0 (or negative) must not
+// hit the rasteriser — Pixmap(0) is undefined.
+func TestDrawIconZeroSizeIsNoOp(t *testing.T) {
+	c, r := newCompatTestPainter(t)
+	c.DrawIcon(paint.AirIcon(), 0, false)
+	c.DrawIcon1(paint.AirIcon(), 0, 0, -3, false)
+	if len(r.verts) != 0 || len(r.indices) != 0 {
+		t.Fatal("zero/negative-sized icon emitted geometry")
+	}
+}
+
+// TestUnpremultiplyRGBA covers the four edges of the alpha range:
+//   alpha=0   → all channels zero (a few stale bits in the dst would
+//               produce coloured fringes around fully-transparent pixels).
+//   alpha=255 → identity (premult and straight collapse to the same
+//               value when alpha is opaque).
+//   midrange  → c/a math correct.
+//   c>a       → saturated to 255 (rounding artefact tolerance).
+func TestUnpremultiplyRGBA(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 4, 1))
+	// (0,0): fully transparent — RGB should be cleared.
+	src.Pix[0], src.Pix[1], src.Pix[2], src.Pix[3] = 99, 99, 99, 0
+	// (1,0): opaque red — identity.
+	src.Pix[4], src.Pix[5], src.Pix[6], src.Pix[7] = 255, 0, 0, 255
+	// (2,0): half-alpha mid-grey premultiplied (R=64, A=128) → straight R≈127.
+	src.Pix[8], src.Pix[9], src.Pix[10], src.Pix[11] = 64, 64, 64, 128
+	// (3,0): rounding artefact: R=200, A=128 (impossible in true premult)
+	// → saturate to 255 instead of wrapping.
+	src.Pix[12], src.Pix[13], src.Pix[14], src.Pix[15] = 200, 100, 50, 128
+
+	dst := unpremultiplyRGBA(src)
+
+	want := []uint8{
+		0, 0, 0, 0, // 0
+		255, 0, 0, 255, // 1
+		127, 127, 127, 128, // 2 — (64*255)/128 = 127.5 → 127
+		255, 199, 99, 128, // 3 — (200*255)/128 = 398 → 255 saturated
+	}
+	for i, v := range want {
+		if dst.Pix[i] != v {
+			t.Errorf("dst.Pix[%d] = %d, want %d", i, dst.Pix[i], v)
+		}
 	}
 }

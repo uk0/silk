@@ -1,6 +1,7 @@
 package glui
 
 import (
+	"image"
 	"math"
 
 	"silk/geom"
@@ -24,11 +25,13 @@ import (
 // What is approximated rather than exactly emulated:
 //   - Pattern brushes / gradients (only solid color is honoured)
 //   - SetOperator / blend modes (we always run SRC_OVER)
-//   - Clip-by-path (only axis-aligned bounding-box clip is supported)
+//   - Clip-by-path (only axis-aligned bounding-box clip is supported —
+//     proper stencil-buffer path clipping is a TODO)
 //   - Cairo glyph IDs in DrawGlyphs/DrawGlyph (no-op; widgets that route
 //     text through DrawGlyphs directly will render blank — fortunately
 //     the standard widget set goes through DrawText/DrawText1)
-//   - DrawPixmap / DrawIcon (no-op — image bridging lands in a follow-up)
+//   - Grayed icons use a fixed RGB×0.6, A×0.7 tint instead of the Cairo
+//     HSL_LUMINOSITY operator. Visually close, not pixel-equivalent.
 //
 // State management mirrors paint.cairoPainter: brush + pen + font are
 // pushed/popped together with the renderer transform on every Save().
@@ -71,6 +74,29 @@ type CairoCompat struct {
 	// Default font to use when SetFont(nil) — only resolved on demand so
 	// we don't pay the rasteriser cost upfront.
 	fontCache *FontCache
+
+	// pixmapTextures caches GL textures uploaded for paint.Pixmap values.
+	// Keyed by interface identity (paint.Pixmap concrete type *cairoSurface
+	// is comparable). First DrawPixmap* call uploads + caches; later calls
+	// reuse the same GL texture so we don't re-upload every frame.
+	//
+	// Lives on CairoCompat (not Renderer) so it survives BindRenderer and
+	// the corresponding GL context is the same Window that created glui.Context.
+	pixmapTextures map[paint.Pixmap]*Texture
+
+	// iconTextures caches per-(icon, size) renders. icon.Pixmap(size)
+	// allocates a fresh *cairoSurface every call, so a pixmap-pointer cache
+	// alone would miss every frame and leak GL textures unboundedly. We
+	// short-circuit at the icon layer instead — same icon at the same size
+	// always maps to the same texture.
+	iconTextures map[iconCacheKey]*Texture
+}
+
+// iconCacheKey is comparable: paint.Icon is an interface whose concrete type
+// (*icon, *airIcon) is a pointer — pointers are valid map keys.
+type iconCacheKey struct {
+	ico  paint.Icon
+	size int
 }
 
 type cairoCompatState struct {
@@ -93,11 +119,13 @@ var _ paint.Painter = (*CairoCompat)(nil)
 // CairoCompat's.
 func NewCairoCompat(r *Renderer) *CairoCompat {
 	c := &CairoCompat{
-		r:          r,
-		penWidth:   1,
-		penColor:   paint.Color{R: 0, G: 0, B: 0, A: 255},
-		brushColor: paint.Color{R: 0, G: 0, B: 0, A: 255},
-		fontCache:  NewFontCache(),
+		r:              r,
+		penWidth:       1,
+		penColor:       paint.Color{R: 0, G: 0, B: 0, A: 255},
+		brushColor:     paint.Color{R: 0, G: 0, B: 0, A: 255},
+		fontCache:      NewFontCache(),
+		pixmapTextures: make(map[paint.Pixmap]*Texture),
+		iconTextures:   make(map[iconCacheKey]*Texture),
 	}
 	c.ctm.InitIdentity()
 	return c
@@ -688,17 +716,212 @@ func (c *CairoCompat) drawTextAt(x, y float64, text string) {
 func (c *CairoCompat) DrawGlyphs(glyphs []paint.Glyph) {}
 func (c *CairoCompat) DrawGlyph(glyph *paint.Glyph)    {}
 
-// --- Pixmap / Icon (stubs) --------------------------------------------
+// --- Pixmap / Icon ----------------------------------------------------
+//
+// Bridge: paint.Pixmap is backed by a Cairo image surface holding ARGB32
+// data in BGRA byte order with *premultiplied* alpha. We:
+//   1. Pull bytes via pm.Image() — that already swaps R/B, returning a
+//      premultiplied image.RGBA.
+//   2. Un-premultiply per-pixel into a fresh *image.RGBA. Glui's blend func
+//      is SRC_ALPHA / ONE_MINUS_SRC_ALPHA (straight alpha), and skipping
+//      this step makes anti-aliased icon edges render too dark.
+//   3. UploadTexture once, reuse every subsequent draw.
+//
+// Cache placement: keyed by paint.Pixmap interface value on CairoCompat,
+// which is shared across BindRenderer calls so we don't re-upload every
+// frame. icon.Pixmap(size) allocates a fresh *cairoSurface on every call,
+// so DrawIcon1 caches at the (icon, size) level instead — see iconTextures.
 
-// Pixmap rendering requires bridging Cairo image surfaces to glui textures.
-// Currently a no-op; widgets that paint icons will appear blank but won't
-// crash. Full support lands in a follow-up.
-func (c *CairoCompat) DrawPixmap(pixmap paint.Pixmap)                                  {}
-func (c *CairoCompat) DrawPixmap1(x, y float64, pixmap paint.Pixmap)                   {}
-func (c *CairoCompat) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64)   {}
-func (c *CairoCompat) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap)             {}
-func (c *CairoCompat) DrawIcon(ico paint.Icon, fSize float64, grayed bool)             {}
-func (c *CairoCompat) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool)      {}
+// uploadPixmap returns a GL texture for pm, uploading on first sight.
+// Returns nil if pm is nil/empty or its bytes can't be retrieved.
+func (c *CairoCompat) uploadPixmap(pm paint.Pixmap) *Texture {
+	if pm == nil {
+		return nil
+	}
+	if tex, ok := c.pixmapTextures[pm]; ok {
+		return tex
+	}
+	tex := c.uploadPixmapNoCache(pm)
+	if tex != nil {
+		c.pixmapTextures[pm] = tex
+	}
+	return tex
+}
+
+// uploadPixmapNoCache reads pm's pixels and uploads a GL texture. Used by
+// uploadPixmap (cached) and the per-icon path (cached at the icon level).
+func (c *CairoCompat) uploadPixmapNoCache(pm paint.Pixmap) *Texture {
+	if pm == nil {
+		return nil
+	}
+	w := pm.Width()
+	h := pm.Height()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	src, err := pm.Image()
+	if err != nil || src == nil {
+		return nil
+	}
+	rgba, ok := src.(*image.RGBA)
+	if !ok {
+		// Fall back to letting UploadTexture do the per-pixel conversion.
+		// We can't un-premultiply non-RGBA inputs without copying first;
+		// give up rather than producing wrong colours.
+		if c.r == nil || c.r.ctx == nil {
+			return nil
+		}
+		return c.r.ctx.UploadTexture(src)
+	}
+	straight := unpremultiplyRGBA(rgba)
+	if c.r == nil || c.r.ctx == nil {
+		return nil
+	}
+	return c.r.ctx.UploadTexture(straight)
+}
+
+// unpremultiplyRGBA returns a fresh image.RGBA where each pixel is the
+// straight (non-premultiplied) form of src's premultiplied colour. Cairo
+// stores ARGB32 with premultiplied alpha; glui's blend stage expects
+// straight alpha, so we divide RGB by alpha before upload.
+func unpremultiplyRGBA(src *image.RGBA) *image.RGBA {
+	w := src.Rect.Dx()
+	h := src.Rect.Dy()
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		srcRow := src.Pix[y*src.Stride : y*src.Stride+w*4]
+		dstRow := dst.Pix[y*dst.Stride : y*dst.Stride+w*4]
+		for x := 0; x < w*4; x += 4 {
+			r := srcRow[x+0]
+			g := srcRow[x+1]
+			b := srcRow[x+2]
+			a := srcRow[x+3]
+			if a == 0 {
+				dstRow[x+0] = 0
+				dstRow[x+1] = 0
+				dstRow[x+2] = 0
+				dstRow[x+3] = 0
+				continue
+			}
+			if a == 255 {
+				dstRow[x+0] = r
+				dstRow[x+1] = g
+				dstRow[x+2] = b
+				dstRow[x+3] = 255
+				continue
+			}
+			// Saturating divide-by-alpha. Premultiplied source guarantees
+			// r,g,b <= a, but rounding from upstream code can produce 1-
+			// off values; clamp to 255 to avoid wrap.
+			dstRow[x+0] = saturatingDivU8(r, a)
+			dstRow[x+1] = saturatingDivU8(g, a)
+			dstRow[x+2] = saturatingDivU8(b, a)
+			dstRow[x+3] = a
+		}
+	}
+	return dst
+}
+
+func saturatingDivU8(c, a uint8) uint8 {
+	v := (uint32(c) * 255) / uint32(a)
+	if v > 255 {
+		return 255
+	}
+	return uint8(v)
+}
+
+// DrawPixmap paints pm at the model-space origin (matches Cairo's
+// SetSourceSurface(pm,0,0) + Paint() — DrawPixmap1 with x=y=0).
+func (c *CairoCompat) DrawPixmap(pm paint.Pixmap) {
+	c.DrawPixmap1(0, 0, pm)
+}
+
+func (c *CairoCompat) DrawPixmap1(x, y float64, pm paint.Pixmap) {
+	tex := c.uploadPixmap(pm)
+	if tex == nil {
+		return
+	}
+	c.r.DrawImage(tex, Rect{
+		X: float32(x), Y: float32(y),
+		W: float32(tex.Width()), H: float32(tex.Height()),
+	}, Color{1, 1, 1, 1})
+}
+
+// DrawPixmap2 honours the source offset (x0, y0): the rectangle drawn at
+// (x, y) is the sub-image of pm starting at (x0, y0).
+func (c *CairoCompat) DrawPixmap2(x, y float64, pm paint.Pixmap, x0, y0 float64) {
+	tex := c.uploadPixmap(pm)
+	if tex == nil {
+		return
+	}
+	pmW := float32(tex.Width())
+	pmH := float32(tex.Height())
+	srcW := pmW - float32(x0)
+	srcH := pmH - float32(y0)
+	if srcW <= 0 || srcH <= 0 {
+		return
+	}
+	c.r.DrawImageRegion(tex,
+		Rect{X: float32(x0), Y: float32(y0), W: srcW, H: srcH},
+		Rect{X: float32(x), Y: float32(y), W: srcW, H: srcH},
+		Color{1, 1, 1, 1},
+	)
+}
+
+// DrawPixmap5 stretches pm into the (x, y, w, h) rect.
+func (c *CairoCompat) DrawPixmap5(x, y, w, h float64, pm paint.Pixmap) {
+	tex := c.uploadPixmap(pm)
+	if tex == nil {
+		return
+	}
+	c.r.DrawImage(tex, Rect{
+		X: float32(x), Y: float32(y),
+		W: float32(w), H: float32(h),
+	}, Color{1, 1, 1, 1})
+}
+
+// DrawIcon renders ico at the model-space origin. fSize is requested
+// rasteriser size in points; grayed dims the result to mark disabled state.
+func (c *CairoCompat) DrawIcon(ico paint.Icon, fSize float64, grayed bool) {
+	c.DrawIcon1(ico, 0, 0, fSize, grayed)
+}
+
+// DrawIcon1 renders ico at (x, y) sized fSize. Caches the resulting
+// pixmap upload at the (icon, size) level — icon.Pixmap(size) allocates
+// a fresh surface every call, so a per-pixmap cache would miss + leak.
+func (c *CairoCompat) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool) {
+	if ico == nil || ico.IsAir() {
+		return
+	}
+	size := int(fSize + 0.5)
+	if size <= 0 {
+		return
+	}
+	key := iconCacheKey{ico: ico, size: size}
+	tex, ok := c.iconTextures[key]
+	if !ok {
+		pm := ico.Pixmap(size)
+		if pm == nil {
+			return
+		}
+		tex = c.uploadPixmapNoCache(pm)
+		if tex == nil {
+			return
+		}
+		c.iconTextures[key] = tex
+	}
+	tint := Color{1, 1, 1, 1}
+	if grayed {
+		// Approximation of Cairo's OPERATOR_HSL_LUMINOSITY desaturation:
+		// 60% colour, 70% alpha keeps the icon legible while reading as
+		// disabled. Not pixel-equivalent but visually acceptable for now.
+		tint = Color{0.6, 0.6, 0.6, 0.7}
+	}
+	c.r.DrawImage(tex, Rect{
+		X: float32(x), Y: float32(y),
+		W: float32(size), H: float32(size),
+	}, tint)
+}
 
 // --- Helpers ----------------------------------------------------------
 
