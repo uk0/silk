@@ -55,8 +55,8 @@ func TestPainterAdapterFillRectangleEmitsTriangles(t *testing.T) {
 	p.Rectangle(10, 20, 30, 40)
 	p.Fill()
 
-	// A 5-point closed rectangle path triangulates to 3 triangles via fan
-	// (first vertex is the anchor, then 3 fans of (anchor, j, j+1)).
+	// Rectangle records a 5-point closed path; the close-vertex is stripped
+	// before triangulation, leaving 4 unique points → 2 ear-clip triangles.
 	if len(r.indices)%3 != 0 || len(r.indices) == 0 {
 		t.Fatalf("indices=%d not a multiple of 3 or empty", len(r.indices))
 	}

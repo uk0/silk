@@ -19,14 +19,26 @@ func RGBA8(r, g, b, a uint8) Color {
 	}
 }
 
-// vertex is the shared vertex layout used by every shader: 32 bytes,
-// 8-float layout (pos.xy, uv.xy, color.rgba). The renderer never emits
-// any other vertex format so we can leave VAO state bound across draws.
+// vertex is the shared vertex layout used by every shader: 48 bytes,
+// 12-float layout (pos.xy, uv.xy, color.rgba, corner.xyzw). The renderer
+// never emits any other vertex format, so we can leave VAO state bound
+// across draws.
+//
+// The trailing 4 floats hold rect-shader SDF parameters per vertex:
+//   CornerHX, CornerHY — half-size of the rect in points
+//   CornerR            — corner radius in points
+//   CornerAA           — anti-aliasing width in points
+//
+// Path/Glyph/Image shaders ignore these — their attribute is simply not
+// enabled at flush time. Carrying the same stride for every kind keeps a
+// single VBO layout and lets us interleave rect quads with other geometry
+// in the same buffer without reconfiguring vertex pulls.
 type vertex struct {
 	X, Y float32 // position (clip space)
-	U, V float32 // uv / corner-space coordinates
+	U, V float32 // uv / rect-centered point coordinates
 	R, G, B, A float32 // color
+	CornerHX, CornerHY, CornerR, CornerAA float32 // rect SDF data
 }
 
 // vertexSize is the byte size of one vertex.
-const vertexSize = 32
+const vertexSize = 48

@@ -1,6 +1,10 @@
 package glui
 
-import "math"
+import (
+	"math"
+
+	"silk/glui/path"
+)
 
 // PainterAdapter exposes a Cairo-like immediate-mode 2D drawing API on top
 // of a Renderer. It is a *minimal* shim: only the operations existing
@@ -241,12 +245,17 @@ func (p *PainterAdapter) DrawText1(x, y float64, text string) {
 	p.r.DrawText(p.f, text, float32(x), float32(y), p.brush)
 }
 
-// fillCurrentPath triangulates each sub-path as a triangle fan and emits
-// it through Renderer.FillTriangle. This is correct for convex paths
-// (rectangles, arcs of <180°, regular polygons) and good enough for the
-// shapes UI widgets actually draw. Concave / self-intersecting shapes
-// will render incorrectly — a future revision will plug in a proper
-// triangulator.
+// fillCurrentPath triangulates each sub-path with ear-clipping and emits
+// the resulting triangles through Renderer.FillTriangle. Ear-clipping
+// handles arbitrary simple (non-self-intersecting) polygons — concave as
+// well as convex — at O(n²). For the small paths UI widgets typically
+// produce that's plenty fast, and concave shapes (stars, L-shapes,
+// notched panels) now render correctly instead of leaking triangles
+// across the polygon's interior.
+//
+// A trailing duplicate "close" vertex (added by Rectangle and the path
+// builder) is dropped before triangulation so we don't feed the
+// triangulator a zero-area degeneracy.
 func (p *PainterAdapter) fillCurrentPath() {
 	if !p.hasBrush || len(p.pathPts) < 3 {
 		return
@@ -256,14 +265,28 @@ func (p *PainterAdapter) fillCurrentPath() {
 		if i+1 < len(p.pathSubs) {
 			end = p.pathSubs[i+1]
 		}
+		// Strip a trailing close-to-first vertex if present — it's a
+		// zero-length edge that confuses the ear-clipper.
+		if end-start >= 4 {
+			first := p.pathPts[start]
+			last := p.pathPts[end-1]
+			if first == last {
+				end--
+			}
+		}
 		if end-start < 3 {
 			continue
 		}
-		anchor := p.pathPts[start]
-		for j := start + 1; j+1 < end; j++ {
-			a := p.pathPts[j]
-			b := p.pathPts[j+1]
-			p.r.FillTriangle(anchor[0], anchor[1], a[0], a[1], b[0], b[1], p.brush)
+		sub := p.pathPts[start:end]
+		idx := path.Triangulate(sub)
+		// Triangulate returns indices local to `sub`; reproject through
+		// `sub` to obtain the actual point coordinates and emit each
+		// triangle as a path-kind primitive.
+		for k := 0; k+2 < len(idx); k += 3 {
+			a := sub[idx[k]]
+			b := sub[idx[k+1]]
+			c := sub[idx[k+2]]
+			p.r.FillTriangle(a[0], a[1], b[0], b[1], c[0], c[1], p.brush)
 		}
 	}
 }

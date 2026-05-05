@@ -3,15 +3,25 @@ package glui
 import "math"
 
 // FillRoundedRect paints a solid rectangle with all four corners rounded
-// to the given radius. Anti-aliasing is handled in the shader via SDF.
+// to the given radius. Anti-aliasing is handled in the shader via SDF; the
+// per-vertex a_corner attribute carries half-size, radius, and AA width so
+// rects of different sizes/radii can share a single batch.
 func (r *Renderer) FillRoundedRect(rc Rect, radius float32, col Color) {
-	if radius <= 0 {
-		r.FillRect(rc, col)
-		return
-	}
 	r.setBatch(kindRect, 0)
 	hw, hh := rc.W*0.5, rc.H*0.5
-	r.pushQuad(rc.X, rc.Y, rc.W, rc.H, -hw, -hh, hw, hh, col)
+	// Clamp radius so the shader never produces a degenerate SDF (a radius
+	// larger than the half-size collapses the inner box to negative size).
+	if radius < 0 {
+		radius = 0
+	}
+	if hw < hh {
+		if radius > hw {
+			radius = hw
+		}
+	} else if radius > hh {
+		radius = hh
+	}
+	r.pushRectQuad(rc.X, rc.Y, rc.W, rc.H, hw, hh, radius, 1, col)
 }
 
 // StrokeRect paints a 1px outlined rectangle by drawing four thin solid
@@ -33,8 +43,10 @@ func (r *Renderer) FillCircle(cx, cy, radius float32, col Color) {
 	r.FillRoundedRect(Rect{cx - radius, cy - radius, radius * 2, radius * 2}, radius, col)
 }
 
-// Line draws a 1-px-thick line between two points using two triangles.
-// For thicker / anti-aliased strokes, use Path.
+// Line draws a thick line between two points using two triangles. For
+// thicker / anti-aliased strokes, use a Path. Routed through kindPath so
+// the SDF rect shader doesn't run on a quad whose UVs don't represent
+// rect-centered coordinates.
 func (r *Renderer) Line(x0, y0, x1, y1, width float32, col Color) {
 	if width <= 0 {
 		return
@@ -50,8 +62,7 @@ func (r *Renderer) Line(x0, y0, x1, y1, width float32, col Color) {
 	px := -dy / length * hw
 	py := dx / length * hw
 
-	// Four corners of the line quad.
-	r.setBatch(kindRect, 0)
+	r.setBatch(kindPath, 0)
 	base := uint16(len(r.verts))
 	cs := [4][2]float32{
 		{x0 + px, y0 + py},
@@ -61,7 +72,7 @@ func (r *Renderer) Line(x0, y0, x1, y1, width float32, col Color) {
 	}
 	for _, c := range cs {
 		cx, cy := r.project(c[0], c[1])
-		r.verts = append(r.verts, vertex{cx, cy, 0, 0, col.R, col.G, col.B, col.A})
+		r.verts = append(r.verts, vertex{cx, cy, 0, 0, col.R, col.G, col.B, col.A, 0, 0, 0, 0})
 	}
 	r.indices = append(r.indices, base, base+1, base+2, base, base+2, base+3)
 }
@@ -72,7 +83,7 @@ func (r *Renderer) FillTriangle(x0, y0, x1, y1, x2, y2 float32, col Color) {
 	base := uint16(len(r.verts))
 	for _, p := range [3][2]float32{{x0, y0}, {x1, y1}, {x2, y2}} {
 		cx, cy := r.project(p[0], p[1])
-		r.verts = append(r.verts, vertex{cx, cy, 0, 0, col.R, col.G, col.B, col.A})
+		r.verts = append(r.verts, vertex{cx, cy, 0, 0, col.R, col.G, col.B, col.A, 0, 0, 0, 0})
 	}
 	r.indices = append(r.indices, base, base+1, base+2)
 }

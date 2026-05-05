@@ -100,6 +100,10 @@ func (r *Renderer) project(x, y float32) (cx, cy float32) {
 // pushQuad emits 4 vertices + 6 indices forming a quad with the given
 // shared color. Each corner is projected through the current transform
 // independently so the quad survives rotation/skew correctly.
+//
+// Corner-SDF data is zeroed; this is the right format for path/glyph/image
+// quads, which never read the trailing a_corner attribute. Rect-kind quads
+// must use pushRectQuad so the shader has well-defined SDF parameters.
 func (r *Renderer) pushQuad(x, y, w, h float32, u0, v0, u1, v1 float32, col Color) {
 	base := uint16(len(r.verts))
 	x0, y0 := r.project(x, y)
@@ -108,10 +112,10 @@ func (r *Renderer) pushQuad(x, y, w, h float32, u0, v0, u1, v1 float32, col Colo
 	x3, y3 := r.project(x, y+h)
 
 	r.verts = append(r.verts,
-		vertex{x0, y0, u0, v0, col.R, col.G, col.B, col.A},
-		vertex{x1, y1, u1, v0, col.R, col.G, col.B, col.A},
-		vertex{x2, y2, u1, v1, col.R, col.G, col.B, col.A},
-		vertex{x3, y3, u0, v1, col.R, col.G, col.B, col.A},
+		vertex{x0, y0, u0, v0, col.R, col.G, col.B, col.A, 0, 0, 0, 0},
+		vertex{x1, y1, u1, v0, col.R, col.G, col.B, col.A, 0, 0, 0, 0},
+		vertex{x2, y2, u1, v1, col.R, col.G, col.B, col.A, 0, 0, 0, 0},
+		vertex{x3, y3, u0, v1, col.R, col.G, col.B, col.A, 0, 0, 0, 0},
 	)
 	r.indices = append(r.indices,
 		base, base+1, base+2,
@@ -119,14 +123,45 @@ func (r *Renderer) pushQuad(x, y, w, h float32, u0, v0, u1, v1 float32, col Colo
 	)
 }
 
-// FillRect paints a solid axis-aligned rectangle.
+// pushRectQuad emits a quad whose four vertices carry per-vertex SDF corner
+// data. (halfW, halfH) is the rect's half-size in points, radius is the
+// corner radius (0 for a sharp rect), and aaWidth is the anti-aliasing
+// half-width — typically 1 point on the framebuffer.
+//
+// All four vertices receive identical corner data so the interpolated
+// varying is constant across the quad — this keeps the SDF computation
+// per-fragment exact while still letting different batched rects carry
+// different sizes/radii in the same draw call.
+func (r *Renderer) pushRectQuad(x, y, w, h, halfW, halfH, radius, aaWidth float32, col Color) {
+	base := uint16(len(r.verts))
+	x0, y0 := r.project(x, y)
+	x1, y1 := r.project(x+w, y)
+	x2, y2 := r.project(x+w, y+h)
+	x3, y3 := r.project(x, y+h)
+
+	// UVs are in *points* centered on the rect midpoint — exactly what the
+	// SDF in the rect fragment shader consumes.
+	u0, v0 := -halfW, -halfH
+	u1, v1 := halfW, halfH
+
+	r.verts = append(r.verts,
+		vertex{x0, y0, u0, v0, col.R, col.G, col.B, col.A, halfW, halfH, radius, aaWidth},
+		vertex{x1, y1, u1, v0, col.R, col.G, col.B, col.A, halfW, halfH, radius, aaWidth},
+		vertex{x2, y2, u1, v1, col.R, col.G, col.B, col.A, halfW, halfH, radius, aaWidth},
+		vertex{x3, y3, u0, v1, col.R, col.G, col.B, col.A, halfW, halfH, radius, aaWidth},
+	)
+	r.indices = append(r.indices,
+		base, base+1, base+2,
+		base, base+2, base+3,
+	)
+}
+
+// FillRect paints a solid axis-aligned rectangle. The rect shader's SDF
+// reduces to the rectangle's natural edge when radius=0.
 func (r *Renderer) FillRect(rc Rect, col Color) {
 	r.setBatch(kindRect, 0)
-	// For non-rounded rects we use the rect shader with radius=0; the SDF
-	// reduces to the rectangle's natural edge. UV is in *points* relative
-	// to the rect's center, which the SDF expects.
 	hw, hh := rc.W*0.5, rc.H*0.5
-	r.pushQuad(rc.X, rc.Y, rc.W, rc.H, -hw, -hh, hw, hh, col)
+	r.pushRectQuad(rc.X, rc.Y, rc.W, rc.H, hw, hh, 0, 1, col)
 }
 
 // setBatch flushes the current batch if the new kind/texture differs.
@@ -158,7 +193,11 @@ func (r *Renderer) flush() {
 	prog.Use()
 
 	// Wire up the attribute layout. With GL 2.1 + no VAO we set up pointers
-	// each flush; this is cheap (3 calls) and avoids global state bugs.
+	// each flush; this is cheap and avoids global state bugs.
+	//
+	// All four programs share the same 48-byte stride. The trailing
+	// a_corner attribute is only present in the rect shader; for the other
+	// kinds Attrib() returns -1 and we skip the enable.
 	posLoc := uint32(prog.Attrib("a_pos"))
 	uvLoc := uint32(prog.Attrib("a_uv"))
 	colLoc := uint32(prog.Attrib("a_color"))
@@ -169,6 +208,16 @@ func (r *Renderer) flush() {
 	gl.VertexAttribPointer(uvLoc, 2, gl.FLOAT, false, vertexSize, unsafe.Pointer(uintptr(8)))
 	gl.EnableVertexAttribArray(colLoc)
 	gl.VertexAttribPointer(colLoc, 4, gl.FLOAT, false, vertexSize, unsafe.Pointer(uintptr(16)))
+
+	cornerLoc := int32(-1)
+	if r.curKind == kindRect {
+		cornerLoc = prog.Attrib("a_corner")
+		if cornerLoc >= 0 {
+			loc := uint32(cornerLoc)
+			gl.EnableVertexAttribArray(loc)
+			gl.VertexAttribPointer(loc, 4, gl.FLOAT, false, vertexSize, unsafe.Pointer(uintptr(32)))
+		}
+	}
 
 	if r.curTex != 0 {
 		gl.ActiveTexture(gl.TEXTURE0)
@@ -181,6 +230,9 @@ func (r *Renderer) flush() {
 	gl.DisableVertexAttribArray(posLoc)
 	gl.DisableVertexAttribArray(uvLoc)
 	gl.DisableVertexAttribArray(colLoc)
+	if cornerLoc >= 0 {
+		gl.DisableVertexAttribArray(uint32(cornerLoc))
+	}
 
 	r.verts = r.verts[:0]
 	r.indices = r.indices[:0]
