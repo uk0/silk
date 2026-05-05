@@ -112,6 +112,24 @@ type Painter interface {
 	DrawIcon1(ico Icon, x, y, fSize float64, grayed bool)
 }
 
+// ShadowPainter is implemented by painters that support GPU-accelerated
+// box shadows. Widget code can type-assert any Painter to ShadowPainter
+// to draw a soft drop shadow on backends that have a shader for it (the
+// pure-OpenGL renderer in silk/glui), and gracefully degrade — by
+// rendering the shape without a shadow — on backends that do not.
+//
+// The interface is intentionally narrow: a single rectangle, a corner
+// radius, a feather distance, and a colour. Painters that want richer
+// shadow controls (offset, inner/outer, multi-stop falloff) can layer
+// extra interfaces on top without breaking this one.
+//
+// Coordinates and sizes are in the painter's logical units (points), the
+// same convention every other Painter method uses; the colour is in
+// paint's straight-alpha 8-bit form.
+type ShadowPainter interface {
+	FillBoxShadow(rc geom.Rect, radius, blur float64, col Color)
+}
+
 type painterStateEx struct {
 	pen   Pen
 	brush Brush

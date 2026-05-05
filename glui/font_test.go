@@ -1,6 +1,9 @@
 package glui
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // TestFontGlyphCacheASCII makes sure every printable ASCII rune produces
 // either a cached glyph with a region or a non-zero advance for whitespace
@@ -98,6 +101,43 @@ func TestDefaultFontShared(t *testing.T) {
 	b := DefaultFont(12)
 	if a != b {
 		t.Errorf("DefaultFont(12) returned different instances on repeat call")
+	}
+}
+
+// TestFontSDFModeProducesGradient flips on SILK_GLUI_SDF and checks that
+// the rasterised 'M' glyph lands a gradient — multiple distinct alpha
+// values — into the atlas instead of the binary mask the raster path
+// produces. The histogram must contain at least 5 distinct bytes; in
+// raster mode you'd typically see 2-3 (background + 1-2 anti-aliased
+// edge values), so 5+ is a meaningful discriminator.
+func TestFontSDFModeProducesGradient(t *testing.T) {
+	os.Setenv("SILK_GLUI_SDF", "1")
+	defer os.Unsetenv("SILK_GLUI_SDF")
+
+	f := NewFont(16)
+	if !f.useSDF {
+		t.Skip("SDF mode not enabled")
+	}
+
+	g := f.Glyph('M')
+	if g.region.W == 0 || g.region.H == 0 {
+		t.Fatalf("'M' glyph rasterisation produced empty region")
+	}
+
+	// Inspect the slot the glyph occupies in the atlas.
+	pix := f.AtlasPixels()
+	stride := f.atlasW
+	histogram := make(map[byte]int)
+	for y := g.region.Y; y < g.region.Y+g.region.H; y++ {
+		for x := g.region.X; x < g.region.X+g.region.W; x++ {
+			i := y*stride + x
+			if i < len(pix) {
+				histogram[pix[i]]++
+			}
+		}
+	}
+	if len(histogram) < 5 {
+		t.Errorf("SDF should produce gradient values, only got %d distinct: %v", len(histogram), histogram)
 	}
 }
 

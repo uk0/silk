@@ -1282,6 +1282,35 @@ func (c *CairoCompat) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool
 	}, tint)
 }
 
+// --- Box shadow ------------------------------------------------------
+//
+// CairoCompat implements paint.ShadowPainter: widgets that want a
+// drop shadow can type-assert their Painter to ShadowPainter and call
+// FillBoxShadow. On the Cairo back-end the type assertion fails (Cairo's
+// painter does not satisfy the interface) and the widget falls back to
+// drawing without a shadow — the documented degradation pattern.
+
+// Compile-time check: CairoCompat must satisfy paint.ShadowPainter so
+// widget-side type assertions actually find the method.
+var _ paint.ShadowPainter = (*CairoCompat)(nil)
+
+// FillBoxShadow renders a soft drop shadow under the given rect. Translates
+// from paint's logical units + Color into the renderer's float32 form, then
+// delegates to Renderer.FillBoxShadow which uses the rect SDF shader to
+// produce a true GPU blur.
+//
+// The host code should draw the actual rectangle ON TOP of this shadow, not
+// beneath — see Renderer.FillBoxShadow for the rendering contract.
+func (c *CairoCompat) FillBoxShadow(rc geom.Rect, radius, blur float64, col paint.Color) {
+	if c.r == nil {
+		return
+	}
+	c.r.FillBoxShadow(Rect{
+		X: float32(rc.X), Y: float32(rc.Y),
+		W: float32(rc.Width), H: float32(rc.Height),
+	}, float32(radius), float32(blur), paintColorToGlui(col))
+}
+
 // --- Helpers ----------------------------------------------------------
 
 func paintColorToGlui(c paint.Color) Color {

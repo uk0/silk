@@ -3,6 +3,7 @@ package glui
 import (
 	"image"
 	"image/draw"
+	"os"
 
 	"silk/glui/atlas"
 
@@ -13,6 +14,17 @@ import (
 	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
 )
+
+// sdfPadding is the per-side padding (in pixels) added to each glyph slot
+// when SDF mode is active. The distance transform needs room around the
+// glyph contour so its falloff is not clipped by the atlas neighbours; an
+// 8-pixel border (same as sdfSpread) keeps soft falloff fully on-tile.
+const sdfPadding = 4
+
+// sdfSpread sets the maximum distance (in pixels) the SDF generator
+// considers before saturating to 0/255. Matches sdfPadding so the spread
+// just reaches the edge of the padded slot.
+const sdfSpread = 8.0
 
 // DefaultFontDPI is the resolution opentype rasterises at. 72 DPI keeps
 // "size" in CSS-style points so a font created with size 14 produces text
@@ -47,6 +59,13 @@ type Font struct {
 	ascent  float32
 	descent float32
 	height  float32
+
+	// useSDF flips glyph rasterisation through generateSDF instead of
+	// uploading raw alpha masks. Opt-in via SILK_GLUI_SDF=1; the default
+	// is the raster path so existing tests and visual baselines stay put.
+	// Toggling this on a constructed Font is not supported — the atlas
+	// dimensions and per-glyph padding are baked in at construction.
+	useSDF bool
 }
 
 // glyphInfo is the per-rune cache record. (X, Y) inside the atlas are the
@@ -65,10 +84,18 @@ type glyphInfo struct {
 // which comfortably holds an ASCII-plus-Latin-Extended subset at 14pt and
 // scales down for 9–10pt UI labels.
 //
+// When the SILK_GLUI_SDF env var is set to "1" the font runs each glyph
+// through generateSDF before atlas upload, producing a signed distance
+// field instead of a raster mask. Sampling the SDF with smoothstep gives
+// crisp edges at extreme zoom — useful for the designer canvas. SDF mode
+// allocates the atlas at 1024x1024 still, but each glyph now occupies a
+// `sdfPadding`-padded slot so the distance field has room to spread.
+//
 // On error (which would only happen if the embedded TTF data became
 // invalid — i.e. never, in normal operation) NewFont falls back to a
 // zero-glyph Font so the caller's draw loop won't panic on nil deref.
 func NewFont(size float64) *Font {
+	useSDF := os.Getenv("SILK_GLUI_SDF") == "1"
 	face, err := newGoRegularFace(size)
 	if err != nil {
 		// Defensive: allocate a Font with no face. Glyph() will return
@@ -80,9 +107,12 @@ func NewFont(size float64) *Font {
 			atlasW: 1024,
 			atlasH: 1024,
 			dirty:  true,
+			useSDF: useSDF,
 		}
 	}
-	return newFontFromFace(face, 1024, 1024)
+	f := newFontFromFace(face, 1024, 1024)
+	f.useSDF = useSDF
+	return f
 }
 
 // newGoRegularFace parses the bundled Go Regular TTF and creates a face at
@@ -168,7 +198,18 @@ func (f *Font) Glyph(r rune) glyphInfo {
 		return g
 	}
 
-	region, fit := f.atlas.Pack(w+1, h+1) // 1-pixel padding to prevent bleed
+	// In SDF mode each glyph slot is padded by sdfPadding pixels on every
+	// side so the distance transform can spread without clipping into a
+	// neighbour. The packed region therefore measures (w+pad*2+1) by
+	// (h+pad*2+1) — same +1 bleed guard as the raster path.
+	pad := 0
+	if f.useSDF {
+		pad = sdfPadding
+	}
+	slotW := w + pad*2
+	slotH := h + pad*2
+
+	region, fit := f.atlas.Pack(slotW+1, slotH+1) // 1-pixel padding to prevent bleed
 	if !fit {
 		// Atlas is full — drop the glyph silently, returning an info that
 		// still advances the pen. A more sophisticated implementation
@@ -181,15 +222,34 @@ func (f *Font) Glyph(r rune) glyphInfo {
 	// Copy the glyph mask into our CPU-side atlas pixel buffer. The
 	// opentype rasteriser returns mask data already in *image.Alpha form
 	// (or its rendering subset), so draw.Draw with draw.Src reads exactly
-	// the alpha byte we want.
+	// the alpha byte we want. In SDF mode we centre the glyph inside the
+	// padded slot, leaving an empty border that becomes the SDF spread.
 	dst := newAlphaView(f.pixels, f.atlasW, f.atlasH)
-	dstRect := image.Rect(region.X, region.Y, region.X+w, region.Y+h)
+	maskX := region.X + pad
+	maskY := region.Y + pad
+	dstRect := image.Rect(maskX, maskY, maskX+w, maskY+h)
 	draw.Draw(dst, dstRect, mask, maskp, draw.Src)
 
+	if f.useSDF {
+		// Run the distance transform over the padded slot in-place.
+		// Extract the slot to a contiguous buffer (SDF expects packed rows
+		// without an atlas stride), transform, then write back.
+		buf := make([]byte, slotW*slotH)
+		for yy := 0; yy < slotH; yy++ {
+			srcOff := (region.Y+yy)*f.atlasW + region.X
+			copy(buf[yy*slotW:(yy+1)*slotW], f.pixels[srcOff:srcOff+slotW])
+		}
+		sdf := generateSDF(buf, slotW, slotH, sdfSpread)
+		for yy := 0; yy < slotH; yy++ {
+			dstOff := (region.Y+yy)*f.atlasW + region.X
+			copy(f.pixels[dstOff:dstOff+slotW], sdf[yy*slotW:(yy+1)*slotW])
+		}
+	}
+
 	g := glyphInfo{
-		region:  atlas.Region{X: region.X, Y: region.Y, W: w, H: h},
-		offX:    float32(dr.Min.X),
-		offY:    float32(dr.Min.Y),
+		region:  atlas.Region{X: region.X, Y: region.Y, W: slotW, H: slotH},
+		offX:    float32(dr.Min.X - pad),
+		offY:    float32(dr.Min.Y - pad),
 		advance: fixedToF32(advance),
 	}
 	f.glyphs[r] = g

@@ -121,6 +121,8 @@ type Window struct {
 	gluiPainter *glui.CairoCompat // reused across frames so the font atlas
 	// (and its GL textures) survives — allocating a fresh painter per frame
 	// would leak texture IDs at 60fps.
+	gluiFps *glui.FPSCounter // rolling 1-second FPS measurement; surfaced
+	// as a top-right overlay when SILK_GLUI_FPS=1.
 
 	mouseEntered bool
 	autoCaptured bool
@@ -302,6 +304,12 @@ func (this *Window) create(p *Window, wt WindowType) error {
 			core.Warn("glui init failed:", err)
 			this.useGlui = false
 			this.gluiCtx = nil
+		} else {
+			// FPS counter is allocated unconditionally — Tick() is cheap
+			// and the env-gated overlay reads from it. Allocating only
+			// when the env is set would leave the counter unwired if the
+			// user toggles it on at runtime via reload.
+			this.gluiFps = glui.NewFPSCounter()
 		}
 	}
 
@@ -597,6 +605,14 @@ func (this *Window) paint() {
 func (this *Window) paintGlui() {
 	this.glfwWin.MakeContextCurrent()
 
+	// Sample frame timing first thing so the rolling 1-second window is
+	// stamped with this frame even if a panic later in the function
+	// short-circuits the overlay draw. The counter ignores nil receivers
+	// only via this guard, not internally.
+	if this.gluiFps != nil {
+		this.gluiFps.Tick()
+	}
+
 	fbw, fbh := this.glfwWin.GetFramebufferSize()
 	sx, _ := this.glfwWin.GetContentScale()
 
@@ -648,6 +664,18 @@ func (this *Window) paintGlui() {
 		}()
 		DrawWidgetAll(this.widget, this.gluiPainter, 0, 0, 0, 0, width, height)
 	}()
+
+	// Optional FPS overlay. Drawing through the renderer directly (not via
+	// gluiPainter) because no transform/clip/state is needed — just a pair
+	// of text quads in screen space. setBatch flushes whatever batch
+	// DrawWidgetAll left open, so we don't need an explicit flush.
+	if this.gluiFps != nil && os.Getenv("SILK_GLUI_FPS") == "1" {
+		fps := glui.DefaultFont(12)
+		msg := this.gluiFps.Format()
+		// Right-align the readout to a 100-point margin from the right
+		// edge so it stays visible regardless of widget content width.
+		r.DrawText(fps, msg, float32(width)-100, 16, glui.RGBA8(255, 200, 0, 220))
+	}
 
 	r.End()
 	this.glfwWin.SwapBuffers()

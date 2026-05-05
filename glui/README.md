@@ -26,6 +26,14 @@ side changes — see "CairoCompat bridge" below.
 The pure-glui API is exposed for native code that wants to skip the shim:
 graph editors, custom panels, the form designer's overlay layer.
 
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `SILK_GLUI=1` | Switch the window paint path to the pure-OpenGL renderer. |
+| `SILK_GLUI_SDF=1` | Rasterise glyphs through the signed-distance-field generator (`glui/font_sdf.go`) instead of uploading raw alpha masks. Sharper text under heavy zoom on the designer canvas, at a small one-time cost per glyph. |
+| `SILK_GLUI_FPS=1` | Draw a top-right HUD overlay reporting rolling 1-second FPS and frame time. Useful for benchmarking the glui path against the Cairo baseline. |
+
 ## Architecture
 
 ```
@@ -187,6 +195,45 @@ window.gluiPainter.BeginFrame() // advances LRU + evicts stale textures
 `BeginFrame` runs cache eviction: entries unused for ~5 seconds (300
 frames) are freed. A 256-entry hard cap on each map (pixmaps, icons)
 catches pathological growth.
+
+## Box shadows: the ShadowPainter pattern
+
+`Renderer.FillBoxShadow` produces a soft, GPU-accelerated drop shadow by
+outsetting the rect-SDF shader's AA width to span the blur. To let widget
+authors call it from inside their `Draw(g paint.Painter)` method without
+pulling glui into the `gui` import graph, the bridge exposes the shadow
+through an interface defined in `paint`:
+
+```go
+package paint
+
+type ShadowPainter interface {
+    FillBoxShadow(rc geom.Rect, radius, blur float64, col Color)
+}
+```
+
+`CairoCompat` (the glui-side bridge) implements `ShadowPainter`; the
+production `cairoPainter` does not. Widget code therefore opts in via a
+type assertion — when the assertion succeeds the GL path renders the soft
+shadow, and when it fails the widget falls through to its existing
+draw-without-shadow code:
+
+```go
+func (this *Card) Draw(g paint.Painter) {
+    rect := geom.Rect{X: 0, Y: 0, Width: this.W, Height: this.H}
+    if sp, ok := g.(paint.ShadowPainter); ok {
+        sp.FillBoxShadow(rect, /*radius*/ 8, /*blur*/ 6,
+            paint.Color{R: 0, G: 0, B: 0, A: 60})
+    }
+    // ... existing fill / border / contents ...
+}
+```
+
+This pattern keeps the Painter interface minimal (no `FillBoxShadow` is
+forced onto every back-end) while letting GL-aware widgets light up the
+extra capability. Cairo widgets that genuinely need a shadow can keep
+drawing one with their existing paint operations — the assertion failure
+just routes them to that path automatically.
 
 ## Performance
 
