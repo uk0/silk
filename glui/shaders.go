@@ -129,3 +129,39 @@ void main() {
     gl_FragColor = vec4(v_color.rgb, v_color.a * a);
 }
 `
+
+// Two-stop linear gradient. The vertex shader passes a parametric
+// coordinate `t` packed into v_uv.x (0 at the start endpoint, 1 at the
+// end). The fragment mixes between u_color0 and u_color1 by t, then
+// modulates with v_color so per-vertex tinting still works (e.g. a
+// Save/Restore alpha multiplier).
+//
+// a_corner is consumed by the rect shader only; for gradient batches the
+// renderer writes zeros so the attribute is ignored. We still declare it
+// in the vertex layout to keep the 48-byte stride uniform across batches.
+const gradientVertSrc = `
+#version 120
+attribute vec2 a_pos;
+attribute vec2 a_uv;
+attribute vec4 a_color;
+attribute vec4 a_corner;
+varying vec2 v_uv;
+varying vec4 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`
+
+const gradientFragSrc = `
+#version 120
+varying vec2 v_uv;
+varying vec4 v_color;
+uniform vec4 u_color0;
+uniform vec4 u_color1;
+void main() {
+    float t = clamp(v_uv.x, 0.0, 1.0);
+    gl_FragColor = mix(u_color0, u_color1, t) * v_color;
+}
+`

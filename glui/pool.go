@@ -40,6 +40,8 @@ func (c *Context) programFor(k batchKind) *shader.Program {
 		return c.imageProg
 	case kindGlyph:
 		return c.glyphProg
+	case kindGradient:
+		return c.gradientProg
 	}
 	return nil
 }

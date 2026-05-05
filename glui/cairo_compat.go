@@ -25,7 +25,12 @@ import (
 // is the bridge for the legacy widget set.
 //
 // What is approximated rather than exactly emulated:
-//   - Pattern brushes / gradients (only solid color is honoured)
+//   - Pixmap-pattern brushes are not supported (rendered transparent)
+//   - Linear gradients honour only the first and last stops, and the GPU
+//     gradient path applies only when the filled path is a single axis-
+//     aligned rectangle. Multi-stop gradients lose intermediates;
+//     non-rect paths fall back to a solid fill of the start-stop colour.
+//   - Radial gradients are not GPU-accelerated yet (treated as solid).
 //   - SetOperator / blend modes (we always run SRC_OVER)
 //   - Clip-by-path (only axis-aligned bounding-box clip is supported —
 //     proper stencil-buffer path clipping is a TODO)
@@ -52,6 +57,17 @@ type CairoCompat struct {
 	penWidth   float32
 	brushColor paint.Color
 	font       paint.Font
+
+	// Active linear-gradient brush state. gradientActive flags whether
+	// SetBrush most recently selected a *paint.LinearGradient. When set,
+	// fillCurrentPath routes axis-aligned rectangle paths through
+	// Renderer.FillGradientRect; non-rect paths fall back to a solid fill of
+	// gradStart so the shape still renders something visible (and the
+	// limitation is logged once in package docs).
+	gradientActive   bool
+	gradientStart    paint.Color
+	gradientEnd      paint.Color
+	gradientVertical bool
 
 	// Logical CTM mirrored from the renderer. We need read access to it
 	// for GetMatrix() and to resolve hairline pens (width=0). Renderer.xform
@@ -117,14 +133,18 @@ type iconCacheKey struct {
 }
 
 type cairoCompatState struct {
-	pathLen    int
-	subsLen    int
-	penColor   paint.Color
-	penWidth   float32
-	brushColor paint.Color
-	font       paint.Font
-	ctm        geom.Mat3x2
-	clipRect   geom.Rect
+	pathLen          int
+	subsLen          int
+	penColor         paint.Color
+	penWidth         float32
+	brushColor       paint.Color
+	font             paint.Font
+	ctm              geom.Mat3x2
+	clipRect         geom.Rect
+	gradientActive   bool
+	gradientStart    paint.Color
+	gradientEnd      paint.Color
+	gradientVertical bool
 }
 
 // Compile-time interface satisfaction. If a paint.Painter method goes
@@ -306,14 +326,18 @@ func (c *CairoCompat) evictOldestIcons(n int) {
 func (c *CairoCompat) Save() int {
 	depth := len(c.stateStack)
 	c.stateStack = append(c.stateStack, cairoCompatState{
-		pathLen:    len(c.pathPts),
-		subsLen:    len(c.pathSubs),
-		penColor:   c.penColor,
-		penWidth:   c.penWidth,
-		brushColor: c.brushColor,
-		font:       c.font,
-		ctm:        c.ctm,
-		clipRect:   c.clipRect,
+		pathLen:          len(c.pathPts),
+		subsLen:          len(c.pathSubs),
+		penColor:         c.penColor,
+		penWidth:         c.penWidth,
+		brushColor:       c.brushColor,
+		font:             c.font,
+		ctm:              c.ctm,
+		clipRect:         c.clipRect,
+		gradientActive:   c.gradientActive,
+		gradientStart:    c.gradientStart,
+		gradientEnd:      c.gradientEnd,
+		gradientVertical: c.gradientVertical,
 	})
 	c.r.Save()
 	return depth
@@ -340,6 +364,10 @@ func (c *CairoCompat) Restore() int {
 	c.brushColor = s.brushColor
 	c.font = s.font
 	c.ctm = s.ctm
+	c.gradientActive = s.gradientActive
+	c.gradientStart = s.gradientStart
+	c.gradientEnd = s.gradientEnd
+	c.gradientVertical = s.gradientVertical
 	// Pop clips pushed *deeper* than the new stack depth. clipPushedAt is
 	// tagged with the Save depth in effect at Clip-time; a clip at depth K
 	// belongs to the Save scope at depth K, so it must pop when we Restore
@@ -578,6 +606,22 @@ func (c *CairoCompat) fillCurrentPath() {
 	if len(c.pathPts) < 3 {
 		return
 	}
+
+	// Gradient fast path: if the brush is a linear gradient and the path is a
+	// single axis-aligned rectangle (the common case — buttons, chart areas,
+	// gauge fills) route through Renderer.FillGradientRect for a true GPU
+	// gradient. Other path shapes fall through to the solid triangulation
+	// fill below using the start-stop colour, matching the documented
+	// limitation in CairoCompat's package comment.
+	if c.gradientActive {
+		if rc, ok := c.singleAxisAlignedRectPath(); ok {
+			start := paintColorToGlui(c.gradientStart)
+			end := paintColorToGlui(c.gradientEnd)
+			c.r.FillGradientRect(rc, start, end, c.gradientVertical)
+			return
+		}
+	}
+
 	col := paintColorToGlui(c.brushColor)
 	for i, start := range c.pathSubs {
 		end := len(c.pathPts)
@@ -605,6 +649,63 @@ func (c *CairoCompat) fillCurrentPath() {
 			c.r.FillTriangle(a[0], a[1], b[0], b[1], cc[0], cc[1], col)
 		}
 	}
+}
+
+// singleAxisAlignedRectPath reports whether the current path consists of
+// exactly one sub-path made of four corners of an axis-aligned rectangle
+// (with an optional duplicated close vertex). Returns the rect on success.
+//
+// Only Rectangle() / Rectangle1() emit this exact shape; any path produced
+// by MoveTo+LineTo with rotation, skew, or extra anchors fails the check
+// and the caller falls back to triangulated fill. We accept both 4 unique
+// vertices and the 5-vertex closed form Rectangle() emits.
+func (c *CairoCompat) singleAxisAlignedRectPath() (Rect, bool) {
+	if len(c.pathSubs) != 1 {
+		return Rect{}, false
+	}
+	pts := c.pathPts
+	n := len(pts)
+	// Drop the trailing close vertex if it duplicates the first.
+	if n == 5 && pts[0] == pts[4] {
+		n = 4
+	}
+	if n != 4 {
+		return Rect{}, false
+	}
+	// Axis-aligned check: x and y values should reduce to exactly two
+	// distinct values across the four corners.
+	xs := [4]float32{pts[0][0], pts[1][0], pts[2][0], pts[3][0]}
+	ys := [4]float32{pts[0][1], pts[1][1], pts[2][1], pts[3][1]}
+	minX, maxX := xs[0], xs[0]
+	minY, maxY := ys[0], ys[0]
+	for i := 1; i < 4; i++ {
+		if xs[i] < minX {
+			minX = xs[i]
+		}
+		if xs[i] > maxX {
+			maxX = xs[i]
+		}
+		if ys[i] < minY {
+			minY = ys[i]
+		}
+		if ys[i] > maxY {
+			maxY = ys[i]
+		}
+	}
+	// Each x must be either minX or maxX; same for y. Otherwise the path is
+	// some non-axis-aligned quad that needs triangulation.
+	for i := 0; i < 4; i++ {
+		if xs[i] != minX && xs[i] != maxX {
+			return Rect{}, false
+		}
+		if ys[i] != minY && ys[i] != maxY {
+			return Rect{}, false
+		}
+	}
+	if maxX <= minX || maxY <= minY {
+		return Rect{}, false
+	}
+	return Rect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}, true
 }
 
 func (c *CairoCompat) strokeCurrentPath() {
@@ -793,21 +894,68 @@ func (c *CairoCompat) SetPen1(cr paint.Color, width float64) {
 }
 
 func (c *CairoCompat) SetBrush(br paint.Brush) {
+	// A new brush always replaces the gradient flag. The default cleared
+	// state below means non-gradient brushes (solid, pixmap, nil) read out
+	// as gradientActive=false, and the next Fill/Paint takes the solid path.
+	c.gradientActive = false
+	c.gradientStart = paint.Color{}
+	c.gradientEnd = paint.Color{}
+	c.gradientVertical = false
+
 	switch p := br.(type) {
 	case *paint.SolidBrush:
 		c.brushColor = p.Color
 	case paint.Color:
 		c.brushColor = p
+	case *paint.LinearGradient:
+		// Two-stop approximation: the renderer takes only the first and last
+		// stops. Multi-stop gradients lose intermediate stops — see paint
+		// package comment on LinearGradient.
+		stops := p.Stops
+		if len(stops) >= 2 {
+			c.gradientActive = true
+			c.gradientStart = stops[0].Color
+			c.gradientEnd = stops[len(stops)-1].Color
+			// Choose axis: if |dy| > |dx| the gradient is mostly vertical,
+			// otherwise horizontal. The shader path only honours the two
+			// canonical axes today; a fully-arbitrary axis would need extra
+			// per-vertex t computation. Most UI gradients are top-to-bottom
+			// or left-to-right, so this covers the common case cleanly.
+			dx := p.X1 - p.X0
+			dy := p.Y1 - p.Y0
+			if dy < 0 {
+				dy = -dy
+			}
+			if dx < 0 {
+				dx = -dx
+			}
+			c.gradientVertical = dy > dx
+			// Fallback brush colour mirrors the start stop so non-rect paths
+			// still render legibly with a flat colour.
+			c.brushColor = stops[0].Color
+		} else if len(stops) == 1 {
+			// Single-stop gradient is just a solid brush.
+			c.brushColor = stops[0].Color
+		} else {
+			c.brushColor = paint.Color{}
+		}
 	case nil:
 		c.brushColor = paint.Color{}
 	default:
-		// Pixmap brushes etc. are not supported. Fall back to transparent
-		// rather than rendering with stale colour.
+		// Pixmap brushes / radial gradients aren't shader-handled yet. Fall
+		// back to transparent rather than rendering with stale colour.
 		c.brushColor = paint.Color{}
 	}
 }
 
-func (c *CairoCompat) SetBrush1(cr paint.Color) { c.brushColor = cr }
+// SetBrush1 sets a solid brush colour and clears any active gradient.
+func (c *CairoCompat) SetBrush1(cr paint.Color) {
+	c.brushColor = cr
+	c.gradientActive = false
+	c.gradientStart = paint.Color{}
+	c.gradientEnd = paint.Color{}
+	c.gradientVertical = false
+}
 
 // --- Font / Text ------------------------------------------------------
 

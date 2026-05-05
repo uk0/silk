@@ -70,3 +70,29 @@ func isInf(f float32) bool {
 	neg := float32(math.Inf(-1))
 	return f == pos || f == neg
 }
+
+// TestGradientNoVertexCorruption mirrors TestNoVertexCorruption but for
+// the FillGradientRect emit path, which appends vertices directly rather
+// than through pushQuad / pushRectQuad. A fresh renderer is used so the
+// initial kind-change check inside FillGradientRect short-circuits flush
+// (curKind == kindNone, no indices pending → flush returns early without
+// touching gl).
+func TestGradientNoVertexCorruption(t *testing.T) {
+	r := newTestRenderer()
+	r.FillGradientRect(Rect{X: 50, Y: 50, W: 80, H: 40},
+		Color{1, 0, 0, 1}, Color{0, 1, 0, 1}, false)
+	r.FillGradientRect(Rect{X: 50, Y: 50, W: 80, H: 40},
+		Color{1, 0, 0, 1}, Color{0, 1, 0, 1}, true)
+	for i, v := range r.verts {
+		floats := [12]float32{
+			v.X, v.Y, v.U, v.V, v.R, v.G, v.B, v.A,
+			v.CornerHX, v.CornerHY, v.CornerR, v.CornerAA,
+		}
+		for _, f := range floats {
+			if isNaN(f) || isInf(f) {
+				t.Errorf("gradient vertex[%d] non-finite: %+v", i, v)
+				break
+			}
+		}
+	}
+}

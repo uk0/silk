@@ -40,16 +40,25 @@ type Renderer struct {
 	// previous states pushed by PushClip().
 	curClip   clipState
 	clipStack []clipState
+
+	// Active two-stop linear-gradient colours. Bound as the u_color0 /
+	// u_color1 uniforms on the gradient shader at flush time. A batch can
+	// contain only ONE pair of stops because uniforms are per-program global,
+	// so any change to either colour forces a flush before the next quad is
+	// emitted (FillGradientRect handles that comparison directly).
+	gradStart Color
+	gradEnd   Color
 }
 
 type batchKind uint8
 
 const (
-	kindNone  batchKind = iota
-	kindRect            // solid + rounded rectangles, AA via SDF
-	kindPath            // arbitrary triangulated paths
-	kindImage           // textured quad
-	kindGlyph           // text from atlas
+	kindNone     batchKind = iota
+	kindRect               // solid + rounded rectangles, AA via SDF
+	kindPath               // arbitrary triangulated paths
+	kindImage              // textured quad
+	kindGlyph              // text from atlas
+	kindGradient           // two-stop linear gradient quads
 )
 
 // Begin starts a new frame. fbW/fbH are in points (logical units).
@@ -72,6 +81,12 @@ func (c *Context) Begin(fbW, fbH float32) *Renderer {
 	r.curClip = clipState{}
 	r.clipStack = r.clipStack[:0]
 	gl.Disable(gl.SCISSOR_TEST)
+
+	// Reset gradient stop cache so the first FillGradientRect of the frame
+	// always primes uniforms — comparing against a stale prior-frame value
+	// would let a colour-equal-but-batch-stale gradient skip the flush.
+	r.gradStart = Color{}
+	r.gradEnd = Color{}
 
 	return r
 }
@@ -164,6 +179,66 @@ func (r *Renderer) FillRect(rc Rect, col Color) {
 	r.pushRectQuad(rc.X, rc.Y, rc.W, rc.H, hw, hh, 0, 1, col)
 }
 
+// FillGradientRect paints rc with a two-stop linear gradient from start to
+// end. When vertical is true the axis runs top-to-bottom; otherwise it runs
+// left-to-right.
+//
+// The gradient shader takes its stop colours from per-program uniforms
+// (u_color0, u_color1), which are global to a draw call — so a batch can
+// only carry one pair of stops. Any change to either colour forces a flush
+// before the new quad is emitted, ensuring the uniforms bound at the next
+// flush match the colours the quad expects.
+//
+// Multi-stop gradients are not supported; callers route their start and end
+// stops here and lose intermediates. paint.LinearGradient documents the
+// limitation; CairoCompat collapses to the first/last stop pair.
+func (r *Renderer) FillGradientRect(rc Rect, start, end Color, vertical bool) {
+	// A different gradient — kind change, OR same kind but different stops —
+	// must flush before we add the new quad. setBatch handles the kind/tex
+	// comparison; the colour comparison is independent because uniforms are
+	// not part of the batch key.
+	if r.curKind != kindGradient || r.gradStart != start || r.gradEnd != end {
+		r.flush()
+		r.curKind = kindGradient
+		r.curTex = 0
+		r.gradStart = start
+		r.gradEnd = end
+	}
+
+	base := uint16(len(r.verts))
+	x0, y0 := r.project(rc.X, rc.Y)
+	x1, y1 := r.project(rc.X+rc.W, rc.Y)
+	x2, y2 := r.project(rc.X+rc.W, rc.Y+rc.H)
+	x3, y3 := r.project(rc.X, rc.Y+rc.H)
+
+	// Pack the gradient parameter t into v_uv.x. The fragment shader reads
+	// v_uv.x and clamps to [0,1] — see gradientFragSrc. v_color is white so
+	// the mix(start, end, t) is unmodulated; if a future feature wants a
+	// per-vertex tint (alpha modulation from a Save/Restore stack) it can
+	// pass a colour here.
+	if vertical {
+		// t = 0 at top, 1 at bottom.
+		r.verts = append(r.verts,
+			vertex{x0, y0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+			vertex{x1, y1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+			vertex{x2, y2, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+			vertex{x3, y3, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+		)
+	} else {
+		// t = 0 at left, 1 at right.
+		r.verts = append(r.verts,
+			vertex{x0, y0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+			vertex{x1, y1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+			vertex{x2, y2, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+			vertex{x3, y3, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0},
+		)
+	}
+	r.indices = append(r.indices,
+		base, base+1, base+2,
+		base, base+2, base+3,
+	)
+}
+
 // setBatch flushes the current batch if the new kind/texture differs.
 func (r *Renderer) setBatch(kind batchKind, tex uint32) {
 	if r.curKind == kind && r.curTex == tex {
@@ -223,6 +298,13 @@ func (r *Renderer) flush() {
 		gl.ActiveTexture(gl.TEXTURE0)
 		gl.BindTexture(gl.TEXTURE_2D, r.curTex)
 		prog.Set1i("u_tex", 0)
+	}
+
+	// Gradient uniforms must be bound after Use() and before the draw call —
+	// Set4f calls glUniform4f which targets the currently bound program.
+	if r.curKind == kindGradient {
+		prog.Set4f("u_color0", r.gradStart.R, r.gradStart.G, r.gradStart.B, r.gradStart.A)
+		prog.Set4f("u_color1", r.gradEnd.R, r.gradEnd.G, r.gradEnd.B, r.gradEnd.A)
 	}
 
 	gl.DrawElements(gl.TRIANGLES, int32(len(r.indices)), gl.UNSIGNED_SHORT, unsafe.Pointer(uintptr(0)))

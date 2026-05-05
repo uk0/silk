@@ -219,9 +219,15 @@ go test -bench=. -benchmem ./glui/
 
 The Cairo pipeline is the reference; glui approximates these features:
 
-- **Pattern brushes** — only solid colour is honoured. Linear and radial
-  gradients are not yet implemented; stops collapse to the first stop's
-  colour.
+- **Pattern brushes** — pixmap-pattern brushes are not honoured (drawn
+  transparent). **Linear gradients** are now GPU-accelerated for axis-
+  aligned rectangle fills via the `kindGradient` shader (see
+  `Renderer.FillGradientRect`). Limitations: only the first and last
+  stops are used (multi-stop gradients lose intermediates), and only
+  paths that are a single axis-aligned rect take the gradient path —
+  non-rect paths fall back to a solid fill of the start stop. **Radial
+  gradients** are not GPU-accelerated yet; they collapse to the start
+  stop.
 - **Blend operators** — `paint.SetOperator` is a no-op. glui hardcodes
   SRC_OVER. Honouring arbitrary operators would need a flush + blend-state
   flip on each change.

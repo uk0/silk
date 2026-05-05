@@ -13,11 +13,12 @@ import (
 // must run on the goroutine that owns the GL context, typically the main
 // thread.
 type Context struct {
-	// Shader programs for the four core draw kinds.
-	rectProg  *shader.Program // solid + bordered rectangles, rounded corners
-	pathProg  *shader.Program // arbitrary paths via triangle fan
-	imageProg *shader.Program // textured quads
-	glyphProg *shader.Program // SDF glyph atlas blits
+	// Shader programs for the five core draw kinds.
+	rectProg     *shader.Program // solid + bordered rectangles, rounded corners
+	pathProg     *shader.Program // arbitrary paths via triangle fan
+	imageProg    *shader.Program // textured quads
+	glyphProg    *shader.Program // SDF glyph atlas blits
+	gradientProg *shader.Program // two-stop linear gradient quads
 
 	// Shared streaming VBO + EBO. All draw kinds append into this buffer
 	// and flush on material change. 256KB initial size, grown geometrically.
@@ -71,6 +72,12 @@ func (c *Context) Init() error {
 	}
 	c.glyphProg = prog
 
+	prog, err = shader.Compile(gradientVertSrc, gradientFragSrc)
+	if err != nil {
+		return err
+	}
+	c.gradientProg = prog
+
 	// Streaming buffers — reused every frame, GL_DYNAMIC_DRAW so the driver
 	// can keep them in mappable memory.
 	gl.GenBuffers(1, &c.vbo)
@@ -109,6 +116,9 @@ func (c *Context) Destroy() {
 	c.pathProg.Delete()
 	c.imageProg.Delete()
 	c.glyphProg.Delete()
+	if c.gradientProg != nil {
+		c.gradientProg.Delete()
+	}
 	gl.DeleteBuffers(1, &c.vbo)
 	gl.DeleteBuffers(1, &c.ebo)
 	c.initialized = false
