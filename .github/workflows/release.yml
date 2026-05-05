@@ -1,0 +1,180 @@
+name: Release
+
+# Tag-driven release. The main branch never triggers a build by itself —
+# only pushing a tag like v2.4.0 produces artifacts and a GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required to create the GitHub Release
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-amd64
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - label: macos-arm64
+            os: macos-15
+            goos: darwin
+            goarch: arm64
+          - label: macos-amd64
+            os: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - label: windows-amd64
+            os: windows-latest
+            goos: windows
+            goarch: amd64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # ─── Cairo install per-platform ───
+      - name: Install Cairo (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libcairo2-dev \
+            libx11-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libgl1-mesa-dev
+
+      - name: Install Cairo (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cairo pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-I$(brew --prefix)/include" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L$(brew --prefix)/lib -lcairo" >> $GITHUB_ENV
+
+      - name: Install Cairo (Windows / MSYS2)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: |
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-cairo
+
+      - name: Configure MSYS2 PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
+          echo "PKG_CONFIG_PATH=C:/msys64/mingw64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-IC:/msys64/mingw64/include" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-LC:/msys64/mingw64/lib -lcairo" >> $GITHUB_ENV
+          echo "CGO_ENABLED=1" >> $GITHUB_ENV
+
+      # ─── Test ───
+      - name: Run tests
+        run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+
+      # ─── Build artifacts ───
+      - name: Build designer
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          go build -v -ldflags="-s -w" -o silk-designer-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} design.go
+
+      - name: Build demo
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          go build -v -ldflags="-s -w" -o silk-demo-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} demo.go
+
+      # ─── Package ───
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist/silk-${{ matrix.label }}
+          cp silk-designer-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-designer
+          cp silk-demo-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-demo
+          cp -r icon dist/silk-${{ matrix.label }}/
+          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
+          cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist/silk-${{ matrix.label }}
+          cp silk-designer-${{ matrix.label }}.exe dist/silk-${{ matrix.label }}/silk-designer.exe
+          cp silk-demo-${{ matrix.label }}.exe dist/silk-${{ matrix.label }}/silk-demo.exe
+          cp -r icon dist/silk-${{ matrix.label }}/
+          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
+          # Bundle MSYS2 cairo DLLs so the binary runs on systems without MSYS2.
+          cp /c/msys64/mingw64/bin/libcairo-2.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libpixman-1-0.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libfontconfig-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libfreetype-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libpng16-16.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libexpat-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libgcc_s_seh-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libstdc++-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libwinpthread-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/zlib1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/mingw64/bin/libbz2-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cd dist && 7z a silk-${{ matrix.label }}.zip silk-${{ matrix.label }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: silk-${{ matrix.label }}
+          path: dist/silk-${{ matrix.label }}.*
+          retention-days: 7
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for release notes)
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f -name 'silk-*'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/silk-*.tar.gz
+          # Also attach Windows zip — second pattern (separate file pattern):
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
+
+      - name: Attach Windows zips
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/silk-*.zip
+          fail_on_unmatched_files: false

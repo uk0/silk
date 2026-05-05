@@ -1,0 +1,63 @@
+name: CI
+
+# Pull-request validation. The main branch is intentionally NOT a trigger
+# — pushes to main are local merges, not events that should consume
+# Actions minutes. Tag pushes are handled by release.yml.
+on:
+  pull_request:
+    branches: [main, opengl]
+
+jobs:
+  test:
+    name: Test ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+          - label: macos-arm
+            os: macos-15
+          - label: macos-intel
+            os: macos-15-intel
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Install Cairo (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libcairo2-dev \
+            libx11-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libgl1-mesa-dev
+
+      - name: Install Cairo (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cairo pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-I$(brew --prefix)/include" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L$(brew --prefix)/lib -lcairo" >> $GITHUB_ENV
+
+      - name: Vet
+        run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+
+      - name: Test
+        run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+
+      - name: Build entry points
+        run: |
+          go build -v -o /tmp/silk-designer design.go
+          go build -v -o /tmp/silk-demo demo.go

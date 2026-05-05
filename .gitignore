@@ -16,8 +16,8 @@ resources/
 CLAUDE.md
 *_article
 
-# GitHub (CI/workflows managed separately)
-.github/
+# GitHub
+.github/dependabot.yml
 *.exe
 *.exe~
 *.dll
