@@ -116,8 +116,11 @@ type Window struct {
 	// directly through the silk/glui pure-OpenGL pipeline, bypassing the
 	// Cairo back buffer + texture upload path. Off by default — the legacy
 	// Cairo path remains the production renderer.
-	useGlui bool
-	gluiCtx *glui.Context
+	useGlui     bool
+	gluiCtx     *glui.Context
+	gluiPainter *glui.CairoCompat // reused across frames so the font atlas
+	// (and its GL textures) survives — allocating a fresh painter per frame
+	// would leak texture IDs at 60fps.
 
 	mouseEntered bool
 	autoCaptured bool
@@ -622,7 +625,15 @@ func (this *Window) paintGlui() {
 	// fidelity to Cairo's path/blend semantics is a non-goal; widgets that
 	// need exotic operators or pattern brushes degrade gracefully (see
 	// CairoCompat documentation for the supported subset).
-	painter := glui.NewCairoCompat(r)
+	//
+	// The painter (and its FontCache) lives on the Window so the GL glyph
+	// atlas survives across frames — allocating a fresh painter every paint
+	// would generate (and leak) one set of textures per frame.
+	if this.gluiPainter == nil {
+		this.gluiPainter = glui.NewCairoCompat(r)
+	} else {
+		this.gluiPainter.BindRenderer(r)
+	}
 
 	func() {
 		defer func() {
@@ -630,7 +641,7 @@ func (this *Window) paintGlui() {
 				core.Warn("paint panic in DrawWidgetAll (glui):", rec)
 			}
 		}()
-		DrawWidgetAll(this.widget, painter, 0, 0, 0, 0, width, height)
+		DrawWidgetAll(this.widget, this.gluiPainter, 0, 0, 0, 0, width, height)
 	}()
 
 	r.End()

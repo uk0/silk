@@ -103,6 +103,28 @@ func NewCairoCompat(r *Renderer) *CairoCompat {
 	return c
 }
 
+// BindRenderer attaches the painter to a fresh per-frame Renderer while
+// keeping its FontCache (and the GL textures behind it) alive. State that
+// only makes sense inside a single Begin/End — current path, save stack,
+// active clip — is reset.
+//
+// Hosts should call this once per frame after Context.Begin() instead of
+// allocating a fresh CairoCompat: the FontCache owns persistent GL
+// textures that would otherwise leak.
+func (c *CairoCompat) BindRenderer(r *Renderer) {
+	c.r = r
+	c.pathPts = c.pathPts[:0]
+	c.pathSubs = c.pathSubs[:0]
+	c.curX, c.curY = 0, 0
+	c.stateStack = c.stateStack[:0]
+	c.clipRect = geom.Rect{}
+	c.clipStack = c.clipStack[:0]
+	c.clipPushedAt = c.clipPushedAt[:0]
+	c.ctm.InitIdentity()
+	// Pen/brush/font are intentionally retained — Cairo does the same
+	// across surfaces, and most widgets re-set them at the top of Draw().
+}
+
 // Target returns the painter's underlying surface. CairoCompat has no
 // Cairo surface — widgets never read this in the standard set, so a nil
 // is safe and avoids inventing a fake.
@@ -147,8 +169,17 @@ func (c *CairoCompat) Restore() int {
 	c.brushColor = s.brushColor
 	c.font = s.font
 	c.ctm = s.ctm
-	// Pop any clips pushed inside this state's lifetime.
-	for len(c.clipPushedAt) > 0 && c.clipPushedAt[len(c.clipPushedAt)-1] >= len(c.stateStack)+1 {
+	// Pop clips pushed *deeper* than the new stack depth. clipPushedAt is
+	// tagged with the Save depth in effect at Clip-time; a clip at depth K
+	// belongs to the Save scope at depth K, so it must pop when we Restore
+	// back to a depth strictly less than K.
+	//
+	// Critical: use strict >, not >=. A naive `>= len+1` predicate (which
+	// looks equivalent at first glance) pops *every* clip on the first
+	// Restore in a Save→Clip→Save→Clip nesting because, after the inner
+	// pop, len(stateStack) drops to the outer scope's depth and the outer
+	// clip's tag matches, popping it prematurely.
+	for len(c.clipPushedAt) > 0 && c.clipPushedAt[len(c.clipPushedAt)-1] > len(c.stateStack) {
 		c.r.PopClip()
 		c.clipPushedAt = c.clipPushedAt[:len(c.clipPushedAt)-1]
 	}
@@ -531,8 +562,10 @@ func (c *CairoCompat) applyClip() {
 		X: float32(winRect.X), Y: float32(winRect.Y),
 		W: float32(winRect.Width), H: float32(winRect.Height),
 	})
-	// Track that we owe a PopClip when this Save scope is restored.
-	c.clipPushedAt = append(c.clipPushedAt, len(c.stateStack)+1)
+	// Tag with the current Save depth so Restore() can pop only clips
+	// pushed inside (or below) the scope being restored. See the matching
+	// comment in Restore() for the predicate's correctness rationale.
+	c.clipPushedAt = append(c.clipPushedAt, len(c.stateStack))
 }
 
 func intersectGeomRect(a, b geom.Rect) geom.Rect {
