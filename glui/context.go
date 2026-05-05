@@ -13,12 +13,13 @@ import (
 // must run on the goroutine that owns the GL context, typically the main
 // thread.
 type Context struct {
-	// Shader programs for the five core draw kinds.
-	rectProg     *shader.Program // solid + bordered rectangles, rounded corners
-	pathProg     *shader.Program // arbitrary paths via triangle fan
-	imageProg    *shader.Program // textured quads
-	glyphProg    *shader.Program // SDF glyph atlas blits
-	gradientProg *shader.Program // two-stop linear gradient quads
+	// Shader programs for the six core draw kinds.
+	rectProg         *shader.Program // solid + bordered rectangles, rounded corners
+	pathProg         *shader.Program // arbitrary paths via triangle fan
+	imageProg        *shader.Program // textured quads
+	glyphProg        *shader.Program // SDF glyph atlas blits
+	gradientProg     *shader.Program // two-stop linear gradient quads (uniforms)
+	gradientRampProg *shader.Program // multi-stop gradient via 1-D ramp texture
 
 	// Shared streaming VBO + EBO. All draw kinds append into this buffer
 	// and flush on material change. 256KB initial size, grown geometrically.
@@ -33,6 +34,16 @@ type Context struct {
 	scale float32
 
 	initialized bool
+
+	// gradientRamps caches uploaded 256×1 colour-ramp textures keyed by a
+	// hash of the stop list. Lives on Context (not Renderer) because the GL
+	// texture must outlive a single Begin/End pair — most UI gradients
+	// recur across frames, so the cache earns its keep on the second hit.
+	//
+	// Cache eviction is intentionally minimal: the typical app uses tens of
+	// distinct gradients, well under any reasonable cap. Once a gradient
+	// goes stale the host can call Context.Destroy and start fresh.
+	gradientRamps map[uint64]*Texture
 }
 
 // NewContext allocates a Context. Call Init() once GL is current.
@@ -78,6 +89,13 @@ func (c *Context) Init() error {
 	}
 	c.gradientProg = prog
 
+	prog, err = shader.Compile(gradientRampVertSrc, gradientRampFragSrc)
+	if err != nil {
+		return err
+	}
+	c.gradientRampProg = prog
+	c.gradientRamps = make(map[uint64]*Texture)
+
 	// Streaming buffers — reused every frame, GL_DYNAMIC_DRAW so the driver
 	// can keep them in mappable memory.
 	gl.GenBuffers(1, &c.vbo)
@@ -119,6 +137,13 @@ func (c *Context) Destroy() {
 	if c.gradientProg != nil {
 		c.gradientProg.Delete()
 	}
+	if c.gradientRampProg != nil {
+		c.gradientRampProg.Delete()
+	}
+	for _, tex := range c.gradientRamps {
+		tex.Free()
+	}
+	c.gradientRamps = nil
 	gl.DeleteBuffers(1, &c.vbo)
 	gl.DeleteBuffers(1, &c.ebo)
 	c.initialized = false

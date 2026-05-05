@@ -26,10 +26,11 @@ import (
 //
 // What is approximated rather than exactly emulated:
 //   - Pixmap-pattern brushes are not supported (rendered transparent)
-//   - Linear gradients honour only the first and last stops, and the GPU
-//     gradient path applies only when the filled path is a single axis-
-//     aligned rectangle. Multi-stop gradients lose intermediates;
-//     non-rect paths fall back to a solid fill of the start-stop colour.
+//   - Linear gradients are GPU-accelerated only when the filled path is a
+//     single axis-aligned rectangle. Two-stop gradients use a uniform-
+//     based fast path; gradients with three or more stops upload a 256-
+//     pixel 1-D ramp texture and sample it per fragment. Non-rect paths
+//     still fall back to a solid fill of the start-stop colour.
 //   - Radial gradients are not GPU-accelerated yet (treated as solid).
 //   - SetOperator / blend modes (we always run SRC_OVER)
 //   - Clip-by-path (only axis-aligned bounding-box clip is supported —
@@ -61,13 +62,20 @@ type CairoCompat struct {
 	// Active linear-gradient brush state. gradientActive flags whether
 	// SetBrush most recently selected a *paint.LinearGradient. When set,
 	// fillCurrentPath routes axis-aligned rectangle paths through
-	// Renderer.FillGradientRect; non-rect paths fall back to a solid fill of
+	// Renderer.FillGradientRect (two-stop) or FillMultiGradientRect
+	// (three or more stops); non-rect paths fall back to a solid fill of
 	// gradStart so the shape still renders something visible (and the
 	// limitation is logged once in package docs).
 	gradientActive   bool
 	gradientStart    paint.Color
 	gradientEnd      paint.Color
 	gradientVertical bool
+
+	// gradientStops carries the full multi-stop list when the active
+	// gradient has more than two stops. Empty for single- or two-stop
+	// gradients (which still go through gradientStart/gradientEnd) so the
+	// fast uniform path can stay in use for the common case.
+	gradientStops []GradientStop
 
 	// Logical CTM mirrored from the renderer. We need read access to it
 	// for GetMatrix() and to resolve hairline pens (width=0). Renderer.xform
@@ -145,6 +153,7 @@ type cairoCompatState struct {
 	gradientStart    paint.Color
 	gradientEnd      paint.Color
 	gradientVertical bool
+	gradientStops    []GradientStop
 }
 
 // Compile-time interface satisfaction. If a paint.Painter method goes
@@ -338,6 +347,7 @@ func (c *CairoCompat) Save() int {
 		gradientStart:    c.gradientStart,
 		gradientEnd:      c.gradientEnd,
 		gradientVertical: c.gradientVertical,
+		gradientStops:    c.gradientStops,
 	})
 	c.r.Save()
 	return depth
@@ -368,6 +378,7 @@ func (c *CairoCompat) Restore() int {
 	c.gradientStart = s.gradientStart
 	c.gradientEnd = s.gradientEnd
 	c.gradientVertical = s.gradientVertical
+	c.gradientStops = s.gradientStops
 	// Pop clips pushed *deeper* than the new stack depth. clipPushedAt is
 	// tagged with the Save depth in effect at Clip-time; a clip at depth K
 	// belongs to the Save scope at depth K, so it must pop when we Restore
@@ -613,11 +624,21 @@ func (c *CairoCompat) fillCurrentPath() {
 	// gradient. Other path shapes fall through to the solid triangulation
 	// fill below using the start-stop colour, matching the documented
 	// limitation in CairoCompat's package comment.
+	//
+	// When three or more stops are present, take the multi-stop ramp path
+	// instead. The two-stop uniform path stays the default for ordinary
+	// buttons because it skips the texture upload and round-trip — the
+	// vast majority of UI gradients are 2-stop, so optimising that case is
+	// worth the small branching cost here.
 	if c.gradientActive {
 		if rc, ok := c.singleAxisAlignedRectPath(); ok {
-			start := paintColorToGlui(c.gradientStart)
-			end := paintColorToGlui(c.gradientEnd)
-			c.r.FillGradientRect(rc, start, end, c.gradientVertical)
+			if len(c.gradientStops) >= 3 {
+				c.r.FillMultiGradientRect(rc, c.gradientStops, c.gradientVertical)
+			} else {
+				start := paintColorToGlui(c.gradientStart)
+				end := paintColorToGlui(c.gradientEnd)
+				c.r.FillGradientRect(rc, start, end, c.gradientVertical)
+			}
 			return
 		}
 	}
@@ -719,6 +740,12 @@ func (c *CairoCompat) strokeCurrentPath() {
 		width = 1
 	}
 	col := paintColorToGlui(c.penColor)
+	// JoinMiter + CapButt are the Cairo defaults and the only style data
+	// we can derive from paint.Pen — the Pen interface in this codebase
+	// exposes Width() and Color() only (see paint/pen.go); LineCap and
+	// LineJoin are not part of the API. Widgets that want a different
+	// join/cap need to either upgrade the Pen interface or call a glui-
+	// native stroke directly via PainterAdapter.
 	style := StrokeStyle{
 		Width: width,
 		Color: col,
@@ -901,6 +928,7 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 	c.gradientStart = paint.Color{}
 	c.gradientEnd = paint.Color{}
 	c.gradientVertical = false
+	c.gradientStops = c.gradientStops[:0]
 
 	switch p := br.(type) {
 	case *paint.SolidBrush:
@@ -908,9 +936,6 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 	case paint.Color:
 		c.brushColor = p
 	case *paint.LinearGradient:
-		// Two-stop approximation: the renderer takes only the first and last
-		// stops. Multi-stop gradients lose intermediate stops — see paint
-		// package comment on LinearGradient.
 		stops := p.Stops
 		if len(stops) >= 2 {
 			c.gradientActive = true
@@ -933,6 +958,25 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 			// Fallback brush colour mirrors the start stop so non-rect paths
 			// still render legibly with a flat colour.
 			c.brushColor = stops[0].Color
+			// Capture every stop when the gradient has more than two so
+			// fillCurrentPath can hit the ramp-texture path. Two-stop
+			// gradients deliberately keep gradientStops empty so they
+			// continue using the cheaper uniform-only fast path. We snapshot
+			// the slice to insulate the renderer from later mutations of
+			// the user's *paint.LinearGradient.
+			if len(stops) > 2 {
+				if cap(c.gradientStops) >= len(stops) {
+					c.gradientStops = c.gradientStops[:len(stops)]
+				} else {
+					c.gradientStops = make([]GradientStop, len(stops))
+				}
+				for i, s := range stops {
+					c.gradientStops[i] = GradientStop{
+						Position: s.Offset,
+						Color:    paintColorToGlui(s.Color),
+					}
+				}
+			}
 		} else if len(stops) == 1 {
 			// Single-stop gradient is just a solid brush.
 			c.brushColor = stops[0].Color
@@ -955,6 +999,7 @@ func (c *CairoCompat) SetBrush1(cr paint.Color) {
 	c.gradientStart = paint.Color{}
 	c.gradientEnd = paint.Color{}
 	c.gradientVertical = false
+	c.gradientStops = c.gradientStops[:0]
 }
 
 // --- Font / Text ------------------------------------------------------

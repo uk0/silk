@@ -165,3 +165,41 @@ void main() {
     gl_FragColor = mix(u_color0, u_color1, t) * v_color;
 }
 `
+
+// gradientRampVertSrc is identical to gradientVertSrc — both use the shared
+// 48-byte vertex layout — but kept as a distinct constant in case the ramp
+// path grows extra varyings later (e.g. a per-vertex axis encoding for
+// non-axis-aligned rect gradients). Keeping the names parallel makes the
+// pairing in Context.Init obvious.
+const gradientRampVertSrc = `
+#version 120
+attribute vec2 a_pos;
+attribute vec2 a_uv;
+attribute vec4 a_color;
+attribute vec4 a_corner;
+varying vec2 v_uv;
+varying vec4 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`
+
+// gradientRampFragSrc samples a 1-D colour ramp texture (256×1 RGBA) at
+// v_uv.x. The sampler is named u_tex to piggyback on the renderer's
+// existing texture-binding path in flush(); the v=0.5 row centring picks
+// the single texel row of a height-1 ramp without any seam ambiguity from
+// nearest-neighbour rounding. v_color is white for now (the ramp itself
+// carries the alpha) but the modulation slot is preserved for a future
+// alpha-multiplier from a Save/Restore stack.
+const gradientRampFragSrc = `
+#version 120
+varying vec2 v_uv;
+varying vec4 v_color;
+uniform sampler2D u_tex;
+void main() {
+    vec4 c = texture2D(u_tex, vec2(clamp(v_uv.x, 0.0, 1.0), 0.5));
+    gl_FragColor = c * v_color;
+}
+`

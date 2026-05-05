@@ -21,22 +21,40 @@ const (
 )
 
 // StrokeStyle parameters for Polyline().
+//
+// Dash, when non-empty, switches the polyline to a dash-aware path that
+// breaks every segment into on/off pieces of the lengths listed. The pattern
+// loops as the cursor advances along the polyline, so the gaps stay consistent
+// across joins. Empty Dash (the zero value) renders a fully solid stroke —
+// the historical behaviour.
 type StrokeStyle struct {
 	Width      float32
 	Color      Color
 	Join       StrokeJoin
 	Cap        StrokeCap
 	MiterLimit float32 // default: 10 — switch to bevel beyond this
+	Dash       []float32 // alternating on/off lengths in points; nil = solid
+	DashOffset float32   // initial phase along the dash pattern
 }
 
 // Polyline strokes a sequence of points with join handling. For closed
 // shapes, repeat the first point at the end.
+//
+// When style.Dash is non-empty, the call routes to PolylineDashed which
+// emits a separate quad per on-piece. Joins are skipped on the dashed path
+// because a join only makes sense between two contiguous on-pieces and the
+// cursor crossing a segment boundary while inside a dash is best handled by
+// just continuing the dash into the next segment as a fresh quad.
 func (r *Renderer) Polyline(points [][2]float32, style StrokeStyle) {
 	if len(points) < 2 || style.Width <= 0 {
 		return
 	}
 	if style.MiterLimit == 0 {
 		style.MiterLimit = 10
+	}
+	if len(style.Dash) > 0 {
+		r.PolylineDashed(points, style)
+		return
 	}
 
 	r.setBatch(kindPath, 0)
@@ -72,6 +90,177 @@ func (r *Renderer) Polyline(points [][2]float32, style StrokeStyle) {
 			r.emitJoin(x1, y1, x0, y0, x2, y2, hw, style)
 		}
 	}
+}
+
+// PolylineDashed strokes points using style.Dash as an alternating on/off
+// length pattern (in points). The first entry is "on", the second "off",
+// then it loops. style.DashOffset advances the initial phase so the pattern
+// can be shifted without changing the array.
+//
+// Algorithm: walk along the polyline maintaining a remaining-distance cursor
+// inside the current dash entry. While "on", accumulate sub-segment endpoints
+// and emit a regular line quad each time we cross from on→off (or hit the
+// end of the polyline). Phase persists across vertices so the pattern looks
+// continuous through joins, matching Cairo's dash semantics.
+//
+// Joins are not emitted on the dashed path: a join is only meaningful between
+// two contiguous on-pieces meeting at a vertex, and that case already gets
+// the right look from the two adjacent quads' shared corner. Diagnosing every
+// join condition correctly inside a dash run added complexity for little
+// visual gain, so we keep the implementation tight.
+func (r *Renderer) PolylineDashed(points [][2]float32, style StrokeStyle) {
+	if len(points) < 2 || style.Width <= 0 || len(style.Dash) == 0 {
+		return
+	}
+	r.setBatch(kindPath, 0)
+	hw := style.Width * 0.5
+	col := style.Color
+
+	// Position the cursor inside the dash pattern. Negative DashOffset is
+	// allowed; we wrap the offset into [0, totalLen) so the rest of the
+	// algorithm only needs to look forward.
+	totalLen := float32(0)
+	for _, d := range style.Dash {
+		if d > 0 {
+			totalLen += d
+		}
+	}
+	if totalLen <= 0 {
+		// Pathological: every entry zero. Avoid an infinite-loop later.
+		return
+	}
+	offset := style.DashOffset
+	for offset < 0 {
+		offset += totalLen
+	}
+	for offset >= totalLen {
+		offset -= totalLen
+	}
+
+	// Find the dash index and remaining distance for the starting offset.
+	dashIdx := 0
+	consumed := float32(0)
+	for dashIdx < len(style.Dash) {
+		if offset < consumed+style.Dash[dashIdx] {
+			break
+		}
+		consumed += style.Dash[dashIdx]
+		dashIdx++
+	}
+	if dashIdx >= len(style.Dash) {
+		dashIdx = 0
+	}
+	remaining := style.Dash[dashIdx] - (offset - consumed)
+	if remaining <= 0 {
+		// Land exactly on a boundary — start of next entry.
+		dashIdx = (dashIdx + 1) % len(style.Dash)
+		remaining = style.Dash[dashIdx]
+	}
+	// "on" if dashIdx is even (entries 0, 2, 4, … are draws; 1, 3, … are gaps).
+	on := dashIdx%2 == 0
+
+	// runStart marks the world-space start of the current "on" run when on==true.
+	// Until we open one, runOpen stays false so we don't emit empty quads.
+	var runStart [2]float32
+	runOpen := false
+
+	for i := 0; i < len(points)-1; i++ {
+		x0, y0 := points[i][0], points[i][1]
+		x1, y1 := points[i+1][0], points[i+1][1]
+
+		dx := x1 - x0
+		dy := y1 - y0
+		length := float32(math.Hypot(float64(dx), float64(dy)))
+		if length == 0 {
+			continue
+		}
+		ux := dx / length
+		uy := dy / length
+
+		// Walk along the segment from cur (= 0) to length, peeling off the
+		// current dash chunk's remaining distance until the segment is
+		// exhausted. Each cross from on→off closes the quad; each cross from
+		// off→on opens a new one. If a run is still open at the segment end
+		// it carries through into the next segment.
+		if on && !runOpen {
+			runStart = [2]float32{x0, y0}
+			runOpen = true
+		}
+
+		cur := float32(0)
+		for cur < length {
+			step := remaining
+			if cur+step >= length {
+				// The dash continues into (or past) the segment's end; stop
+				// at the segment end, advance the dash counter, and break.
+				step = length - cur
+				cur = length
+				remaining -= step
+				if remaining <= 0 {
+					// Boundary hit at the vertex; close any open "on" run
+					// here and flip phase. Reusing the segment's end-point
+					// as the run terminus keeps geometry contiguous.
+					if on && runOpen {
+						r.emitDashedQuad(runStart, [2]float32{x1, y1}, hw, col)
+						runOpen = false
+					}
+					dashIdx = (dashIdx + 1) % len(style.Dash)
+					remaining = style.Dash[dashIdx]
+					on = dashIdx%2 == 0
+					if on {
+						runStart = [2]float32{x1, y1}
+						runOpen = true
+					}
+				}
+				break
+			}
+
+			// The dash boundary lies inside this segment — split here.
+			cur += step
+			remaining = 0
+			endX := x0 + ux*cur
+			endY := y0 + uy*cur
+
+			if on && runOpen {
+				r.emitDashedQuad(runStart, [2]float32{endX, endY}, hw, col)
+				runOpen = false
+			}
+			// Move to the next dash entry.
+			dashIdx = (dashIdx + 1) % len(style.Dash)
+			remaining = style.Dash[dashIdx]
+			on = dashIdx%2 == 0
+			if on {
+				runStart = [2]float32{endX, endY}
+				runOpen = true
+			}
+		}
+	}
+
+	// Close any "on" run still open at the polyline's end with the last point.
+	if on && runOpen {
+		last := points[len(points)-1]
+		r.emitDashedQuad(runStart, [2]float32{last[0], last[1]}, hw, col)
+	}
+}
+
+// emitDashedQuad pushes a 4-vertex 6-index line quad from p0 to p1 with
+// half-width hw. Skips zero-length runs (which would emit a degenerate
+// triangle that the GPU still draws as a hairline).
+func (r *Renderer) emitDashedQuad(p0, p1 [2]float32, hw float32, col Color) {
+	dx := p1[0] - p0[0]
+	dy := p1[1] - p0[1]
+	length := float32(math.Hypot(float64(dx), float64(dy)))
+	if length == 0 {
+		return
+	}
+	nx := -dy / length
+	ny := dx / length
+	base := uint16(len(r.verts))
+	r.appendStrokeVert(p0[0]+nx*hw, p0[1]+ny*hw, col)
+	r.appendStrokeVert(p1[0]+nx*hw, p1[1]+ny*hw, col)
+	r.appendStrokeVert(p1[0]-nx*hw, p1[1]-ny*hw, col)
+	r.appendStrokeVert(p0[0]-nx*hw, p0[1]-ny*hw, col)
+	r.indices = append(r.indices, base, base+1, base+2, base, base+2, base+3)
 }
 
 func (r *Renderer) appendStrokeVert(x, y float32, col Color) {

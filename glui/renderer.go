@@ -53,12 +53,13 @@ type Renderer struct {
 type batchKind uint8
 
 const (
-	kindNone     batchKind = iota
-	kindRect               // solid + rounded rectangles, AA via SDF
-	kindPath               // arbitrary triangulated paths
-	kindImage              // textured quad
-	kindGlyph              // text from atlas
-	kindGradient           // two-stop linear gradient quads
+	kindNone         batchKind = iota
+	kindRect                   // solid + rounded rectangles, AA via SDF
+	kindPath                   // arbitrary triangulated paths
+	kindImage                  // textured quad
+	kindGlyph                  // text from atlas
+	kindGradient               // two-stop linear gradient quads
+	kindGradientRamp           // multi-stop gradient via 1-D ramp texture
 )
 
 // Begin starts a new frame. fbW/fbH are in points (logical units).

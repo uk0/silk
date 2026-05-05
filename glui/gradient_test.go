@@ -255,6 +255,205 @@ func TestCairoCompatGradientStateScopedBySaveRestore(t *testing.T) {
 	}
 }
 
+// TestBuildGradientRampInterpolatesStops verifies the CPU ramp builder
+// produces the expected colour at known stop positions and at the midpoint
+// between two stops.
+//
+// We pick stops at 0.0 and 1.0 with primary colours so floating-point error
+// can't drift the bytes — at these endpoints the ramp must read exactly
+// the input colour, byte-perfect.
+func TestBuildGradientRampInterpolatesStops(t *testing.T) {
+	stops := []GradientStop{
+		{Position: 0, Color: Color{R: 1, A: 1}},
+		{Position: 1, Color: Color{B: 1, A: 1}},
+	}
+	ramp := buildGradientRamp(stops)
+	if len(ramp) != gradientRampSize*4 {
+		t.Fatalf("ramp size = %d, want %d", len(ramp), gradientRampSize*4)
+	}
+	// Texel 0: pure red.
+	if ramp[0] != 255 || ramp[1] != 0 || ramp[2] != 0 || ramp[3] != 255 {
+		t.Errorf("ramp[0] = %v, want red", ramp[0:4])
+	}
+	// Last texel: pure blue.
+	last := (gradientRampSize - 1) * 4
+	if ramp[last+0] != 0 || ramp[last+1] != 0 || ramp[last+2] != 255 || ramp[last+3] != 255 {
+		t.Errorf("ramp[end] = %v, want blue", ramp[last:last+4])
+	}
+	// Midpoint: half-red + half-blue (~127 each).
+	mid := (gradientRampSize / 2) * 4
+	r, b := int(ramp[mid+0]), int(ramp[mid+2])
+	if r < 120 || r > 135 || b < 120 || b > 135 {
+		t.Errorf("ramp[mid] = %v, want ~half-red half-blue", ramp[mid:mid+4])
+	}
+}
+
+// TestBuildGradientRampThreeStops verifies a three-stop pattern places the
+// middle colour at the requested position. With stops at 0, 0.5, 1, texel
+// 128 should be near the middle stop.
+func TestBuildGradientRampThreeStops(t *testing.T) {
+	stops := []GradientStop{
+		{Position: 0, Color: Color{R: 1, A: 1}},
+		{Position: 0.5, Color: Color{G: 1, A: 1}},
+		{Position: 1, Color: Color{B: 1, A: 1}},
+	}
+	ramp := buildGradientRamp(stops)
+	mid := (gradientRampSize / 2) * 4 // texel 128
+	if ramp[mid+1] < 240 {
+		t.Errorf("middle stop should dominate at midpoint, got G=%d", ramp[mid+1])
+	}
+}
+
+// TestBuildGradientRampSingleStopFloodFills: a one-stop list flood-fills
+// every texel with that one colour. Useful sanity check; the upload helper
+// short-circuits this case but the builder should still produce a uniform
+// ramp.
+func TestBuildGradientRampSingleStopFloodFills(t *testing.T) {
+	ramp := buildGradientRamp([]GradientStop{{Position: 0, Color: Color{R: 1, A: 1}}})
+	for i := 0; i < gradientRampSize; i++ {
+		if ramp[i*4+0] != 255 || ramp[i*4+3] != 255 {
+			t.Fatalf("ramp[%d] = %v, want all red", i, ramp[i*4:i*4+4])
+		}
+	}
+}
+
+// TestStopsHashStable: identical stop lists must hash to the same value
+// (cache hit), and changing any field must change the hash (cache miss).
+func TestStopsHashStable(t *testing.T) {
+	a := []GradientStop{
+		{Position: 0, Color: Color{R: 1, A: 1}},
+		{Position: 1, Color: Color{B: 1, A: 1}},
+	}
+	b := []GradientStop{
+		{Position: 0, Color: Color{R: 1, A: 1}},
+		{Position: 1, Color: Color{B: 1, A: 1}},
+	}
+	if stopsHash(a) != stopsHash(b) {
+		t.Errorf("identical stops produced different hashes: %x vs %x", stopsHash(a), stopsHash(b))
+	}
+	c := []GradientStop{
+		{Position: 0, Color: Color{R: 1, A: 1}},
+		{Position: 1, Color: Color{B: 0.99, A: 1}}, // tiny perturbation
+	}
+	if stopsHash(a) == stopsHash(c) {
+		t.Errorf("perturbed stops must hash differently: hash=%x", stopsHash(a))
+	}
+}
+
+// TestFillMultiGradientRectAccumulatesQuad: a single FillMultiGradientRect
+// emits one quad. The off-GL test renderer leaves ctx==nil, so the upload
+// short-circuits and curTex stays 0; we still expect four vertices and six
+// indices in the kindGradientRamp batch.
+func TestFillMultiGradientRectAccumulatesQuad(t *testing.T) {
+	r := newAdapterTestRenderer()
+	stops := []GradientStop{
+		{Position: 0, Color: Color{R: 1, A: 1}},
+		{Position: 0.5, Color: Color{G: 1, A: 1}},
+		{Position: 1, Color: Color{B: 1, A: 1}},
+	}
+	r.FillMultiGradientRect(Rect{X: 0, Y: 0, W: 50, H: 50}, stops, false)
+
+	if r.curKind != kindGradientRamp {
+		t.Fatalf("after FillMultiGradientRect curKind = %v, want kindGradientRamp", r.curKind)
+	}
+	if len(r.verts) != 4 || len(r.indices) != 6 {
+		t.Fatalf("expected 4 verts / 6 indices, got %d / %d", len(r.verts), len(r.indices))
+	}
+}
+
+// TestFillMultiGradientRectEmptyStops: zero-stop input emits no geometry.
+func TestFillMultiGradientRectEmptyStops(t *testing.T) {
+	r := newAdapterTestRenderer()
+	r.FillMultiGradientRect(Rect{X: 0, Y: 0, W: 10, H: 10}, nil, false)
+	if len(r.verts) != 0 || len(r.indices) != 0 {
+		t.Fatalf("empty stops should emit nothing, got %d v / %d i", len(r.verts), len(r.indices))
+	}
+}
+
+// TestFillMultiGradientRectSingleStopFallsBackSolid: a one-stop call routes
+// through FillRect (kind = kindRect, not kindGradientRamp).
+func TestFillMultiGradientRectSingleStopFallsBackSolid(t *testing.T) {
+	r := newAdapterTestRenderer()
+	r.FillMultiGradientRect(Rect{X: 0, Y: 0, W: 10, H: 10},
+		[]GradientStop{{Position: 0, Color: Color{R: 1, A: 1}}}, false)
+	if r.curKind != kindRect {
+		t.Fatalf("single-stop should route to kindRect, got %v", r.curKind)
+	}
+}
+
+// TestCairoCompatThreeStopGradientCapturesAllStops: when SetBrush sees a
+// LinearGradient with 3+ stops, gradientStops captures every one of them
+// — that's the data the multi-stop fill path needs.
+func TestCairoCompatThreeStopGradientCapturesAllStops(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	g := paint.NewLinearGradient(0, 0, 100, 0)
+	g.AddStop(0, paint.Color{R: 255, A: 255})
+	g.AddStop(0.5, paint.Color{G: 255, A: 255})
+	g.AddStop(1, paint.Color{B: 255, A: 255})
+	c.SetBrush(g)
+	if !c.gradientActive {
+		t.Fatalf("3-stop gradient did not activate")
+	}
+	if len(c.gradientStops) != 3 {
+		t.Fatalf("3-stop gradient: gradientStops len = %d, want 3", len(c.gradientStops))
+	}
+	if c.gradientStops[1].Position < 0.49 || c.gradientStops[1].Position > 0.51 {
+		t.Errorf("middle stop position = %v, want 0.5", c.gradientStops[1].Position)
+	}
+}
+
+// TestCairoCompatTwoStopKeepsFastPath: a two-stop gradient must NOT populate
+// gradientStops — the fast uniform path stays in use to avoid the texture
+// round-trip on the common case.
+func TestCairoCompatTwoStopKeepsFastPath(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	g := paint.NewLinearGradient(0, 0, 100, 0)
+	g.AddStop(0, paint.Color{R: 255, A: 255})
+	g.AddStop(1, paint.Color{B: 255, A: 255})
+	c.SetBrush(g)
+	if len(c.gradientStops) != 0 {
+		t.Errorf("2-stop gradient should leave gradientStops empty, got %d", len(c.gradientStops))
+	}
+}
+
+// TestCairoCompatThreeStopFillRoutesToRamp: with a 3-stop gradient active,
+// filling a rect must emit a kindGradientRamp batch (not kindGradient).
+func TestCairoCompatThreeStopFillRoutesToRamp(t *testing.T) {
+	c, r := newCompatTestPainter(t)
+	g := paint.NewLinearGradient(0, 0, 100, 0)
+	g.AddStop(0, paint.Color{R: 255, A: 255})
+	g.AddStop(0.5, paint.Color{G: 255, A: 255})
+	g.AddStop(1, paint.Color{B: 255, A: 255})
+	c.SetBrush(g)
+	c.Rectangle(0, 0, 100, 100)
+	c.Fill()
+
+	if r.curKind != kindGradientRamp {
+		t.Fatalf("3-stop fill curKind = %v, want kindGradientRamp", r.curKind)
+	}
+}
+
+// TestCairoCompatThreeStopGradientScopedBySaveRestore: Save/Restore must
+// preserve the multi-stop list, not just the start/end pair.
+func TestCairoCompatThreeStopGradientScopedBySaveRestore(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	g := paint.NewLinearGradient(0, 0, 100, 0)
+	g.AddStop(0, paint.Color{R: 255, A: 255})
+	g.AddStop(0.5, paint.Color{G: 255, A: 255})
+	g.AddStop(1, paint.Color{B: 255, A: 255})
+	c.SetBrush(g)
+
+	c.Save()
+	c.SetBrush1(paint.Color{G: 255, A: 255})
+	if len(c.gradientStops) != 0 {
+		t.Errorf("after SetBrush1 inside Save, gradientStops should be empty, got %d", len(c.gradientStops))
+	}
+	c.Restore()
+	if len(c.gradientStops) != 3 {
+		t.Fatalf("Restore did not bring back gradientStops, got %d", len(c.gradientStops))
+	}
+}
+
 // TestSingleAxisAlignedRectPathDetector: pin the four key cases of the
 // detector.
 func TestSingleAxisAlignedRectPathDetector(t *testing.T) {
