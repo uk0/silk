@@ -31,6 +31,15 @@ const sdfSpread = 8.0
 // approximately 14 logical units tall on screen.
 const DefaultFontDPI = 72
 
+// defaultAtlasSize is the side length of a fresh glyph atlas. 2048×2048 is
+// chosen so a typical CJK working set (~3000 commonly used Han characters)
+// fits at 14pt SDF without overflow. At single-channel storage that's 4 MB
+// per atlas — affordable for desktop GPUs and dwarfed by a single full-
+// screen RGBA framebuffer. ASCII-only workloads pay the same memory cost
+// but never grow beyond it; the atlas is allocated once per Font instance
+// and reused across frames.
+const defaultAtlasSize = 2048
+
 // Font owns a single font face at a single point size, plus the atlas that
 // caches its rasterised glyph masks. A Font is bound to one GL Context
 // (because of the texture) but otherwise is independent of any per-frame
@@ -41,7 +50,19 @@ const DefaultFontDPI = 72
 // rendered size. To render text at a different size, allocate a different
 // Font; sharing one Font across sizes would defeat the per-size atlas.
 type Font struct {
-	face   font.Face
+	face font.Face // primary face — owns the layout metrics
+
+	// faces is the lookup chain searched for each glyph. faces[0] is always
+	// the primary (matches face). Subsequent entries are CJK or other
+	// fallbacks discovered at construction time. Glyph() walks the chain
+	// and uses the first face whose .Glyph returns ok=true.
+	//
+	// Per advisor guidance: layout metrics (Ascent/Descent/LineHeight) come
+	// from the primary face only — pre-cached in ascent/descent/height — so
+	// mixed Latin + CJK lines stay on a single baseline. Per-glyph offX,
+	// offY and advance come from the rasterising face, otherwise CJK glyphs
+	// would read against the wrong bearings and float above the baseline.
+	faces  []font.Face
 	atlas  *atlas.Atlas
 	glyphs map[rune]glyphInfo
 
@@ -80,9 +101,11 @@ type glyphInfo struct {
 }
 
 // NewFont creates an opentype-rasterised font at the given point size,
-// using the bundled "Go Regular" typeface. The atlas is sized 1024x1024
-// which comfortably holds an ASCII-plus-Latin-Extended subset at 14pt and
-// scales down for 9–10pt UI labels.
+// using the bundled "Go Regular" typeface as primary and any locally-
+// available CJK font (PingFang on macOS, Noto Sans CJK on Linux, Microsoft
+// YaHei on Windows) as fallback. The atlas is sized defaultAtlasSize ×
+// defaultAtlasSize which comfortably holds the ASCII-plus-Latin-Extended
+// set together with several thousand Han glyphs at 14pt.
 //
 // When the SILK_GLUI_SDF env var is set to "1" the font runs each glyph
 // through generateSDF before atlas upload, producing a signed distance
@@ -101,17 +124,25 @@ func NewFont(size float64) *Font {
 		// Defensive: allocate a Font with no face. Glyph() will return
 		// zero-advance records so layout still terminates.
 		return &Font{
-			atlas:  atlas.New(1024, 1024),
+			faces:  nil, // Glyph() walks faces; len==0 returns zero record
+			atlas:  atlas.New(defaultAtlasSize, defaultAtlasSize),
 			glyphs: make(map[rune]glyphInfo),
-			pixels: make([]byte, 1024*1024),
-			atlasW: 1024,
-			atlasH: 1024,
+			pixels: make([]byte, defaultAtlasSize*defaultAtlasSize),
+			atlasW: defaultAtlasSize,
+			atlasH: defaultAtlasSize,
 			dirty:  true,
 			useSDF: useSDF,
 		}
 	}
-	f := newFontFromFace(face, 1024, 1024)
+	f := newFontFromFace(face, defaultAtlasSize, defaultAtlasSize)
 	f.useSDF = useSDF
+	// Append CJK fallbacks. discoverSystemCJKFaces is best-effort: missing
+	// system fonts return an empty slice and the font still renders Latin
+	// text correctly via the primary face. newFontFromFace already seeded
+	// f.faces with the primary so we only append the discovered fallbacks.
+	for _, fb := range discoverSystemCJKFaces(size) {
+		f.faces = append(f.faces, fb)
+	}
 	return f
 }
 
@@ -133,6 +164,7 @@ func newFontFromFace(face font.Face, w, h int) *Font {
 	metrics := face.Metrics()
 	f := &Font{
 		face:    face,
+		faces:   []font.Face{face},
 		atlas:   atlas.New(w, h),
 		glyphs:  make(map[rune]glyphInfo),
 		pixels:  make([]byte, w*h),
@@ -167,26 +199,52 @@ func (f *Font) LineHeight() float32 {
 }
 
 // Glyph returns the cached glyph info for r, rasterising it on first
-// request. If the atlas is full or no face is loaded, an empty record
-// (with whatever advance the face reports) is returned.
+// request. If r is not present in any face of the lookup chain or the
+// atlas is full, an empty record (with whatever advance the primary face
+// reports) is returned so layout still terminates.
+//
+// The lookup walks f.faces in order. The primary (Latin) face is tried
+// first; CJK fallback faces are only consulted when primary returns
+// ok=false. opentype.Face.Glyph internally checks GlyphIndex and returns
+// ok=false on glyph 0, so .notdef tofu boxes never leak through.
 func (f *Font) Glyph(r rune) glyphInfo {
 	if g, ok := f.glyphs[r]; ok {
 		return g
 	}
-	if f.face == nil {
+	if len(f.faces) == 0 {
 		g := glyphInfo{}
 		f.glyphs[r] = g
 		return g
 	}
 
-	// Ask the face for the glyph's mask and metrics.
-	dr, mask, maskp, advance, ok := f.face.Glyph(fixed.Point26_6{}, r)
-	if !ok {
-		// No glyph (or fallback) — cache as a zero-width record so we
-		// don't keep asking. Advance is whatever the face suggests.
-		g := glyphInfo{advance: fixedToF32(advance)}
-		f.glyphs[r] = g
-		return g
+	// Walk the face chain. The first face whose .Glyph returns ok=true
+	// supplies bearings, advance, and mask. opentype.Face.Glyph reports
+	// ok=false for runes that resolve to glyph index 0 (.notdef), so the
+	// chain skips faces that would otherwise emit a tofu box.
+	var (
+		dr      image.Rectangle
+		mask    image.Image
+		maskp   image.Point
+		advance fixed.Int26_6
+		matched bool
+	)
+	for _, fc := range f.faces {
+		gdr, gmask, gmaskp, gadv, ok := fc.Glyph(fixed.Point26_6{}, r)
+		if !ok {
+			continue
+		}
+		dr = gdr
+		mask = gmask
+		maskp = gmaskp
+		advance = gadv
+		matched = true
+		break
+	}
+	if !matched {
+		// All faces miss — cache a zero-record so we don't re-walk every
+		// frame. Pen does not advance for the missing rune.
+		f.glyphs[r] = glyphInfo{}
+		return f.glyphs[r]
 	}
 
 	w := dr.Dx()

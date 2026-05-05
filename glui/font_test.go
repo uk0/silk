@@ -142,10 +142,11 @@ func TestFontSDFModeProducesGradient(t *testing.T) {
 }
 
 // TestFontHelloWorldRasterises is a sanity check that an opentype-backed
-// face rasterises a mixed-script string into the atlas. Go Regular has no
-// CJK glyphs, so the second half is expected to fall back to a missing
-// glyph (zero region, non-zero advance), but the first half MUST produce
-// real anti-aliased coverage.
+// face rasterises a mixed-script string into the atlas. The Latin portion
+// renders through the primary Go Regular face; the CJK portion either
+// renders through a discovered system fallback (when fonts-noto-cjk or
+// PingFang etc. are present) or falls back to zero-glyph records. Either
+// way the Latin half MUST produce real anti-aliased coverage.
 func TestFontHelloWorldRasterises(t *testing.T) {
 	f := NewFont(14)
 	const s = "Hello, 世界"

@@ -41,7 +41,8 @@ jobs:
             pkg-config libcairo2-dev \
             libx11-dev libxcursor-dev libxi-dev \
             libxinerama-dev libxrandr-dev libxxf86vm-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            fonts-noto-cjk
 
       - name: Install Cairo (macOS)
         if: runner.os == 'macOS'
