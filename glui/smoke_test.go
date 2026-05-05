@@ -1,0 +1,72 @@
+package glui
+
+import (
+	"math"
+	"testing"
+)
+
+// TestPublicAPISmoke exercises Renderer draw methods within a single
+// batch kind to catch regressions in vertex emission. Doesn't validate
+// pixel output — just asserts no panic and that vertex buffers grow.
+//
+// Uses newTestRenderer (transform_test.go) which has no GL context, so we
+// avoid:
+//   - Cross-kind transitions (would trigger flush → gl.BufferData → nil)
+//   - PushClip / PopClip (calls gl.Scissor / gl.Enable)
+//   - End() (calls gl.Disable)
+// Cross-kind paths and clip are exercised with a real GL context in
+// the standalone glui_demo.
+func TestPublicAPISmoke(t *testing.T) {
+	r := newTestRenderer()
+
+	// All within kindRect — no batch switches.
+	r.FillRect(Rect{X: 10, Y: 10, W: 100, H: 50}, Color{1, 0, 0, 1})
+	r.FillRoundedRect(Rect{X: 120, Y: 10, W: 100, H: 50}, 8, Color{0, 1, 0, 1})
+	r.StrokeRect(Rect{X: 10, Y: 70, W: 100, H: 50}, 2, Color{0, 0, 1, 1})
+	r.FillCircle(50, 200, 30, Color{1, 1, 0, 1})
+
+	// Transform stack within the same kind.
+	r.Save()
+	r.Translate(400, 100)
+	r.Rotate(0.5)
+	r.Scale(2, 2)
+	r.FillRect(Rect{X: 0, Y: 0, W: 30, H: 30}, Color{0.5, 0.5, 0.5, 1})
+	r.Restore()
+
+	if len(r.verts) == 0 {
+		t.Error("no vertices recorded")
+	}
+	if len(r.indices) == 0 {
+		t.Error("no indices recorded")
+	}
+}
+
+// TestNoVertexCorruption verifies all vertex floats are finite. Catches
+// uninitialised reads, divide-by-zero in projection, and similar bugs that
+// silently produce NaN/Inf and corrupt the GPU buffer.
+func TestNoVertexCorruption(t *testing.T) {
+	r := newTestRenderer()
+	r.FillRect(Rect{X: 100, Y: 100, W: 50, H: 50}, Color{1, 0.5, 0, 1})
+	r.FillRoundedRect(Rect{X: 200, Y: 100, W: 50, H: 50}, 8, Color{1, 0.5, 0, 1})
+
+	for i, v := range r.verts {
+		floats := [12]float32{
+			v.X, v.Y, v.U, v.V, v.R, v.G, v.B, v.A,
+			v.CornerHX, v.CornerHY, v.CornerR, v.CornerAA,
+		}
+		for _, f := range floats {
+			if isNaN(f) || isInf(f) {
+				t.Errorf("vertex[%d] has non-finite float: %+v", i, v)
+				break
+			}
+		}
+	}
+}
+
+func isNaN(f float32) bool { return f != f }
+func isInf(f float32) bool {
+	// Use math.Inf to avoid the compile-time "division by zero" diagnostic.
+	pos := float32(math.Inf(1))
+	neg := float32(math.Inf(-1))
+	return f == pos || f == neg
+}

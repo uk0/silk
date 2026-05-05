@@ -38,6 +38,17 @@ Drag widgets from the left panel onto the canvas, press **F5** to compile & run.
 
 ---
 
+## Renderer Backends
+
+Silk supports two rendering backends:
+
+- **Cairo** (default, `main` branch): mature CPU-rasterized 2D rendering uploaded to GPU once per frame. Battle-tested.
+- **glui** (experimental, `opengl` branch): pure OpenGL 2D pipeline with shader-based SDF, glyph atlas, and zero-allocation hot paths. Activate with `SILK_GLUI=1`. See [glui/README.md](glui/README.md).
+
+The Cairo path remains production. glui is in active development; the same widget code runs on both backends without modification.
+
+---
+
 ## Development Setup
 
 ### Prerequisites

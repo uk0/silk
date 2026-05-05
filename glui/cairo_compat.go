@@ -4,6 +4,7 @@ import (
 	"image"
 	"math"
 	"sort"
+	"unsafe"
 
 	"silk/geom"
 	"silk/glui/path"
@@ -897,8 +898,20 @@ func (c *CairoCompat) uploadPixmap(pm paint.Pixmap) *Texture {
 
 // uploadPixmapNoCache reads pm's pixels and uploads a GL texture. Used by
 // uploadPixmap (cached) and the per-icon path (cached at the icon level).
+//
+// Fast path: when the pixmap exposes a raw data pointer + stride we read
+// its BGRA bytes directly, unpremultiply in a single linear pass, and feed
+// UploadTextureBGRA. This avoids the per-pixel image.RGBA materialisation
+// inside pm.Image() — a measurable hit when many icons re-rasterise on a
+// theme change (200+ widget designer scenes upload several MB per second).
+//
+// Slow path: when DataPtr is nil (rare — only synthetic Pixmap values used
+// in tests) we fall back to pm.Image() + the original RGBA conversion.
 func (c *CairoCompat) uploadPixmapNoCache(pm paint.Pixmap) *Texture {
 	if pm == nil {
+		return nil
+	}
+	if c.r == nil || c.r.ctx == nil {
 		return nil
 	}
 	w := pm.Width()
@@ -906,25 +919,72 @@ func (c *CairoCompat) uploadPixmapNoCache(pm paint.Pixmap) *Texture {
 	if w <= 0 || h <= 0 {
 		return nil
 	}
+
+	// Fast path: pull raw BGRA bytes directly when the pixmap exposes them.
+	if dataPtr := pm.DataPtr(); dataPtr != nil {
+		stride := pm.Stride()
+		if stride >= w*4 {
+			size := h * stride
+			// unsafe.Slice creates a Go view onto the C-owned buffer. We
+			// MUST copy before any operation that could outlive the
+			// surface (uploads complete inside the gl.TexImage2D call,
+			// but unpremultiplying in-place would corrupt the source).
+			src := unsafe.Slice((*byte)(dataPtr), size)
+			straight := make([]byte, size)
+			unpremultiplyBGRA(src, straight, w, h, stride)
+			return c.r.ctx.UploadTextureBGRA(w, h, stride, straight)
+		}
+	}
+
+	// Slow path: route through pm.Image() + image.RGBA conversion.
 	src, err := pm.Image()
 	if err != nil || src == nil {
 		return nil
 	}
 	rgba, ok := src.(*image.RGBA)
 	if !ok {
-		// Fall back to letting UploadTexture do the per-pixel conversion.
 		// We can't un-premultiply non-RGBA inputs without copying first;
 		// give up rather than producing wrong colours.
-		if c.r == nil || c.r.ctx == nil {
-			return nil
-		}
 		return c.r.ctx.UploadTexture(src)
 	}
 	straight := unpremultiplyRGBA(rgba)
-	if c.r == nil || c.r.ctx == nil {
-		return nil
-	}
 	return c.r.ctx.UploadTexture(straight)
+}
+
+// unpremultiplyBGRA reads premultiplied BGRA from src and writes straight
+// BGRA into dst. Both buffers share the same stride (bytes per row); the
+// trailing tail past w*4 bytes per row is left untouched.
+//
+// Cairo ARGB32 on little-endian: the byte order in memory is B,G,R,A. We
+// only need to divide RGB (here B/G/R bytes) by alpha; the ordering is
+// otherwise transparent to UploadTextureBGRA which feeds GL_BGRA directly.
+func unpremultiplyBGRA(src, dst []byte, w, h, stride int) {
+	rowBytes := w * 4
+	for y := 0; y < h; y++ {
+		off := y * stride
+		s := src[off : off+rowBytes]
+		d := dst[off : off+rowBytes]
+		for x := 0; x < rowBytes; x += 4 {
+			a := s[x+3]
+			switch a {
+			case 0:
+				d[x+0] = 0
+				d[x+1] = 0
+				d[x+2] = 0
+				d[x+3] = 0
+			case 255:
+				d[x+0] = s[x+0]
+				d[x+1] = s[x+1]
+				d[x+2] = s[x+2]
+				d[x+3] = 255
+			default:
+				d[x+0] = saturatingDivU8(s[x+0], a)
+				d[x+1] = saturatingDivU8(s[x+1], a)
+				d[x+2] = saturatingDivU8(s[x+2], a)
+				d[x+3] = a
+			}
+		}
+	}
 }
 
 // unpremultiplyRGBA returns a fresh image.RGBA where each pixel is the

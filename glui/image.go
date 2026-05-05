@@ -31,6 +31,38 @@ func (t *Texture) Free() {
 	}
 }
 
+// UploadTextureBGRA uploads raw BGRA pixel data (Cairo's native format on
+// little-endian systems) as a GL texture. Faster than UploadTexture when
+// you already have a tightly-packed BGRA buffer — skips the image.Image
+// indirection.
+//
+// stride is bytes per row (typically width*4 for tight packing).
+// data must be at least height*stride bytes.
+//
+// Caller is responsible for unpremultiplying alpha if the source is in
+// premultiplied form (Cairo ARGB32 surfaces are): glui's blend stage uses
+// straight alpha, so premultiplied input renders too dark on AA edges.
+func (c *Context) UploadTextureBGRA(width, height, stride int, data []byte) *Texture {
+	if width <= 0 || height <= 0 || stride < width*4 || len(data) < height*stride {
+		return nil
+	}
+	var id uint32
+	gl.GenTextures(1, &id)
+	gl.BindTexture(gl.TEXTURE_2D, id)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+	// stride is in bytes; UNPACK_ROW_LENGTH is in pixels.
+	gl.PixelStorei(gl.UNPACK_ROW_LENGTH, int32(stride/4))
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(width), int32(height), 0,
+		gl.BGRA, gl.UNSIGNED_BYTE, gl.Ptr(data))
+	// Restore default so subsequent uploads aren't affected.
+	gl.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
+	return &Texture{id: id, width: width, height: height}
+}
+
 // UploadTexture creates a GPU texture from an image. The image is converted
 // to RGBA8 if needed. Linear filtering, clamp-to-edge wrap.
 func (c *Context) UploadTexture(img image.Image) *Texture {
