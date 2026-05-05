@@ -269,3 +269,41 @@ func newAlphaView(pix []byte, w, h int) *image.Alpha {
 		Rect:   image.Rect(0, 0, w, h),
 	}
 }
+
+// FontCache lazily creates Font instances for each requested size.
+// All fonts share the same underlying TTF data, so memory overhead per
+// size is just the rasterized atlas + glyph table.
+//
+// FontCache is NOT safe for concurrent use; render threads should hold
+// one instance and create per-size fonts on demand.
+type FontCache struct {
+	fonts map[int]*Font // key = size in points (rounded to nearest int)
+}
+
+// NewFontCache returns a fresh, empty cache.
+func NewFontCache() *FontCache {
+	return &FontCache{fonts: make(map[int]*Font)}
+}
+
+// At returns the Font for the requested point size, creating it on first
+// request. Sizes are rounded to the nearest integer point — sub-point
+// scaling is handled by the GPU at draw time, not by allocating a fresh
+// atlas per fractional size.
+func (c *FontCache) At(size float64) *Font {
+	key := int(size + 0.5)
+	if f, ok := c.fonts[key]; ok {
+		return f
+	}
+	f := NewFont(float64(key))
+	c.fonts[key] = f
+	return f
+}
+
+// defaultFontCache is the package-level cache backing DefaultFont.
+var defaultFontCache = NewFontCache()
+
+// DefaultFont returns the cached default font at the given point size.
+// Repeated calls with the same size return the same Font instance.
+func DefaultFont(size float64) *Font {
+	return defaultFontCache.At(size)
+}

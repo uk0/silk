@@ -72,6 +72,35 @@ func TestFontMetrics(t *testing.T) {
 	}
 }
 
+// TestFontCacheReuse verifies that requesting the same size twice yields
+// the same instance, and different sizes yield different instances.
+func TestFontCacheReuse(t *testing.T) {
+	c := NewFontCache()
+	a := c.At(14)
+	b := c.At(14)
+	if a != b {
+		t.Errorf("FontCache.At(14) returned different instances on repeat call")
+	}
+	d := c.At(16)
+	if a == d {
+		t.Errorf("FontCache.At(14) == FontCache.At(16); should differ by size")
+	}
+	// Sub-point variations rounding to the same int share an instance.
+	if c.At(14.2) != a {
+		t.Errorf("FontCache.At(14.2) did not share the size-14 instance")
+	}
+}
+
+// TestDefaultFontShared verifies the package-level DefaultFont returns the
+// same instance across calls for the same size.
+func TestDefaultFontShared(t *testing.T) {
+	a := DefaultFont(12)
+	b := DefaultFont(12)
+	if a != b {
+		t.Errorf("DefaultFont(12) returned different instances on repeat call")
+	}
+}
+
 // TestFontHelloWorldRasterises is a sanity check that an opentype-backed
 // face rasterises a mixed-script string into the atlas. Go Regular has no
 // CJK glyphs, so the second half is expected to fall back to a missing
