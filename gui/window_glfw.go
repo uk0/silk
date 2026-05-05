@@ -5,10 +5,12 @@ package gui
 import (
 	"silk/core"
 	"silk/geom"
+	"silk/glui"
 	"silk/gv"
 	"silk/paint"
 	"fmt"
 	"math"
+	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -109,6 +111,13 @@ type Window struct {
 	pboTexW      int32
 	pboTexH      int32
 	pboAvailable bool
+
+	// useGlui: when true (opt-in via SILK_GLUI=1) the window renders
+	// directly through the silk/glui pure-OpenGL pipeline, bypassing the
+	// Cairo back buffer + texture upload path. Off by default — the legacy
+	// Cairo path remains the production renderer.
+	useGlui bool
+	gluiCtx *glui.Context
 
 	mouseEntered bool
 	autoCaptured bool
@@ -280,6 +289,19 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	}
 	initGL()
 
+	// Opt-in glui path: SILK_GLUI=1 switches this window's paint() to the
+	// pure-OpenGL renderer in silk/glui instead of the Cairo back buffer.
+	// Init must run after gl.Init() because it compiles GLSL shaders.
+	if os.Getenv("SILK_GLUI") == "1" {
+		this.useGlui = true
+		this.gluiCtx = glui.NewContext()
+		if err := this.gluiCtx.Init(); err != nil {
+			core.Warn("glui init failed:", err)
+			this.useGlui = false
+			this.gluiCtx = nil
+		}
+	}
+
 	// Enable vsync so SwapBuffers blocks until the display retrace.
 	// On 60Hz this caps painting at 60fps; on ProMotion / 120Hz / 144Hz
 	// monitors it adapts to the display's actual refresh rate. Combined
@@ -313,6 +335,14 @@ func (this *Window) create(p *Window, wt WindowType) error {
 }
 
 func (this *Window) destroy() {
+	if this.gluiCtx != nil {
+		// Release glui's GPU resources before tearing down the GL context.
+		if this.glfwWin != nil {
+			this.glfwWin.MakeContextCurrent()
+		}
+		this.gluiCtx.Destroy()
+		this.gluiCtx = nil
+	}
 	if this.glTexture != 0 {
 		this.glfwWin.MakeContextCurrent()
 		gl.DeleteTextures(1, &this.glTexture)
@@ -368,6 +398,11 @@ func (this *Window) getBackBuffer(width, height int) paint.Pixmap {
 
 func (this *Window) paint() {
 	if this.widget == nil || this.glfwWin == nil {
+		return
+	}
+
+	if this.useGlui && this.gluiCtx != nil {
+		this.paintGlui()
 		return
 	}
 
@@ -543,6 +578,52 @@ func (this *Window) paint() {
 	drawFullscreenQuadUV(this.glTexture, int32(fbw), int32(fbh), texU, texV)
 
 	gl.Flush()
+	this.glfwWin.SwapBuffers()
+	this.dirty = false
+	this.fullDirty = false
+	this.dirtyRegion = geom.Rect{}
+}
+
+// paintGlui renders the window via the silk/glui pure-OpenGL pipeline.
+//
+// Currently a smoke-test implementation: it draws a fixed pattern of shapes
+// proving the renderer + shaders work end-to-end. The full widget-tree
+// integration (replacing DrawWidgetAll with a glui-aware visitor) lands in
+// a follow-up. Until then, this method exists to validate the GL path on
+// real hardware while the existing Cairo path keeps shipping pixels.
+func (this *Window) paintGlui() {
+	this.glfwWin.MakeContextCurrent()
+
+	fbw, fbh := this.glfwWin.GetFramebufferSize()
+	sx, _ := this.glfwWin.GetContentScale()
+
+	width, height := this.widget.Size()
+	if width <= 0 || height <= 0 {
+		ww, wh := this.glfwWin.GetSize()
+		if ww > 0 && wh > 0 {
+			width, height = float64(ww), float64(wh)
+			this.widget.NakedWidget().setSize(width, height)
+		} else {
+			return
+		}
+	}
+
+	this.gluiCtx.Resize(float32(width), float32(height), float32(sx))
+
+	gl.Viewport(0, 0, int32(fbw), int32(fbh))
+	gl.ClearColor(0.95, 0.95, 0.97, 1.0)
+	gl.Clear(gl.COLOR_BUFFER_BIT)
+
+	r := this.gluiCtx.Begin(float32(width), float32(height))
+
+	// Smoke-test pattern. Replaced by widget-tree visitor in the next pass.
+	r.FillRect(glui.Rect{X: 20, Y: 20, W: 200, H: 80}, glui.RGBA8(60, 130, 230, 255))
+	r.FillRoundedRect(glui.Rect{X: 240, Y: 20, W: 200, H: 80}, 12, glui.RGBA8(40, 180, 100, 255))
+	r.StrokeRect(glui.Rect{X: 460, Y: 20, W: 200, H: 80}, 2, glui.RGBA8(220, 60, 60, 255))
+	r.FillCircle(120, 180, 40, glui.RGBA8(240, 180, 40, 255))
+	r.Line(20, 260, 660, 260, 2, glui.RGBA8(120, 120, 140, 255))
+
+	r.End()
 	this.glfwWin.SwapBuffers()
 	this.dirty = false
 	this.fullDirty = false
