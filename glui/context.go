@@ -36,6 +36,12 @@ type Context struct {
 
 	initialized bool
 
+	// msaaSamples reports the actual sample count negotiated with the
+	// driver at Init time. 0 means MSAA is inactive (either the GLFW hint
+	// requested 0 samples, or the driver couldn't honour the request).
+	// Populated once and never mutated after Init.
+	msaaSamples int
+
 	// gradientRamps caches uploaded 256×1 colour-ramp textures keyed by a
 	// hash of the stop list. Lives on Context (not Renderer) because the GL
 	// texture must outlive a single Begin/End pair — most UI gradients
@@ -119,9 +125,29 @@ func (c *Context) Init() error {
 	gl.Disable(gl.DEPTH_TEST)
 	gl.Disable(gl.CULL_FACE)
 
+	// Enable multisample rasterisation when the framebuffer was created
+	// with sample buffers (GLFW Samples hint > 0). The driver treats
+	// gl.Enable(MULTISAMPLE) as a no-op when no samples are available, so
+	// it's safe to call unconditionally — but we still query the buffer
+	// state to populate Context.MSAASamples for diagnostic / overlay use.
+	gl.Enable(gl.MULTISAMPLE)
+	var sampleBuffers, samples int32
+	gl.GetIntegerv(gl.SAMPLE_BUFFERS, &sampleBuffers)
+	gl.GetIntegerv(gl.SAMPLES, &samples)
+	if sampleBuffers > 0 {
+		c.msaaSamples = int(samples)
+	}
+
 	c.initialized = true
 	return nil
 }
+
+// MSAASamples returns the actual multisample sample count negotiated at
+// Init. 0 indicates MSAA is inactive — either disabled at the framebuffer
+// level (SILK_GLUI_MSAA=0) or unsupported by the driver. Use this to
+// surface the sample count in a diagnostic overlay or skip MSAA-only
+// fast paths in test rigs.
+func (c *Context) MSAASamples() int { return c.msaaSamples }
 
 // Resize updates the logical viewport. width/height are in points,
 // scale is physical-pixels-per-point (2.0 on Retina, 1.0 otherwise).

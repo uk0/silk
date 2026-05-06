@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 	"unicode"
@@ -143,6 +144,39 @@ type Window struct {
 	dndCtx        *dndContext
 }
 
+// msaaSampleCount returns the multisample sample count to request via
+// glfw.Samples. SILK_GLUI_MSAA overrides the default; valid values are
+// 0 (disabled), 2, 4, 8, 16. Any non-numeric or negative value falls back
+// to the default (4). Hardware that does not support the requested count
+// is handled by GLFW + the driver, which silently downgrades; we don't
+// crash on values like 32 even though most desktop GPUs cap at 16.
+func msaaSampleCount() int {
+	const defaultSamples = 4
+	v := os.Getenv("SILK_GLUI_MSAA")
+	if v == "" {
+		return defaultSamples
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return defaultSamples
+	}
+	// Round-trip through allowed values rather than passing arbitrary input
+	// to the driver. 0 is honoured (explicit disable); other values are
+	// snapped to the nearest supported tier.
+	switch {
+	case n == 0:
+		return 0
+	case n <= 2:
+		return 2
+	case n <= 4:
+		return 4
+	case n <= 8:
+		return 8
+	default:
+		return 16
+	}
+}
+
 func init() {
 	runtime.LockOSThread()
 
@@ -244,6 +278,22 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	glfw.WindowHint(glfw.ContextVersionMajor, 2)
 	glfw.WindowHint(glfw.ContextVersionMinor, 1)
 	glfw.WindowHint(glfw.Resizable, glfw.True)
+
+	// Multisample antialiasing. The default 4× covers the visible jaggies
+	// on triangulated stroke quads and ear-clipped concave polygons (where
+	// the SDF rect shader's per-pixel AA doesn't apply). SILK_GLUI_MSAA
+	// overrides the sample count: 0 disables MSAA entirely, otherwise the
+	// value is passed through as the GLFW samples hint. The driver clamps
+	// to whatever the hardware supports — we do not validate against that
+	// because GLFW silently falls back when 16× isn't available.
+	glfw.WindowHint(glfw.Samples, msaaSampleCount())
+
+	// Stencil bits. 8 is sufficient for ~256 nested clip paths — well
+	// beyond what any real widget tree reaches. Asking for stencil here
+	// reserves the buffer at framebuffer-creation time so future work on
+	// path-shaped clipping can light up the stencil pipeline without an
+	// API churn that breaks existing windows.
+	glfw.WindowHint(glfw.StencilBits, 8)
 
 	switch wt {
 	case WtPopup:
