@@ -43,6 +43,15 @@ type Edit struct {
 	cbTextChanged func(interface{}, string)
 	cbVerify      func(interface{}, string) bool
 	cbSubmit      func(interface{}, string)
+
+	// validator, when non-nil, gates every typed keystroke and every
+	// SetText call. Mirrors Qt's QLineEdit::setValidator semantics:
+	// keystrokes that would produce an Invalid result are dropped on
+	// the floor; SetText with an Invalid argument is a no-op so a
+	// programmatic caller can't put the widget into an unreachable
+	// state. Intermediate is permitted in both paths so the user can
+	// keep typing toward a valid value.
+	validator Validator
 }
 
 func NewEdit() *Edit {
@@ -303,7 +312,27 @@ func (this *Edit) OnTextInput(s string) {
 	if this.readonly {
 		return
 	}
-	//core.Debug(this.sel0, this.sel1)
+	// Validator gate: if installed, classify the candidate text BEFORE
+	// committing. Invalid drops the keystroke; Intermediate / Acceptable
+	// allow the change. We compute the candidate by simulating the same
+	// range replace replace() would perform, without mutating state.
+	if this.validator != nil {
+		begin, end := this.sel0, this.sel1
+		if begin > end {
+			begin, end = end, begin
+		}
+		text := this.Text()
+		if begin > len(text) {
+			begin = len(text)
+		}
+		if end > len(text) {
+			end = len(text)
+		}
+		candidate := text[:begin] + s + text[end:]
+		if this.validator.Validate(candidate) == Invalid {
+			return
+		}
+	}
 	this.replace(this.sel0, this.sel1, s)
 	this.caretXSaved = false
 	this.emitEdited()
@@ -661,7 +690,61 @@ func (this *Edit) replace(begin, end int, s string) (caret int, old string) {
 }
 
 func (this *Edit) SetText(s string) {
+	if this.validator != nil && this.validator.Validate(s) == Invalid {
+		// Mirrors QLineEdit: programmatic SetText with an Invalid value
+		// is a no-op so callers can't bypass the validator. To force the
+		// text through, clear the validator first or call ValidatorFixup.
+		return
+	}
 	this.TextBlock.SetText(s)
+	this.emitChanged()
+	this.Layout()
+}
+
+// SetValidator installs (or clears, when nil) the input validator. The
+// new validator is applied to existing text only when ValidatorFixup is
+// called explicitly — switching validators mid-flight does not
+// retroactively reject the current value, matching Qt's behaviour.
+func (this *Edit) SetValidator(v Validator) {
+	this.validator = v
+}
+
+// Validator returns the currently installed validator, or nil when no
+// validator is gating input.
+func (this *Edit) Validator() Validator {
+	return this.validator
+}
+
+// HasAcceptableInput reports whether the current text is in the
+// Acceptable state per the installed validator. Returns true when no
+// validator is installed (free-form text is always "acceptable").
+// Mirrors QLineEdit::hasAcceptableInput; hosts use it to enable / disable
+// Submit actions when the user's input is mid-edit (Intermediate).
+func (this *Edit) HasAcceptableInput() bool {
+	if this.validator == nil {
+		return true
+	}
+	return this.validator.Validate(this.Text()) == Acceptable
+}
+
+// ValidatorFixup applies the installed validator's Fixupper, if any,
+// to the current text. Typically called on lose-focus so a partial
+// "12" auto-completes to "12.00" when DoubleValidator{Decimals: 2} is
+// installed. Safe to call when no validator or no Fixupper is set —
+// the text is left unchanged.
+func (this *Edit) ValidatorFixup() {
+	if this.validator == nil {
+		return
+	}
+	fx, ok := this.validator.(Fixupper)
+	if !ok {
+		return
+	}
+	fixed := fx.Fixup(this.Text())
+	if fixed == this.Text() {
+		return
+	}
+	this.TextBlock.SetText(fixed)
 	this.emitChanged()
 	this.Layout()
 }
