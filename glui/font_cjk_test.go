@@ -65,6 +65,40 @@ func TestFontCJKMixedString(t *testing.T) {
 	}
 }
 
+// TestFontCJKMultiScriptCoverage stresses the full fallback chain:
+// a single Font instance must successfully rasterise Han, hiragana,
+// katakana, and Hangul characters within one rendered string. The
+// chain order is checked indirectly — every queried glyph lands in
+// the atlas with non-zero region, proving SOME face supplied it.
+//
+// The runtime walks faces in priority order (Han primary → kana →
+// Hangul on macOS), so this test catches a regression where one
+// script's font is missed during discovery.
+func TestFontCJKMultiScriptCoverage(t *testing.T) {
+	if len(discoverSystemCJKFaces(14)) == 0 {
+		t.Skipf("no system CJK fonts on %s — skipping multi-script test", runtime.GOOS)
+	}
+	f := NewFont(14)
+	cases := []struct {
+		name string
+		ch   rune
+	}{
+		{"Han 中", '中'},
+		{"Hiragana あ", 'あ'},
+		{"Katakana カ", 'カ'},
+		{"Hangul 한", '한'},
+	}
+	for _, c := range cases {
+		g := f.Glyph(c.ch)
+		// At least one face in the chain must have rasterised the glyph.
+		// region.W==0 with advance==0 means every face missed it; on a
+		// macOS host with the full chain that indicates a discovery bug.
+		if g.region.W == 0 && g.advance == 0 {
+			t.Errorf("%s: rune %q produced empty glyph + zero advance", c.name, c.ch)
+		}
+	}
+}
+
 // TestFontCJKAtlasUsesFallbackFace re-asserts the advisor's invariant: the
 // per-glyph offY for a CJK rune comes from the fallback face, not the Go
 // Regular primary. We verify this indirectly by confirming the recorded

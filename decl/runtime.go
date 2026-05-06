@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"silk/core"
+	"silk/i18n"
 )
 
 // Widget capability shapes used by applyProp's interface assertions.
@@ -103,13 +104,24 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 // "best-effort apply" semantics so older designs with attribs the
 // runtime no longer cares about still load cleanly.
 //
-// Non-Lit values (Ref / Bind / Expr) need higher-level wiring (event
-// dispatch, reactive subscription, code-eval) and are skipped here;
-// the consumer of decl is expected to walk the AST first, install
-// handlers, then call Build.
+// Value variants:
+//   - Lit: pass through to the duck-typed setter
+//   - TrKey: resolve via i18n.T() then treat as a string Lit. This
+//     is what makes designer-authored .silkui files automatically
+//     localise — the widget's text/title/etc. is whatever the active
+//     locale's translator returns for the source string.
+//   - Ref / Bind / Expr: skipped here. Higher-level callers walk the
+//     AST first, install event/binding wiring, then call Build.
 func applyProp(obj interface{}, p Prop) {
-	lit, ok := p.Value.(Lit)
-	if !ok {
+	var lit Lit
+	switch v := p.Value.(type) {
+	case Lit:
+		lit = v
+	case TrKey:
+		// Resolve translation at Build time. The translated string
+		// becomes a string-typed Lit for the duck-typed setters.
+		lit = Lit{V: i18n.T(v.Source)}
+	default:
 		return
 	}
 	switch p.Name {

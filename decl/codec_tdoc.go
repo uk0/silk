@@ -41,6 +41,7 @@ const (
 	tagRef  = "@ref:"
 	tagBind = "@bind:"
 	tagExpr = "@expr:"
+	tagTr   = "@tr:"  // i18n translation key
 	tagLit  = "@lit:" // explicit literal escape for strings starting with "@"
 )
 
@@ -166,6 +167,8 @@ func writeProp(doc *core.TDoc, name string, v Value) {
 		_ = doc.WriteAttr(name, tagBind+x.Path)
 	case Expr:
 		_ = doc.WriteAttr(name, tagExpr+x.Source)
+	case TrKey:
+		_ = doc.WriteAttr(name, tagTr+x.Source)
 	}
 }
 
@@ -188,6 +191,8 @@ func decodeValue(s string) Value {
 		return Bind{Path: s[len(tagBind):]}
 	case strings.HasPrefix(s, tagExpr):
 		return Expr{Source: s[len(tagExpr):]}
+	case strings.HasPrefix(s, tagTr):
+		return TrKey{Source: s[len(tagTr):]}
 	case strings.HasPrefix(s, tagLit):
 		return Lit{V: s[len(tagLit):]}
 	default:

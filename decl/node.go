@@ -88,6 +88,24 @@ type Expr struct {
 
 func (Expr) isValue() {}
 
+// TrKey marks a property value as a translation source string. The
+// runtime resolves it via i18n.T at Build time, so a designer-authored
+// .silkui carrying TrKey values renders in the user's locale without
+// the designer needing to know which language is active.
+//
+// Example:
+//
+//	decl.Button(decl.P("text", decl.TrKey{Source: "OK"}))
+//
+// On a host with i18n.SetLocale("zh-CN") active, the button's text
+// becomes "确定". With no locale set or no matching entry, it falls
+// back to the source string "OK" — same fallback policy as i18n.T.
+type TrKey struct {
+	Source string
+}
+
+func (TrKey) isValue() {}
+
 // SetProp inserts a new property or updates an existing one with the
 // same name in place. Order is preserved on update; appended on insert.
 // Used by tools that mutate AST after construction (e.g. the designer

@@ -37,7 +37,17 @@ func systemFontCandidates() []string {
 		// migrated in 10.15; Hiragino Sans GB lives at the canonical path
 		// in current builds). Probe both locations so the discovery works
 		// without depending on a specific macOS version.
+		//
+		// macOS splits CJK script coverage across several files:
+		//   - Hiragino Sans GB / PingFang / STHeiti / Songti — Han glyphs
+		//     (Simplified + Traditional Chinese); no kana, limited Korean.
+		//   - AquaKana — hiragana + katakana (Japanese phonetics) only.
+		//   - AppleSDGothicNeo — full Korean coverage incl. Hangul.
+		// The full chain is returned by discoverSystemCJKFaces in priority
+		// order so a Japanese / Korean run still renders kana / Hangul
+		// even when the Han-script primary doesn't carry them.
 		return []string{
+			// Han-script primaries.
 			"/System/Library/Fonts/PingFang.ttc",
 			"/System/Library/Fonts/Supplemental/PingFang.ttc",
 			"/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -46,6 +56,14 @@ func systemFontCandidates() []string {
 			"/System/Library/Fonts/STHeiti Light.ttc",
 			"/System/Library/Fonts/Supplemental/Songti.ttc",
 			"/Library/Fonts/Songti.ttc",
+			// Japanese kana coverage — required when the user's run
+			// includes hiragana or katakana that the Han primary
+			// can't render.
+			"/System/Library/Fonts/AquaKana.ttc",
+			"/System/Library/Fonts/Supplemental/AquaKana.ttc",
+			// Korean coverage — Hangul syllables and Jamo.
+			"/System/Library/Fonts/AppleSDGothicNeo.ttc",
+			"/System/Library/Fonts/Supplemental/AppleGothic.ttf",
 		}
 	case "linux":
 		return []string{
@@ -68,27 +86,31 @@ func systemFontCandidates() []string {
 	return nil
 }
 
-// discoverSystemCJKFaces walks the platform candidate list and returns a
-// face for the first successfully-loaded font, sized at the same point
-// size as the primary. Returns nil if none of the candidates exist on the
+// discoverSystemCJKFaces walks the platform candidate list and returns
+// every face that loads successfully, in the order they appear in
+// systemFontCandidates. Returns nil if no candidate loads on the
 // current host.
 //
-// The function is best-effort: the caller treats a nil/empty return as
-// "no fallback" and proceeds with primary-only rendering. CJK characters
-// will then surface as missing glyphs (zero-advance records) — visible
-// gaps in the rendered string but no crash.
+// The full chain matters because macOS in particular splits CJK script
+// coverage across several files: Han-script primaries don't carry kana,
+// kana files don't carry Hangul, and so on. Glyph() walks the chain
+// in this order until a face with the requested rune is found, so a
+// Japanese run on a CJK-mixed host renders correctly without the host
+// having to figure out which one font covers everything.
 //
-// We only return one face today. Most CJK fonts already cover Simplified
-// + Traditional + Japanese + Korean from a single .ttc, so a single
-// fallback typically suffices. The function returns a slice anyway so a
-// future iteration can chain multiple discovered fonts (e.g. dedicated
-// emoji or symbol fonts) without changing the call site.
+// The function is best-effort: a nil/empty return leaves the host with
+// primary-only rendering. CJK runes then surface as missing-glyph
+// records — visible gaps but no crash.
 func discoverSystemCJKFaces(size float64) []font.Face {
-	face, _ := discoverSystemCJKFaceWithPath(size)
-	if face == nil {
-		return nil
+	var faces []font.Face
+	for _, path := range systemFontCandidates() {
+		face, err := loadFontFile(path, size)
+		if err != nil || face == nil {
+			continue
+		}
+		faces = append(faces, face)
 	}
-	return []font.Face{face}
+	return faces
 }
 
 // discoverSystemCJKFaceWithPath returns the first successfully-loaded
@@ -97,6 +119,11 @@ func discoverSystemCJKFaces(size float64) []font.Face {
 // the CI log as "loaded /System/Library/Fonts/Supplemental/..." instead
 // of "loaded /System/Library/Fonts/...". Returns ("", nil) when no
 // candidate loads.
+//
+// Distinct from discoverSystemCJKFaces: this returns only the first
+// match (used for tests that need a single observable path). Production
+// font construction goes through discoverSystemCJKFaces to gather the
+// full chain.
 func discoverSystemCJKFaceWithPath(size float64) (font.Face, string) {
 	for _, path := range systemFontCandidates() {
 		face, err := loadFontFile(path, size)
