@@ -52,6 +52,20 @@ type Edit struct {
 	// state. Intermediate is permitted in both paths so the user can
 	// keep typing toward a valid value.
 	validator Validator
+
+	// completer, when non-nil, refreshes its Suggestions list on every
+	// keystroke so the host (or an attached popup) can render the
+	// current candidate set. The Edit itself does not draw a popup — a
+	// follow-up widget (CompleterPopup) consumes Completer.Suggestions
+	// to render the list. This split keeps the data layer testable
+	// without GL state and lets hosts attach custom popup geometry.
+	completer *Completer
+
+	// completionPrefixStart is the byte offset in Text() where the
+	// active "completion prefix" begins. Set on every Filter call so
+	// AcceptCompletion knows what range to replace when the user picks
+	// a candidate. Defaults to the entire current text on a fresh edit.
+	completionPrefixStart int
 }
 
 func NewEdit() *Edit {
@@ -336,6 +350,96 @@ func (this *Edit) OnTextInput(s string) {
 	this.replace(this.sel0, this.sel1, s)
 	this.caretXSaved = false
 	this.emitEdited()
+	// Refresh completer suggestions if installed. The "active prefix"
+	// is the substring starting at completionPrefixStart up to caret;
+	// it falls back to the full text on a fresh edit.
+	this.refreshCompleter()
+}
+
+// SetCompleter installs (or clears, when nil) the input completer.
+// Subsequent text edits trigger Filter; hosts read Suggestions() and
+// call AcceptCompletion(idx) when the user picks a candidate.
+//
+// Switching completers does not retroactively re-filter — the next
+// keystroke or an explicit refreshCompleter call updates the list.
+func (this *Edit) SetCompleter(c *Completer) {
+	this.completer = c
+}
+
+// Completer returns the installed Completer, or nil.
+func (this *Edit) Completer() *Completer { return this.completer }
+
+// CompletionPrefix returns the substring currently being completed —
+// from completionPrefixStart to the caret position. Hosts call this to
+// highlight the prefix in their popup or to compute completion bounds.
+func (this *Edit) CompletionPrefix() string {
+	text := this.Text()
+	caret := this.sel0
+	if caret > len(text) {
+		caret = len(text)
+	}
+	start := this.completionPrefixStart
+	if start < 0 || start > caret {
+		start = caret
+	}
+	return text[start:caret]
+}
+
+// SetCompletionPrefixStart pins the byte offset where the active
+// completion prefix begins. Defaults to 0 (whole text). Hosts that
+// implement word-by-word completion (e.g. a code editor where each
+// new identifier resets the prefix start) call this on whitespace /
+// boundary keystrokes.
+func (this *Edit) SetCompletionPrefixStart(start int) {
+	this.completionPrefixStart = start
+}
+
+// AcceptCompletion replaces the active prefix with the suggestion at
+// idx in the current Suggestions list. No-op when idx is out of range
+// or no completer is installed. Returns true on a successful replace.
+//
+// After replacement, completionPrefixStart moves to the position
+// immediately after the inserted candidate, so a subsequent keystroke
+// starts a fresh completion against whatever the user types next.
+func (this *Edit) AcceptCompletion(idx int) bool {
+	if this.completer == nil {
+		return false
+	}
+	suggestions := this.completer.Suggestions()
+	if idx < 0 || idx >= len(suggestions) {
+		return false
+	}
+	pick := suggestions[idx]
+	caret := this.sel0
+	text := this.Text()
+	if caret > len(text) {
+		caret = len(text)
+	}
+	start := this.completionPrefixStart
+	if start < 0 || start > caret {
+		start = caret
+	}
+	// Replace [start:caret] with pick; leave any text past the caret
+	// (unusual but possible if the user moved the caret mid-typing)
+	// untouched so we don't surprise-clobber it.
+	newText := text[:start] + pick + text[caret:]
+	this.TextBlock.SetText(newText)
+	newCaret := start + len(pick)
+	this.sel0 = newCaret
+	this.sel1 = newCaret
+	this.completionPrefixStart = newCaret
+	this.emitChanged()
+	this.Layout()
+	return true
+}
+
+// refreshCompleter is called from OnTextInput / SetText after the
+// underlying buffer changes. No-op when no completer is set.
+func (this *Edit) refreshCompleter() {
+	if this.completer == nil {
+		return
+	}
+	this.completer.Filter(this.CompletionPrefix())
 }
 
 func (this *Edit) OnKeyDown(key int, repeat bool) {
