@@ -30,7 +30,33 @@ type (
 // (with a single argument matching the parent's static type) is
 // assembled into the tree. When SetParent is missing, children are
 // still Built — they just don't get auto-parented.
+//
+// For applications that need to wire event handlers after construction,
+// see BuildWithIndex which additionally returns a map from Node.ID to
+// the corresponding widget instance.
 func (n *Node) Build() (interface{}, error) {
+	obj, _, err := n.BuildWithIndex()
+	return obj, err
+}
+
+// BuildWithIndex behaves like Build but additionally collects every
+// Node with a non-empty ID into a flat map keyed by that ID. Apps can
+// then look up specific widgets by their declared name and bind event
+// handlers, install reactive bindings, or imperatively mutate state
+// without walking the widget tree.
+//
+// Duplicate IDs in a single tree silently overwrite the earlier entry —
+// designer-authored docs already enforce uniqueness at the index layer
+// so this is the right policy for runtime users too. If your tooling
+// is generating decl trees programmatically and may emit duplicates,
+// validate before calling Build().
+func (n *Node) BuildWithIndex() (interface{}, map[string]interface{}, error) {
+	idx := make(map[string]interface{})
+	root, err := buildInto(n, idx)
+	return root, idx, err
+}
+
+func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 	if n == nil {
 		return nil, fmt.Errorf("decl.Build: nil node")
 	}
@@ -48,11 +74,15 @@ func (n *Node) Build() (interface{}, error) {
 		applyProp(obj, p)
 	}
 
+	if n.ID != "" {
+		idx[n.ID] = obj
+	}
+
 	for _, c := range n.Children {
 		if c == nil {
 			continue
 		}
-		child, err := c.Build()
+		child, err := buildInto(c, idx)
 		if err != nil {
 			return nil, fmt.Errorf("decl.Build: %s child: %w", n.Type, err)
 		}

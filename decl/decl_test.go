@@ -206,3 +206,17 @@ func Test10_BuildUnknownTypeErrors(t *testing.T) {
 		t.Errorf("Build() of unknown type should error")
 	}
 }
+
+// Test11_BuildWithIndexEmpty asserts the index API returns an empty
+// (non-nil) map when no node carries an ID — the host can range it
+// safely without a nil check.
+func Test11_BuildWithIndexEmpty(t *testing.T) {
+	n := New("decl.NeverRegistered")
+	_, idx, err := n.BuildWithIndex()
+	if err == nil {
+		t.Errorf("Build of unregistered should still error")
+	}
+	if idx == nil {
+		t.Errorf("idx must be non-nil even on error")
+	}
+}

@@ -63,8 +63,7 @@ func ToTDoc(n *Node) *core.TDoc {
 	}
 
 	for _, p := range n.Props {
-		s := encodeValue(p.Value)
-		_ = doc.WriteAttr(p.Name, s)
+		writeProp(doc, p.Name, p.Value)
 	}
 
 	for _, c := range n.Children {
@@ -139,44 +138,48 @@ func FromTDoc(doc *core.TDoc) (*Node, error) {
 	return n, nil
 }
 
-// encodeValue produces the string written into the TDoc value slot for
-// a single property. Non-literal variants are tag-prefixed so they are
-// recoverable.
+// writeProp dispatches on the Value variant to choose the right TDoc
+// write path. Lit values pass through WriteAttr's native typed handling
+// — the persist layer formats numbers, bools, and strings (with
+// quoting) without our intervention. Ref/Bind/Expr round-trip via a
+// tag-prefixed string so the variant is recoverable on read.
 //
-// For Lit, we let core.PersistString format the underlying primitive
-// (numbers, bools etc.). PersistString quotes strings, so re-loading
-// goes through the inverse path in decodeValue.
-func encodeValue(v Value) string {
+// The earlier "stringify then write" approach double-encoded strings:
+// PersistString quoted "OK" to `"OK"`, the resulting Go string was
+// then written through SetValue which called PersistString again,
+// producing `"\"OK\""` on disk. Splitting the two paths fixes that.
+func writeProp(doc *core.TDoc, name string, v Value) {
 	switch x := v.(type) {
 	case Lit:
-		s, err := core.PersistString(x.V)
-		if err != nil {
-			return ""
-		}
-		// A literal string that begins with "@" needs an explicit escape so
-		// it doesn't parse back as a Ref/Bind/Expr. PersistString quotes
-		// strings, so the leading rune of s for a string literal is "
-		// (not @). Numeric / bool literals never collide. Belt-and-braces
-		// guard regardless: if the *unquoted* primitive starts with "@" we
-		// prepend the literal escape.
+		// String literals that start with "@" need the explicit @lit:
+		// escape so they don't parse back as Ref/Bind/Expr after a
+		// round-trip. Numeric and bool primitives never collide with
+		// the tag prefixes.
 		if s, ok := x.V.(string); ok && strings.HasPrefix(s, "@") {
-			return tagLit + s
+			_ = doc.WriteAttr(name, tagLit+s)
+			return
 		}
-		return s
+		_ = doc.WriteAttr(name, x.V)
 	case Ref:
-		return tagRef + x.Name
+		_ = doc.WriteAttr(name, tagRef+x.Name)
 	case Bind:
-		return tagBind + x.Path
+		_ = doc.WriteAttr(name, tagBind+x.Path)
 	case Expr:
-		return tagExpr + x.Source
-	default:
-		return ""
+		_ = doc.WriteAttr(name, tagExpr+x.Source)
 	}
 }
 
-// decodeValue parses the inverse of encodeValue. The four prefixes route
-// to their typed Value; everything else goes through PersistSscan as a
-// generic string and surfaces as a Lit.
+// decodeValue is the inverse of writeProp. The four tag prefixes route
+// directly to Ref/Bind/Expr/Lit-escape; everything else is wrapped as
+// a Lit holding the deserialised Go string. Type coercion (string →
+// bool / float / int) is the runtime's responsibility — applyProp's
+// asBool / asFloat already handle this for the dominant prop names so
+// the AST stays a faithful textual mirror of what was written.
+//
+// Note: the input s is assumed to have already been unquoted by
+// TDoc.Value(&s), which uses PersistSscan's quotedString scanner. So
+// "\"OK\"" on disk arrives here as the Go string OK; tag dispatch works
+// against the user-visible value, not the on-disk encoding.
 func decodeValue(s string) Value {
 	switch {
 	case strings.HasPrefix(s, tagRef):
@@ -186,17 +189,8 @@ func decodeValue(s string) Value {
 	case strings.HasPrefix(s, tagExpr):
 		return Expr{Source: s[len(tagExpr):]}
 	case strings.HasPrefix(s, tagLit):
-		// Explicit literal escape for strings beginning with "@".
 		return Lit{V: s[len(tagLit):]}
 	default:
-		// Decode through the persist layer — numbers, bools, quoted
-		// strings all come back as their natural Go type. Falls back to
-		// the raw string when PersistSscan can't pick a concrete type.
-		var raw string
-		_, err := core.PersistSscan(s, &raw)
-		if err != nil {
-			return Lit{V: s}
-		}
-		return Lit{V: raw}
+		return Lit{V: s}
 	}
 }

@@ -84,6 +84,33 @@ func TestBuildAttachesChildrenToForm(t *testing.T) {
 	}
 }
 
+// TestBuildWithIndexLooksUpByID confirms BuildWithIndex returns a
+// map that lets the host wire post-construction logic (event handlers,
+// reactive bindings) by the declared ID — without walking the widget
+// tree manually. This is the runtime hook the decl_demo binary uses
+// to bind a Go closure to a button's Click action.
+func TestBuildWithIndexLooksUpByID(t *testing.T) {
+	n := decl.Form(decl.ID("Main"),
+		decl.Children(
+			decl.Button(decl.ID("ok"), decl.P("text", "OK")),
+			decl.Label(decl.ID("status"), decl.P("text", "Ready")),
+		),
+	)
+	_, idx, err := n.BuildWithIndex()
+	if err != nil {
+		t.Fatalf("BuildWithIndex: %v", err)
+	}
+	if _, ok := idx["Main"].(*gui.Form); !ok {
+		t.Errorf("idx[Main] = %T, want *gui.Form", idx["Main"])
+	}
+	if _, ok := idx["ok"].(*gui.Button); !ok {
+		t.Errorf("idx[ok] = %T, want *gui.Button", idx["ok"])
+	}
+	if _, ok := idx["status"].(*gui.Label); !ok {
+		t.Errorf("idx[status] = %T, want *gui.Label", idx["status"])
+	}
+}
+
 // TestBuildLabelTextRoundTripsViaTDoc: a Label authored in code,
 // serialised to TDoc, parsed back, and Built must end up with the
 // same text. This is the end-to-end "designer can read code; runtime
