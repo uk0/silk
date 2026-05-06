@@ -18,8 +18,21 @@ func NewSolidBrush(cr Color) *SolidBrush {
 	return &SolidBrush{cr}
 }
 
+// PixmapBrush is an image-fill brush. Cairo uses the embedded *Pattern
+// for cairo_set_source / cairo_fill operations; pure-OpenGL backends
+// (silk/glui CairoCompat) read the original Pixmap to upload as a GL
+// texture and bind via the kindImage batch. Both backends share the
+// same Extend setting for repeat / clamp / mirror behaviour at the
+// edges.
+//
+// Holding pixmap as a separate field is intentional — the Cairo
+// Pattern doesn't expose its source surface portably, and the Pixmap
+// is what glui needs anyway. Memory cost is one extra interface
+// reference per brush; the Cairo Pattern is the heavyweight object.
 type PixmapBrush struct {
-	pat *cairo.Pattern
+	pat    *cairo.Pattern
+	pixmap Pixmap
+	extend Extend
 }
 
 // GradientStop is a single colour stop along a gradient axis.
@@ -92,14 +105,29 @@ func NewPixmapBrush(pixmap Pixmap) *PixmapBrush {
 	p := cairo.NewPatternForSurface(s.Surface)
 	br := new(PixmapBrush)
 	br.pat = p
+	br.pixmap = pixmap
 	br.setFinalizer()
 	return br
 }
 
+// Pixmap returns the source pixmap so non-Cairo backends can sample
+// it directly. Non-nil for every brush constructed via NewPixmapBrush;
+// only nil if a backend hand-builds a brush bypassing the constructor
+// (no public API does this today).
+func (this *PixmapBrush) Pixmap() Pixmap {
+	return this.pixmap
+}
+
 func (this *PixmapBrush) Extend() Extend {
-	return Extend(this.pat.Extend())
+	if this.pat != nil {
+		return Extend(this.pat.Extend())
+	}
+	return this.extend
 }
 
 func (this *PixmapBrush) SetExtend(ext Extend) {
-	this.pat.SetExtend(cairo.Extend(ext))
+	this.extend = ext
+	if this.pat != nil {
+		this.pat.SetExtend(cairo.Extend(ext))
+	}
 }

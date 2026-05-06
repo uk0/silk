@@ -743,3 +743,162 @@ func TestFillPreserveKeepsCurrentPoint(t *testing.T) {
 		t.Errorf("after FillPreserve: curX=%v curY=%v, want 50/60", c.curX, c.curY)
 	}
 }
+
+// --- PixmapBrush integration --------------------------------------------
+
+// makeTestPixmap allocates a real cairo-backed pixmap of the given size
+// and fills it with a known colour pattern so pixmapAverageColor has
+// something deterministic to read.
+func makeTestPixmap(w, h int) paint.Pixmap {
+	pm := paint.NewPixmap(w, h)
+	// Fill with mid-gray via SetData. The exact format the persist
+	// layer expects is BGRA premultiplied; mid-gray (128 across all
+	// channels with alpha=255) satisfies that without the
+	// premultiplication step distorting the result.
+	stride := pm.Stride()
+	buf := make([]byte, stride*h)
+	for i := 0; i < len(buf); i += 4 {
+		buf[i+0] = 128 // B
+		buf[i+1] = 128 // G
+		buf[i+2] = 128 // R
+		buf[i+3] = 255 // A
+	}
+	_ = pm.SetData(buf)
+	return pm
+}
+
+// TestCairoCompatPixmapBrushActivates: SetBrush with a *paint.PixmapBrush
+// must flip pixmapBrushActive on, capture the pixmap, and clear gradient
+// state.
+func TestCairoCompatPixmapBrushActivates(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	pm := makeTestPixmap(8, 8)
+	c.SetBrush(paint.NewPixmapBrush(pm))
+
+	if !c.pixmapBrushActive {
+		t.Fatalf("pixmapBrushActive false after SetBrush(PixmapBrush)")
+	}
+	if c.pixmapBrush != pm {
+		t.Errorf("pixmapBrush = %v, want the supplied pixmap", c.pixmapBrush)
+	}
+	if c.gradientActive || c.radialActive {
+		t.Errorf("pixmap brush wrongly activated other brush flags: g=%v r=%v",
+			c.gradientActive, c.radialActive)
+	}
+}
+
+// TestCairoCompatPixmapBrushSetsAverageColorFallback: the average colour
+// is non-zero after a successful SetBrush, ready for the non-rect
+// fallback path.
+func TestCairoCompatPixmapBrushSetsAverageColorFallback(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	pm := makeTestPixmap(8, 8)
+	c.SetBrush(paint.NewPixmapBrush(pm))
+
+	if c.pixmapAvgColor.R == 0 && c.pixmapAvgColor.G == 0 && c.pixmapAvgColor.B == 0 {
+		t.Errorf("pixmapAvgColor = %+v, want non-zero (mid-gray)", c.pixmapAvgColor)
+	}
+}
+
+// TestCairoCompatPixmapBrushDetectsRectFastPath: with a pixmap brush
+// installed and an axis-aligned rect path, fillCurrentPath would
+// route through DrawImage IF the renderer had a GL context. The
+// off-GL test renderer leaves ctx==nil so uploadPixmap returns nil
+// and we fall back to triangulation — covered by the next test.
+//
+// What this test pins: SetBrush captured the pixmap and the rect-
+// detection logic accepted the path (i.e. the fast-path gate is in
+// place). The actual DrawImage path is exercised by the standalone
+// glui_demo with a real GL context.
+func TestCairoCompatPixmapBrushDetectsRectFastPath(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	pm := makeTestPixmap(8, 8)
+	c.SetBrush(paint.NewPixmapBrush(pm))
+	c.Rectangle(0, 0, 100, 100)
+	if rc, ok := c.singleAxisAlignedRectPath(); !ok {
+		t.Fatalf("rect path not detected as axis-aligned")
+	} else if rc.W != 100 || rc.H != 100 {
+		t.Errorf("rect = %+v, want 100x100", rc)
+	}
+	if c.pixmapBrush != pm {
+		t.Errorf("pixmap brush not retained: got %v", c.pixmapBrush)
+	}
+}
+
+// TestCairoCompatPixmapBrushNonRectFallsBack: a non-rect path with a
+// pixmap brush falls back to solid triangulation using the average
+// colour. Geometry must still be emitted.
+func TestCairoCompatPixmapBrushNonRectFallsBack(t *testing.T) {
+	c, r := newCompatTestPainter(t)
+	pm := makeTestPixmap(8, 8)
+	c.SetBrush(paint.NewPixmapBrush(pm))
+
+	// Triangle — not a rect.
+	c.MoveTo(0, 0)
+	c.LineTo(50, 0)
+	c.LineTo(25, 50)
+	c.LineTo(0, 0)
+	c.Fill()
+
+	if r.curKind == kindImage {
+		t.Errorf("non-rect with pixmap brush should fall back, got kindImage")
+	}
+	if len(r.indices) == 0 {
+		t.Errorf("non-rect pixmap fallback emitted no geometry")
+	}
+}
+
+// TestCairoCompatPixmapBrushScopedBySaveRestore: Save then SetBrush1
+// (solid) inside a scope; Restore brings the pixmap brush back.
+func TestCairoCompatPixmapBrushScopedBySaveRestore(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	pm := makeTestPixmap(8, 8)
+	c.SetBrush(paint.NewPixmapBrush(pm))
+
+	c.Save()
+	c.SetBrush1(paint.Color{R: 255, A: 255})
+	if c.pixmapBrushActive {
+		t.Errorf("inside Save scope SetBrush1 did not clear pixmapBrushActive")
+	}
+	c.Restore()
+	if !c.pixmapBrushActive {
+		t.Errorf("Restore did not bring back the pixmap brush")
+	}
+	if c.pixmapBrush != pm {
+		t.Errorf("Restore did not bring back pixmapBrush, got %v", c.pixmapBrush)
+	}
+}
+
+// TestCairoCompatPixmapBrushAndOthersAreMutuallyExclusive: switching to
+// linear gradient clears pixmap state, and vice versa.
+func TestCairoCompatPixmapBrushAndOthersAreMutuallyExclusive(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	pm := makeTestPixmap(8, 8)
+
+	// Set pixmap brush first.
+	c.SetBrush(paint.NewPixmapBrush(pm))
+	if !c.pixmapBrushActive {
+		t.Fatalf("setup: pixmap brush did not activate")
+	}
+
+	// Switch to linear gradient — pixmap state must clear.
+	g := paint.NewLinearGradient(0, 0, 100, 0)
+	g.AddStop(0, paint.Color{R: 255, A: 255})
+	g.AddStop(1, paint.Color{B: 255, A: 255})
+	c.SetBrush(g)
+	if c.pixmapBrushActive {
+		t.Errorf("linear gradient did not clear pixmapBrushActive")
+	}
+	if !c.gradientActive {
+		t.Errorf("linear gradient did not set gradientActive")
+	}
+
+	// Switch back to pixmap — gradient state must clear.
+	c.SetBrush(paint.NewPixmapBrush(pm))
+	if c.gradientActive {
+		t.Errorf("pixmap brush did not clear gradientActive")
+	}
+	if !c.pixmapBrushActive {
+		t.Errorf("pixmap brush did not re-activate")
+	}
+}

@@ -104,6 +104,17 @@ type CairoCompat struct {
 	radialR1     float32
 	radialStops  []GradientStop
 
+	// Active pixmap-brush state. pixmapBrushActive flags whether
+	// SetBrush most recently selected a *paint.PixmapBrush. When set,
+	// fillCurrentPath routes axis-aligned rect paths through
+	// Renderer.DrawImage with the cached GL texture for the brush's
+	// pixmap. Non-rect paths fall back to a solid fill of pixmapAvgColor
+	// (the average colour of the source pixmap, computed on first
+	// upload) so the shape still renders something visible.
+	pixmapBrushActive bool
+	pixmapBrush       paint.Pixmap
+	pixmapAvgColor    paint.Color
+
 	// Logical CTM mirrored from the renderer. We need read access to it
 	// for GetMatrix() and to resolve hairline pens (width=0). Renderer.xform
 	// already stores the identical matrix — we keep our own float64 copy
@@ -192,6 +203,9 @@ type cairoCompatState struct {
 	radialR0         float32
 	radialR1         float32
 	radialStops      []GradientStop
+	pixmapBrushActive bool
+	pixmapBrush       paint.Pixmap
+	pixmapAvgColor    paint.Color
 }
 
 // Compile-time interface satisfaction. If a paint.Painter method goes
@@ -400,6 +414,9 @@ func (c *CairoCompat) Save() int {
 		radialR0:         c.radialR0,
 		radialR1:         c.radialR1,
 		radialStops:      c.radialStops,
+		pixmapBrushActive: c.pixmapBrushActive,
+		pixmapBrush:       c.pixmapBrush,
+		pixmapAvgColor:    c.pixmapAvgColor,
 	})
 	c.r.Save()
 	return depth
@@ -442,6 +459,9 @@ func (c *CairoCompat) Restore() int {
 	c.radialR0 = s.radialR0
 	c.radialR1 = s.radialR1
 	c.radialStops = s.radialStops
+	c.pixmapBrushActive = s.pixmapBrushActive
+	c.pixmapBrush = s.pixmapBrush
+	c.pixmapAvgColor = s.pixmapAvgColor
 	// Pop clips pushed *deeper* than the new stack depth. clipPushedAt is
 	// tagged with the Save depth in effect at Clip-time; a clip at depth K
 	// belongs to the Save scope at depth K, so it must pop when we Restore
@@ -715,6 +735,23 @@ func (c *CairoCompat) fillCurrentPath() {
 		if rc, ok := c.singleAxisAlignedRectPath(); ok {
 			c.r.FillRadialGradientRect(rc, c.radialCx, c.radialCy, c.radialR0, c.radialR1, c.radialStops)
 			return
+		}
+	}
+
+	// Pixmap brush fast path: an active *paint.PixmapBrush + an axis-
+	// aligned rect path routes through DrawImage with the cached brush
+	// texture. The image is stretched to fill the rect (Extend modes
+	// other than NONE are not honoured yet — same simplification as the
+	// gradient paths). Non-rect paths fall through to the triangulated
+	// solid fill below using the source pixmap's average colour
+	// (computed once at SetBrush time) so the shape stays visible.
+	if c.pixmapBrushActive && c.pixmapBrush != nil {
+		if rc, ok := c.singleAxisAlignedRectPath(); ok {
+			tex := c.uploadPixmap(c.pixmapBrush)
+			if tex != nil {
+				c.r.DrawImage(tex, rc, Color{1, 1, 1, 1})
+				return
+			}
 		}
 	}
 
@@ -1059,9 +1096,9 @@ func (c *CairoCompat) SetPen1(cr paint.Color, width float64) {
 }
 
 func (c *CairoCompat) SetBrush(br paint.Brush) {
-	// A new brush always replaces the gradient flag. The default cleared
-	// state below means non-gradient brushes (solid, pixmap, nil) read out
-	// as gradientActive=false, and the next Fill/Paint takes the solid path.
+	// A new brush always replaces every brush-mode flag. The default cleared
+	// state below means non-special brushes (solid, nil) read out as all
+	// flags false, and the next Fill/Paint takes the solid colour path.
 	c.gradientActive = false
 	c.gradientStart = paint.Color{}
 	c.gradientEnd = paint.Color{}
@@ -1071,6 +1108,9 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 	c.radialCx, c.radialCy = 0, 0
 	c.radialR0, c.radialR1 = 0, 0
 	c.radialStops = c.radialStops[:0]
+	c.pixmapBrushActive = false
+	c.pixmapBrush = nil
+	c.pixmapAvgColor = paint.Color{}
 
 	switch p := br.(type) {
 	case *paint.SolidBrush:
@@ -1156,16 +1196,32 @@ func (c *CairoCompat) SetBrush(br paint.Brush) {
 		} else {
 			c.brushColor = paint.Color{}
 		}
+	case *paint.PixmapBrush:
+		pm := p.Pixmap()
+		if pm != nil && pm.Width() > 0 && pm.Height() > 0 {
+			c.pixmapBrushActive = true
+			c.pixmapBrush = pm
+			// Average colour fallback for non-rect paths. We compute
+			// once on SetBrush; for typical icon-sized brushes this is
+			// near-instant. Larger brushes pay the cost once per
+			// SetBrush call rather than per draw, which is fine
+			// because PixmapBrush is rarely re-set inside a frame.
+			c.pixmapAvgColor = pixmapAverageColor(pm)
+			c.brushColor = c.pixmapAvgColor
+		} else {
+			c.brushColor = paint.Color{}
+		}
 	case nil:
 		c.brushColor = paint.Color{}
 	default:
-		// Pixmap brushes aren't shader-handled yet. Fall back to transparent
-		// rather than rendering with stale colour.
+		// Unknown brush type. Fall back to transparent rather than
+		// rendering with stale colour.
 		c.brushColor = paint.Color{}
 	}
 }
 
-// SetBrush1 sets a solid brush colour and clears any active gradient.
+// SetBrush1 sets a solid brush colour and clears any active gradient
+// or pixmap brush.
 func (c *CairoCompat) SetBrush1(cr paint.Color) {
 	c.brushColor = cr
 	c.gradientActive = false
@@ -1177,6 +1233,9 @@ func (c *CairoCompat) SetBrush1(cr paint.Color) {
 	c.radialCx, c.radialCy = 0, 0
 	c.radialR0, c.radialR1 = 0, 0
 	c.radialStops = c.radialStops[:0]
+	c.pixmapBrushActive = false
+	c.pixmapBrush = nil
+	c.pixmapAvgColor = paint.Color{}
 }
 
 // --- Font / Text ------------------------------------------------------
@@ -1542,5 +1601,61 @@ func paintColorToGlui(c paint.Color) Color {
 		G: float32(c.G) * f,
 		B: float32(c.B) * f,
 		A: float32(c.A) * f,
+	}
+}
+
+// pixmapAverageColor returns a representative single colour for pm,
+// used by the PixmapBrush fallback path when the active path can't be
+// detected as an axis-aligned rect. We sample on a sparse grid (16
+// rows × 16 columns at most) rather than averaging every pixel — the
+// fallback is best-effort and the user only sees this colour when
+// they're filling a non-rect shape with a textured brush, which is
+// rare.
+//
+// Returns transparent black on any error reading the pixmap data.
+func pixmapAverageColor(pm paint.Pixmap) paint.Color {
+	if pm == nil {
+		return paint.Color{}
+	}
+	w := pm.Width()
+	h := pm.Height()
+	if w <= 0 || h <= 0 {
+		return paint.Color{}
+	}
+	// Use the pixmap's own pixel iterator via Image() — slow on large
+	// pixmaps but precise. We only call this once per SetBrush so the
+	// per-frame cost is zero.
+	src, err := pm.Image()
+	if err != nil || src == nil {
+		return paint.Color{}
+	}
+	bounds := src.Bounds()
+	stepX := bounds.Dx() / 16
+	if stepX < 1 {
+		stepX = 1
+	}
+	stepY := bounds.Dy() / 16
+	if stepY < 1 {
+		stepY = 1
+	}
+	var sumR, sumG, sumB, sumA, n uint64
+	for y := bounds.Min.Y; y < bounds.Max.Y; y += stepY {
+		for x := bounds.Min.X; x < bounds.Max.X; x += stepX {
+			r, g, b, a := src.At(x, y).RGBA()
+			sumR += uint64(r >> 8)
+			sumG += uint64(g >> 8)
+			sumB += uint64(b >> 8)
+			sumA += uint64(a >> 8)
+			n++
+		}
+	}
+	if n == 0 {
+		return paint.Color{}
+	}
+	return paint.Color{
+		R: uint8(sumR / n),
+		G: uint8(sumG / n),
+		B: uint8(sumB / n),
+		A: uint8(sumA / n),
 	}
 }
