@@ -687,3 +687,59 @@ func TestCairoCompatSetPen1ResetsExtensions(t *testing.T) {
 		t.Errorf("SetPen1 left stale cap/join: cap=%v join=%v", c.penLineCap, c.penLineJoin)
 	}
 }
+
+// TestClipResetsCurrentPoint pins the Cairo-equivalent behaviour fixed
+// in this round: cairo_clip clears the current point in addition to
+// the path. Without this, DrawWidgetAll's prologue (Rectangle for
+// clip + Clip + Translate) leaves curX/curY at the clip rect's
+// origin, and any child widget calling DrawText draws at that offset
+// inside its already-translated coordinate system — text renders far
+// outside the visible region. The visible symptom: SILK_GLUI=1
+// windows render only the form background (light gray); every label
+// and button text vanishes off-screen.
+func TestClipResetsCurrentPoint(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	c.Rectangle(20, 20, 360, 24)
+	if c.curX != 20 || c.curY != 20 {
+		t.Fatalf("after Rectangle: curX=%v curY=%v, want 20/20", c.curX, c.curY)
+	}
+	c.Clip()
+	if c.curX != 0 || c.curY != 0 {
+		t.Errorf("after Clip: curX=%v curY=%v, want 0/0", c.curX, c.curY)
+	}
+}
+
+// TestFillResetsCurrentPoint mirrors TestClipResetsCurrentPoint for
+// the Fill / Stroke path (no _preserve). cairo_fill / cairo_stroke
+// also clear the current point — only the _preserve variants keep
+// the path and current point intact.
+func TestFillResetsCurrentPoint(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	c.Rectangle(50, 60, 100, 32)
+	c.Fill()
+	if c.curX != 0 || c.curY != 0 {
+		t.Errorf("after Fill: curX=%v curY=%v, want 0/0", c.curX, c.curY)
+	}
+}
+
+// TestStrokeResetsCurrentPoint mirrors the Fill case for Stroke.
+func TestStrokeResetsCurrentPoint(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	c.MoveTo(10, 10)
+	c.LineTo(20, 30)
+	c.Stroke()
+	if c.curX != 0 || c.curY != 0 {
+		t.Errorf("after Stroke: curX=%v curY=%v, want 0/0", c.curX, c.curY)
+	}
+}
+
+// TestFillPreserveKeepsCurrentPoint asserts the inverse: cairo_fill_preserve
+// keeps the path AND the current point, since the path is not consumed.
+func TestFillPreserveKeepsCurrentPoint(t *testing.T) {
+	c, _ := newCompatTestPainter(t)
+	c.Rectangle(50, 60, 100, 32)
+	c.FillPreserve()
+	if c.curX != 50 || c.curY != 60 {
+		t.Errorf("after FillPreserve: curX=%v curY=%v, want 50/60", c.curX, c.curY)
+	}
+}

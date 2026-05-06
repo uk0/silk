@@ -864,6 +864,17 @@ func (c *CairoCompat) strokeCurrentPath() {
 func (c *CairoCompat) resetPath() {
 	c.pathPts = c.pathPts[:0]
 	c.pathSubs = c.pathSubs[:0]
+	// Cairo's cairo_clip / cairo_fill / cairo_stroke (without _preserve)
+	// also clear the "current point" — subsequent cairo_get_current_point
+	// returns (0, 0). Mirror that here so widgets that rely on DrawText
+	// (which reads c.curX/c.curY) after a parent's clip-rect setup don't
+	// inherit the clip rect's origin as their text position. Without
+	// this reset, DrawWidgetAll's prologue (Rectangle + Clip + Translate)
+	// leaves curX/curY at the clip rect's origin, and a child widget
+	// calling DrawText draws its glyphs at that offset within its
+	// already-translated coordinate space — resulting in text rendered
+	// far outside the visible region.
+	c.curX, c.curY = 0, 0
 }
 
 // --- Whole-area paint -------------------------------------------------

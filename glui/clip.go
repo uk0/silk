@@ -19,7 +19,10 @@ type clipState struct {
 func (r *Renderer) PushClip(rc Rect) {
 	r.flush()
 
-	// Save the previous state so PopClip can restore it.
+	// Save the previous state so PopClip can restore it. We track the
+	// stack regardless of GL context — off-GL test renderers still
+	// observe nesting depth via len(r.clipStack) and the curClip update
+	// below, even though the gl.Scissor call is skipped.
 	r.clipStack = append(r.clipStack, r.curClip)
 
 	// Convert logical rect to integer framebuffer pixels.
@@ -56,6 +59,13 @@ func (r *Renderer) PushClip(rc Rect) {
 	glY := fbH - (py + ph)
 
 	r.curClip = clipState{x: px, y: glY, w: pw, h: ph, enabled: true}
+	if r.ctx == nil {
+		// Off-GL test renderer: stack state already updated. Skip the
+		// driver calls so unit tests that exercise Clip / Save / Restore
+		// don't need a real OpenGL context. Real-window paint paths
+		// always have ctx set.
+		return
+	}
 	gl.Enable(gl.SCISSOR_TEST)
 	gl.Scissor(px, glY, pw, ph)
 }
@@ -69,13 +79,18 @@ func (r *Renderer) PopClip() {
 	if n == 0 {
 		// Defensive: unbalanced PopClip just disables scissoring.
 		r.curClip = clipState{}
-		gl.Disable(gl.SCISSOR_TEST)
+		if r.ctx != nil {
+			gl.Disable(gl.SCISSOR_TEST)
+		}
 		return
 	}
 	prev := r.clipStack[n-1]
 	r.clipStack = r.clipStack[:n-1]
 	r.curClip = prev
 
+	if r.ctx == nil {
+		return
+	}
 	if prev.enabled {
 		gl.Enable(gl.SCISSOR_TEST)
 		gl.Scissor(prev.x, prev.y, prev.w, prev.h)
