@@ -31,59 +31,9 @@ var identityMatrix = geom.Mat3x2{Xx: 1, Yx: 0, Xy: 0, Yy: 1, X0: 0, Y0: 0}
 // rare debug paths.
 var _ = core.Warn
 
-func murmur3_32(_p uintptr, _len int) uint32 {
-	const c1 uint32 = 0xcc9e2d51
-	const c2 uint32 = 0x1b873593
-	const r1 uint32 = 15
-	const r2 uint32 = 13
-	const m uint32 = 5
-	const n uint32 = 0xe6546b64
-
-	p := unsafe.Pointer(_p)
-
-	var hash uint32 = 0x5a7cbfed
-
-	len0 := uint32(_len)
-	for _len >= 4 {
-		k := *((*uint32)(p))
-		k *= c1
-		k = (k << r1) | (k >> (32 - r1))
-		k *= c2
-
-		hash ^= k
-		hash = (hash << r2) | (hash >> (32 - r2))
-		hash = hash*m + n
-		p = unsafe.Pointer(uintptr(p) + 4)
-		_len -= 4
-	}
-
-	if _len != 0 {
-		var k uint32 = 0
-		switch _len {
-		case 3:
-			p2 := (*uint8)(unsafe.Pointer(uintptr(p) + 2))
-			k ^= uint32(*p2) << 16
-		case 2:
-			p1 := (*uint8)(unsafe.Pointer(uintptr(p) + 1))
-			k ^= uint32(*p1) << 8
-		case 1:
-			p0 := (*uint8)(p)
-			k ^= uint32(*p0)
-			k *= c1
-			k = (k << r1) | (k >> (32 - r1))
-			k *= c2
-			hash ^= k
-		}
-	}
-
-	hash ^= len0
-	hash ^= (hash >> 16)
-	hash *= 0x85ebca6b
-	hash ^= (hash >> 13)
-	hash *= 0xc2b2ae35
-	hash ^= (hash >> 16)
-	return hash
-}
+// (Deleted murmur3_32 — replaced by mixPtr/mixFloat in
+// hashScaledFontCacheKey. The old impl iterated +4 byte chunks past
+// the struct end which tripped checkptr under -race.)
 
 type scaledFontCacheKey struct {
 	m    *geom.Mat3x2
@@ -103,9 +53,55 @@ func equalScaledFontCacheKey(a, b interface{}) bool {
 			ma.m.X0 == mb.m.X0 && ma.m.Y0 == mb.m.Y0)
 }
 
+// hashScaledFontCacheKey hashes the cache key by explicit field
+// access rather than raw byte iteration over the struct. The earlier
+// implementation passed `unsafe.Pointer(m)` + `unsafe.Sizeof(*m)`
+// into a generic murmur3 which iterated +4 byte chunks past the end
+// of the struct under -race / checkptr — flagged as a checkptr
+// violation. The fix avoids unsafe pointer arithmetic entirely.
 func hashScaledFontCacheKey(i interface{}) uint32 {
 	m := i.(*scaledFontCacheKey)
-	return murmur3_32(uintptr(unsafe.Pointer(m)), int(unsafe.Sizeof(*m)))
+	// Hash the matrix pointer + face pointer addresses. Pointers are
+	// stable while the face / matrix lives in the cache; identity-
+	// based hashing is what equalScaledFontCacheKey already mirrors
+	// on the matrix-pointer fast path.
+	h := uint32(0x5a7cbfed)
+	h = mixPtr(h, uintptr(unsafe.Pointer(m.m)))
+	h = mixPtr(h, uintptr(unsafe.Pointer(m.face)))
+	if m.m != nil {
+		// Mat3x2 pointers might collide across instances when the
+		// caller re-uses one — stir in the matrix values too.
+		h = mixFloat(h, m.m.Xx)
+		h = mixFloat(h, m.m.Yx)
+		h = mixFloat(h, m.m.Xy)
+		h = mixFloat(h, m.m.Yy)
+		h = mixFloat(h, m.m.X0)
+		h = mixFloat(h, m.m.Y0)
+	}
+	return h
+}
+
+// mixPtr / mixFloat are murmur-3-flavoured 32-bit mixers that
+// stir a single 64-bit value into the running hash without unsafe
+// pointer arithmetic. Sufficient distribution for the small
+// scaled-font cache; don't try to use these for general hashing.
+func mixPtr(h uint32, v uintptr) uint32 {
+	a := uint32(v)
+	b := uint32(v >> 32)
+	h ^= a
+	h = (h*0x85ebca6b ^ (h >> 16))
+	h ^= b
+	h = (h*0xc2b2ae35 ^ (h >> 13))
+	return h
+}
+
+func mixFloat(h uint32, f float64) uint32 {
+	bits := *(*uint64)(unsafe.Pointer(&f))
+	h ^= uint32(bits)
+	h = (h*0x85ebca6b ^ (h >> 16))
+	h ^= uint32(bits >> 32)
+	h = (h*0xc2b2ae35 ^ (h >> 13))
+	return h
 }
 
 type scaledFont struct {
