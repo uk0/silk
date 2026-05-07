@@ -4,20 +4,51 @@ package glui
 // the given font and color. Each glyph is positioned using the bearing
 // values returned by font.Face.Glyph so descenders ('g', 'p', 'j') and
 // short letters ('a', '.') sit correctly relative to the baseline.
+//
+// Two positioning strategies, picked by Font.SubpixelEnabled():
+//
+//   - Default (subpixel off): the quad lands at the exact float pen position
+//     pen + offX. Texture LINEAR sampling smooths fractional offsets — text
+//     looks slightly soft when the pen sits between pixels but stays visually
+//     coherent and matches the historical baseline.
+//   - Subpixel on: pen X is split into floor + fraction. The fraction is
+//     quantised to numSubpixelBuckets buckets and the matching pre-rasterised
+//     mask is fetched. The quad snaps to integer X so texture sampling
+//     stays pixel-aligned — sharp text at any pen position. The rasteriser
+//     does the subpixel work, not the texture filter.
 func (r *Renderer) DrawText(f *Font, text string, x, y float32, col Color) {
 	if f == nil || text == "" {
 		return
 	}
 
+	subpixel := f.SubpixelEnabled()
+
 	// Pre-rasterise every glyph so the atlas texture is consistent for the
 	// whole batch. If glyphs were rasterised inside the loop and the atlas
 	// resized mid-flight, the texture upload would invalidate vertices we
-	// already pushed.
-	for _, ch := range text {
-		f.Glyph(ch)
+	// already pushed. With subpixel on we rasterise the bucket-specific
+	// variant the glyph will actually draw against — pre-pass and draw
+	// pass must request the same key.
+	{
+		pen := x
+		for _, ch := range text {
+			frac := pen - float32(int32(pen))
+			if frac < 0 {
+				frac += 1
+			}
+			g := f.GlyphAt(ch, frac)
+			pen += g.advance
+		}
 	}
 
-	tex := f.Texture()
+	// Off-GL test mode: r.ctx == nil → skip the texture upload (which would
+	// segfault on the gl.GenTextures call) and pass tex=0 to setBatch. The
+	// downstream flush also short-circuits when ctx is nil, so the test still
+	// observes vertex emission via r.verts without ever talking to GL.
+	var tex uint32
+	if r.ctx != nil {
+		tex = f.Texture()
+	}
 	r.setBatch(kindGlyph, tex)
 
 	atlasW := float32(f.atlasW)
@@ -25,7 +56,11 @@ func (r *Renderer) DrawText(f *Font, text string, x, y float32, col Color) {
 	pen := x
 
 	for _, ch := range text {
-		g := f.Glyph(ch)
+		frac := pen - float32(int32(pen))
+		if frac < 0 {
+			frac += 1
+		}
+		g := f.GlyphAt(ch, frac)
 		if g.region.W == 0 || g.region.H == 0 {
 			pen += g.advance
 			continue
@@ -40,7 +75,17 @@ func (r *Renderer) DrawText(f *Font, text string, x, y float32, col Color) {
 		// (baseline pen). offY is negative for ascending glyphs and small
 		// for short ones, so adding it lands the quad's top-left edge in
 		// the right spot.
-		gx := pen + g.offX
+		var gx float32
+		if subpixel {
+			// Snap to integer; the bucket-specific mask carries the
+			// subpixel shift internally so texture sampling stays aligned.
+			gx = float32(int32(pen)) + g.offX
+			if pen < 0 && pen != float32(int32(pen)) {
+				gx -= 1 // floor for negative non-integer pen
+			}
+		} else {
+			gx = pen + g.offX
+		}
 		gy := y + g.offY
 		gw := float32(g.region.W)
 		gh := float32(g.region.H)

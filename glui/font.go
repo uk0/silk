@@ -21,6 +21,16 @@ import (
 // 8-pixel border (same as sdfSpread) keeps soft falloff fully on-tile.
 const sdfPadding = 4
 
+// numSubpixelBuckets is the count of fractional X positions cached per
+// glyph when subpixel rendering is enabled. Four buckets give a quarter-
+// pixel quantization (0.0, 0.25, 0.5, 0.75 px) — small enough that the
+// residual error after bucketing is below human perceptual threshold for
+// 14pt text on retina displays. The cost is up to 4× more atlas slots
+// per used glyph; ASCII still fits comfortably in the default 2048×2048
+// atlas, and CJK working sets stay under a few thousand glyphs after
+// bucket multiplication.
+const numSubpixelBuckets = 4
+
 // sdfSpread sets the maximum distance (in pixels) the SDF generator
 // considers before saturating to 0/255. Matches sdfPadding so the spread
 // just reaches the edge of the padded slot.
@@ -64,7 +74,7 @@ type Font struct {
 	// would read against the wrong bearings and float above the baseline.
 	faces  []font.Face
 	atlas  *atlas.Atlas
-	glyphs map[rune]glyphInfo
+	glyphs map[glyphKey]glyphInfo
 
 	// Atlas pixels (single channel) live on the CPU until upload. The
 	// dirty flag means we have to re-upload at next Texture() call.
@@ -87,6 +97,25 @@ type Font struct {
 	// Toggling this on a constructed Font is not supported — the atlas
 	// dimensions and per-glyph padding are baked in at construction.
 	useSDF bool
+
+	// subpixel turns on the multi-bucket subpixel-positioning cache. When
+	// enabled, each glyph is rasterised at numSubpixelBuckets fractional X
+	// offsets (0.0, 0.25, 0.5, 0.75 px). DrawText picks the matching bucket
+	// for the current pen fraction and snaps the quad to integer X — the
+	// subpixel shift is baked into the mask, not produced by texture
+	// filtering, so glyphs stay sharp at any pen position. Opt-in via
+	// SILK_GLUI_SUBPIXEL=1; default off so existing tests and pixel-perfect
+	// baselines are unaffected.
+	subpixel bool
+}
+
+// glyphKey identifies a cached glyph variant. r is the rune; sub is the
+// subpixel-offset bucket [0, numSubpixelBuckets) when subpixel mode is on.
+// In default (non-subpixel) mode every key has sub == 0 and the cache
+// behaves identically to the previous map[rune]glyphInfo.
+type glyphKey struct {
+	r   rune
+	sub uint8
 }
 
 // glyphInfo is the per-rune cache record. (X, Y) inside the atlas are the
@@ -98,6 +127,25 @@ type glyphInfo struct {
 	offX    float32
 	offY    float32
 	advance float32
+}
+
+// subpixelBucket quantises a fractional pen-X offset into [0, numSubpixelBuckets).
+// Negative inputs wrap into [0, 1) before bucketing so callers don't have
+// to normalise themselves.
+func subpixelBucket(fracX float32) uint8 {
+	// Reduce to [0, 1).
+	f := fracX - float32(int32(fracX))
+	if f < 0 {
+		f += 1
+	}
+	b := int(f * float32(numSubpixelBuckets))
+	if b >= numSubpixelBuckets {
+		b = numSubpixelBuckets - 1
+	}
+	if b < 0 {
+		b = 0
+	}
+	return uint8(b)
 }
 
 // NewFont creates an opentype-rasterised font at the given point size,
@@ -119,23 +167,26 @@ type glyphInfo struct {
 // zero-glyph Font so the caller's draw loop won't panic on nil deref.
 func NewFont(size float64) *Font {
 	useSDF := os.Getenv("SILK_GLUI_SDF") == "1"
+	useSubpixel := os.Getenv("SILK_GLUI_SUBPIXEL") == "1"
 	face, err := newGoRegularFace(size)
 	if err != nil {
 		// Defensive: allocate a Font with no face. Glyph() will return
 		// zero-advance records so layout still terminates.
 		return &Font{
-			faces:  nil, // Glyph() walks faces; len==0 returns zero record
-			atlas:  atlas.New(defaultAtlasSize, defaultAtlasSize),
-			glyphs: make(map[rune]glyphInfo),
-			pixels: make([]byte, defaultAtlasSize*defaultAtlasSize),
-			atlasW: defaultAtlasSize,
-			atlasH: defaultAtlasSize,
-			dirty:  true,
-			useSDF: useSDF,
+			faces:    nil, // Glyph() walks faces; len==0 returns zero record
+			atlas:    atlas.New(defaultAtlasSize, defaultAtlasSize),
+			glyphs:   make(map[glyphKey]glyphInfo),
+			pixels:   make([]byte, defaultAtlasSize*defaultAtlasSize),
+			atlasW:   defaultAtlasSize,
+			atlasH:   defaultAtlasSize,
+			dirty:    true,
+			useSDF:   useSDF,
+			subpixel: useSubpixel,
 		}
 	}
 	f := newFontFromFace(face, defaultAtlasSize, defaultAtlasSize)
 	f.useSDF = useSDF
+	f.subpixel = useSubpixel
 	// Append CJK fallbacks. discoverSystemCJKFaces is best-effort: missing
 	// system fonts return an empty slice and the font still renders Latin
 	// text correctly via the primary face. newFontFromFace already seeded
@@ -166,7 +217,7 @@ func newFontFromFace(face font.Face, w, h int) *Font {
 		face:    face,
 		faces:   []font.Face{face},
 		atlas:   atlas.New(w, h),
-		glyphs:  make(map[rune]glyphInfo),
+		glyphs:  make(map[glyphKey]glyphInfo),
 		pixels:  make([]byte, w*h),
 		atlasW:  w,
 		atlasH:  h,
@@ -198,29 +249,53 @@ func (f *Font) LineHeight() float32 {
 	return f.ascent + f.descent
 }
 
-// Glyph returns the cached glyph info for r, rasterising it on first
-// request. If r is not present in any face of the lookup chain or the
-// atlas is full, an empty record (with whatever advance the primary face
-// reports) is returned so layout still terminates.
-//
-// The lookup walks f.faces in order. The primary (Latin) face is tried
-// first; CJK fallback faces are only consulted when primary returns
-// ok=false. opentype.Face.Glyph internally checks GlyphIndex and returns
-// ok=false on glyph 0, so .notdef tofu boxes never leak through.
+// Glyph returns the cached glyph info for r at the integer-pen variant
+// (subpixel bucket 0). All callers that don't care about subpixel
+// positioning use this entry point; it preserves the legacy behaviour
+// of one rasterisation per rune.
 func (f *Font) Glyph(r rune) glyphInfo {
-	if g, ok := f.glyphs[r]; ok {
+	return f.glyphForKey(glyphKey{r: r, sub: 0})
+}
+
+// GlyphAt returns the cached glyph info appropriate for drawing r at a
+// pen position whose fractional X component is fracX. When subpixel
+// rendering is disabled it forwards to Glyph(r); otherwise it picks the
+// right subpixel-bucket variant, rasterising it on first request.
+func (f *Font) GlyphAt(r rune, fracX float32) glyphInfo {
+	if !f.subpixel {
+		return f.glyphForKey(glyphKey{r: r, sub: 0})
+	}
+	return f.glyphForKey(glyphKey{r: r, sub: subpixelBucket(fracX)})
+}
+
+// glyphForKey is the unified rasterise+cache entry point. The lookup
+// walks f.faces in order: the primary (Latin) face is tried first;
+// CJK fallback faces are only consulted when primary returns ok=false.
+// opentype.Face.Glyph reports ok=false for runes that resolve to glyph
+// index 0 (.notdef), so the chain skips faces that would otherwise emit
+// a tofu box.
+//
+// The subpixel offset is encoded in the rasterisation dot — a 26.6 fixed
+// point. With numSubpixelBuckets=4 the dots are 0, 16, 32, 48 (= 0.0,
+// 0.25, 0.5, 0.75 px). The opentype rasteriser uses the fractional dot
+// for hinting, producing a pixel mask with that subpixel shift baked in.
+// Each cache entry therefore carries a sharp glyph at one specific
+// quarter-pixel offset; DrawText picks the right one for the live pen.
+func (f *Font) glyphForKey(key glyphKey) glyphInfo {
+	if g, ok := f.glyphs[key]; ok {
 		return g
 	}
 	if len(f.faces) == 0 {
 		g := glyphInfo{}
-		f.glyphs[r] = g
+		f.glyphs[key] = g
 		return g
 	}
 
-	// Walk the face chain. The first face whose .Glyph returns ok=true
-	// supplies bearings, advance, and mask. opentype.Face.Glyph reports
-	// ok=false for runes that resolve to glyph index 0 (.notdef), so the
-	// chain skips faces that would otherwise emit a tofu box.
+	// Encode the subpixel bucket as a fractional 26.6 dot. Bucket 0 means
+	// dot=(0,0) which is identical to the legacy rasterisation, so a
+	// non-subpixel font (which always passes sub=0) hits the same path.
+	dotX := fixed.Int26_6(int(key.sub) * 64 / numSubpixelBuckets)
+
 	var (
 		dr      image.Rectangle
 		mask    image.Image
@@ -229,7 +304,7 @@ func (f *Font) Glyph(r rune) glyphInfo {
 		matched bool
 	)
 	for _, fc := range f.faces {
-		gdr, gmask, gmaskp, gadv, ok := fc.Glyph(fixed.Point26_6{}, r)
+		gdr, gmask, gmaskp, gadv, ok := fc.Glyph(fixed.Point26_6{X: dotX}, key.r)
 		if !ok {
 			continue
 		}
@@ -243,8 +318,8 @@ func (f *Font) Glyph(r rune) glyphInfo {
 	if !matched {
 		// All faces miss — cache a zero-record so we don't re-walk every
 		// frame. Pen does not advance for the missing rune.
-		f.glyphs[r] = glyphInfo{}
-		return f.glyphs[r]
+		f.glyphs[key] = glyphInfo{}
+		return f.glyphs[key]
 	}
 
 	w := dr.Dx()
@@ -252,7 +327,7 @@ func (f *Font) Glyph(r rune) glyphInfo {
 	if w == 0 || h == 0 {
 		// Whitespace glyph: no mask, just advance.
 		g := glyphInfo{advance: fixedToF32(advance)}
-		f.glyphs[r] = g
+		f.glyphs[key] = g
 		return g
 	}
 
@@ -273,7 +348,7 @@ func (f *Font) Glyph(r rune) glyphInfo {
 		// still advances the pen. A more sophisticated implementation
 		// would grow the atlas or evict by LRU.
 		g := glyphInfo{advance: fixedToF32(advance)}
-		f.glyphs[r] = g
+		f.glyphs[key] = g
 		return g
 	}
 
@@ -310,10 +385,20 @@ func (f *Font) Glyph(r rune) glyphInfo {
 		offY:    float32(dr.Min.Y - pad),
 		advance: fixedToF32(advance),
 	}
-	f.glyphs[r] = g
+	f.glyphs[key] = g
 	f.dirty = true
 	return g
 }
+
+// SubpixelEnabled reports whether the font caches multiple subpixel
+// variants per glyph. Tests and tools that introspect rendering quality
+// can branch on this.
+func (f *Font) SubpixelEnabled() bool { return f.subpixel }
+
+// SetSubpixel toggles subpixel rendering after construction. Useful for
+// runtime A/B comparisons; widget code typically passes the env var
+// SILK_GLUI_SUBPIXEL at startup instead.
+func (f *Font) SetSubpixel(on bool) { f.subpixel = on }
 
 // MeasureText returns the total advance width of text in this font.
 func (f *Font) MeasureText(text string) float32 {

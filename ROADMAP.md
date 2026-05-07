@@ -202,16 +202,21 @@ glui 之前 hardcode SRC_OVER，CairoCompat.SetOperator 是 no-op。Cairo 14 种
 
 约 280 LOC（实现 + 测试）。
 
-#### 3.2.4 glui 字体子像素定位
+#### 3.2.4 glui 字体子像素定位 ✅（已完成 — 灰度子像素，LCD shader 推迟）
 
-当前 glyph quad 钉在整数像素，Cairo 模式更清晰。
+之前 glyph quad 默认走 fractional 位置 + bilinear filtering，结果是"软糊"text。Cairo 在每次绘制时按实际亚像素位置重栅格化，因此清晰。
 
-**实现**：
-- DrawText 接受非整数 baseline x
-- 在 fragment shader 内做 sub-pixel 偏移（LCD 子像素 RGB 三采样）
-- 启用条件：`SILK_GLUI_SUBPIXEL=1` 或 macOS retina HiDPI 自动开
+**已完成**：
+- ✅ `glui/font.go`: glyph 缓存键从 `map[rune]glyphInfo` 改为 `map[glyphKey]glyphInfo`，key 含 `sub uint8` (0..3)
+- ✅ `numSubpixelBuckets=4`：在 0.0 / 0.25 / 0.5 / 0.75 px 各栅格化一份，传 `fixed.Point26_6{X: dotX}` 让 opentype 把亚像素偏移烘进 mask
+- ✅ `Font.subpixel` 字段 + `SetSubpixel(bool)` + `SubpixelEnabled()` 方法；构造时通过 `SILK_GLUI_SUBPIXEL=1` env var 也能开
+- ✅ `Font.GlyphAt(r, fracX)` 自动量化到桶；`Glyph(r)` 仍走桶 0 保留旧调用语义
+- ✅ `DrawText` 两条路径：subpixel off 保留旧 fractional 行为；subpixel on 时整数 snap quad X，亚像素清晰度全靠 mask 自身
+- ✅ 8 个测试覆盖：桶量化（含负数/越界）、默认关、开后两个桶 mask 字节级不同、`MeasureText` 不受影响（advance 与 sub 无关）、fractional 行为保留（off）、整数 snap（on）、`Glyph(r) == GlyphAt(r, 0)`、subpixel-off `GlyphAt(r, *)` 不爆缓存
 
-工作量：~300 LOC + 视觉对比测试。
+LCD 子像素三采样（RGB 通道分别偏移 1/3 px）需要 RGBA atlas + RGB-aware fragment shader，已写入 §3.3 待办，灰度桶缓存对 14pt 以上字号的清晰度提升已经显著。
+
+约 280 LOC（实现 + 测试）。
 
 #### 3.2.5 性能基准测试套件
 
