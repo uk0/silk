@@ -59,8 +59,18 @@ import (
 
 	"silk/geom"
 
+	"golang.org/x/image/font"
+	"golang.org/x/image/math/fixed"
 	"golang.org/x/image/vector"
 )
+
+// defaultFace returns a fallback face at 12px when no scaled font has
+// been set on the context. Used for raw ShowText calls before any
+// SetScaledFont. Most painter calls bind the scaled font first, so this
+// path mostly serves diagnostics.
+func defaultFace() font.Face {
+	return loadFace("", 12, false, false)
+}
 
 // ===== Constants =====
 
@@ -238,12 +248,21 @@ type ctxState struct {
 
 // Surface mirrors cairo_surface_t. silk uses image surfaces almost
 // exclusively (window back-buffer, off-screen pixmaps); we back it
-// with image.RGBA.
+// with image.RGBA for the rasteriser to write into.
+//
+// Byte-order bridge: silk's window upload path reads DataPtr() as
+// Cairo ARGB32 — which on little-endian machines lands as BGRA in
+// memory. Go's image.RGBA stores RGBA. To keep Window.paint()
+// unchanged we maintain a parallel `dataBGRA` slice that mirrors
+// img.Pix with R↔B swapped; Flush() rebuilds it. DataPtr() returns
+// dataBGRA, which Window.paint() then ships to gl.TexImage2D as
+// gl.BGRA without converting per-channel.
 type Surface struct {
-	img    *image.RGBA
-	format Format
-	width  int
-	height int
+	img      *image.RGBA
+	dataBGRA []byte
+	format   Format
+	width    int
+	height   int
 }
 
 // NewImageSurface creates an image-backed surface of the given format.
@@ -303,17 +322,43 @@ func (this *Surface) Stride() int          { return this.img.Stride }
 func (this *Surface) Type() SurfaceType    { return SURFACE_TYPE_IMAGE }
 func (this *Surface) Status() Status       { return STATUS_SUCCESS }
 func (this *Surface) Destroy()             {}
-func (this *Surface) Flush()               {}
 func (this *Surface) MarkDirty()           {}
-// Image returns the surface as a Go image.Image. Match Pixmap interface signature
-// expected by silk/paint: (image.Image, error).
+
+// Flush rebuilds dataBGRA from img.Pix (R↔B swapped). Called every
+// frame by Window.paint() right before DataPtr() / TexImage2D, so
+// the GL upload sees Cairo-compatible BGRA byte order. Rebuilding
+// is O(W*H) but a 1400×900 frame is ~5MB — well below the GPU's
+// per-frame texture upload bandwidth.
+func (this *Surface) Flush() {
+	src := this.img.Pix
+	if cap(this.dataBGRA) < len(src) {
+		this.dataBGRA = make([]byte, len(src))
+	}
+	this.dataBGRA = this.dataBGRA[:len(src)]
+	for i := 0; i+3 < len(src); i += 4 {
+		this.dataBGRA[i] = src[i+2]   // B = R from RGBA
+		this.dataBGRA[i+1] = src[i+1] // G stays
+		this.dataBGRA[i+2] = src[i]   // R = B from RGBA
+		this.dataBGRA[i+3] = src[i+3] // A stays
+	}
+}
+
+// Image returns the surface as a Go image.Image. Match Pixmap
+// interface signature expected by silk/paint: (image.Image, error).
 func (this *Surface) Image() (image.Image, error) { return this.img, nil }
 
 // RGBA returns the underlying *image.RGBA directly. Used by purego
 // rasteriser internals.
 func (this *Surface) RGBA() *image.RGBA { return this.img }
+
+// DataPtr returns the Cairo-compatible BGRA byte buffer for GL upload.
+// Lazy-rebuilt by Flush — call Flush before DataPtr if Drawing has
+// happened since the last frame.
 func (this *Surface) DataPtr() unsafe.Pointer {
-	return unsafe.Pointer(&this.img.Pix[0])
+	if this.dataBGRA == nil || len(this.dataBGRA) == 0 {
+		this.Flush()
+	}
+	return unsafe.Pointer(&this.dataBGRA[0])
 }
 
 // NewContext allocates a drawing context for this surface. The Context
@@ -498,10 +543,13 @@ func (this *FontFace) ToySlant() FontSlant { return this.slant }
 func (this *FontFace) ToyWeight() FontWeight { return this.weight }
 
 type ScaledFont struct {
-	face    *FontFace
-	matrix  geom.Mat3x2
-	ctm     geom.Mat3x2
-	options *FontOptions
+	face     *FontFace
+	matrix   geom.Mat3x2
+	ctm      geom.Mat3x2
+	options  *FontOptions
+	pixSize  int
+	resolved font.Face // lazy: resolved opentype face matching family/weight/size
+	cjk      font.Face // lazy: CJK fallback at the same size
 }
 
 func NewScaledFont(face *FontFace, matrix, ctm *geom.Mat3x2, options *FontOptions) *ScaledFont {
@@ -516,59 +564,199 @@ func NewScaledFont(face *FontFace, matrix, ctm *geom.Mat3x2, options *FontOption
 	} else {
 		sf.ctm.InitIdentity()
 	}
+	sf.pixSize = pixelSizeFromMatrix(&sf.matrix)
 	return sf
+}
+
+// pixelSizeFromMatrix derives a pixel font size from cairo's font
+// matrix. silk constructs a pure scale matrix via m.InitScale(size,
+// size), so reading m.Xx (the scale-x term) gives the size directly.
+// We round to int because opentype.NewFace caches by int.
+func pixelSizeFromMatrix(m *geom.Mat3x2) int {
+	sx := math.Hypot(m.Xx, m.Yx)
+	if sx < 1 {
+		sx = 12
+	}
+	return int(math.Round(sx))
+}
+
+// face returns the resolved opentype face, lazily loading on first
+// access. Cached on the ScaledFont so repeat queries are O(1).
+func (this *ScaledFont) latinFace() font.Face {
+	if this.resolved != nil {
+		return this.resolved
+	}
+	family := ""
+	bold := false
+	italic := false
+	if this.face != nil {
+		family = this.face.family
+		bold = this.face.weight == FONT_WEIGHT_BOLD
+		italic = this.face.slant != FONT_SLANT_NORMAL
+	}
+	size := this.pixSize
+	if size <= 0 {
+		size = 12
+	}
+	this.resolved = loadFace(family, size, bold, italic)
+	return this.resolved
+}
+
+// cjkFace returns a CJK-capable fallback at the same size, lazily
+// initialised on first request.
+func (this *ScaledFont) cjkFace() font.Face {
+	if this.cjk != nil {
+		return this.cjk
+	}
+	size := this.pixSize
+	if size <= 0 {
+		size = 12
+	}
+	this.cjk = loadCJKFallback(size)
+	return this.cjk
+}
+
+// glyphFace picks the right face to render rune r — Latin face if it
+// has a glyph, otherwise the CJK fallback. Pattern matches cairo's
+// fallback chain.
+func (this *ScaledFont) glyphFace(r rune) font.Face {
+	primary := this.latinFace()
+	if _, ok := primary.GlyphAdvance(r); ok {
+		return primary
+	}
+	return this.cjkFace()
 }
 
 func (this *ScaledFont) Destroy()       {}
 func (this *ScaledFont) Status() Status { return STATUS_SUCCESS }
+
+// FontExtents reports ascent / descent / line-height in pixels. Drives
+// silk's text alignment math; needs to be a real number (not the
+// placeholder constants the bitmap stub returned) so labels position
+// vertically the same as on the libcairo build.
 func (this *ScaledFont) FontExtents() *FontExtents {
+	face := this.latinFace()
+	m := face.Metrics()
 	return &FontExtents{
-		Ascent:      10,
-		Descent:     3,
-		Height:      14,
-		MaxXAdvance: 8,
+		Ascent:      fixedToFloat(m.Ascent),
+		Descent:     fixedToFloat(m.Descent),
+		Height:      fixedToFloat(m.Height),
+		MaxXAdvance: float64(this.pixSize), // monospace upper bound
 		MaxYAdvance: 0,
 	}
 }
+
+// GlyphExtents totals the advance width of glyphs[] using the real
+// face. Heights come from font metrics. Cairo uses this for hit tests
+// and selection rectangles.
 func (this *ScaledFont) GlyphExtents(glyphs []Glyph) *TextExtents {
+	face := this.latinFace()
+	cjk := (font.Face)(nil)
 	xa := 0.0
-	for range glyphs {
-		xa += 7
+	for _, g := range glyphs {
+		r := rune(g.index)
+		adv, ok := face.GlyphAdvance(r)
+		if !ok {
+			if cjk == nil {
+				cjk = this.cjkFace()
+			}
+			adv, _ = cjk.GlyphAdvance(r)
+		}
+		xa += fixedToFloat(adv)
 	}
-	return &TextExtents{Width: xa, Height: 12, XAdvance: xa}
+	m := face.Metrics()
+	return &TextExtents{
+		Width:    xa,
+		Height:   fixedToFloat(m.Ascent + m.Descent),
+		XAdvance: xa,
+		YBearing: -fixedToFloat(m.Ascent),
+	}
 }
 
-// GlyphExtents_hack is silk's CGO-bypass shortcut: takes an unsafe
-// pointer + count instead of a Go slice. In purego mode we just
-// return placeholder metrics — the slice version above is the real
-// one anyway.
+// GlyphExtents_hack reads `n` Glyphs from raw memory and delegates to
+// GlyphExtents. silk's CGO bypass passes an unsafe pointer; same
+// 24-byte stride as the libcairo build.
 func (this *ScaledFont) GlyphExtents_hack(p unsafe.Pointer, n int) *TextExtents {
-	return &TextExtents{Width: float64(n) * 7, Height: 12, XAdvance: float64(n) * 7}
+	if p == nil || n == 0 {
+		m := this.latinFace().Metrics()
+		return &TextExtents{Height: fixedToFloat(m.Ascent + m.Descent)}
+	}
+	glyphs := unsafe.Slice((*Glyph)(p), n)
+	return this.GlyphExtents(glyphs)
 }
 
-// TextToGlyphs_hack is silk's text-shaping shortcut. The CGO version
-// dispatches to libcairo's text shaper; in purego mode we synthesise
-// glyphs (one per rune at advance=7).
+// TextToGlyphs_hack lays out a UTF-8 string at (x, y) using the
+// resolved opentype face. Each rune becomes a Glyph at the
+// advance-incremented X position. Glyphs whose codepoint isn't in the
+// primary face fall through to the CJK face — same behaviour as
+// libcairo's fallback chain.
+//
+// Returned glyphs are emitted via the `out` callback; silk's wrapper
+// in paint/font.go reads the buffer back into Go memory.
 func (this *ScaledFont) TextToGlyphs_hack(x, y float64, text string, out func(buf unsafe.Pointer, num int)) error {
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return nil
 	}
-	glyphs := make([]Glyph, len(runes))
+	primary := this.latinFace()
+	cjk := (font.Face)(nil)
+
+	glyphs := make([]Glyph, 0, len(runes))
 	cx := x
-	for i, r := range runes {
-		glyphs[i] = Glyph{index: uint32(r), X: cx, Y: y}
-		cx += 7
+	for _, r := range runes {
+		adv, ok := primary.GlyphAdvance(r)
+		if !ok {
+			if cjk == nil {
+				cjk = this.cjkFace()
+			}
+			adv, ok = cjk.GlyphAdvance(r)
+			if !ok {
+				adv = fixed.Int26_6(this.pixSize << 6) // 1em fallback
+			}
+		}
+		glyphs = append(glyphs, Glyph{index: uint32(r), X: cx, Y: y})
+		cx += fixedToFloat(adv)
 	}
-	if out != nil {
+	if len(glyphs) > 0 && out != nil {
 		out(unsafe.Pointer(&glyphs[0]), len(glyphs))
 	}
 	return nil
 }
 
+// TextExtents measures width/height of a text string at this font's
+// scale. Used by silk's alignment + ellipsis logic.
 func (this *ScaledFont) TextExtents(text string) *TextExtents {
-	w := float64(len(text)) * 7
-	return &TextExtents{Width: w, Height: 12, XAdvance: w}
+	if text == "" {
+		m := this.latinFace().Metrics()
+		return &TextExtents{Height: fixedToFloat(m.Ascent + m.Descent)}
+	}
+	primary := this.latinFace()
+	cjk := (font.Face)(nil)
+	xa := 0.0
+	for _, r := range text {
+		adv, ok := primary.GlyphAdvance(r)
+		if !ok {
+			if cjk == nil {
+				cjk = this.cjkFace()
+			}
+			adv, _ = cjk.GlyphAdvance(r)
+		}
+		xa += fixedToFloat(adv)
+	}
+	m := primary.Metrics()
+	return &TextExtents{
+		Width:    xa,
+		Height:   fixedToFloat(m.Ascent + m.Descent),
+		XAdvance: xa,
+		YBearing: -fixedToFloat(m.Ascent),
+	}
+}
+
+// fixedToFloat converts a 26.6 fixed-point value to floating point
+// pixels. Used everywhere font metrics need to leave the font.Face
+// API.
+func fixedToFloat(v fixed.Int26_6) float64 {
+	return float64(v) / 64.0
 }
 func (this *ScaledFont) GlyphPath(glyphs []Glyph) {}
 func (this *ScaledFont) FontFace() *FontFace      { return this.face }
@@ -741,14 +929,66 @@ func (this *Context) SetOperator(o Operator) { this.state.operator = o }
 func (this *Context) Operator() Operator     { return this.state.operator }
 
 // --- Transform stack ---
+//
+// silk's geom.Mat3x2 multiplication uses post-multiply semantics
+// (`new = old + delta` regardless of scale), which is correct for its
+// own internal coord-system math but does NOT match libcairo. In real
+// cairo, `cairo_translate(tx, ty)` translates *user space* — so the
+// device-space translation is scaled by the current CTM scale. We
+// reimplement the transform ops here using cairo semantics so paths
+// and glyphs share one consistent device-space mapping.
 
-func (this *Context) Translate(tx, ty float64) { this.state.matrix.Translate(tx, ty) }
-func (this *Context) Scale(sx, sy float64)     { this.state.matrix.Scale(sx, sy) }
-func (this *Context) Rotate(r float64)         { this.state.matrix.Rotate(r) }
+// Translate concatenates a user-space translation onto the CTM. The
+// device shift equals (Xx*tx + Xy*ty, Yx*tx + Yy*ty) — under a 2x
+// HiDPI scale, Translate(10, 0) shifts device by 20 pixels. silk's
+// geom.Mat3x2.Translate would shift by 10, breaking the coord match
+// between Rectangle (which scales) and Translate (which doesn't).
+func (this *Context) Translate(tx, ty float64) {
+	m := &this.state.matrix
+	m.X0 += m.Xx*tx + m.Xy*ty
+	m.Y0 += m.Yx*tx + m.Yy*ty
+}
+
+// Scale concatenates a user-space scale. Scaling user space by (sx,
+// sy) means a unit user vector now maps to (sx, sy) user → applied
+// to existing CTM that already maps user→device. So Xx, Xy multiply
+// by sx; Yx, Yy multiply by sy.
+func (this *Context) Scale(sx, sy float64) {
+	m := &this.state.matrix
+	m.Xx *= sx
+	m.Yx *= sx
+	m.Xy *= sy
+	m.Yy *= sy
+}
+
+// Rotate concatenates a rotation onto the CTM. cairo_rotate semantics:
+// rotates user space, so CTM_new = CTM * Rotate(theta).
+func (this *Context) Rotate(r float64) {
+	c := math.Cos(r)
+	s := math.Sin(r)
+	m := &this.state.matrix
+	xx, xy := m.Xx, m.Xy
+	yx, yy := m.Yx, m.Yy
+	m.Xx = xx*c + xy*s
+	m.Xy = -xx*s + xy*c
+	m.Yx = yx*c + yy*s
+	m.Yy = -yx*s + yy*c
+}
+
+// Transform applies a user-space matrix m onto the CTM. The
+// composition is CTM_new = CTM * m, mirroring cairo_transform.
 func (this *Context) Transform(m *geom.Mat3x2) {
-	if m != nil {
-		this.state.matrix.MultiplyWidth(m)
+	if m == nil {
+		return
 	}
+	c := &this.state.matrix
+	xx := c.Xx*m.Xx + c.Xy*m.Yx
+	yx := c.Yx*m.Xx + c.Yy*m.Yx
+	xy := c.Xx*m.Xy + c.Xy*m.Yy
+	yy := c.Yx*m.Xy + c.Yy*m.Yy
+	x0 := c.Xx*m.X0 + c.Xy*m.Y0 + c.X0
+	y0 := c.Yx*m.X0 + c.Yy*m.Y0 + c.Y0
+	c.Xx, c.Yx, c.Xy, c.Yy, c.X0, c.Y0 = xx, yx, xy, yy, x0, y0
 }
 func (this *Context) SetMatrix(m *geom.Mat3x2) {
 	if m != nil {
@@ -950,7 +1190,7 @@ func (this *Context) fillPath() {
 			r.ClosePath()
 		}
 	}
-	r.Draw(this.surface.img, image.Rect(0, 0, w, h), &image.Uniform{C: this.state.source}, image.Point{})
+	r.Draw(this.surface.img, this.drawRect(), &image.Uniform{C: this.state.source}, image.Point{})
 }
 
 func (this *Context) FillExtens() (x1, y1, x2, y2 float64) { return this.PathExtens() }
@@ -1011,7 +1251,7 @@ func (this *Context) strokePath() {
 			have = false
 		}
 	}
-	r.Draw(this.surface.img, image.Rect(0, 0, w, h), &image.Uniform{C: this.state.source}, image.Point{})
+	r.Draw(this.surface.img, this.drawRect(), &image.Uniform{C: this.state.source}, image.Point{})
 }
 
 // strokeSegment rasterises a line as a thin oriented quad (offset by
@@ -1048,8 +1288,6 @@ func (this *Context) PaintWithAlpha(alpha float64) {
 	if src == nil {
 		return
 	}
-	// Composite with alpha onto entire surface. Use draw.Src for
-	// alpha=1 (faster), else apply alpha and use draw.Over.
 	r, g, b, a := src.RGBA()
 	if alpha < 1 {
 		a = uint32(float64(a) * alpha)
@@ -1060,27 +1298,94 @@ func (this *Context) PaintWithAlpha(alpha float64) {
 		B: uint8(b >> 8),
 		A: uint8(a >> 8),
 	}
-	bounds := this.surface.img.Rect
+	dr := this.drawRect()
 	if alpha >= 1 {
-		draw.Draw(this.surface.img, bounds, &image.Uniform{C: col}, image.Point{}, draw.Src)
+		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Src)
 	} else {
-		draw.Draw(this.surface.img, bounds, &image.Uniform{C: col}, image.Point{}, draw.Over)
+		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Over)
 	}
 }
 
 // --- Clip ---
+//
+// Clip stores an AABB in device (post-CTM) coordinates. Subsequent
+// fill / stroke / paint clamp their draw destination to this rect via
+// image.Rectangle.Intersect, so the rasteriser only writes inside the
+// clip region. Path-shaped clipping (cairo's true behaviour) is
+// approximated by AABB — same simplification glui's CairoCompat uses.
 
 func (this *Context) Clip() {
-	x1, y1, x2, y2 := this.PathExtens()
-	this.state.clipRect = geom.Rect{X: x1, Y: y1, Width: x2 - x1, Height: y2 - y1}
-	this.state.hasClip = true
+	this.applyClip()
 	this.path = this.path[:0]
 }
 
-func (this *Context) ClipPreserve() {
-	x1, y1, x2, y2 := this.PathExtens()
-	this.state.clipRect = geom.Rect{X: x1, Y: y1, Width: x2 - x1, Height: y2 - y1}
+func (this *Context) ClipPreserve() { this.applyClip() }
+
+func (this *Context) applyClip() {
+	if len(this.path) == 0 {
+		// Empty path → empty clip.
+		this.state.clipRect = geom.Rect{}
+		this.state.hasClip = true
+		return
+	}
+	// Path AABB in device (CTM-transformed) coordinates.
+	x1, y1 := math.Inf(1), math.Inf(1)
+	x2, y2 := math.Inf(-1), math.Inf(-1)
+	consider := func(x, y float64) {
+		tx, ty := this.state.matrix.Transform(x, y)
+		if tx < x1 {
+			x1 = tx
+		}
+		if ty < y1 {
+			y1 = ty
+		}
+		if tx > x2 {
+			x2 = tx
+		}
+		if ty > y2 {
+			y2 = ty
+		}
+	}
+	for _, p := range this.path {
+		switch p.op {
+		case 'M', 'L':
+			consider(p.x1, p.y1)
+		case 'C':
+			consider(p.x1, p.y1)
+			consider(p.x2, p.y2)
+			consider(p.x3, p.y3)
+		}
+	}
+	if math.IsInf(x1, 1) {
+		// No emit-able points — clip to nothing.
+		this.state.clipRect = geom.Rect{}
+		this.state.hasClip = true
+		return
+	}
+	newClip := geom.Rect{X: x1, Y: y1, Width: x2 - x1, Height: y2 - y1}
+	if this.state.hasClip {
+		newClip = this.state.clipRect.IntersectCopy(newClip)
+	}
+	this.state.clipRect = newClip
 	this.state.hasClip = true
+}
+
+// drawRect computes the destination rectangle for fill/stroke/paint
+// operations, intersecting the surface bounds with the active clip
+// rect. Used by every drawing op so output stays inside the clip.
+func (this *Context) drawRect() image.Rectangle {
+	full := this.surface.img.Rect
+	if !this.state.hasClip {
+		return full
+	}
+	cr := this.state.clipRect
+	cri := image.Rect(
+		int(math.Floor(cr.X)),
+		int(math.Floor(cr.Y)),
+		int(math.Ceil(cr.X+cr.Width)),
+		int(math.Ceil(cr.Y+cr.Height)),
+	)
+	return full.Intersect(cri)
 }
 
 func (this *Context) ResetClip() { this.state.hasClip = false }
@@ -1118,15 +1423,109 @@ func (this *Context) SetFontOptions(o *FontOptions)   {}
 func (this *Context) FontOptions(o *FontOptions)      {}
 func (this *Context) SetScaledFont(sf *ScaledFont)    { this.state.font = sf }
 func (this *Context) ScaledFont() *ScaledFont         { return this.state.font }
-func (this *Context) SelectFontFace(family string, slant FontSlant, weight FontWeight) {}
-func (this *Context) ShowText(text string)      {}
-func (this *Context) ShowGlyphs(glyphs []Glyph) {}
+func (this *Context) SelectFontFace(family string, slant FontSlant, weight FontWeight) {
+	face := NewToyFontFace(family, slant, weight)
+	var m geom.Mat3x2
+	m.InitScale(12, 12) // default 12pt; SetFontSize updates
+	this.state.font = NewScaledFont(face, &m, &this.state.matrix, NewFontOptions())
+}
 
-// ShowGlyphs_hack matches the unsafe.Pointer + count form silk uses to
-// bypass cgo-marshalling. In purego mode there's no marshalling cost,
-// so this is a stub — text rendering for the rasteriser is a follow-up
-// (would need opentype glyph contour walking).
-func (this *Context) ShowGlyphs_hack(p unsafe.Pointer, n int) {}
+// ShowText renders `text` starting at the current point. Each rune's
+// advance moves the current point so consecutive ShowText calls
+// concatenate. CTM applies to glyph positions identically to ShowGlyphs.
+func (this *Context) ShowText(text string) {
+	if text == "" || this.surface == nil {
+		return
+	}
+	if this.state.font == nil {
+		this.SelectFontFace("", FONT_SLANT_NORMAL, FONT_WEIGHT_NORMAL)
+	}
+	x, y := this.curX, this.curY
+	glyphs := make([]Glyph, 0, len(text))
+	cx := x
+	primary := this.state.font.latinFace()
+	cjk := (font.Face)(nil)
+	for _, r := range text {
+		adv, ok := primary.GlyphAdvance(r)
+		if !ok {
+			if cjk == nil {
+				cjk = this.state.font.cjkFace()
+			}
+			adv, _ = cjk.GlyphAdvance(r)
+		}
+		glyphs = append(glyphs, Glyph{index: uint32(r), X: cx, Y: y})
+		cx += fixedToFloat(adv)
+	}
+	if len(glyphs) > 0 {
+		this.ShowGlyphs_hack(unsafe.Pointer(&glyphs[0]), len(glyphs))
+		this.curX = cx
+	}
+}
+
+// ShowGlyphs renders an explicit glyph slice. Same code path as
+// ShowGlyphs_hack but takes a typed slice — used by silk's higher-level
+// helpers that don't go through the unsafe-pointer dance.
+func (this *Context) ShowGlyphs(glyphs []Glyph) {
+	if len(glyphs) == 0 {
+		return
+	}
+	this.ShowGlyphs_hack(unsafe.Pointer(&glyphs[0]), len(glyphs))
+}
+
+// ShowGlyphs_hack rasterises the glyph array at p (length n) using
+// the active scaled font. CTM applies to each glyph's (X, Y) — that's
+// the cairo convention, glyph positions live in user space and the
+// rasteriser pushes them through the matrix.
+//
+// Glyphs whose rune isn't in the primary face flow through the CJK
+// fallback face, matching libcairo's substitution behaviour.
+func (this *Context) ShowGlyphs_hack(p unsafe.Pointer, n int) {
+	if this.surface == nil || this.surface.img == nil || n == 0 || p == nil {
+		return
+	}
+	glyphs := unsafe.Slice((*Glyph)(p), n)
+
+	src := this.state.source
+	if src == nil {
+		src = color.RGBA{R: 0, G: 0, B: 0, A: 255}
+	}
+	srcImg := &image.Uniform{C: src}
+
+	sf := this.state.font
+	if sf == nil {
+		// No scaled font set — synthesise a default at 12px so silk's
+		// ShowText path still produces visible glyphs.
+		sf = &ScaledFont{pixSize: 12}
+	}
+
+	clipR, hasClip := this.drawRect(), this.state.hasClip
+	full := this.surface.img.Rect
+
+	for _, g := range glyphs {
+		tx, ty := this.state.matrix.Transform(g.X, g.Y)
+		dot := fixed.Point26_6{
+			X: fixed.Int26_6(math.Round(tx * 64)),
+			Y: fixed.Int26_6(math.Round(ty * 64)),
+		}
+		face := sf.glyphFace(rune(g.index))
+		dr, mask, maskp, _, ok := face.Glyph(dot, rune(g.index))
+		if !ok {
+			continue
+		}
+		drClipped := dr.Intersect(full)
+		if hasClip {
+			drClipped = drClipped.Intersect(clipR)
+		}
+		if drClipped.Empty() {
+			continue
+		}
+		mp := image.Point{
+			X: maskp.X + (drClipped.Min.X - dr.Min.X),
+			Y: maskp.Y + (drClipped.Min.Y - dr.Min.Y),
+		}
+		draw.DrawMask(this.surface.img, drClipped, srcImg, image.Point{}, mask, mp, draw.Over)
+	}
+}
 
 func (this *Context) FontExtents() *FontExtents {
 	if this.state.font != nil {
