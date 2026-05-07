@@ -35,6 +35,7 @@ import (
 
 	"silk/core"
 	"silk/ged"
+	"silk/graph"
 	"silk/gui"
 )
 
@@ -104,11 +105,22 @@ func buildToolBar(frame *gui.Frame) {
 	frame.SetToolBar(tb)
 }
 
-// buildPanels installs the central content area: a left dock with
-// the file explorer, a centre dock with the multi-tab code editor
-// stack, and a bottom dock with the Terminal / Output tabs. The
-// existing FileExplorer + CodeEditor widgets carry the actual
-// content; layout glue is the only thing this file owns.
+// buildPanels installs the central content area:
+//
+//   - Center dock: editor tabs (code mode) + GedView (design mode)
+//     coexist as sibling tabs, so designers flip between editing
+//     code and dragging widgets onto the canvas without leaving the
+//     window.
+//   - Left dock: FileExplorer (project mode) + WidgetList (design
+//     mode) — WidgetList is the drag source that pairs with
+//     GedView's drag target via the gui.IDndContext protocol, so
+//     dropping a Button widget anywhere on the canvas is the same
+//     gesture as in the standalone designer.
+//   - Bottom dock: Terminal + Output tabs.
+//
+// The widget palette ↔ design canvas drag-drop is the heart of the
+// silk designer. Without it silkide is just a code IDE; with it the
+// IDE doubles as the visual form designer.
 func buildPanels(frame *gui.Frame) {
 	dock, ok := frame.SuggestDocDock().(*gui.Dock)
 	if !ok || dock == nil {
@@ -117,6 +129,13 @@ func buildPanels(frame *gui.Frame) {
 
 	editorTabs := buildEditorTabs(dock)
 	dock.AddView(editorTabs)
+
+	// Design canvas — sibling of the editor tabs in the center dock.
+	// The user clicks the dock's tab strip to flip between coding and
+	// designing. GedView wires its own selection / drop / paste
+	// handlers via Init, so just adding the view is enough.
+	designCanvas := ged.NewGedView()
+	dock.AddView(designCanvas)
 
 	leftDockI := dock.SplitNewDock(true, false)
 	leftDock, _ := leftDockI.(*gui.Dock)
@@ -128,12 +147,37 @@ func buildPanels(frame *gui.Frame) {
 			openFileInEditor(editorTabs, path)
 		})
 		leftDock.AddView(fileExplorer)
+
+		// Widget palette — sibling tab in the same left dock so the
+		// user picks a Button / Label / Edit etc. in the same panel
+		// they were just browsing files in. Drag-and-drop into the
+		// design canvas works because WidgetList implements gui's
+		// drag-source protocol and GedView implements the matching
+		// drop target (OnDragEnter / OnDragMove / OnDrop).
+		widgetList := ged.NewWidgetList()
+		leftDock.AddView(widgetList)
 	}
 
 	bottomDockI := dock.SplitNewDock(false, true)
 	if bottomDock, ok := bottomDockI.(*gui.Dock); ok {
 		bottomDock.AddView(buildTerminalPane())
 		bottomDock.AddView(buildOutputPane())
+
+		// Property inspector — bottom-right tab. Tied to the
+		// design canvas's scene so selection on the canvas
+		// updates the inspector's property table for the
+		// currently-selected widget. Lives in the bottom dock so
+		// the file-tree column on the left edge stays free.
+		inspector := ged.NewObjectInspector()
+		inspector.SetScene(designCanvas.GedScene())
+		bottomDock.AddView(inspector)
+
+		// Trigger an inspector rebuild whenever the design
+		// canvas's selection changes. Without this the inspector
+		// stays stuck on whatever was selected when SetScene fired.
+		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
+			inspector.Rebuild()
+		})
 	}
 }
 
