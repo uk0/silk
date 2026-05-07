@@ -58,6 +58,14 @@ type CairoCompat struct {
 	curX     float32
 	curY     float32
 
+	// arcsInPath records every Arc / ArcNegative emission that contributed
+	// to the current path. fillCurrentPath inspects this side buffer to
+	// detect the canonical "rounded-rect via 4 corner arcs" pattern and
+	// dispatch it to Renderer.FillRoundedRect (the SDF rect shader)
+	// instead of paying the path-triangulation cost. MoveTo and
+	// Rectangle reset the buffer so each fresh path starts at zero.
+	arcsInPath []arcRecord
+
 	// Pen / brush / font state. brushColor mirrors the SOURCE colour the
 	// Cairo painter resolves; pen.color/pen.width is the stroke style.
 	penColor   paint.Color
@@ -595,6 +603,9 @@ func (c *CairoCompat) MoveTo(x, y float64) {
 	c.pathSubs = append(c.pathSubs, len(c.pathPts))
 	c.pathPts = append(c.pathPts, [2]float32{float32(x), float32(y)})
 	c.curX, c.curY = float32(x), float32(y)
+	// MoveTo starts a fresh sub-path; reset the arc-tracker so an old
+	// path's arc records don't contaminate the rounded-rect detector.
+	c.arcsInPath = c.arcsInPath[:0]
 }
 
 func (c *CairoCompat) LineTo(x, y float64) {
@@ -655,6 +666,15 @@ func (c *CairoCompat) appendArc(xc, yc, radius, a0, a1 float64, sign float64) {
 		}
 	}
 
+	// Record the arc for the rounded-rect detector. We store the
+	// post-normalisation (a0, a1) so the span check downstream sees the
+	// effective sweep.
+	c.arcsInPath = append(c.arcsInPath, arcRecord{
+		cx: float32(xc), cy: float32(yc),
+		radius: float32(radius),
+		a0:     a0, a1: a1,
+	})
+
 	const stepsPerQuarter = 16
 	span := math.Abs(a1 - a0)
 	steps := int(span/(math.Pi/2)*stepsPerQuarter) + 1
@@ -688,6 +708,10 @@ func (c *CairoCompat) Rectangle(x, y, w, h float64) {
 		[2]float32{xf, yf},
 	)
 	c.curX, c.curY = xf, yf
+	// A plain Rectangle starts a fresh sub-path with no arcs. Clear the
+	// detector so a leftover arc from a previous path doesn't combine
+	// with these four corners and falsely pass the rounded-rect gate.
+	c.arcsInPath = c.arcsInPath[:0]
 }
 
 func (c *CairoCompat) Rectangle1(rect geom.Rect) {
@@ -778,6 +802,22 @@ func (c *CairoCompat) fillCurrentPath() {
 		}
 	}
 
+	// Rounded-rect fast path: solid-brush fills of the canonical 4-arc
+	// + 4-line shape route through Renderer.FillRoundedRect (SDF rect
+	// shader) instead of triangulating ~64 line segments per corner
+	// (16/quarter × 4). This is the difference between the "glui slower
+	// than Cairo on round-rect" benchmark regression and the headline
+	// 3-6× win — tessellated arcs dominated CPU time. Brush
+	// gating: only solid; gradient/pixmap brushes aren't yet wired
+	// through FillRoundedRect on the GPU side.
+	if !c.gradientActive && !c.radialActive && !c.pixmapBrushActive {
+		if rc, radius, ok := c.detectRoundedRect(); ok {
+			col := paintColorToGlui(c.brushColor)
+			c.r.FillRoundedRect(rc, radius, col)
+			return
+		}
+	}
+
 	col := paintColorToGlui(c.brushColor)
 	for i, start := range c.pathSubs {
 		end := len(c.pathPts)
@@ -805,6 +845,107 @@ func (c *CairoCompat) fillCurrentPath() {
 			c.r.FillTriangle(a[0], a[1], b[0], b[1], cc[0], cc[1], col)
 		}
 	}
+}
+
+// arcRecord captures one Arc / ArcNegative emission so fillCurrentPath
+// can recognise the canonical rounded-rect path (4 corner arcs + 4
+// connecting line segments) and dispatch to the SDF rect shader.
+type arcRecord struct {
+	cx, cy float32
+	radius float32
+	a0, a1 float64
+}
+
+// detectRoundedRect inspects arcsInPath + pathSubs to decide whether
+// the current path is exactly one rounded rectangle. On match it
+// returns the outer rect, the corner radius, and ok=true.
+//
+// Rules (any failure returns ok=false; the caller falls through to
+// the slow tessellation path):
+//
+//   - Exactly one sub-path
+//   - Exactly four arcs recorded
+//   - All four arcs share the same radius
+//   - Each arc spans π/2 (a quarter-turn) within float32 tolerance
+//   - The four arc centres form an axis-aligned rectangle in the same
+//     order rounded-rect helpers produce: top-left, top-right,
+//     bottom-right, bottom-left (or any rotation thereof)
+//
+// The outer rectangle is computed from min/max arc-centre coords
+// expanded by the radius — this is exactly what FillRoundedRect's SDF
+// shader expects.
+func (c *CairoCompat) detectRoundedRect() (Rect, float32, bool) {
+	if len(c.pathSubs) != 1 {
+		return Rect{}, 0, false
+	}
+	if len(c.arcsInPath) != 4 {
+		return Rect{}, 0, false
+	}
+
+	r := c.arcsInPath[0].radius
+	if r <= 0 {
+		return Rect{}, 0, false
+	}
+	const radiusTol = 1e-3
+	const spanTol = 1e-3
+	for _, a := range c.arcsInPath {
+		if math.Abs(float64(a.radius-r)) > radiusTol {
+			return Rect{}, 0, false
+		}
+		span := math.Abs(a.a1 - a.a0)
+		if math.Abs(span-math.Pi/2) > spanTol {
+			return Rect{}, 0, false
+		}
+	}
+
+	xs := [4]float32{c.arcsInPath[0].cx, c.arcsInPath[1].cx, c.arcsInPath[2].cx, c.arcsInPath[3].cx}
+	ys := [4]float32{c.arcsInPath[0].cy, c.arcsInPath[1].cy, c.arcsInPath[2].cy, c.arcsInPath[3].cy}
+	minX, maxX := xs[0], xs[0]
+	minY, maxY := ys[0], ys[0]
+	for i := 1; i < 4; i++ {
+		if xs[i] < minX {
+			minX = xs[i]
+		}
+		if xs[i] > maxX {
+			maxX = xs[i]
+		}
+		if ys[i] < minY {
+			minY = ys[i]
+		}
+		if ys[i] > maxY {
+			maxY = ys[i]
+		}
+	}
+	if maxX <= minX || maxY <= minY {
+		return Rect{}, 0, false
+	}
+	// Each centre must hit one of the four corners (minX|maxX, minY|maxY).
+	for i := 0; i < 4; i++ {
+		if xs[i] != minX && xs[i] != maxX {
+			return Rect{}, 0, false
+		}
+		if ys[i] != minY && ys[i] != maxY {
+			return Rect{}, 0, false
+		}
+	}
+	// Each of the four corner positions must appear exactly once across
+	// the centre array; otherwise we have two arcs at the same corner
+	// and another corner missing — not a rounded rect.
+	corners := map[[2]float32]int{}
+	for i := 0; i < 4; i++ {
+		corners[[2]float32{xs[i], ys[i]}]++
+	}
+	if len(corners) != 4 {
+		return Rect{}, 0, false
+	}
+
+	rect := Rect{
+		X: minX - r,
+		Y: minY - r,
+		W: maxX - minX + 2*r,
+		H: maxY - minY + 2*r,
+	}
+	return rect, r, true
 }
 
 // singleAxisAlignedRectPath reports whether the current path consists of

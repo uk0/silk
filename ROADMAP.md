@@ -228,11 +228,12 @@ LCD 子像素三采样（RGB 通道分别偏移 1/3 px）需要 RGBA atlas + RGB
 - ✅ `bench/cairo_bench_test.go`: 通过 `paint.NewPixmap.NewPainter` 测 Cairo 全栈渲染（C 库实际写像素）
 - ✅ `glui/bench_export.go`: 把原本只在 `*_test.go` 内部使用的 `newBenchRenderer` 升级为公开 API 方便跨包调用
 - ✅ `BENCHMARK.md`: 跑法 + 结果表 + 方法论 + 已知 RoundedRect 反向场景的根因解释
-- ✅ 数字落地：5/6 场景 glui 比 Cairo 快 **3–6×**（详见 BENCHMARK.md），RoundedRect 是已知反例（CairoCompat 路径累积+三角化绕开了 SDF 快路径）
+- ✅ 数字落地：6/6 场景 glui 比 Cairo 快 **3–7.6×**（详见 BENCHMARK.md）
+- ✅ 后续优化：CairoCompat 加 rounded-rect 模式识别 → SDF rect shader 快路径，RoundedRect 单测从 7.9ms 降到 0.45ms（17.4× 加速），从落后 3.5× 转为领先 4.9×。`arcsInPath` side-buffer 在 `appendArc` 记录每个弧，`Fill` 时检查 4 等半径四分之一弧 + 4 LineTo + 单子路径 + 实心 brush 模式 → 直接 dispatch `Renderer.FillRoundedRect`。Gradient/不等半径/非 canonical 全部 fall-through 慢路径，6 个测试锁住
 
 CI 上挂 PR regression gate 推迟到下个 milestone（需要先有稳态基线 + tolerance 政策）。
 
-约 350 LOC（实现 + 文档）。
+约 600 LOC（实现 + 文档 + RoundedRect 快路径 + 测试）。
 
 #### 3.2.6 Designer 输出 decl Go 源码 ✅（已完成）
 
