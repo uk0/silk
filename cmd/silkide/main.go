@@ -56,8 +56,12 @@ func main() {
 	frame.SetTitle(idTitle())
 	gui.SetDefaultFrame(frame)
 
-	buildToolBar(frame)
-	buildPanels(frame)
+	// Order: panels first so the toolbar can capture references to
+	// the editor tabs and design canvas, wiring Open / Save buttons
+	// through to GedScene.OpenFile / Save without the global plumbing
+	// SuggestDocDock would otherwise force.
+	editorTabs, designCanvas := buildPanels(frame)
+	buildToolBar(frame, editorTabs, designCanvas)
 	buildStatusBar(frame)
 
 	frame.SetClosedCallback(func(*gui.Frame) { core.Quit() })
@@ -88,7 +92,12 @@ func idTitle() string {
 // style fallback when the icon fails to load — paint.LoadIcon returns
 // the "image-missing" red-cross sentinel rather than nil for unknown
 // names, so the toolbar always renders SOMETHING.
-func buildToolBar(frame *gui.Frame) {
+//
+// `editorTabs` and `designCanvas` are captured so Open / Save / Run
+// callbacks can route to the right view. Open dispatches by file
+// extension: .silkui files load into the design canvas, anything else
+// opens in a code editor tab.
+func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	tb := gui.NewToolBar()
 
 	// Hamburger menu — no glyph in the silk icon catalog, so we keep
@@ -97,24 +106,66 @@ func buildToolBar(frame *gui.Frame) {
 	tb.AddAction("☰", nil, func() {})
 	tb.AddSeparator()
 
-	// File ops. folder.png stands in for "open file"; save.png is
-	// direct; refresh has no asset yet, falls back to label "↻".
-	tb.AddAction("", paint.LoadIcon("folder"), func() {})
-	tb.AddAction("↻", nil, func() {})
-	tb.AddAction("", paint.LoadIcon("save"), func() {})
+	// Open: route .silkui to the design canvas, everything else to a
+	// new editor tab. SaveFileDialog / OpenFileDialog are the only
+	// platform-aware bits and silk's gui package wraps each OS's
+	// native dialog.
+	tb.AddAction("", paint.LoadIcon("folder"), func() {
+		path := gui.OpenFileDialog()
+		if path == "" {
+			return
+		}
+		openFromTree(path, editorTabs, designCanvas, nil)
+	})
+	tb.AddAction("↻", nil, func() {
+		// Refresh: force-redraw active design canvas. Useful when
+		// editing the underlying .silkui file in another editor.
+		if designCanvas != nil {
+			designCanvas.Update()
+		}
+	})
+	tb.AddAction("", paint.LoadIcon("save"), func() {
+		// Save the current design canvas as .silkui. GedScene.Save()
+		// pops a SaveFileDialog if the scene has no filename yet.
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			scene.Save()
+		}
+	})
 	tb.AddSeparator()
 
 	// Navigation. Mock-up shows back / forward arrows; we re-use the
 	// undo / redo glyphs which carry the same left / right semantics
 	// in most icon sets.
-	tb.AddAction("", paint.LoadIcon("edit-undo"), func() {})
-	tb.AddAction("", paint.LoadIcon("edit-redo"), func() {})
+	tb.AddAction("", paint.LoadIcon("edit-undo"), func() {
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			if stack := scene.UndoStack(); stack != nil && stack.CanUndo() {
+				stack.Undo()
+				designCanvas.Update()
+			}
+		}
+	})
+	tb.AddAction("", paint.LoadIcon("edit-redo"), func() {
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			if stack := scene.UndoStack(); stack != nil && stack.CanRedo() {
+				stack.Redo()
+				designCanvas.Update()
+			}
+		}
+	})
 	tb.AddSeparator()
 
-	// Run / Debug / Search / Settings. run.png and preview.png exist
-	// natively; debug + search + settings don't yet have assets so
-	// we fall back to short text labels — easy to swap once the icon
-	// catalog grows.
+	// Run / Debug / Preview / PropSheet. run.png and preview.png
+	// exist natively; debug doesn't yet have an asset so we fall
+	// back to a short text label.
 	tb.AddAction("", paint.LoadIcon("run"), func() {})
 	tb.AddAction("Debug", nil, func() {})
 	tb.AddSeparator()
@@ -140,10 +191,10 @@ func buildToolBar(frame *gui.Frame) {
 // The widget palette ↔ design canvas drag-drop is the heart of the
 // silk designer. Without it silkide is just a code IDE; with it the
 // IDE doubles as the visual form designer.
-func buildPanels(frame *gui.Frame) {
+func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	dock, ok := frame.SuggestDocDock().(*gui.Dock)
 	if !ok || dock == nil {
-		return
+		return nil, nil
 	}
 
 	editorTabs := buildEditorTabs(dock)
@@ -202,6 +253,8 @@ func buildPanels(frame *gui.Frame) {
 		bottomDock.AddView(buildTerminalPane())
 		bottomDock.AddView(buildOutputPane())
 	}
+
+	return editorTabs, designCanvas
 }
 
 // buildEditorTabs composes the multi-tab code editor view. Each tab
