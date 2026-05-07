@@ -218,17 +218,21 @@ LCD 子像素三采样（RGB 通道分别偏移 1/3 px）需要 RGBA atlas + RGB
 
 约 280 LOC（实现 + 测试）。
 
-#### 3.2.5 性能基准测试套件
+#### 3.2.5 性能基准测试套件 ✅（已完成）
 
-宣称"5-10× 提速"需要数字背书。
+之前没有可重现的对比数字，所有"快"宣称都是定性描述。
 
-**实现**：
-- `bench/` 目录：rect_fill / gradient / text / pixmap / scrolling / typical_form
-- 每个用例两种模式跑 1000 次、记 ns/op + frames/sec
-- `go test -bench` 输出 + 自动写入 `BENCHMARK.md`
-- CI 上选一个用例做 PR 性能 regression gate
+**已完成**：
+- ✅ `bench/scenarios.go`: 6 个场景通过 `paint.Painter` 接口驱动两种 backend —— RectFill / RoundedRect / LinearGradient / TextPaint / ScrollingList / TypicalForm
+- ✅ `bench/glui_bench_test.go`: 通过 `glui.NewBenchRenderer` + `NewCairoCompat` 测 glui CPU 录制成本（无真 GL flush）
+- ✅ `bench/cairo_bench_test.go`: 通过 `paint.NewPixmap.NewPainter` 测 Cairo 全栈渲染（C 库实际写像素）
+- ✅ `glui/bench_export.go`: 把原本只在 `*_test.go` 内部使用的 `newBenchRenderer` 升级为公开 API 方便跨包调用
+- ✅ `BENCHMARK.md`: 跑法 + 结果表 + 方法论 + 已知 RoundedRect 反向场景的根因解释
+- ✅ 数字落地：5/6 场景 glui 比 Cairo 快 **3–6×**（详见 BENCHMARK.md），RoundedRect 是已知反例（CairoCompat 路径累积+三角化绕开了 SDF 快路径）
 
-工作量：~500 LOC + 数据收集。
+CI 上挂 PR regression gate 推迟到下个 milestone（需要先有稳态基线 + tolerance 政策）。
+
+约 350 LOC（实现 + 文档）。
 
 #### 3.2.6 Designer 输出 decl Go 源码
 
