@@ -231,8 +231,8 @@ type pathSeg struct {
 
 // state captures one Save/Restore frame.
 type ctxState struct {
-	matrix    geom.Mat3x2
-	source    color.Color
+	matrix geom.Mat3x2
+	source color.Color
 	// sourceSurf is non-nil when SetSource(NewPatternForSurface) or
 	// SetSourceSurface was called. fillPath / Paint sample from it
 	// instead of state.source. (sourceX, sourceY) is the user-space
@@ -241,6 +241,10 @@ type ctxState struct {
 	sourceSurf *image.RGBA
 	sourceX    float64
 	sourceY    float64
+	// sourceImage is a generated per-pixel source (linear / radial
+	// gradient). If non-nil, it overrides both sourceSurf and the solid
+	// state.source on the rasteriser path.
+	sourceImage image.Image
 	lineWidth  float64
 	lineCap    LineCap
 	lineJoin   LineJoin
@@ -460,52 +464,111 @@ type Image interface {
 
 // ===== Pattern =====
 
+// patternKind classifies a Pattern's source. Solid colour patterns
+// stay on the existing state.source path; surface and gradient kinds
+// route through state.sourceSurf / a generated gradient image.Image.
+type patternKind int
+
+const (
+	patternKindSolid patternKind = iota
+	patternKindSurface
+	patternKindLinear
+	patternKindRadial
+)
+
+// gradStop is one colour stop on a linear or radial gradient.
+type gradStop struct {
+	offset float64
+	col    color.RGBA
+}
+
 // Pattern is the source for fill/stroke. silk uses solid colour patterns
-// most of the time; surface patterns for image brushes; gradients for
-// linear/radial fills (currently approximated by first-stop colour).
+// most of the time, surface patterns for image brushes, and gradients
+// for theme buttons / cards / radial avatars.
 type Pattern struct {
-	col     color.Color
-	surf    *Surface
-	extend  Extend
-	filter  Filter
-	matrix  geom.Mat3x2
+	kind   patternKind
+	col    color.Color
+	surf   *Surface
+	extend Extend
+	filter Filter
+	matrix geom.Mat3x2
+
+	// Linear gradient endpoints in user space.
+	x0, y0, x1, y1 float64
+	// Radial gradient: two circles interpolation.
+	cx0, cy0, r0 float64
+	cx1, cy1, r1 float64
+	stops        []gradStop
 }
 
 func NewRGBPattern(r, g, b float64) *Pattern {
-	return &Pattern{col: f64ColorRGB(r, g, b, 1)}
+	return &Pattern{kind: patternKindSolid, col: f64ColorRGB(r, g, b, 1)}
 }
 
 func NewRGBAPattern(r, g, b, a float64) *Pattern {
-	return &Pattern{col: f64ColorRGB(r, g, b, a)}
+	return &Pattern{kind: patternKindSolid, col: f64ColorRGB(r, g, b, a)}
 }
 
 func NewPatternForSurface(s *Surface) *Pattern {
-	p := &Pattern{surf: s}
+	p := &Pattern{kind: patternKindSurface, surf: s}
 	p.matrix.InitIdentity()
 	return p
 }
 
-// NewLinearPattern / NewRadialPattern — currently approximated by the
-// first stop colour. silk's drawn-on-rasteriser path doesn't support
-// gradient interpolation in this build; svgexport / pdfexport handle
-// the gradient case for export users.
+// NewLinearPattern creates a linear gradient between (x0, y0) and
+// (x1, y1) in user space. Add stops with AddColorStopRGBA.
 func NewLinearPattern(x0, y0, x1, y1 float64) *Pattern {
-	return &Pattern{}
+	p := &Pattern{kind: patternKindLinear, x0: x0, y0: y0, x1: x1, y1: y1}
+	p.matrix.InitIdentity()
+	return p
 }
 
+// NewRadialPattern creates a radial gradient between two circles.
+// Stops interpolate from the inner (r0) to the outer (r1) circle —
+// silk's avatar / card highlights typically pass r0 = 0.
 func NewRadialPattern(cx0, cy0, r0, cx1, cy1, r1 float64) *Pattern {
-	return &Pattern{}
+	p := &Pattern{
+		kind: patternKindRadial,
+		cx0:  cx0, cy0: cy0, r0: r0,
+		cx1: cx1, cy1: cy1, r1: r1,
+	}
+	p.matrix.InitIdentity()
+	return p
 }
 
-func (this *Pattern) Destroy()                              {}
-func (this *Pattern) Status() Status                        { return STATUS_SUCCESS }
-func (this *Pattern) AddColorStopRGB(off, r, g, b float64)  { this.col = f64ColorRGB(r, g, b, 1) }
-func (this *Pattern) AddColorStopRGBA(off, r, g, b, a float64) {
-	this.col = f64ColorRGB(r, g, b, a)
+func (this *Pattern) Destroy()       {}
+func (this *Pattern) Status() Status { return STATUS_SUCCESS }
+
+// AddColorStopRGB / AddColorStopRGBA push a stop onto the gradient
+// stop list. Stops stay sorted by offset because silk's callers add
+// them in order; if a future caller breaks that, sampling still
+// yields a sensible (clamped) colour for any t.
+func (this *Pattern) AddColorStopRGB(off, r, g, b float64) {
+	this.AddColorStopRGBA(off, r, g, b, 1)
 }
-func (this *Pattern) ColorStopCount() int      { return 0 }
+func (this *Pattern) AddColorStopRGBA(off, r, g, b, a float64) {
+	col := color.RGBA{
+		R: clamp8(r),
+		G: clamp8(g),
+		B: clamp8(b),
+		A: clamp8(a),
+	}
+	this.stops = append(this.stops, gradStop{offset: off, col: col})
+	if this.kind == patternKindSolid && this.col == nil {
+		this.col = col
+	}
+}
+func (this *Pattern) ColorStopCount() int { return len(this.stops) }
 func (this *Pattern) ColorStopRGBA(idx int) (off, r, g, b, a float64) {
-	return 0, 0, 0, 0, 0
+	if idx < 0 || idx >= len(this.stops) {
+		return 0, 0, 0, 0, 0
+	}
+	s := this.stops[idx]
+	return s.offset,
+		float64(s.col.R) / 255.0,
+		float64(s.col.G) / 255.0,
+		float64(s.col.B) / 255.0,
+		float64(s.col.A) / 255.0
 }
 func (this *Pattern) RGBA() (r, g, b, a float64) {
 	if this.col == nil {
@@ -900,26 +963,31 @@ func (this *Context) SetSourceRGBA(r, g, b, a float64) {
 }
 
 // SetSource binds a pattern as the active fill / paint source. Solid
-// colour patterns route to state.source (the existing path); surface
-// patterns route to state.sourceSurf so fillPath / Paint can sample
-// from the bitmap instead of a single colour.
+// colours stay on state.source; surfaces feed state.sourceSurf;
+// gradients build a per-pixel image.Image on state.sourceImage.
 func (this *Context) SetSource(p *Pattern) {
 	if p == nil {
 		return
 	}
-	if p.surf != nil && p.surf.img != nil {
-		this.state.sourceSurf = p.surf.img
-		// Pattern's matrix is in surface-coord-to-user-coord direction,
-		// so its (X0, Y0) gives the user-space offset of the surface's
-		// origin when the pattern is sampled. silk's icon path passes
-		// a scale matrix here.
-		this.state.sourceX = -p.matrix.X0
-		this.state.sourceY = -p.matrix.Y0
-		return
-	}
-	if p.col != nil {
-		this.state.source = p.col
-		this.state.sourceSurf = nil
+	// Reset any prior non-solid source — SetSource is exclusive.
+	this.state.sourceSurf = nil
+	this.state.sourceImage = nil
+
+	switch p.kind {
+	case patternKindSurface:
+		if p.surf != nil && p.surf.img != nil {
+			this.state.sourceSurf = p.surf.img
+			this.state.sourceX = -p.matrix.X0
+			this.state.sourceY = -p.matrix.Y0
+		}
+	case patternKindLinear:
+		this.state.sourceImage = newLinearGradient(&this.state.matrix, p)
+	case patternKindRadial:
+		this.state.sourceImage = newRadialGradient(&this.state.matrix, p)
+	default:
+		if p.col != nil {
+			this.state.source = p.col
+		}
 	}
 }
 
@@ -1273,11 +1341,16 @@ func (this *Context) fillPath() {
 }
 
 // rasterizeWithSource draws the rasteriser's coverage into dst[r] using
-// the active source — either the surface pattern (when sourceSurf is
-// set) or the solid source colour. The surface case computes a per-
-// pixel offset so the source's pixel (0, 0) lands at the configured
-// user-space anchor (sourceX, sourceY) under the current CTM.
+// the active source — surface pattern, gradient pattern, or solid
+// colour. The first matching slot wins; missing slots fall through to
+// the next.
 func (this *Context) rasterizeWithSource(r *vector.Rasterizer, dr image.Rectangle) {
+	if this.state.sourceImage != nil {
+		// Gradients sample by device pixel directly; sp = dr.Min so
+		// At(x, y) sees the actual surface coords.
+		r.Draw(this.surface.img, dr, this.state.sourceImage, dr.Min)
+		return
+	}
 	if this.state.sourceSurf != nil {
 		dx, dy := this.state.matrix.Transform(this.state.sourceX, this.state.sourceY)
 		sp := image.Point{
@@ -1288,6 +1361,150 @@ func (this *Context) rasterizeWithSource(r *vector.Rasterizer, dr image.Rectangl
 		return
 	}
 	r.Draw(this.surface.img, dr, &image.Uniform{C: this.state.source}, image.Point{})
+}
+
+// ===== Gradient implementations =====
+//
+// Both linearGradient and radialGradient implement image.Image and
+// return per-device-pixel colours. Endpoints / centres are pre-
+// transformed to device space at SetSource time, so the per-pixel
+// inner loop is only arithmetic — no matrix multiply per call.
+
+type linearGradient struct {
+	dx, dy   float64 // device delta from p0 to p1
+	dot      float64 // dx*dx + dy*dy (inverse cached as invDot)
+	invDot   float64
+	p0x, p0y float64
+	stops    []gradStop
+}
+
+func newLinearGradient(ctm *geom.Mat3x2, p *Pattern) *linearGradient {
+	x0, y0 := ctm.Transform(p.x0, p.y0)
+	x1, y1 := ctm.Transform(p.x1, p.y1)
+	dx := x1 - x0
+	dy := y1 - y0
+	dot := dx*dx + dy*dy
+	invDot := 0.0
+	if dot > 1e-12 {
+		invDot = 1 / dot
+	}
+	return &linearGradient{
+		dx: dx, dy: dy, dot: dot, invDot: invDot,
+		p0x: x0, p0y: y0,
+		stops: append([]gradStop(nil), p.stops...),
+	}
+}
+
+func (g *linearGradient) ColorModel() color.Model { return color.RGBAModel }
+func (g *linearGradient) Bounds() image.Rectangle {
+	return image.Rect(-1<<30, -1<<30, 1<<30, 1<<30)
+}
+func (g *linearGradient) At(x, y int) color.Color { return g.RGBA64At(x, y) }
+func (g *linearGradient) RGBA64At(x, y int) color.RGBA64 {
+	if g.dot == 0 {
+		return colorAtOffset(g.stops, 0)
+	}
+	fx, fy := float64(x), float64(y)
+	t := ((fx-g.p0x)*g.dx + (fy-g.p0y)*g.dy) * g.invDot
+	return colorAtOffset(g.stops, t)
+}
+
+type radialGradient struct {
+	cx, cy float64 // outer circle centre in device coords
+	rOuter float64 // outer radius in device units
+	rInner float64 // inner radius in device units
+	stops  []gradStop
+}
+
+func newRadialGradient(ctm *geom.Mat3x2, p *Pattern) *radialGradient {
+	cx, cy := ctm.Transform(p.cx1, p.cy1)
+	// Rough device-radius using CTM linear scale.
+	scale := math.Hypot(ctm.Xx, ctm.Yx)
+	if scale == 0 {
+		scale = 1
+	}
+	return &radialGradient{
+		cx:     cx,
+		cy:     cy,
+		rOuter: p.r1 * scale,
+		rInner: p.r0 * scale,
+		stops:  append([]gradStop(nil), p.stops...),
+	}
+}
+
+func (g *radialGradient) ColorModel() color.Model { return color.RGBAModel }
+func (g *radialGradient) Bounds() image.Rectangle {
+	return image.Rect(-1<<30, -1<<30, 1<<30, 1<<30)
+}
+func (g *radialGradient) At(x, y int) color.Color { return g.RGBA64At(x, y) }
+func (g *radialGradient) RGBA64At(x, y int) color.RGBA64 {
+	span := g.rOuter - g.rInner
+	if span <= 0 {
+		return colorAtOffset(g.stops, 0)
+	}
+	dx := float64(x) - g.cx
+	dy := float64(y) - g.cy
+	d := math.Sqrt(dx*dx + dy*dy)
+	t := (d - g.rInner) / span
+	return colorAtOffset(g.stops, t)
+}
+
+// colorAtOffset interpolates the stop list at parametric position t.
+// Out-of-range t clamps to the nearest stop colour. Empty stop lists
+// return transparent black so a forgotten AddColorStop doesn't paint
+// uninitialised garbage.
+func colorAtOffset(stops []gradStop, t float64) color.RGBA64 {
+	if len(stops) == 0 {
+		return color.RGBA64{}
+	}
+	if t <= stops[0].offset {
+		return rgba8To64(stops[0].col)
+	}
+	if t >= stops[len(stops)-1].offset {
+		return rgba8To64(stops[len(stops)-1].col)
+	}
+	for i := 1; i < len(stops); i++ {
+		if t <= stops[i].offset {
+			prev := stops[i-1]
+			curr := stops[i]
+			span := curr.offset - prev.offset
+			if span < 1e-9 {
+				return rgba8To64(curr.col)
+			}
+			f := (t - prev.offset) / span
+			return blendRGBA(prev.col, curr.col, f)
+		}
+	}
+	return rgba8To64(stops[len(stops)-1].col)
+}
+
+func blendRGBA(a, b color.RGBA, t float64) color.RGBA64 {
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	one := 1 - t
+	r := one*float64(a.R) + t*float64(b.R)
+	g := one*float64(a.G) + t*float64(b.G)
+	bb := one*float64(a.B) + t*float64(b.B)
+	aa := one*float64(a.A) + t*float64(b.A)
+	return color.RGBA64{
+		R: uint16(r * 257),
+		G: uint16(g * 257),
+		B: uint16(bb * 257),
+		A: uint16(aa * 257),
+	}
+}
+
+func rgba8To64(c color.RGBA) color.RGBA64 {
+	return color.RGBA64{
+		R: uint16(c.R) * 257,
+		G: uint16(c.G) * 257,
+		B: uint16(c.B) * 257,
+		A: uint16(c.A) * 257,
+	}
 }
 
 func (this *Context) FillExtens() (x1, y1, x2, y2 float64) { return this.PathExtens() }
