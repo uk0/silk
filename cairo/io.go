@@ -1,3 +1,5 @@
+//go:build !silk_no_cairo
+
 package cairo
 
 // extern int writeFunc(void *closure, void*data, unsigned int length);

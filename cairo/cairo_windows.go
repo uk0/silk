@@ -1,3 +1,5 @@
+//go:build !silk_no_cairo
+
 package cairo
 
 // #include <cairo/cairo-win32.h>
