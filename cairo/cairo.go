@@ -1,3 +1,5 @@
+//go:build !silk_pure_go
+
 package cairo
 
 // #include <cairo/cairo.h>

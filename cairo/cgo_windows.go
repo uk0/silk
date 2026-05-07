@@ -1,3 +1,5 @@
+//go:build !silk_pure_go
+
 // Windows cgo flags for Cairo.
 //
 // On Windows, pkg-config is often unavailable or unreliable. We default to

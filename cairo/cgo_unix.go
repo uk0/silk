@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !silk_pure_go
 
 // Unix-like systems (macOS, Linux, *BSD) discover Cairo headers and libs
 // via pkg-config, which is the standard mechanism on these platforms.
