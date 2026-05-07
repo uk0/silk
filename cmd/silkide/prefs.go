@@ -230,8 +230,12 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		if designCanvas == nil {
 			return
 		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			scene.Save()
+		scene := designCanvas.GedScene()
+		if scene == nil {
+			return
+		}
+		if scene.Save() {
+			regenerateGoForSilkui(scene.Filename())
 		}
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Z', func() {
