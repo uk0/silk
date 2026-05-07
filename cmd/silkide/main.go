@@ -36,6 +36,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"silk/a11y"
 	"silk/core"
 	"silk/decl"
 	"silk/ged"
@@ -673,6 +674,15 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 		}
 	})
 
+	// "Dump a11y tree" — surfaces the cherry-picked silk/a11y package
+	// inside the IDE. Useful for verifying that custom widgets expose
+	// sane Roles to screen readers, or for snapshotting the visual
+	// hierarchy in a bug report. Output goes to stderr.
+	menu.AddSeparator()
+	menu.AddButton1(i18n.T("Dump A11y Tree"), nil).Action().BindFunc0(func() {
+		dumpA11yTree()
+	})
+
 	// Recent files: skip if the MRU is empty so the menu doesn't show
 	// an orphan separator. globalPrefs is set up in main() before any
 	// toolbar callback fires.
@@ -694,6 +704,44 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 	xg, yg := anchor.MapToGlobal(0, 0)
 	_, h := anchor.Size()
 	menu.ShowAsPopup(xg, yg+h, true)
+}
+
+// dumpA11yTree renders the active frame's accessibility hierarchy
+// to stderr. Wired to both the hamburger "Dump A11y Tree" menu
+// item and the Cmd+Shift+A shortcut so the same code path serves
+// menu users and keyboard users.
+func dumpA11yTree() {
+	root := gui.DefaultFrame()
+	if root == nil {
+		fmt.Fprintln(os.Stderr, "a11y: no DefaultFrame")
+		return
+	}
+	tree := a11y.Walk(root)
+	if tree == nil {
+		fmt.Fprintln(os.Stderr, "a11y: nil tree (root not visible)")
+		return
+	}
+	fmt.Fprintln(os.Stderr, "a11y tree:")
+	dumpA11yNode(tree, 0)
+}
+
+// dumpA11yNode renders an a11y.Node as an indented tree on stderr.
+// Each line: "<indent><Role> <Name>" — bounds and state are skipped
+// to keep the dump readable; callers needing every field should walk
+// the tree directly.
+func dumpA11yNode(n *a11y.Node, depth int) {
+	if n == nil {
+		return
+	}
+	indent := strings.Repeat("  ", depth)
+	name := n.Name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	fmt.Fprintf(os.Stderr, "%s%s %s\n", indent, n.Role, name)
+	for _, c := range n.Children {
+		dumpA11yNode(c, depth+1)
+	}
 }
 
 // regenerateGoForSilkui writes a .silk.go file alongside the .silkui

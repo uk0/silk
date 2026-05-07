@@ -178,8 +178,9 @@ func registerSilkideTranslations() {
 		"Refresh":   "刷新",
 		"Export...": "导出...",
 		"Settings":  "设置",
-		"Menu":      "菜单",
-		"New":       "新建",
+		"Menu":           "菜单",
+		"New":            "新建",
+		"Dump A11y Tree": "导出无障碍树",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
@@ -281,4 +282,11 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction, 'Q', func() {
 		core.Quit()
 	})
+
+	// Cmd+Shift+A: dump the accessibility tree of the active frame.
+	// Useful for verifying that custom widgets expose sane Roles to
+	// screen readers, or for snapshotting the visual hierarchy in a
+	// bug report. Same handler as the hamburger menu's "Dump A11y
+	// Tree" entry — output goes to stderr.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'A', dumpA11yTree)
 }

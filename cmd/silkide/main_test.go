@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"silk/a11y"
 	"silk/decl"
 	"silk/ged"
 	"silk/i18n"
@@ -199,6 +200,45 @@ func TestRegisterSilkideTranslations(t *testing.T) {
 		got := i18n.T(src)
 		if got != want {
 			t.Errorf("Tr(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
+
+// TestDumpA11yNodeFormatsTree: the indented-tree formatter handles
+// a representative root → children shape and produces a stable
+// stderr-shape that future bug reports can diff against.
+func TestDumpA11yNodeFormatsTree(t *testing.T) {
+	// Capture stderr.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = saved }()
+
+	tree := &a11y.Node{
+		Role: a11y.RoleWindow,
+		Name: "silkide",
+		Children: []*a11y.Node{
+			{Role: a11y.RoleToolBar, Name: "tools"},
+			{Role: a11y.RoleButton, Name: "Save"},
+		},
+	}
+	dumpA11yNode(tree, 0)
+	w.Close()
+
+	buf := make([]byte, 1024)
+	n, _ := r.Read(buf)
+	got := string(buf[:n])
+
+	for _, want := range []string{
+		"Window silkide",
+		"  ToolBar tools",
+		"  Button Save",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("dumpA11yNode missing %q\n----\n%s", want, got)
 		}
 	}
 }
