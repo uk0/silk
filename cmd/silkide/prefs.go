@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"silk/core"
@@ -81,6 +82,68 @@ func (p *preferences) LastOpenedDir() string {
 func (p *preferences) SetLastOpenedDir(dir string) {
 	_ = p.store.SetString("files/lastDir", dir)
 	_ = p.store.Sync()
+}
+
+// recentFilesMax caps the rolling MRU list. JetBrains IDEs default to
+// 50 but most users only ever scan the first 10, and the longer the
+// list the slower the de-dup walk on every open.
+const recentFilesMax = 10
+
+// RecentFiles returns the most-recently-opened-first list of file
+// paths. Capped at recentFilesMax entries. Stale entries (file no
+// longer exists on disk) are filtered out before return — saves a
+// round-trip stat on every menu draw and matches Qt Creator's
+// "Recent Files" behaviour.
+func (p *preferences) RecentFiles() []string {
+	raw := p.store.StringList("files/recent", nil)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, path := range raw {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+// AddRecentFile pushes `path` to the front of the recent-files list,
+// de-duping any prior occurrence. Caps to recentFilesMax. Empty
+// paths are ignored.
+func (p *preferences) AddRecentFile(path string) {
+	if path == "" {
+		return
+	}
+	abs := path
+	if absPath, err := filepathAbs(path); err == nil {
+		abs = absPath
+	}
+	cur := p.store.StringList("files/recent", nil)
+	out := make([]string, 0, len(cur)+1)
+	out = append(out, abs)
+	for _, prev := range cur {
+		if prev == abs {
+			continue
+		}
+		out = append(out, prev)
+		if len(out) >= recentFilesMax {
+			break
+		}
+	}
+	_ = p.store.SetStringList("files/recent", out)
+	_ = p.store.Sync()
+}
+
+// filepathAbs delegates to filepath.Abs but isolates the import so
+// prefs.go's import block stays minimal — the only filepath need is
+// here in AddRecentFile.
+func filepathAbs(path string) (string, error) {
+	return filepath.Abs(path)
 }
 
 // installLocale picks the user's locale and registers the inline

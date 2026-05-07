@@ -37,9 +37,11 @@ import (
 	"strings"
 
 	"silk/core"
+	"silk/decl"
 	"silk/ged"
 	"silk/graph"
 	"silk/gui"
+	"silk/hotreload"
 	"silk/i18n"
 	"silk/paint"
 	"silk/pdfexport"
@@ -63,6 +65,7 @@ func main() {
 	// instead of bouncing through the default and resizing.
 	installLocale()
 	prefs := newPreferences()
+	globalPrefs = prefs
 
 	frame := gui.NewFrameWindow()
 	frame.SetUuidStr("c1d8e2f0-1a3b-4c2d-9e7f-silkide00001")
@@ -486,35 +489,116 @@ func itemDisplayName(item graph.IItem) string {
 // Switching the active dock view is intentional: when the user opens
 // a .silkui we want them looking at the design canvas, not at the
 // code editor that was visible before.
+//
+// Every successful open also touches preferences.AddRecentFile so the
+// MRU list survives across launches. The package-level globalPrefs
+// reference is set in main() right after newPreferences().
 func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerDock *gui.Dock) {
 	if filepath.Ext(path) == ".silkui" {
 		if canvas == nil {
 			return
 		}
-		if err := canvas.GedScene().OpenFile(path); err == nil && centerDock != nil {
-			// Bring the design canvas to the front so the user sees
-			// the loaded scene immediately.
-			if idx := centerDock.IndexOfView(canvas); idx >= 0 {
-				centerDock.SetActiveIndex(idx)
+		if err := canvas.GedScene().OpenFile(path); err == nil {
+			recordRecentFile(path)
+			watchForReload(canvas, path)
+			if centerDock != nil {
+				// Bring the design canvas to the front so the user sees
+				// the loaded scene immediately.
+				if idx := centerDock.IndexOfView(canvas); idx >= 0 {
+					centerDock.SetActiveIndex(idx)
+				}
 			}
 		}
 		return
 	}
-	openFileInEditor(tabs, path)
+	if openFileInEditor(tabs, path) {
+		recordRecentFile(path)
+	}
+}
+
+// globalPrefs is the package-level preferences instance set up by
+// main(). openFromTree's recordRecentFile reaches it without
+// threading another argument through every call site.
+var globalPrefs *preferences
+
+// globalReloader watches every .silkui file silkide opens for
+// external edits and re-applies them to the design canvas. Lazily
+// constructed when the first .silkui opens — silkide instances that
+// only edit code never spin up the watcher.
+var globalReloader *hotreload.Reloader
+
+// startReloader spins up the file-system watcher on first .silkui
+// open. The onReload closure captures the design canvas so changes
+// to a watched .silkui flow back through GedScene.OpenFile.
+func startReloader(canvas *ged.GedView) {
+	if globalReloader != nil || canvas == nil {
+		return
+	}
+	r, err := hotreload.New(
+		func(path string, _ *decl.Node) error {
+			scene := canvas.GedScene()
+			if scene == nil {
+				return nil
+			}
+			// Reload on the watcher goroutine. silk's render loop
+			// polls glfw events; OpenFile's internal Update() fires
+			// the next paint pass off whatever pixels we land. Not
+			// ideal cross-thread but matches how every other silk
+			// callback (fswatch, signal-slot) behaves.
+			_ = scene.OpenFile(path)
+			return nil
+		},
+		func(path string, err error) {
+			core.Warn("hotreload: ", path, ": ", err)
+		},
+		hotreload.Options{
+			AllowedExt: []string{".silkui"},
+		},
+	)
+	if err != nil {
+		core.Warn("hotreload.New: ", err)
+		return
+	}
+	globalReloader = r
+}
+
+// watchForReload registers a .silkui path with the file watcher so
+// external edits flow back into the design canvas. Idempotent —
+// re-watching a path is a no-op.
+func watchForReload(canvas *ged.GedView, path string) {
+	if filepath.Ext(path) != ".silkui" {
+		return
+	}
+	startReloader(canvas)
+	if globalReloader != nil {
+		_ = globalReloader.Watch(path)
+	}
+}
+
+// recordRecentFile updates the MRU list when a file open succeeds.
+// nil-safe so unit tests can call openFromTree without setting up a
+// full preferences store.
+func recordRecentFile(path string) {
+	if globalPrefs == nil {
+		return
+	}
+	globalPrefs.AddRecentFile(path)
 }
 
 // openFileInEditor adds a fresh code-editor tab for path in tabs.
-// Used as the default branch of openFromTree.
-func openFileInEditor(tabs *gui.TabWidget, path string) {
+// Used as the default branch of openFromTree. Returns true on
+// success so the caller can record it in the MRU list.
+func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	if tabs == nil {
-		return
+		return false
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return false
 	}
 	ed := makeCodeEditor(string(data))
 	tabs.AddTab(ed, filepath.Base(path), nil)
+	return true
 }
 
 // sampleMainGo returns the canonical "Hello, gogpu!" main.go

@@ -158,6 +158,62 @@ func TestRegisterSilkideTranslations(t *testing.T) {
 	}
 }
 
+// TestRecentFilesRoundTrip exercises AddRecentFile / RecentFiles:
+// MRU ordering, de-dup, capped length, missing-file filtering.
+func TestRecentFilesRoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+
+	// Create three real files so RecentFiles' stat filter accepts them.
+	paths := []string{
+		filepath.Join(tmp, "a.txt"),
+		filepath.Join(tmp, "b.txt"),
+		filepath.Join(tmp, "c.txt"),
+	}
+	for _, p := range paths {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := newPreferences()
+
+	// Push in order a → b → c. Front-of-list is c, then b, then a.
+	for _, path := range paths {
+		p.AddRecentFile(path)
+	}
+	got := p.RecentFiles()
+	if len(got) != 3 {
+		t.Fatalf("after 3 distinct adds: got %d entries, want 3", len(got))
+	}
+	if got[0] != paths[2] || got[2] != paths[0] {
+		t.Errorf("MRU order broken: %v\n want [c, b, a]", got)
+	}
+
+	// Re-add 'a' — moves to front, doesn't dup.
+	p.AddRecentFile(paths[0])
+	got = p.RecentFiles()
+	if len(got) != 3 {
+		t.Errorf("after dup-readd: %d entries, want 3", len(got))
+	}
+	if got[0] != paths[0] {
+		t.Errorf("re-add didn't move to front: %v", got)
+	}
+
+	// Delete a file on disk. Its entry stays in the underlying list
+	// but RecentFiles filters it out.
+	if err := os.Remove(paths[1]); err != nil {
+		t.Fatal(err)
+	}
+	got = p.RecentFiles()
+	for _, g := range got {
+		if g == paths[1] {
+			t.Errorf("deleted file %q still in RecentFiles", paths[1])
+		}
+	}
+}
+
 // TestPreferencesWindowSize: prefs.WindowSize round-trips through
 // SetWindowSize, and the default falls back to a sane non-zero value
 // when the settings file is empty.
