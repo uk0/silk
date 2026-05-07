@@ -267,14 +267,33 @@ func renderPath(p *Path, painter paint.Painter, st Style) {
 			cy2 := cmd.Y + 2.0/3.0*(cmd.Y1-cmd.Y)
 			painter.CurveTo(cx1, cy1, cx2, cy2, cmd.X, cmd.Y)
 		case PathArc:
-			// Arc decomposition: Cairo's Painter doesn't expose SVG-
-			// style elliptical arcs directly. Approximate by walking
-			// the SVG arc → centre form and rendering as a sequence
-			// of cubic Beziers via the 90-degree-arc formula. For
-			// brevity we lower to a lineTo here; the visible effect
-			// is a "chord across the arc". A follow-up will swap in
-			// the full SVG-arc decomposition.
-			painter.LineTo(cmd.C, cmd.D)
+			// SVG elliptical arc → cubic Bezier decomposition. We use
+			// the W3C endpoint-to-center conversion to extract the
+			// ellipse parameters, slice the sweep into ≤90° pieces,
+			// and emit one painter.CurveTo per piece. The starting
+			// point of each cubic comes from the painter's current
+			// pen position, which advances after each CurveTo call.
+			//
+			// PathCmd packs the arc args as:
+			//   X1 = rx, Y1 = ry, X2 = xRot
+			//   A = largeArcFlag, B = sweepFlag
+			//   C = endX, D = endY
+			x0, y0 := painter.CurrentPoint()
+			large := cmd.A != 0
+			sweep := cmd.B != 0
+			segs := decomposeArc(x0, y0, cmd.X1, cmd.Y1, cmd.X2,
+				large, sweep, cmd.C, cmd.D)
+			if len(segs) == 0 {
+				// Zero-length or fully degenerate arc — nothing to
+				// emit, but the SVG spec says move the pen to the
+				// endpoint anyway. A LineTo to (endX, endY) keeps the
+				// path connected for fill correctness.
+				painter.LineTo(cmd.C, cmd.D)
+			} else {
+				for _, s := range segs {
+					painter.CurveTo(s.c1x, s.c1y, s.c2x, s.c2y, s.endX, s.endY)
+				}
+			}
 		case PathClose:
 			// Painter has no explicit ClosePath; drawing a zero-length
 			// segment to the start triggers the same fill behaviour

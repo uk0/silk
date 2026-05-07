@@ -190,16 +190,17 @@ glui 当前 hardcode SRC_OVER。Cairo 的 14 种 operator 中实战用到的：
 
 工作量：~400 LOC + tests。
 
-#### 3.2.3 SVG 路径椭圆弧完整解算
+#### 3.2.3 SVG 路径椭圆弧完整解算 ✅（已完成）
 
 当前 svg 渲染器把 `A` 命令简化为 LineTo，复杂图标会缺一段弧。
 
-**实现**：
-- SVG 椭圆弧 → 中心参数转换（W3C 标准算法）
-- 90° 切片成 cubic Bezier（`(4/3)*tan(θ/4)` 公式）
-- svg.PathArc 渲染时调用 painter.CurveTo
+**已完成**：
+- ✅ `svg/arc.go`: `decomposeArc(...)` 走 W3C 标准 endpoint→center 转换 + 90° cubic Bezier 切片
+- ✅ 退化处理：rx=0/ry=0 → 直线段；起终点重合 → 跳过；半径过小 → 自动上调（W3C B.2.5）
+- ✅ render.go 中 PathArc 用 painter.CurveTo 串联 decomposed 段
+- ✅ 8 个测试覆盖：零长度、退化半径、四分之一圆、大弧标志、sweep 翻转、终点精度、半径过小自动 scale、渲染器集成 CurveTo emit
 
-工作量：~200 LOC + tests。
+约 280 LOC（实现 + 测试）。
 
 #### 3.2.4 glui 字体子像素定位
 
