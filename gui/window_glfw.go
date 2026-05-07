@@ -347,7 +347,12 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	// Opt-in glui path: SILK_GLUI=1 switches this window's paint() to the
 	// pure-OpenGL renderer in silk/glui instead of the Cairo back buffer.
 	// Init must run after gl.Init() because it compiles GLSL shaders.
-	if os.Getenv("SILK_GLUI") == "1" {
+	//
+	// In silk_no_cairo builds the Cairo back buffer path is replaced by
+	// a no-op nullPainter, so glui is the only renderer that produces
+	// pixels. forceGluiPath returns true under that build tag so the
+	// window auto-enables glui without needing the env var.
+	if os.Getenv("SILK_GLUI") == "1" || forceGluiPath() {
 		this.useGlui = true
 		this.gluiCtx = glui.NewContext()
 		if err := this.gluiCtx.Init(); err != nil {

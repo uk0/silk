@@ -67,64 +67,37 @@ go test ./paint/                      # ✓
 go test -tags silk_no_cairo ./paint/  # ✓
 ```
 
-paint 包是 Cairo 移除链上的最大瓶颈，Round 2 把它打通了。下游包（gui / glui）目前在 silk_no_cairo 下还会失败（它们直接依赖 cairoSurface 等 paint-internal），是 Round 3 的目标。
+paint 包是 Cairo 移除链上的最大瓶颈，Round 2 把它打通了。
 
-### Round 3（下轮 30min 后）— gui 包窗口路径切分
+### Round 3+4 ✅（已完成）— gui 自动切 glui + 端到端验证
 
-**目标**：`silk/gui` 在 silk_no_cairo 模式下使用 glui 路径（不走 Cairo backbuffer）。
+**实际产出**（远比预期顺利 —— Round 2 把 paint 拆掉后下游全自动顺利）：
 
-**步骤**：
+- ✅ gui 包在两个 tag 下都直接编译通过（无 silk/cairo 直接 import）
+- ✅ 添加 `gui/glui_force_pure.go` + `gui/glui_force_cairo.go`：silk_no_cairo 下 `forceGluiPath()` 返回 true，自动激活 glui 渲染（用户无需 SILK_GLUI=1）
+- ✅ 默认模式仍是 Cairo 路径，glui 仍是 opt-in
+- ✅ glui / decl / i18n / settings / svg / state / fswatch 全部 11 包在 silk_no_cairo 下构建+测试通过
+- ✅ 端到端验证：`/tmp/decl-demo-pure` 二进制
+  - `otool -L` 显示 **0 个 cairo 引用**
+  - 仅链 Cocoa / OpenGL / 系统库（13 项）
+  - 实际运行：窗口 + Frame chrome + 计数器 + 按钮全部渲染
+  - Swift CGEvent 模拟点击：counter 0→3，Increment 按钮显示 hover 蓝框
 
-1. **拆 `paint/pixmap.go`**：
-   - 保留：`Pixmap` interface + `Format` 常量（无 tag）
-   - 新建 `paint/pixmap_cairo.go`（`!silk_no_cairo`）：移入 `cairoSurface`、`NewPixmap`、`LoadPngFile`
-   - 新建 `paint/pixmap_pure.go`（`silk_no_cairo`）：纯 Go 实现 `imagePixmap`，使用 `image.RGBA` + `image/png`
-   - `NewPixmap` / `LoadPngFile` 函数签名改为返回 `Pixmap` 接口
+**验收命令**：
+```bash
+go build -tags silk_no_cairo ./...      # ✓
+go test  -tags silk_no_cairo ./...      # ✓ 11 包全过
+go build -tags silk_no_cairo decl_demo.go
+otool -L /tmp/decl_demo                 # 无 libcairo
+/tmp/decl_demo                          # 窗口 + 交互正常
+```
 
-2. **拆 `paint/surface.go`**：
-   - `Surface` interface 留无 tag
-   - cairoSurface 实现搬到 `paint/surface_cairo.go`
+### 还差什么（追加项，非阻塞）
 
-3. **拆 `paint/painter.go`**：
-   - `Painter` interface 留无 tag
-   - `cairoPainter` 实现搬到 `paint/painter_cairo.go`
-   - 新建 `paint/painter_pure.go` 提供桩（实际 painter 由 glui CairoCompat 在 gui 层注入）
-
-4. **`paint/brush.go`** 中 `NewPixmapBrush`：
-   - lazy 创建 cairo.Pattern（仅在 cairo 可用时）
-   - pure 模式只保留 `pixmap` + `extend` 字段
-
-5. **`paint/font.go`**：
-   - 拆出 Cairo scaled font 部分到 `font_cairo.go`
-   - pure 模式用 opentype 接口（已在 glui 实现，复用部分代码到 paint）
-
-6. **`paint/icon.go`** + **`paint/paint_windows.go`**：tag 标记，pure 模式提供 stub
-
-**验收**：`go build -tags silk_no_cairo ./paint/` 通过，`go test ./paint/` 在两种 tag 下都过。
-
-### Round 3 — gui 包窗口路径切分
-
-**目标**：`silk/gui` 在 silk_no_cairo 模式下使用 glui 路径（不走 Cairo backbuffer）。
-
-**步骤**：
-
-1. `gui/window_glfw.go` 中 `paint()` 函数（Cairo 路径）加 tag `!silk_no_cairo`
-2. 让 `paintGlui()` 成为 silk_no_cairo 模式下的唯一入口
-3. `gui/window_windows.go`（win32+Cairo+GDI）整体加 tag — silk_no_cairo on Windows 走 GLFW（已支持）
-4. clipboard / cursor 文件可能也涉及 Cairo，分别审查
-5. 验收：`go build -tags silk_no_cairo ./gui/` 通过
-
-### Round 4 — 端到端 + CI
-
-**目标**：构建产物零 libcairo 依赖。
-
-**步骤**：
-
-1. `decl_demo.go` / `i18n_demo.go` 在 silk_no_cairo 下编译运行
-2. `otool -L` / `ldd` 确认产物无 libcairo
-3. `.github/workflows/ci.yml` 矩阵加 `silk_no_cairo` 测试
-4. README 加 "no-Cairo build" 章节
-5. release.yml 选择性产出两套二进制（cairo + cairo-free）
+- CI workflow `.github/workflows/ci.yml` 矩阵未加 silk_no_cairo 测试
+- release.yml 未产出 cairo-free 二进制
+- README 未加 "no-Cairo build" 章节
+- gui/theme.go 的 9-patch 主题在 pure 模式下 `NewPainter()` 返回 nullPainter（生成的 tile 是空白）—— 默认主题用编程式绘制（programmatic 路径），非 9-patch，所以用户层面看不出差别
 
 ## 预估代码量
 
