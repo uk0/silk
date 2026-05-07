@@ -1121,7 +1121,13 @@ func (this *Context) appendArc(xc, yc, r, a0, a1 float64, sign float64) {
 	}
 	startX := xc + r*math.Cos(a0)
 	startY := yc + r*math.Sin(a0)
-	if !this.hasCur {
+	// Decide M-vs-L by what the path actually contains. Just checking
+	// hasCur is not enough: after Stroke / Fill the path is cleared but
+	// hasCur stays true (cairo preserves the current point across
+	// path-consuming ops). If we emitted LineTo with an empty path, the
+	// rasterizer would synthesise a stray line from (0, 0) to the arc
+	// start — which then fills as a giant wedge across the surface.
+	if len(this.path) == 0 {
 		this.MoveTo(startX, startY)
 	} else {
 		this.LineTo(startX, startY)
@@ -1189,6 +1195,7 @@ func (this *Context) Fill() {
 	this.path = this.path[:0]
 }
 
+
 func (this *Context) FillPreserve() { this.fillPath() }
 
 func (this *Context) fillPath() {
@@ -1208,10 +1215,22 @@ func (this *Context) fillPath() {
 			r.MoveTo(float32(x), float32(y))
 			first = false
 		case 'L':
-			r.LineTo(float32(x), float32(y))
+			// A leading L (no prior M) should anchor the subpath at L's
+			// own coords — otherwise the rasterizer pulls the line from
+			// its default (0, 0) and fills a wedge to the surface origin.
+			if first {
+				r.MoveTo(float32(x), float32(y))
+				first = false
+			} else {
+				r.LineTo(float32(x), float32(y))
+			}
 		case 'C':
 			x2, y2 := this.state.matrix.Transform(p.x2, p.y2)
 			x3, y3 := this.state.matrix.Transform(p.x3, p.y3)
+			if first {
+				r.MoveTo(float32(x), float32(y))
+				first = false
+			}
 			r.CubeTo(float32(x), float32(y), float32(x2), float32(y2), float32(x3), float32(y3))
 		case 'Z':
 			r.ClosePath()
@@ -1307,29 +1326,65 @@ func (this *Context) Paint() {
 	this.PaintWithAlpha(1.0)
 }
 
+// PaintWithAlpha fills the active clip region with the current source.
+// Honours the active Porter-Duff operator — most importantly OpClear
+// (zeroes the destination) and OpOver (alpha-blends source over dest).
+//
+// The clear case is critical: silk's Window.paint() begins each frame
+// with `SetOperator(OpClear); Paint(); SetOperator(OpOver)` to wipe
+// the back buffer. If we ignored the operator and painted with the
+// source colour instead, every frame would inherit the previous
+// frame's last source — visible as huge coloured panels under the
+// rest of the UI.
 func (this *Context) PaintWithAlpha(alpha float64) {
 	if this.surface == nil || this.surface.img == nil {
 		return
 	}
-	src := this.state.source
-	if src == nil {
+	dr := this.drawRect()
+	if dr.Empty() {
 		return
 	}
-	r, g, b, a := src.RGBA()
+
+	switch this.state.operator {
+	case OPERATOR_CLEAR:
+		// Result = (0,0,0,0). Source is ignored entirely.
+		clear := color.RGBA{}
+		draw.Draw(this.surface.img, dr, &image.Uniform{C: clear}, image.Point{}, draw.Src)
+		return
+	case OPERATOR_SOURCE:
+		// Result = source. Replaces dst even where source is transparent.
+		src := this.state.source
+		if src == nil {
+			src = color.RGBA{}
+		}
+		col := scaleAlpha(src, alpha)
+		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Src)
+		return
+	default:
+		// OPERATOR_OVER (the cairo default) and any other operator we
+		// haven't specialised: alpha-blend source over dst.
+		src := this.state.source
+		if src == nil {
+			return
+		}
+		col := scaleAlpha(src, alpha)
+		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Over)
+	}
+}
+
+// scaleAlpha returns a color.RGBA at `alpha`-scaled opacity. Inputs
+// can be any color.Color; we convert to 0..255 RGBA at the end.
+func scaleAlpha(c color.Color, alpha float64) color.RGBA {
+	r, g, b, a := c.RGBA()
 	if alpha < 1 {
 		a = uint32(float64(a) * alpha)
 	}
-	col := color.RGBA{
+	// RGBA() returns premultiplied 16-bit values; cap at uint8.
+	return color.RGBA{
 		R: uint8(r >> 8),
 		G: uint8(g >> 8),
 		B: uint8(b >> 8),
 		A: uint8(a >> 8),
-	}
-	dr := this.drawRect()
-	if alpha >= 1 {
-		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Src)
-	} else {
-		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Over)
 	}
 }
 
