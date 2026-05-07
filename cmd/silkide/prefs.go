@@ -120,6 +120,11 @@ func registerSilkideTranslations() {
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
 		"untitled":  "未命名",
+		// Status-bar message templates. i18n.Tf passes the format args
+		// through unchanged, so the "%s" / "%d" placeholders translate
+		// 1-for-1 from English to Chinese.
+		"Selected: %s":       "已选中: %s",
+		"Selected: %d items": "已选中: %d 项",
 	})
 }
 

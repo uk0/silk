@@ -75,8 +75,27 @@ func main() {
 	// SuggestDocDock would otherwise force.
 	editorTabs, designCanvas := buildPanels(frame)
 	buildToolBar(frame, editorTabs, designCanvas)
-	buildStatusBar(frame)
+	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
+
+	// Live selection feedback in the status bar's transient message
+	// slot. Without this the user has to mouse over to the right-side
+	// inspector to confirm what got selected after a click.
+	if designCanvas != nil && statusBar != nil {
+		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
+			n := len(items)
+			if n == 0 {
+				statusBar.SetMessage("")
+				return
+			}
+			if n == 1 {
+				name := itemDisplayName(items[0])
+				statusBar.SetMessage(i18n.Tf("Selected: %s", name))
+				return
+			}
+			statusBar.SetMessage(i18n.Tf("Selected: %d items", n))
+		})
+	}
 
 	// Persist the final window size + position on close so the next
 	// launch restores the user's geometry instead of bouncing through
@@ -424,7 +443,7 @@ func buildOutputPane() gui.IWidget {
 // uses AddPermanentWidget for the right-aligned cells that show
 // project metadata; SetMessage drives the transient left-aligned
 // message slot which we leave blank initially.
-func buildStatusBar(frame *gui.Frame) {
+func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	sb := gui.NewStatusBar()
 
 	cwd, _ := os.Getwd()
@@ -440,6 +459,23 @@ func buildStatusBar(frame *gui.Frame) {
 	sb.AddPermanentWidget(gui.NewLabel("v0.1.3"))
 
 	frame.SetStatusBar(sb)
+	return sb
+}
+
+// itemDisplayName returns a human-friendly identifier for a scene
+// item. Prefers the item's Title() when present (matches the IDE's
+// inspector tree column); falls back to the item's Go-type name so
+// even un-named freshly-dropped widgets get a reasonable label.
+func itemDisplayName(item graph.IItem) string {
+	if item == nil {
+		return "(nil)"
+	}
+	if t, ok := item.(interface{ Title() string }); ok {
+		if name := t.Title(); name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("%T", item)
 }
 
 // openFromTree dispatches a FileExplorer click. .silkui files load
