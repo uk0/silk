@@ -242,10 +242,19 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	}
 
 	// Hamburger menu — no glyph in the silk icon catalog, so we keep
-	// the unicode bars. AddAction's icon param accepts nil for text-
-	// only buttons.
-	if btn := tb.AddAction("☰", nil, func() {}); btn != nil {
-		gui.SetToolTip(btn, i18n.T("Menu"))
+	// the unicode bars. Click pops a menu with File→New / Open /
+	// Save followed by the recent files MRU. Closes the visibility
+	// gap on the prefs.RecentFiles list (data was tracked but had
+	// no UI to surface it before).
+	// Empty initial callback then re-bind: lets us reference the
+	// returned *Button from inside the closure (used as the popup
+	// anchor point).
+	hamburger := tb.AddAction("☰", nil, func() {})
+	if hamburger != nil {
+		gui.SetToolTip(hamburger, i18n.T("Menu"))
+		hamburger.Action().BindFunc0(func() {
+			showHamburgerMenu(hamburger, editorTabs, designCanvas)
+		})
 	}
 	tb.AddSeparator()
 
@@ -629,6 +638,63 @@ var globalReloader *hotreload.Reloader
 // SetScene, and the buildPanels closure that originally captured it
 // has gone out of scope by the time those callbacks fire.
 var globalInspector *ged.ObjectInspector
+
+// showHamburgerMenu pops the silkide application menu next to the
+// hamburger toolbar button. Hosts the four standard file actions
+// (New / Open / Save / Save As-via-Open) plus a separator and the
+// recent-files MRU. Built fresh on every click so the recent list
+// reflects whatever the user just opened.
+func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
+	if anchor == nil {
+		return
+	}
+	menu := gui.NewPopupMenu()
+
+	// File actions — same handlers as the toolbar / Cmd shortcuts
+	// so all three entry points end up in the same code path.
+	menu.AddButton1(i18n.T("New"), nil).Action().BindFunc0(func() {
+		newDesignCanvas(designCanvas)
+	})
+	menu.AddButton1(i18n.T("Open"), nil).Action().BindFunc0(func() {
+		path := gui.OpenFileDialog()
+		if path == "" {
+			return
+		}
+		openFromTree(path, editorTabs, designCanvas, nil)
+	})
+	menu.AddButton1(i18n.T("Save"), nil).Action().BindFunc0(func() {
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			if scene.Save() {
+				regenerateGoForSilkui(scene.Filename())
+			}
+		}
+	})
+
+	// Recent files: skip if the MRU is empty so the menu doesn't show
+	// an orphan separator. globalPrefs is set up in main() before any
+	// toolbar callback fires.
+	if globalPrefs != nil {
+		if recent := globalPrefs.RecentFiles(); len(recent) > 0 {
+			menu.AddSeparator()
+			for _, path := range recent {
+				p := path // capture per-iteration
+				label := filepath.Base(p)
+				btn := menu.AddButton1(label, nil)
+				gui.SetToolTip(btn, p)
+				btn.Action().BindFunc0(func() {
+					openFromTree(p, editorTabs, designCanvas, nil)
+				})
+			}
+		}
+	}
+
+	xg, yg := anchor.MapToGlobal(0, 0)
+	_, h := anchor.Size()
+	menu.ShowAsPopup(xg, yg+h, true)
+}
 
 // regenerateGoForSilkui writes a .silk.go file alongside the .silkui
 // at `silkuiPath`, mirroring what cmd/silkgen does. Called every time
