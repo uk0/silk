@@ -4,6 +4,9 @@ import (
 	"os"
 	"strings"
 
+	"silk/core"
+	"silk/ged"
+	"silk/gui"
 	"silk/i18n"
 	"silk/settings"
 )
@@ -126,4 +129,80 @@ func registerSilkideTranslations() {
 // i18n.Locale().
 func localeIsChinese() bool {
 	return strings.HasPrefix(i18n.Locale(), "zh")
+}
+
+// registerShortcuts wires the IDE's keyboard shortcuts through silk's
+// frame-level shortcut registry. The same callback bodies as the
+// toolbar buttons fire here, so Cmd+S and the save toolbar icon
+// share their save logic. silk's gui.RegisterShortcut routes through
+// the window-level key callback BEFORE focus routing — without that
+// pre-emption a focused CodeEditor would consume Cmd+Z for its own
+// undo before the IDE-level design-canvas undo could fire.
+//
+// Mapping (Cmd on macOS, Ctrl elsewhere via gui.ModAction):
+//
+//	Cmd+O    → OpenFileDialog → openFromTree
+//	Cmd+S    → save active design canvas
+//	Cmd+Z    → undo on the design canvas's UndoStack
+//	Cmd+Shift+Z / Cmd+Y → redo
+//	Cmd+R    → refresh the design canvas
+func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
+	gui.RegisterShortcut(gui.ModAction, 'O', func() {
+		path := gui.OpenFileDialog()
+		if path == "" {
+			return
+		}
+		openFromTree(path, editorTabs, designCanvas, nil)
+	})
+	gui.RegisterShortcut(gui.ModAction, 'S', func() {
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			scene.Save()
+		}
+	})
+	gui.RegisterShortcut(gui.ModAction, 'Z', func() {
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			if stack := scene.UndoStack(); stack != nil && stack.CanUndo() {
+				stack.Undo()
+				designCanvas.Update()
+			}
+		}
+	})
+	// Redo: both Cmd+Shift+Z (Mac convention) and Cmd+Y (Windows /
+	// Linux convention) bind to the same handler.
+	redo := func() {
+		if designCanvas == nil {
+			return
+		}
+		if scene := designCanvas.GedScene(); scene != nil {
+			if stack := scene.UndoStack(); stack != nil && stack.CanRedo() {
+				stack.Redo()
+				designCanvas.Update()
+			}
+		}
+	}
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'Z', redo)
+	gui.RegisterShortcut(gui.ModAction, 'Y', redo)
+	gui.RegisterShortcut(gui.ModAction, 'R', func() {
+		if designCanvas != nil {
+			designCanvas.Update()
+		}
+	})
+	// Cmd+W: close active editor tab, Cmd+Q: quit. Standard mac UX.
+	gui.RegisterShortcut(gui.ModAction, 'W', func() {
+		if editorTabs == nil {
+			return
+		}
+		if idx := editorTabs.CurrentIndex(); idx >= 0 {
+			editorTabs.RemoveTab(idx)
+		}
+	})
+	gui.RegisterShortcut(gui.ModAction, 'Q', func() {
+		core.Quit()
+	})
 }

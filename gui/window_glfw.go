@@ -1799,6 +1799,15 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 		return
 	}
 
+	// Application-level shortcuts (Cmd+S / Cmd+O / Cmd+Z etc.) are
+	// checked before focus routing — otherwise a focused CodeEditor
+	// would eat Cmd+Z for its own undo before the IDE's design-canvas
+	// undo could fire. dispatchShortcut returns true when the key was
+	// consumed by a registered shortcut.
+	if action == glfw.Press && dispatchShortcut(vk) {
+		return
+	}
+
 	// Determine the target widget: use focusWidget if set, otherwise
 	// fall back to the root widget of the window receiving the key event.
 	target := focusWidget

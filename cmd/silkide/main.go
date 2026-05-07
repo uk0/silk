@@ -76,6 +76,7 @@ func main() {
 	editorTabs, designCanvas := buildPanels(frame)
 	buildToolBar(frame, editorTabs, designCanvas)
 	buildStatusBar(frame)
+	registerShortcuts(editorTabs, designCanvas)
 
 	// Persist the final window size + position on close so the next
 	// launch restores the user's geometry instead of bouncing through
