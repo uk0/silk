@@ -327,7 +327,26 @@ fswatch 当前是 polling。系统级 inotify / FSEvents / ReadDirectoryChangesW
 
 可选 cgo（fsnotify）或纯 Go 系统调用直接封装。
 
+**注**：fswatch 文档（doc.go）明确反对引入 fsnotify 第三方依赖；纯 Go 系统调用包装跨平台代价大且 macOS polling 没有实际痛点（500ms 延迟 + stat 调用近零 CPU）。本项延后；可作为单独 silk-fsevents 包做 opt-in 升级而不替换主路径。
+
 工作量：~400 LOC。
+
+#### 3.3.7 Export surfaces (PDF / SVG / PS) ✅（SVG 已完成）
+
+opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surface / cairo_ps_surface —— "用 paint.Painter 画一次，导出为矢量文件" 的能力没了。设计器画布、报表生成、图表导出等场景都需要这条出口。
+
+**已完成（SVG）**：
+- ✅ `svgexport/svgpaint.go`: `SVGPainter` 实现 `paint.Painter` 全部 30+ 方法 —— 路径构造（MoveTo/LineTo/Arc/CurveTo/Rectangle）、Fill/Stroke、变换栈（Save/Restore/Translate/Scale/Rotate）、画笔/画刷/字体/文本
+- ✅ CTM 在 emit 时 fold 进坐标 —— 输出无 `transform=` 嵌套 `<g>`，文件更小、parsing 更直
+- ✅ 颜色：opaque → `#RRGGBB`，alpha < 255 → `rgba(r,g,b,a)`
+- ✅ 文本走 `<text>` 元素保留可选/可访问性，XML 转义 5 个保留字符防注入
+- ✅ Pixmap/Icon/Glyphs 是 SVG 无原生对应的 raster-only 操作，记 no-op 留 SVG raster image 后续扩展
+- ✅ Clip 当前 no-op（SVG 走 `<defs><clipPath>` 是 follow-up；多数 designer scene 不需要）
+- ✅ 11 个测试覆盖：paint.Painter 接口编译断言、rect/path 路径属性、stroke 属性、CTM 折叠、Save/Restore 状态栈、Arc → SVG "A" 命令、文本 + XML 转义、`encoding/xml` parses output、rgba alpha、空 Fill no-op、`<script>` 转义防 XSS
+
+**未做（PDF / PS）**：PDF 需要 PDF 1.4+ 文档结构（cross-reference table / catalog / pages tree / content streams 压缩），约 ~800 LOC 加生成器；PS 类似。SVG 已经覆盖 90% 设计器/图表/报表导出场景，PDF 排队等真正需求出现再做。
+
+约 480 LOC（实现 + 测试）。
 
 ---
 
