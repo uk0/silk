@@ -1,6 +1,4 @@
-//go:build silk_pure_go
-
-// Cross-platform font loader for the pure-Go cairo build.
+// Cross-platform font loader for purecairo.
 //
 // Strategy mirrors libcairo's font-resolution: ask FontConfig (or the
 // platform analogue) for a face, fall back to a known list, fall back
@@ -19,7 +17,7 @@
 // All faces are cached by `(family, size, bold, italic)` so widget
 // repaints don't re-parse the font on every frame.
 
-package cairo
+package purecairo
 
 import (
 	"os"
