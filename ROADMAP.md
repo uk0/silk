@@ -295,11 +295,20 @@ OpenGL 2.1 是桌面级。如果要跑：
 
 工作量：~600 LOC。
 
-#### 3.3.4 自动 Accessibility 树
+#### 3.3.4 自动 Accessibility 树 ✅（已完成 — 跨平台 Go 层；OS bridge 推迟）
 
-macOS 的 NSAccessibility / Windows UIA / Linux AT-SPI。让 Silk 应用对屏幕阅读器、自动化测试可见。
+之前 silk 没有任何 a11y 接口，屏幕阅读器 / 自动测试无法枚举 UI。
 
-工作量：~1500 LOC + 平台特定 cgo。
+**已完成**：
+- ✅ `a11y/a11y.go`: `Role` 枚举（40+ widget 角色）、`State` 位掩码（Focused / Checked / Disabled / Hidden / ReadOnly / Pressed / Expanded / Selected / Required / Invalid）、`Node` 结构（role + name + desc + value + state + bounds + children）、显式 `Accessible` 接口及 4 个可选 refinement
+- ✅ `a11y/inspect.go`: 鸭子类型 `readName / readDescription / readValue / readState / readBounds` 通过现有 widget 方法名（Text/Title/IsChecked/Value/IsEnabled/HasFocus/Bounds）回退提取信息 —— 不修改 62 个 widget 文件
+- ✅ `a11y/walk.go`: `Walk(root)` 默认跳过 hidden 子树；`WalkAll(root)` 完整枚举；递归 DFS 保持视觉顺序；nil-safe；通过 `childrenAdapter` 接口让任意层次结构（gui.IWidget / graph.IItem / 自定义）适配
+- ✅ `a11y/guess.go`: 反射查 widget runtime 类型名后缀，把"Button"→`RoleButton`、"Slider"→`RoleSlider` 等映射 40+ 条 —— 既覆盖 silk 内置 widget，又支持 host 自定义 `MyButton` / `TaggedLabel` 等模式
+- ✅ 11 个测试覆盖：Role.String 稳定性、State 位运算、显式 Accessible 优先于 duck-type、duck-type name/state/checked/value-as-float、类型名推断 role、嵌套子树递归、hidden 跳过、WalkAll 反例、nil-safe、bounds XYWH fallback
+
+OS-native bridge（macOS NSAccessibility / Windows UIA / Linux AT-SPI）属于平台特定 cgo 工作（~1500 LOC + 三个 OS），推迟到后续 milestone 单独立项。当前 a11y 包已经足够给 Silk 自动化测试套件、designer outline 视图、debug overlay 等内部工具用。
+
+约 480 LOC（实现 + 测试）。比预估 1500 LOC 少 —— OS bridge 没做。
 
 #### 3.3.5 性能：GPU instancing + 复杂场景
 
