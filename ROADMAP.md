@@ -362,9 +362,17 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（recording surface 等价物）**：
+- ✅ `recpaint/recpaint.go`: `RecordingPainter` 实现 paint.Painter 全部 30+ 方法 —— 每次调用把闭包追加到 ops slice，捕获参数 by value
+- ✅ `Replay(target paint.Painter)`：迭代 ops 调用 target，幂等（可对多个 target 重放，可对同一 target 重放多次）
+- ✅ Mirror 状态：`CurrentPoint` / `CurrentState` / `GetMatrix` 在录制期返回实时正确值（不是 stub），让 widget Draw 代码读 CTM 时行为与真 Painter 一致
+- ✅ `Reset()` 清 ops 但保留 mirror 状态 —— 跨帧复用同一个 recorder 时减少 New 分配
+- ✅ 用例：scene cache（复杂子场景录一次，每帧 cheap replay）、multi-target export（一次录制 → 屏幕 + PDF + SVG 三个目标）、debug 捕获（测试中录一段，replay 到 instrumented painter 检查每个调用）
+- ✅ 10 个测试覆盖：paint.Painter 接口编译断言、replay 路由每个 op 一次、order 保持、多 target 幂等、CurrentPoint mirror、CurrentState mirror、GetMatrix mirror（与独立 Mat3x2 操作结果对齐）、Reset 不破坏 mirror、nil target 安全、replay 到 svgexport.SVGPainter 和直接调用 byte-identical
+
 **未做（PS）**：PostScript 文档结构与 PDF 大同小异（DSC comments + showpage），但实战使用率远低于 PDF/SVG，留给真正需求出现再做。
 
-约 1500 LOC（SVG 480 + PDF 480 + 测试 + 文档结构 + 图像嵌入两侧）。
+约 2000 LOC（SVG 480 + PDF 480 + 测试 + 文档结构 + 图像嵌入两侧 + recording surface 360）。
 
 ---
 
