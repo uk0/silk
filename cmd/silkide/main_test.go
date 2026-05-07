@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"silk/ged"
+	"silk/i18n"
 )
 
 // TestSampleMainGoLooksLikeReference locks in the sample seed code so
@@ -129,4 +130,51 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestRegisterSilkideTranslations: zh-CN translations registered by
+// installLocale must include the toolbar / menu strings silkide
+// actually emits, otherwise switching to a Chinese locale leaves
+// English labels showing.
+func TestRegisterSilkideTranslations(t *testing.T) {
+	registerSilkideTranslations()
+	prev := i18n.Locale()
+	defer i18n.SetLocale(prev)
+
+	i18n.SetLocale("zh-CN")
+	cases := map[string]string{
+		"Debug":  "调试",
+		"Save":   "保存",
+		"Open":   "打开",
+		"Undo":   "撤销",
+		"Redo":   "重做",
+		"Settings": "设置",
+	}
+	for src, want := range cases {
+		got := i18n.T(src)
+		if got != want {
+			t.Errorf("Tr(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
+
+// TestPreferencesWindowSize: prefs.WindowSize round-trips through
+// SetWindowSize, and the default falls back to a sane non-zero value
+// when the settings file is empty.
+func TestPreferencesWindowSize(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp) // Linux fallback path
+	t.Setenv("HOME", tmp)            // macOS Application Support path
+
+	p := newPreferences()
+	w, h := p.WindowSize()
+	if w < 320 || h < 240 {
+		t.Errorf("default WindowSize = (%d, %d), expected ≥ (320, 240)", w, h)
+	}
+
+	p.SetWindowSize(1500, 950)
+	p2 := newPreferences()
+	if w2, h2 := p2.WindowSize(); w2 != 1500 || h2 != 950 {
+		t.Errorf("after SetWindowSize(1500, 950): WindowSize() = (%d, %d)", w2, h2)
+	}
 }

@@ -40,6 +40,7 @@ import (
 	"silk/ged"
 	"silk/graph"
 	"silk/gui"
+	"silk/i18n"
 	"silk/paint"
 	"silk/pdfexport"
 	"silk/svgexport"
@@ -56,6 +57,13 @@ func main() {
 	// path automatically (no build tag); users who explicitly want
 	// the pure-OpenGL binary should expect the documented ged
 	// rendering gaps until that follow-up lands.
+	// Locale + persisted preferences come up before the frame so
+	// every translated string in the toolbar / status bar resolves
+	// correctly the first time, and the saved window size is honoured
+	// instead of bouncing through the default and resizing.
+	installLocale()
+	prefs := newPreferences()
+
 	frame := gui.NewFrameWindow()
 	frame.SetUuidStr("c1d8e2f0-1a3b-4c2d-9e7f-silkide00001")
 	frame.SetTitle(idTitle())
@@ -69,10 +77,19 @@ func main() {
 	buildToolBar(frame, editorTabs, designCanvas)
 	buildStatusBar(frame)
 
-	frame.SetClosedCallback(func(*gui.Frame) { core.Quit() })
+	// Persist the final window size on close so the next launch picks
+	// up the user's chosen geometry.
+	frame.SetClosedCallback(func(*gui.Frame) {
+		if win := frame.Window(); win != nil {
+			_, _, w, h := win.Bounds()
+			prefs.SetWindowSize(int(w), int(h))
+		}
+		core.Quit()
+	})
 
 	if win := frame.Window(); win != nil {
-		win.SetSize(1280, 800)
+		w, h := prefs.WindowSize()
+		win.SetSize(float64(w), float64(h))
 		win.MoveToCenter()
 	}
 
@@ -172,7 +189,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// exist natively; debug doesn't yet have an asset so we fall
 	// back to a short text label.
 	tb.AddAction("", paint.LoadIcon("run"), func() {})
-	tb.AddAction("Debug", nil, func() {})
+	tb.AddAction(i18n.T("Debug"), nil, func() {})
 	tb.AddSeparator()
 	// Export (preview-eye icon): pops SaveFileDialog, dispatches by
 	// extension to silk/svgexport or silk/pdfexport, draws the active
