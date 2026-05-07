@@ -5,6 +5,19 @@ import (
 	"strings"
 )
 
+// imageData carries one embedded image's metadata + zlib-compressed
+// RGB bytes ready for the PDF /XObject stream. Width / Height are in
+// pixels. Bytes are 3 bytes per pixel (RGB) compressed with FlateDecode
+// — alpha (if any) was composited onto white during encoding by the
+// PDFPainter, so we don't carry an SMask. That trade-off keeps the
+// document object count linear in the unique-image count rather than
+// 2× (image + soft mask).
+type imageData struct {
+	width, height int
+	compressed    []byte
+	name          string // "Im1", "Im2", ...
+}
+
 // document.go assembles the PDF 1.4 file structure around a content
 // stream. The output is the minimum every PDF reader (Acrobat, macOS
 // Preview, Chrome / Firefox / Safari built-in viewers) accepts:
@@ -54,9 +67,12 @@ import (
 // the actual byte position of each "N 0 obj" header. We track offsets
 // as we write and emit the xref last.
 
-func buildDocument(width, height float64, content string) string {
+func buildDocument(width, height float64, content string, images []imageData) string {
 	var b strings.Builder
-	var offsets [6]int // offsets[i] = byte position of object (i+1) header
+	// Object IDs: 1=Catalog, 2=Pages, 3=Page, 4=Contents, 5=Font,
+	// 6..(5+N)=Images. offsets[i] is the byte position of object (i+1)
+	// header — we size for 5 + len(images) objects.
+	offsets := make([]int, 5+len(images))
 
 	// Header. The four high-bit bytes after "%" are the canonical
 	// "this is a binary file" marker every PDF should carry — many
@@ -76,11 +92,19 @@ func buildDocument(width, height float64, content string) string {
 	b.WriteString("<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n")
 	b.WriteString("endobj\n")
 
-	// Object 3: Page
+	// Object 3: Page. Resources include the font + every image XObject.
 	offsets[2] = b.Len()
 	b.WriteString("3 0 obj\n")
 	fmt.Fprintf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %g %g]\n", width, height)
-	b.WriteString("   /Resources << /Font << /F1 5 0 R >> >>\n")
+	b.WriteString("   /Resources << /Font << /F1 5 0 R >>")
+	if len(images) > 0 {
+		b.WriteString("\n             /XObject << ")
+		for i, img := range images {
+			fmt.Fprintf(&b, "/%s %d 0 R ", img.name, 6+i)
+		}
+		b.WriteString(">>")
+	}
+	b.WriteString(" >>\n")
 	b.WriteString("   /Contents 4 0 R\n")
 	b.WriteString(">>\n")
 	b.WriteString("endobj\n")
@@ -100,6 +124,23 @@ func buildDocument(width, height float64, content string) string {
 	b.WriteString("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n")
 	b.WriteString("endobj\n")
 
+	// Objects 6..N: image XObjects. Each carries its own zlib-compressed
+	// RGB stream. PDF /Filter /FlateDecode + /ColorSpace /DeviceRGB +
+	// /BitsPerComponent 8 is the standard "lossless RGB" embedding.
+	for i, img := range images {
+		offsets[5+i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n", 6+i)
+		b.WriteString("<< /Type /XObject /Subtype /Image\n")
+		fmt.Fprintf(&b, "   /Width %d /Height %d\n", img.width, img.height)
+		b.WriteString("   /ColorSpace /DeviceRGB /BitsPerComponent 8\n")
+		fmt.Fprintf(&b, "   /Filter /FlateDecode /Length %d\n", len(img.compressed))
+		b.WriteString(">>\n")
+		b.WriteString("stream\n")
+		b.Write(img.compressed)
+		b.WriteString("\nendstream\n")
+		b.WriteString("endobj\n")
+	}
+
 	// Cross-reference table. Slot 0 is the free-list head; we use the
 	// canonical "0000000000 65535 f" entry. Subsequent slots are
 	// "<offset> 00000 n" where offset is fixed-width 10 digits.
@@ -107,22 +148,20 @@ func buildDocument(width, height float64, content string) string {
 	// IMPORTANT: each xref line MUST be exactly 20 bytes including the
 	// trailing newline — readers rely on this for direct seeking.
 	xrefOffset := b.Len()
+	totalObjs := 5 + len(images)
 	b.WriteString("xref\n")
-	b.WriteString("0 6\n")
+	fmt.Fprintf(&b, "0 %d\n", totalObjs+1)
 	b.WriteString("0000000000 65535 f \n")
-	for i := 0; i < 5; i++ {
+	for i := 0; i < totalObjs; i++ {
 		fmt.Fprintf(&b, "%010d 00000 n \n", offsets[i])
 	}
 
 	// Trailer + EOF marker
 	b.WriteString("trailer\n")
-	b.WriteString("<< /Size 6 /Root 1 0 R >>\n")
+	fmt.Fprintf(&b, "<< /Size %d /Root 1 0 R >>\n", totalObjs+1)
 	b.WriteString("startxref\n")
 	fmt.Fprintf(&b, "%d\n", xrefOffset)
 	b.WriteString("%%EOF\n")
 
-	// Sentinel — used by the offsets bookkeeping above; suppress unused
-	// variable lint when offsets[5] is never read.
-	_ = offsets[5]
 	return b.String()
 }

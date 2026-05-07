@@ -34,7 +34,10 @@
 package pdfexport
 
 import (
+	"bytes"
+	"compress/zlib"
 	"fmt"
+	"image"
 	"io"
 	"math"
 	"strings"
@@ -74,6 +77,15 @@ type PDFPainter struct {
 	font  paint.Font
 
 	curX, curY float64
+
+	// images is the per-painter image XObject pool. DrawPixmap appends
+	// here on first sight; document assembly emits one PDF object per
+	// entry. Names are auto-assigned ("Im1", "Im2", …) — the painter
+	// doesn't deduplicate by pixmap identity, so the same icon used
+	// twice produces two image objects. Real-world export sizes stay
+	// modest because typical designer scenes use a small palette of
+	// pixmaps; deduplication is a follow-up.
+	images []imageData
 }
 
 type state struct {
@@ -110,14 +122,14 @@ func (p *PDFPainter) transformPoint(x, y float64) (float64, float64) {
 // The painter is not consumed — multiple calls produce identical
 // output.
 func (p *PDFPainter) WriteTo(w io.Writer) (int64, error) {
-	doc := buildDocument(p.width, p.height, p.content.String())
+	doc := buildDocument(p.width, p.height, p.content.String(), p.images)
 	n, err := io.WriteString(w, doc)
 	return int64(n), err
 }
 
 // Bytes returns the complete PDF document as a byte slice.
 func (p *PDFPainter) Bytes() []byte {
-	doc := buildDocument(p.width, p.height, p.content.String())
+	doc := buildDocument(p.width, p.height, p.content.String(), p.images)
 	return []byte(doc)
 }
 
@@ -436,14 +448,124 @@ func (p *PDFPainter) DrawText1(x, y float64, text string) {
 func (p *PDFPainter) DrawGlyphs(glyphs []paint.Glyph) {}
 func (p *PDFPainter) DrawGlyph(glyph *paint.Glyph)    {}
 
-// --- paint.Painter: pixmap / icon -------------------------------------
+// --- paint.Painter: pixmap embedding ---------------------------------
+//
+// Pixmaps are encoded as zlib-compressed RGB byte streams and stored
+// as PDF /XObject /Subtype /Image entries. Each unique pixmap goes
+// into a separate object referenced from the page's Resources
+// dictionary as /Im1, /Im2, etc. The content stream emits a
+// "q w 0 0 h x y cm /ImN Do Q" block to draw the image at the
+// requested position with proper Y-flip (the unit-square
+// transformation puts image bottom-left at the PDF y_pdf = H - y - h).
+//
+// Alpha channel: PDF native alpha needs an SMask (separate gray-scale
+// XObject) per image — doubles the object count. We composite alpha
+// onto white during encoding instead, which works for the icons and
+// chart-marker use cases where the embedding is over a light
+// background. Apps that need precise transparency (drop shadows etc.)
+// can use SVG export instead until SMask support lands.
 
-func (p *PDFPainter) DrawPixmap(pixmap paint.Pixmap)                                {}
-func (p *PDFPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap)                 {}
-func (p *PDFPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64) {}
-func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap)           {}
-func (p *PDFPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)           {}
-func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool)    {}
+func (p *PDFPainter) DrawPixmap(pixmap paint.Pixmap) {
+	if pixmap == nil {
+		return
+	}
+	w := float64(pixmap.Width())
+	h := float64(pixmap.Height())
+	p.DrawPixmap5(p.curX, p.curY, w, h, pixmap)
+}
+
+func (p *PDFPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
+	if pixmap == nil {
+		return
+	}
+	p.DrawPixmap5(x, y, float64(pixmap.Width()), float64(pixmap.Height()), pixmap)
+}
+
+func (p *PDFPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64) {
+	// Source-offset variant — same simplification as svgexport: ignore
+	// (x0, y0) and emit the full image. Sub-region embedding requires
+	// a clip group around the Do operator, which is a follow-up.
+	p.DrawPixmap1(x, y, pixmap)
+}
+
+func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
+	if pixmap == nil || w <= 0 || h <= 0 {
+		return
+	}
+	img, err := pixmap.Image()
+	if err != nil || img == nil {
+		return
+	}
+	imgW := pixmap.Width()
+	imgH := pixmap.Height()
+	if imgW <= 0 || imgH <= 0 {
+		return
+	}
+
+	rgb, ok := encodePixmapToFlatedRGB(img, imgW, imgH)
+	if !ok {
+		return
+	}
+	idx := len(p.images) + 1
+	name := fmt.Sprintf("Im%d", idx)
+	p.images = append(p.images, imageData{
+		width:      imgW,
+		height:     imgH,
+		compressed: rgb,
+		name:       name,
+	})
+
+	tx, ty := p.transformPoint(x, y)
+	// PDF image's bottom-left lands at (tx, ty - h) after Y-flip.
+	bottomY := ty - h
+	p.content.WriteString("q\n")
+	fmt.Fprintf(&p.content, "%g 0 0 %g %g %g cm\n", w, h, tx, bottomY)
+	fmt.Fprintf(&p.content, "/%s Do\n", name)
+	p.content.WriteString("Q\n")
+}
+
+func (p *PDFPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)        {}
+func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool) {}
+
+// encodePixmapToFlatedRGB converts an image.Image into the zlib-
+// compressed RGB byte stream PDF expects for /Filter /FlateDecode +
+// /ColorSpace /DeviceRGB. Alpha is composited onto white inline.
+//
+// Returns (compressed_bytes, true) on success; (nil, false) when the
+// source image's dimensions don't match w/h or zlib fails.
+func encodePixmapToFlatedRGB(img image.Image, w, h int) ([]byte, bool) {
+	if img.Bounds().Dx() != w || img.Bounds().Dy() != h {
+		return nil, false
+	}
+	raw := make([]byte, 0, w*h*3)
+	min := img.Bounds().Min
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			r, g, b, a := img.At(min.X+x, min.Y+y).RGBA()
+			// 16-bit values; composite onto white using alpha.
+			r8 := uint32(r >> 8)
+			g8 := uint32(g >> 8)
+			b8 := uint32(b >> 8)
+			a8 := uint32(a >> 8)
+			// Composite alpha over white: out = src*a + 255*(1-a).
+			rOut := byte((r8*a8 + 255*(255-a8)) / 255)
+			gOut := byte((g8*a8 + 255*(255-a8)) / 255)
+			bOut := byte((b8*a8 + 255*(255-a8)) / 255)
+			raw = append(raw, rOut, gOut, bOut)
+		}
+	}
+
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write(raw); err != nil {
+		zw.Close()
+		return nil, false
+	}
+	if err := zw.Close(); err != nil {
+		return nil, false
+	}
+	return buf.Bytes(), true
+}
 
 // --- helpers ----------------------------------------------------------
 

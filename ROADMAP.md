@@ -355,9 +355,16 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖：paint.Painter 接口编译断言、PDF doc 结构、`re`/`f`/`S`/`RG`/`rg`/`w`/`c`/`q`/`Q`/`BT/ET`/`Tf`/`Tm`/`Tj` 全部关键 operator、Y 翻转坐标正确、Arc → cubic 解算、Save/Restore q/Q 嵌套、文本转义保护 PDF 字面字符串语法、xref 偏移每条指向真"N 0 obj"、startxref 字节位置准确、非透明 alpha 当前 fallback 文档化
 - ✅ macOS `qlmanage` Quick Look 渲染验证 PDF 真合法（thumbnail 成功生成）
 
+**已完成（图像嵌入）**：
+- ✅ `svgexport` `DrawPixmap` / `DrawPixmap1` / `DrawPixmap5`：编码 PNG + base64 → 输出 `<image href="data:image/png;base64,..."/>`，CTM 同步 fold 进坐标
+- ✅ `pdfexport` `DrawPixmap*`：编码 zlib-compressed RGB → 添加 PDF `/XObject /Subtype /Image` 对象、更新 `/Resources /XObject` dict、内容流 emit `q w 0 0 h x y cm /ImN Do Q`，alpha 通道在编码时合成到白底（PDF SMask 单独 object 单独走 follow-up）
+- ✅ `document.go` 重构成支持 N 个图像对象 —— xref 表大小、`/Size` trailer 字段、对象 ID 编排全部跟着图像数动态调整，每条 xref 仍严格 20 字节
+- ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
+- ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
+
 **未做（PS）**：PostScript 文档结构与 PDF 大同小异（DSC comments + showpage），但实战使用率远低于 PDF/SVG，留给真正需求出现再做。
 
-约 1000 LOC（SVG 480 + PDF 480 + 测试 + 文档结构）。
+约 1500 LOC（SVG 480 + PDF 480 + 测试 + 文档结构 + 图像嵌入两侧）。
 
 ---
 

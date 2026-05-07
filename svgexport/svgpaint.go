@@ -26,7 +26,10 @@
 package svgexport
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
+	"image/png"
 	"io"
 	"math"
 	"strings"
@@ -409,14 +412,76 @@ func (p *SVGPainter) DrawText1(x, y float64, text string) {
 func (p *SVGPainter) DrawGlyphs(glyphs []paint.Glyph) {}
 func (p *SVGPainter) DrawGlyph(glyph *paint.Glyph)    {}
 
-// --- paint.Painter: pixmap / icon (no native SVG equivalent) ----------
+// --- paint.Painter: pixmap embedding ---------------------------------
+//
+// Pixmaps are PNG-encoded and embedded as base64 data URIs in <image>
+// elements. SVG natively supports this — every reader (browser-based,
+// rsvg, Inkscape) handles it. The cost is some bloat in the output XML
+// (PNG bytes are roughly 1.33× larger after base64); for designer
+// scenes with a handful of icons the overhead is fine. Apps that
+// expect dozens of unique pixmaps and care about file size can
+// post-process the SVG to extract images to sibling files and rewrite
+// href attributes.
 
-func (p *SVGPainter) DrawPixmap(pixmap paint.Pixmap)                                      {}
-func (p *SVGPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap)                       {}
-func (p *SVGPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64)       {}
-func (p *SVGPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap)                 {}
-func (p *SVGPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)                 {}
-func (p *SVGPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool)          {}
+func (p *SVGPainter) DrawPixmap(pixmap paint.Pixmap) {
+	if pixmap == nil {
+		return
+	}
+	w := float64(pixmap.Width())
+	h := float64(pixmap.Height())
+	p.DrawPixmap5(p.curX, p.curY, w, h, pixmap)
+}
+
+func (p *SVGPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
+	if pixmap == nil {
+		return
+	}
+	p.DrawPixmap5(x, y, float64(pixmap.Width()), float64(pixmap.Height()), pixmap)
+}
+
+func (p *SVGPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64) {
+	// Source-offset variant. SVG <image> doesn't carry a clip-region
+	// without an extra <clipPath> setup; for the common case where
+	// callers want the full image at (x, y) we ignore (x0, y0) and
+	// emit the same as DrawPixmap1. Accurate sub-region rendering is
+	// a follow-up using preserveAspectRatio / viewBox tricks.
+	p.DrawPixmap1(x, y, pixmap)
+}
+
+func (p *SVGPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
+	if pixmap == nil || w <= 0 || h <= 0 {
+		return
+	}
+	dataURI := pixmapToDataURI(pixmap)
+	if dataURI == "" {
+		return
+	}
+	tx, ty := p.transformPoint(x, y)
+	fmt.Fprintf(&p.body,
+		`<image x="%g" y="%g" width="%g" height="%g" href="%s"/>`+"\n",
+		tx, ty, w, h, dataURI)
+}
+
+func (p *SVGPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)        {}
+func (p *SVGPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool) {}
+
+// pixmapToDataURI encodes pixmap as PNG and wraps in a "data:image/png;base64,…"
+// URI suitable for an SVG <image href="…"/> attribute. Returns empty
+// string if encoding fails (paint.Pixmap.Image errors are rare but
+// possible — e.g. cgo path with a freed surface). Empty return causes
+// the caller to skip the <image> emission entirely.
+func pixmapToDataURI(pixmap paint.Pixmap) string {
+	img, err := pixmap.Image()
+	if err != nil || img == nil {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return ""
+	}
+	encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
+	return "data:image/png;base64," + encoded
+}
 
 // --- helpers ----------------------------------------------------------
 
