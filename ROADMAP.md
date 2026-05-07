@@ -344,9 +344,20 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ Clip 当前 no-op（SVG 走 `<defs><clipPath>` 是 follow-up；多数 designer scene 不需要）
 - ✅ 11 个测试覆盖：paint.Painter 接口编译断言、rect/path 路径属性、stroke 属性、CTM 折叠、Save/Restore 状态栈、Arc → SVG "A" 命令、文本 + XML 转义、`encoding/xml` parses output、rgba alpha、空 Fill no-op、`<script>` 转义防 XSS
 
-**未做（PDF / PS）**：PDF 需要 PDF 1.4+ 文档结构（cross-reference table / catalog / pages tree / content streams 压缩），约 ~800 LOC 加生成器；PS 类似。SVG 已经覆盖 90% 设计器/图表/报表导出场景，PDF 排队等真正需求出现再做。
+**已完成（PDF）**：
+- ✅ `pdfexport/pdfpaint.go`: `PDFPainter` 同 SVGPainter 一样实现 paint.Painter 全部 30+ 方法 —— 路径构造、Fill/Stroke、Save/Restore（同时 emit PDF 的 q/Q）、变换栈、画笔/画刷/字体
+- ✅ `pdfexport/document.go`: PDF 1.4 文档结构组装 —— %PDF-1.4 header + binary marker / 5 个 object（Catalog / Pages / Page / Contents / Font）/ xref table（每行严格 20 字节）/ trailer / startxref / %%EOF
+- ✅ Y 翻转每坐标 emit 时处理（PDF 原点 bottom-left vs paint 原点 top-left），输出无需嵌套 cm 全局变换
+- ✅ Helvetica 走 PDF 标准 14 字体（无需嵌入 TTF），DrawText 用 Tm `1 0 0 -1 x y` 反转 glyph 朝向兼容 paint top-down 调用
+- ✅ Arc 90° 切片 cubic Bezier 近似（PDF 无原生 arc operator）
+- ✅ Rectangle 走 PDF 原生 `re` operator（比 4 LineTo 快）
+- ✅ xref 偏移精确到字节（offset 错则全部 reader 拒收）；`startxref` 指向 `xref\n` 关键字位置
+- ✅ 12 个测试覆盖：paint.Painter 接口编译断言、PDF doc 结构、`re`/`f`/`S`/`RG`/`rg`/`w`/`c`/`q`/`Q`/`BT/ET`/`Tf`/`Tm`/`Tj` 全部关键 operator、Y 翻转坐标正确、Arc → cubic 解算、Save/Restore q/Q 嵌套、文本转义保护 PDF 字面字符串语法、xref 偏移每条指向真"N 0 obj"、startxref 字节位置准确、非透明 alpha 当前 fallback 文档化
+- ✅ macOS `qlmanage` Quick Look 渲染验证 PDF 真合法（thumbnail 成功生成）
 
-约 480 LOC（实现 + 测试）。
+**未做（PS）**：PostScript 文档结构与 PDF 大同小异（DSC comments + showpage），但实战使用率远低于 PDF/SVG，留给真正需求出现再做。
+
+约 1000 LOC（SVG 480 + PDF 480 + 测试 + 文档结构）。
 
 ---
 
