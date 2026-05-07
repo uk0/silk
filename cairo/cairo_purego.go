@@ -1013,8 +1013,35 @@ func (this *Context) UserToDeviceDistance(x, y *float64) {
 		*x, *y = nx, ny
 	}
 }
-func (this *Context) DeviceToUser(x, y *float64)         {}
-func (this *Context) DeviceToUserDistance(x, y *float64) {}
+// DeviceToUser inverts the CTM at (*x, *y). Mirrors cairo's
+// cairo_device_to_user.
+func (this *Context) DeviceToUser(x, y *float64) {
+	if x == nil || y == nil {
+		return
+	}
+	ux, uy, ok := this.deviceToUser(*x, *y)
+	if ok {
+		*x, *y = ux, uy
+	}
+}
+
+// DeviceToUserDistance inverts the linear part of the CTM (no
+// translation). Used for distance / size conversions where the
+// origin shouldn't matter.
+func (this *Context) DeviceToUserDistance(x, y *float64) {
+	if x == nil || y == nil {
+		return
+	}
+	m := &this.state.matrix
+	det := m.Xx*m.Yy - m.Xy*m.Yx
+	if det == 0 {
+		return
+	}
+	dx := *x
+	dy := *y
+	*x = (m.Yy*dx - m.Xy*dy) / det
+	*y = (-m.Yx*dx + m.Xx*dy) / det
+}
 
 // --- Path construction ---
 
@@ -1390,12 +1417,81 @@ func (this *Context) drawRect() image.Rectangle {
 
 func (this *Context) ResetClip() { this.state.hasClip = false }
 
+// ClipBounds returns the clip extents in USER (post-CTM-inverse)
+// space — matching libcairo's cairo_clip_extents semantics. silk's
+// drawWidgetChildren intersects these with child Bounds(), which are
+// also in user space, so returning device coords here would inflate
+// the per-widget viewport by the HiDPI scale and overflow children.
+//
+// We compute the user-space AABB by transforming the four device-clip
+// corners through the inverse CTM. For pure scale+translate (the
+// common case) this collapses to the obvious axis-aligned answer; the
+// matrix path also handles rotated CTMs correctly.
 func (this *Context) ClipBounds() (x, y, w, h float64) {
 	if !this.state.hasClip {
-		return 0, 0, float64(this.surface.width), float64(this.surface.height)
+		w = float64(this.surface.width)
+		h = float64(this.surface.height)
+		// Convert full surface bounds back to user space.
+		ux1, uy1, ok1 := this.deviceToUser(0, 0)
+		ux2, uy2, ok2 := this.deviceToUser(w, h)
+		if ok1 && ok2 {
+			return ux1, uy1, ux2 - ux1, uy2 - uy1
+		}
+		return 0, 0, w, h
 	}
 	r := this.state.clipRect
-	return r.X, r.Y, r.Width, r.Height
+	// Map four device corners through inverse CTM, take AABB.
+	corners := [4][2]float64{
+		{r.X, r.Y},
+		{r.X + r.Width, r.Y},
+		{r.X, r.Y + r.Height},
+		{r.X + r.Width, r.Y + r.Height},
+	}
+	var minX, minY, maxX, maxY float64
+	have := false
+	for _, c := range corners {
+		ux, uy, ok := this.deviceToUser(c[0], c[1])
+		if !ok {
+			continue
+		}
+		if !have {
+			minX, minY, maxX, maxY = ux, uy, ux, uy
+			have = true
+			continue
+		}
+		if ux < minX {
+			minX = ux
+		}
+		if uy < minY {
+			minY = uy
+		}
+		if ux > maxX {
+			maxX = ux
+		}
+		if uy > maxY {
+			maxY = uy
+		}
+	}
+	if !have {
+		return 0, 0, 0, 0
+	}
+	return minX, minY, maxX - minX, maxY - minY
+}
+
+// deviceToUser inverts the active CTM at (dx, dy). Returns ok=false
+// if the matrix is singular — should never happen for the affine
+// CTMs silk produces, but kept defensive.
+func (this *Context) deviceToUser(dx, dy float64) (ux, uy float64, ok bool) {
+	m := &this.state.matrix
+	det := m.Xx*m.Yy - m.Xy*m.Yx
+	if det == 0 {
+		return 0, 0, false
+	}
+	tx := dx - m.X0
+	ty := dy - m.Y0
+	ux = (m.Yy*tx - m.Xy*ty) / det
+	uy = (-m.Yx*tx + m.Xx*ty) / det
+	return ux, uy, true
 }
 
 func (this *Context) InClip(x, y float64) bool { return true }
