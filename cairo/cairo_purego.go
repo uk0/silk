@@ -233,15 +233,23 @@ type pathSeg struct {
 type ctxState struct {
 	matrix    geom.Mat3x2
 	source    color.Color
-	lineWidth float64
-	lineCap   LineCap
-	lineJoin  LineJoin
-	miter     float64
-	operator  Operator
-	dash      Dash
-	font      *ScaledFont
-	clipRect  geom.Rect // AABB approximation
-	hasClip   bool
+	// sourceSurf is non-nil when SetSource(NewPatternForSurface) or
+	// SetSourceSurface was called. fillPath / Paint sample from it
+	// instead of state.source. (sourceX, sourceY) is the user-space
+	// offset where the surface's pixel (0, 0) should land — same
+	// convention as cairo_set_source_surface.
+	sourceSurf *image.RGBA
+	sourceX    float64
+	sourceY    float64
+	lineWidth  float64
+	lineCap    LineCap
+	lineJoin   LineJoin
+	miter      float64
+	operator   Operator
+	dash       Dash
+	font       *ScaledFont
+	clipRect   geom.Rect // AABB approximation
+	hasClip    bool
 }
 
 // ===== Surface =====
@@ -891,16 +899,41 @@ func (this *Context) SetSourceRGBA(r, g, b, a float64) {
 	this.state.source = f64ColorRGB(r, g, b, a)
 }
 
+// SetSource binds a pattern as the active fill / paint source. Solid
+// colour patterns route to state.source (the existing path); surface
+// patterns route to state.sourceSurf so fillPath / Paint can sample
+// from the bitmap instead of a single colour.
 func (this *Context) SetSource(p *Pattern) {
-	if p != nil && p.col != nil {
+	if p == nil {
+		return
+	}
+	if p.surf != nil && p.surf.img != nil {
+		this.state.sourceSurf = p.surf.img
+		// Pattern's matrix is in surface-coord-to-user-coord direction,
+		// so its (X0, Y0) gives the user-space offset of the surface's
+		// origin when the pattern is sampled. silk's icon path passes
+		// a scale matrix here.
+		this.state.sourceX = -p.matrix.X0
+		this.state.sourceY = -p.matrix.Y0
+		return
+	}
+	if p.col != nil {
 		this.state.source = p.col
+		this.state.sourceSurf = nil
 	}
 }
 
+// SetSourceSurface mirrors cairo_set_source_surface: subsequent
+// fill / paint draws sample pixels from `s`, with the surface's
+// pixel (0, 0) anchored at user (x, y).
 func (this *Context) SetSourceSurface(s *Surface, x, y float64) {
-	// Surface-source is approximated by no-op on the rasteriser path —
-	// silk's PixmapBrush goes through a separate path on the existing
-	// Cairo backend that this purego shim doesn't fully reproduce.
+	if s == nil || s.img == nil {
+		this.state.sourceSurf = nil
+		return
+	}
+	this.state.sourceSurf = s.img
+	this.state.sourceX = x
+	this.state.sourceY = y
 }
 
 func (this *Context) Source() *Pattern {
@@ -1236,7 +1269,25 @@ func (this *Context) fillPath() {
 			r.ClosePath()
 		}
 	}
-	r.Draw(this.surface.img, this.drawRect(), &image.Uniform{C: this.state.source}, image.Point{})
+	this.rasterizeWithSource(r, this.drawRect())
+}
+
+// rasterizeWithSource draws the rasteriser's coverage into dst[r] using
+// the active source — either the surface pattern (when sourceSurf is
+// set) or the solid source colour. The surface case computes a per-
+// pixel offset so the source's pixel (0, 0) lands at the configured
+// user-space anchor (sourceX, sourceY) under the current CTM.
+func (this *Context) rasterizeWithSource(r *vector.Rasterizer, dr image.Rectangle) {
+	if this.state.sourceSurf != nil {
+		dx, dy := this.state.matrix.Transform(this.state.sourceX, this.state.sourceY)
+		sp := image.Point{
+			X: dr.Min.X - int(math.Round(dx)),
+			Y: dr.Min.Y - int(math.Round(dy)),
+		}
+		r.Draw(this.surface.img, dr, this.state.sourceSurf, sp)
+		return
+	}
+	r.Draw(this.surface.img, dr, &image.Uniform{C: this.state.source}, image.Point{})
 }
 
 func (this *Context) FillExtens() (x1, y1, x2, y2 float64) { return this.PathExtens() }
@@ -1297,7 +1348,7 @@ func (this *Context) strokePath() {
 			have = false
 		}
 	}
-	r.Draw(this.surface.img, this.drawRect(), &image.Uniform{C: this.state.source}, image.Point{})
+	this.rasterizeWithSource(r, this.drawRect())
 }
 
 // strokeSegment rasterises a line as a thin oriented quad (offset by
@@ -1353,6 +1404,11 @@ func (this *Context) PaintWithAlpha(alpha float64) {
 		return
 	case OPERATOR_SOURCE:
 		// Result = source. Replaces dst even where source is transparent.
+		if this.state.sourceSurf != nil {
+			draw.Draw(this.surface.img, dr, this.state.sourceSurf,
+				this.sourceSamplePoint(dr.Min), draw.Src)
+			return
+		}
 		src := this.state.source
 		if src == nil {
 			src = color.RGBA{}
@@ -1363,12 +1419,29 @@ func (this *Context) PaintWithAlpha(alpha float64) {
 	default:
 		// OPERATOR_OVER (the cairo default) and any other operator we
 		// haven't specialised: alpha-blend source over dst.
+		if this.state.sourceSurf != nil {
+			draw.Draw(this.surface.img, dr, this.state.sourceSurf,
+				this.sourceSamplePoint(dr.Min), draw.Over)
+			return
+		}
 		src := this.state.source
 		if src == nil {
 			return
 		}
 		col := scaleAlpha(src, alpha)
 		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Over)
+	}
+}
+
+// sourceSamplePoint returns the (x, y) pixel inside state.sourceSurf
+// that maps to dst pixel `dstMin`. Pattern matrices are flattened into
+// `sourceX` / `sourceY` ahead of time, so this is the simple
+// translate-only case (no pattern rotation / non-uniform scale).
+func (this *Context) sourceSamplePoint(dstMin image.Point) image.Point {
+	dx, dy := this.state.matrix.Transform(this.state.sourceX, this.state.sourceY)
+	return image.Point{
+		X: dstMin.X - int(math.Round(dx)),
+		Y: dstMin.Y - int(math.Round(dy)),
 	}
 }
 
