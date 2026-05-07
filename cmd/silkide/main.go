@@ -122,31 +122,47 @@ func idTitle() string {
 func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	tb := gui.NewToolBar()
 
+	// addIconAction wraps tb.AddAction + gui.SetToolTip so every
+	// icon-only button announces what it does on hover. Tooltip text
+	// goes through i18n.T() so a Chinese locale shows "保存" instead of
+	// "Save", matching the i18n contract for the rest of the IDE
+	// chrome.
+	addIconAction := func(label, iconName, tipKey string, cb func()) {
+		btn := tb.AddAction(label, paint.LoadIcon(iconName), cb)
+		if btn != nil && tipKey != "" {
+			gui.SetToolTip(btn, i18n.T(tipKey))
+		}
+	}
+
 	// Hamburger menu — no glyph in the silk icon catalog, so we keep
 	// the unicode bars. AddAction's icon param accepts nil for text-
 	// only buttons.
-	tb.AddAction("☰", nil, func() {})
+	if btn := tb.AddAction("☰", nil, func() {}); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Menu"))
+	}
 	tb.AddSeparator()
 
 	// Open: route .silkui to the design canvas, everything else to a
 	// new editor tab. SaveFileDialog / OpenFileDialog are the only
 	// platform-aware bits and silk's gui package wraps each OS's
 	// native dialog.
-	tb.AddAction("", paint.LoadIcon("folder"), func() {
+	addIconAction("", "folder", "Open", func() {
 		path := gui.OpenFileDialog()
 		if path == "" {
 			return
 		}
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
-	tb.AddAction("↻", nil, func() {
+	if btn := tb.AddAction("↻", nil, func() {
 		// Refresh: force-redraw active design canvas. Useful when
 		// editing the underlying .silkui file in another editor.
 		if designCanvas != nil {
 			designCanvas.Update()
 		}
-	})
-	tb.AddAction("", paint.LoadIcon("save"), func() {
+	}); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Refresh"))
+	}
+	addIconAction("", "save", "Save", func() {
 		// Save the current design canvas as .silkui. GedScene.Save()
 		// pops a SaveFileDialog if the scene has no filename yet.
 		if designCanvas == nil {
@@ -161,7 +177,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// Navigation. Mock-up shows back / forward arrows; we re-use the
 	// undo / redo glyphs which carry the same left / right semantics
 	// in most icon sets.
-	tb.AddAction("", paint.LoadIcon("edit-undo"), func() {
+	addIconAction("", "edit-undo", "Undo", func() {
 		if designCanvas == nil {
 			return
 		}
@@ -172,7 +188,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 			}
 		}
 	})
-	tb.AddAction("", paint.LoadIcon("edit-redo"), func() {
+	addIconAction("", "edit-redo", "Redo", func() {
 		if designCanvas == nil {
 			return
 		}
@@ -188,8 +204,10 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// Run / Debug / Preview / PropSheet. run.png and preview.png
 	// exist natively; debug doesn't yet have an asset so we fall
 	// back to a short text label.
-	tb.AddAction("", paint.LoadIcon("run"), func() {})
-	tb.AddAction(i18n.T("Debug"), nil, func() {})
+	addIconAction("", "run", "Run", func() {})
+	if btn := tb.AddAction(i18n.T("Debug"), nil, func() {}); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Debug"))
+	}
 	tb.AddSeparator()
 	// Export (preview-eye icon): pops SaveFileDialog, dispatches by
 	// extension to silk/svgexport or silk/pdfexport, draws the active
@@ -198,7 +216,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// "designer scene → SVG/PDF" path that cairo_*_surface used to
 	// provide before the Cairo removal effort split out export
 	// surfaces into pure-Go packages.
-	tb.AddAction("", paint.LoadIcon("preview"), func() {
+	addIconAction("", "preview", "Export...", func() {
 		if designCanvas == nil {
 			return
 		}
@@ -210,7 +228,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 			core.Warn("export failed: ", err)
 		}
 	})
-	tb.AddAction("", paint.LoadIcon("propsheet"), func() {})
+	addIconAction("", "propsheet", "Settings", func() {})
 
 	frame.SetToolBar(tb)
 }

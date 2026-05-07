@@ -91,6 +91,7 @@ func registerSilkideTranslations() {
 		"Refresh":   "刷新",
 		"Export...": "导出...",
 		"Settings":  "设置",
+		"Menu":      "菜单",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
