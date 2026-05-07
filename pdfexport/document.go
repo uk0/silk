@@ -1,6 +1,8 @@
 package pdfexport
 
 import (
+	"bytes"
+	"compress/zlib"
 	"fmt"
 	"strings"
 )
@@ -52,7 +54,22 @@ type pageData struct {
 // because 2N+3 = 5. Tests written before multi-page support arrived
 // keep working without modification.
 
-func buildDocument(pages []pageData, images []imageData) string {
+// flateCompress returns the zlib-encoded form of in. Returned bytes
+// are suitable for a PDF /Filter /FlateDecode stream.
+func flateCompress(in string) []byte {
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write([]byte(in)); err != nil {
+		zw.Close()
+		return nil
+	}
+	if err := zw.Close(); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+func buildDocument(pages []pageData, images []imageData, compress bool) string {
 	var b strings.Builder
 
 	n := len(pages)
@@ -115,9 +132,22 @@ func buildDocument(pages []pageData, images []imageData) string {
 		b.WriteString(">>\n")
 		b.WriteString("endobj\n")
 
-		// Contents stream.
+		// Contents stream — optionally FlateDecode-compressed.
 		offsets[contentObjID-1] = b.Len()
 		fmt.Fprintf(&b, "%d 0 obj\n", contentObjID)
+		if compress {
+			compressed := flateCompress(pg.content)
+			if compressed != nil {
+				fmt.Fprintf(&b, "<< /Length %d /Filter /FlateDecode >>\n", len(compressed))
+				b.WriteString("stream\n")
+				b.Write(compressed)
+				b.WriteString("\nendstream\n")
+				b.WriteString("endobj\n")
+				continue
+			}
+			// flateCompress shouldn't fail in practice; fall through
+			// to plain stream rather than emitting a malformed object.
+		}
 		fmt.Fprintf(&b, "<< /Length %d >>\n", len(pg.content))
 		b.WriteString("stream\n")
 		b.WriteString(pg.content)

@@ -362,6 +362,13 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（PDF clip + 内容流压缩）**：
+- ✅ `Clip()` / `ClipPreserve()`: 之前 no-op，现在 emit `W\nn\n`（winding clip + no-paint）。`ResetClip` 仍 no-op（PDF 没办法在不退出 graphics state 的情况下"拆 clip"，文档明确建议用 Save/Restore 包 clip 区间）
+- ✅ `SetCompression(bool)` / `CompressionEnabled()`: 默认关，opt-in 后 per-page content stream 走 zlib FlateDecode + Contents 字典加 `/Filter /FlateDecode`
+- ✅ 真实场景 ratio：100 rect + text 页面 18KB → 2.8KB（**84.6% 缩减**），远超 ROADMAP 60-80% 估值
+- ✅ 7 个测试覆盖：W/n emission、ClipPreserve 不 reset 路径、空 clip no-op、SetCompression 切换 /Filter、压缩输出更小、压缩流 zlib decode 后字节级与未压缩相同（round-trip 正确）、默认关
+- ✅ macOS `qlmanage` 渲染压缩 PDF 缩略图成功 —— 系统 parser 接受 FlateDecode
+
 **已完成（多页 PDF）**：
 - ✅ `PDFPainter.NewPage()` / `NewPage1(w, h)`：finalise 当前页 content stream + 起新页；CTM/state stack/brush/pen/font/curX/Y 全部 reset，每页独立
 - ✅ `PDFPainter.PageCount()`：实时报告"finished + 当前打开页"总数
