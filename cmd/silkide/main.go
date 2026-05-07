@@ -80,6 +80,7 @@ func main() {
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
+	startTitleSync(frame, designCanvas)
 
 	// Live selection feedback in the status bar's transient message
 	// slot. Without this the user has to mouse over to the right-side
@@ -138,6 +139,80 @@ func idTitle() string {
 		cwd = "silkide"
 	}
 	return filepath.Base(cwd) + " — silkide"
+}
+
+// titleSyncTimer holds the polling timer that mirrors the design
+// canvas's scene Title() into the frame's window title. Kept at the
+// package level so closing the frame can stop it cleanly.
+var titleSyncTimer gui.Timer
+
+// startTitleSync wires a 500ms-tick timer that watches
+// designCanvas.GedScene().Title() and reflects it into the frame's
+// window-bar title. Adds the dirty marker, the project basename, and
+// the "silkide" trailing token.
+//
+// Polling instead of subscribing to scene events because graph's
+// SceneItem doesn't currently fire a TitleChanged signal — adding
+// one would touch the graph package, which has wider blast radius
+// than a 500ms poll for a title string.
+func startTitleSync(frame *gui.Frame, canvas *ged.GedView) {
+	if frame == nil || canvas == nil {
+		return
+	}
+	last := ""
+	titleSyncTimer.Start(500, func() {
+		title := composeTitle(canvas)
+		if title == last {
+			return
+		}
+		// Frame.SetTitle just stores the value; the live window title
+		// goes through Window.SetTitle (which calls glfw.SetTitle).
+		// Updating both keeps a future Frame query consistent with the
+		// visible chrome.
+		frame.SetTitle(title)
+		if win := frame.Window(); win != nil {
+			win.SetTitle(title)
+		}
+		last = title
+	})
+}
+
+// composeTitle builds the window title from the canvas's scene
+// state. Pattern matches JetBrains / VS Code: "<file> — <project>"
+// with the optional dirty asterisk inside the file slot, matching
+// what SceneItem.Title() returns directly. So:
+//
+//   <project> — silkide                          (untitled, clean)
+//   <project> — silkide *                        (untitled, dirty)
+//   form.silkui — <project> — silkide            (clean)
+//   form.silkui * — <project> — silkide          (dirty)
+//
+// SceneItem.Title() returns "<title>" when clean and "<title> *"
+// when dirty, so composeTitle splits on " *" suffix to detect dirty
+// state and re-attaches the marker after the project token. An
+// empty title (no file loaded yet) collapses to base + maybe-marker.
+func composeTitle(canvas *ged.GedView) string {
+	base := idTitle()
+	scene := canvas.GedScene()
+	if scene == nil {
+		return base
+	}
+	raw := scene.Title()
+	dirty := strings.HasSuffix(raw, " *")
+	name := raw
+	if dirty {
+		name = strings.TrimSuffix(raw, " *")
+	}
+	switch {
+	case name == "" && dirty:
+		return base + " *"
+	case name == "":
+		return base
+	case dirty:
+		return name + " * — " + base
+	default:
+		return name + " — " + base
+	}
 }
 
 // buildToolBar adds the icon top toolbar matching the JetBrains-style
