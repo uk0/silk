@@ -7,16 +7,21 @@ import (
 	"strings"
 )
 
-// imageData carries one embedded image's metadata + zlib-compressed
-// RGB bytes ready for the PDF /XObject stream. Width / Height are in
-// pixels. Bytes are 3 bytes per pixel (RGB) compressed with FlateDecode
-// — alpha (if any) was composited onto white during encoding by the
-// PDFPainter, so we don't carry an SMask. That trade-off keeps the
-// document object count linear in the unique-image count rather than
-// 2× (image + soft mask).
+// imageData carries one embedded image's metadata + compressed RGB
+// (and optional alpha) byte streams ready for PDF /XObject emission.
+// Width / Height are in pixels. compressed is 3-byte-per-pixel RGB
+// zlib-compressed with FlateDecode; smask, when non-nil, is the
+// matching grayscale alpha channel (1 byte per pixel) zlib-compressed.
+//
+// PDF reader behaviour: when /SMask references a gray-channel XObject
+// of the same dimensions, the rasteriser multiplies the smask gray
+// value into the main image's alpha at render time. This matches
+// Cairo's PDF surface and produces correct transparency over any
+// destination — drop shadows, half-tinted icons etc.
 type imageData struct {
 	width, height int
 	compressed    []byte
+	smask         []byte // nil for fully-opaque images
 	name          string // "Im1", "Im2", ...
 }
 
@@ -80,7 +85,29 @@ func buildDocument(pages []pageData, images []imageData, compress bool) string {
 		n = 1
 	}
 
-	totalObjs := 2 + 2*n + 1 + len(images)
+	// Image object-ID allocation: the main XObject sits at the next
+	// free ID; if the image has a soft mask, the SMask XObject takes
+	// the ID after that. Pre-pass so the page Resources dict can
+	// reference the right /ImN.
+	imageBaseID := 2 + 2*n + 1 + 1 // after Catalog(1)+Pages(2)+pages*2+Font(2N+3)
+	imageMainIDs := make([]int, len(images))
+	imageSMaskIDs := make([]int, len(images))
+	imageObjCount := 0
+	{
+		cur := imageBaseID
+		for i, img := range images {
+			imageMainIDs[i] = cur
+			cur++
+			imageObjCount++
+			if img.smask != nil {
+				imageSMaskIDs[i] = cur
+				cur++
+				imageObjCount++
+			}
+		}
+	}
+
+	totalObjs := 2 + 2*n + 1 + imageObjCount
 	offsets := make([]int, totalObjs)
 
 	// Header. The four high-bit bytes after "%" are the canonical
@@ -107,7 +134,6 @@ func buildDocument(pages []pageData, images []imageData, compress bool) string {
 
 	// Object IDs for fixed-position references shared across pages.
 	fontID := 2 + 2*n + 1 // 2N+3
-	imageBaseID := fontID + 1
 
 	// Pages + Contents alternating. Page 1 is at object id 3, Contents
 	// 1 at id 4, Page 2 at id 5, Contents 2 at id 6, etc.
@@ -123,7 +149,7 @@ func buildDocument(pages []pageData, images []imageData, compress bool) string {
 		if len(images) > 0 {
 			b.WriteString("\n             /XObject << ")
 			for j, img := range images {
-				fmt.Fprintf(&b, "/%s %d 0 R ", img.name, imageBaseID+j)
+				fmt.Fprintf(&b, "/%s %d 0 R ", img.name, imageMainIDs[j])
 			}
 			b.WriteString(">>")
 		}
@@ -161,20 +187,41 @@ func buildDocument(pages []pageData, images []imageData, compress bool) string {
 	b.WriteString("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n")
 	b.WriteString("endobj\n")
 
-	// Image XObjects.
+	// Image XObjects. For images with an alpha channel we emit a
+	// second XObject right after the main one — a /DeviceGray
+	// SMask of the same dimensions — and reference it from the
+	// main image dict via /SMask N 0 R.
 	for j, img := range images {
-		objID := imageBaseID + j
-		offsets[objID-1] = b.Len()
-		fmt.Fprintf(&b, "%d 0 obj\n", objID)
+		mainID := imageMainIDs[j]
+		offsets[mainID-1] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n", mainID)
 		b.WriteString("<< /Type /XObject /Subtype /Image\n")
 		fmt.Fprintf(&b, "   /Width %d /Height %d\n", img.width, img.height)
 		b.WriteString("   /ColorSpace /DeviceRGB /BitsPerComponent 8\n")
 		fmt.Fprintf(&b, "   /Filter /FlateDecode /Length %d\n", len(img.compressed))
+		if img.smask != nil {
+			fmt.Fprintf(&b, "   /SMask %d 0 R\n", imageSMaskIDs[j])
+		}
 		b.WriteString(">>\n")
 		b.WriteString("stream\n")
 		b.Write(img.compressed)
 		b.WriteString("\nendstream\n")
 		b.WriteString("endobj\n")
+
+		if img.smask != nil {
+			smaskID := imageSMaskIDs[j]
+			offsets[smaskID-1] = b.Len()
+			fmt.Fprintf(&b, "%d 0 obj\n", smaskID)
+			b.WriteString("<< /Type /XObject /Subtype /Image\n")
+			fmt.Fprintf(&b, "   /Width %d /Height %d\n", img.width, img.height)
+			b.WriteString("   /ColorSpace /DeviceGray /BitsPerComponent 8\n")
+			fmt.Fprintf(&b, "   /Filter /FlateDecode /Length %d\n", len(img.smask))
+			b.WriteString(">>\n")
+			b.WriteString("stream\n")
+			b.Write(img.smask)
+			b.WriteString("\nendstream\n")
+			b.WriteString("endobj\n")
+		}
 	}
 
 	// Cross-reference table. Slot 0 is the free-list head; we use the

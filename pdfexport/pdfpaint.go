@@ -614,7 +614,7 @@ func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
 		return
 	}
 
-	rgb, ok := encodePixmapToFlatedRGB(img, imgW, imgH)
+	rgb, smask, ok := encodePixmapToFlatedRGBAndSMask(img, imgW, imgH)
 	if !ok {
 		return
 	}
@@ -624,6 +624,7 @@ func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
 		width:      imgW,
 		height:     imgH,
 		compressed: rgb,
+		smask:      smask,
 		name:       name,
 	})
 
@@ -639,34 +640,83 @@ func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
 func (p *PDFPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)        {}
 func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool) {}
 
-// encodePixmapToFlatedRGB converts an image.Image into the zlib-
-// compressed RGB byte stream PDF expects for /Filter /FlateDecode +
-// /ColorSpace /DeviceRGB. Alpha is composited onto white inline.
+// encodePixmapToFlatedRGBAndSMask converts an image.Image into:
 //
-// Returns (compressed_bytes, true) on success; (nil, false) when the
-// source image's dimensions don't match w/h or zlib fails.
-func encodePixmapToFlatedRGB(img image.Image, w, h int) ([]byte, bool) {
+//   - rgb:    zlib-compressed straight (un-premultiplied) RGB bytes
+//             for the main /XObject /Subtype /Image stream
+//   - smask:  zlib-compressed grayscale alpha bytes for the SMask
+//             companion XObject. Returned nil when every source
+//             pixel is fully opaque, so opaque-only documents still
+//             produce single-XObject images.
+//
+// Switching from "composite onto white" to "RGB + SMask" costs one
+// extra XObject per non-opaque image (doubling object count for that
+// image) but means transparency renders correctly over any
+// background — drop shadows, alpha overlays, half-tinted icons all
+// behave the way the source pixmap intends. PDF readers (Acrobat,
+// Preview, browser viewers) blend the SMask gray channel as alpha at
+// rasterisation time exactly like Cairo's PDF surface does.
+//
+// Un-premultiply: image.At RGBA() returns 16-bit values that ARE
+// premultiplied. Naively writing (r8, g8, b8) without unmultiplying
+// would double-apply alpha when the SMask is also active. We divide
+// by alpha here so the PDF rasteriser's own multiplication matches
+// the original source pixel.
+func encodePixmapToFlatedRGBAndSMask(img image.Image, w, h int) (rgb, smask []byte, ok bool) {
 	if img.Bounds().Dx() != w || img.Bounds().Dy() != h {
-		return nil, false
+		return nil, nil, false
 	}
-	raw := make([]byte, 0, w*h*3)
+	rgbBuf := make([]byte, 0, w*h*3)
+	alphaBuf := make([]byte, 0, w*h)
+	hasAlpha := false
 	min := img.Bounds().Min
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			r, g, b, a := img.At(min.X+x, min.Y+y).RGBA()
-			// 16-bit values; composite onto white using alpha.
-			r8 := uint32(r >> 8)
-			g8 := uint32(g >> 8)
-			b8 := uint32(b >> 8)
-			a8 := uint32(a >> 8)
-			// Composite alpha over white: out = src*a + 255*(1-a).
-			rOut := byte((r8*a8 + 255*(255-a8)) / 255)
-			gOut := byte((g8*a8 + 255*(255-a8)) / 255)
-			bOut := byte((b8*a8 + 255*(255-a8)) / 255)
-			raw = append(raw, rOut, gOut, bOut)
+			a16 := uint32(a)
+			// 16-bit → 8-bit, plus straight (un-premultiplied) RGB.
+			var r8, g8, b8 byte
+			a8 := byte(a >> 8)
+			switch {
+			case a16 == 0:
+				// Fully transparent; the actual RGB doesn't matter
+				// because alpha=0 will erase contribution at render
+				// time. Pick white so dithered viewers don't glow.
+				r8, g8, b8 = 255, 255, 255
+			case a16 < 0xFFFF:
+				hasAlpha = true
+				// Un-premultiply with rounding: src*255/alpha.
+				r8 = byte((uint32(r)*255 + a16/2) / a16)
+				g8 = byte((uint32(g)*255 + a16/2) / a16)
+				b8 = byte((uint32(b)*255 + a16/2) / a16)
+			default: // fully opaque
+				r8 = byte(r >> 8)
+				g8 = byte(g >> 8)
+				b8 = byte(b >> 8)
+			}
+			rgbBuf = append(rgbBuf, r8, g8, b8)
+			alphaBuf = append(alphaBuf, a8)
 		}
 	}
+	rgbZ, ok1 := flateBytes(rgbBuf)
+	if !ok1 {
+		return nil, nil, false
+	}
+	rgb = rgbZ
+	if hasAlpha {
+		alphaZ, ok2 := flateBytes(alphaBuf)
+		if !ok2 {
+			return nil, nil, false
+		}
+		smask = alphaZ
+	}
+	return rgb, smask, true
+}
 
+// flateBytes compresses raw with the standard zlib compressor.
+// Used by encodePixmapToFlatedRGBAndSMask for both the colour and
+// alpha streams.
+func flateBytes(raw []byte) ([]byte, bool) {
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
 	if _, err := zw.Write(raw); err != nil {

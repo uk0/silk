@@ -362,6 +362,15 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（PDF SMask alpha 通道）**：
+- ✅ `encodePixmapToFlatedRGBAndSMask`: 编码时拆 RGB + alpha 双流；alpha < 255 像素出现就触发 SMask 路径
+- ✅ Un-premultiply RGB —— `image.At().RGBA()` 返回 16-bit premultiplied，需要 `src*255/alpha` 还原成直 alpha 否则 SMask 双重 multiply 会把图变黑
+- ✅ `imageData` 加 `smask []byte` 字段；`document.go` 预分配 image 对象 ID（含 alpha 占 2 个：main + SMask companion）
+- ✅ Main image 字典加 `/SMask N 0 R`；SMask XObject 走 `/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode`
+- ✅ Opaque-only 图保持单 XObject —— 透明度合成开销只在真正有 alpha 的图上付
+- ✅ 6 个测试覆盖：opaque 不出 SMask、translucent 出 `/DeviceGray` SMask companion + main 字典 `/SMask N 0 R`、SMask 尺寸匹配 main、xref `/Size` 跟随对象数、xref 偏移在加 SMask 后仍指向真"N 0 obj"、混合 opaque+translucent 文档对象 ID 分配正确
+- ✅ macOS `qlmanage` 渲染含 3 个 50% 半透明矩形 + 1 个 opaque 矩形的 PDF 缩略图成功 —— 系统 PDF parser 正确读 SMask 灰阶通道作 alpha
+
 **已完成（SVG clip path）**：
 - ✅ `svgexport.Clip()` / `ClipPreserve()`: 之前 no-op，现在 emit `<defs><clipPath id="cN"><path d="..."/></clipPath></defs>` + 打开 `<g clip-path="url(#cN)">` 包裹后续内容
 - ✅ `Save/Restore` 跟踪 `openGroups` 计数 —— Restore 自动关闭对应数量的 `</g>`，clip 区域跟着 graphics-state 走（与 Cairo / PDF 行为对齐）
