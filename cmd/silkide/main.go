@@ -552,6 +552,11 @@ func buildOutputPane() gui.IWidget {
 // uses AddPermanentWidget for the right-aligned cells that show
 // project metadata; SetMessage drives the transient left-aligned
 // message slot which we leave blank initially.
+// statusBarZoomLabel is the package-level reference to the status bar's
+// "100%" zoom-percent label so the canvas zoom shortcuts can update it
+// without threading another argument through the shortcut wiring.
+var statusBarZoomLabel *gui.Label
+
 func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	sb := gui.NewStatusBar()
 
@@ -565,10 +570,26 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	sb.AddPermanentWidget(gui.NewLabel("Ln 1, Col 1"))
 	sb.AddPermanentWidget(gui.NewLabel("UTF-8"))
 	sb.AddPermanentWidget(gui.NewLabel("Go 1.25"))
+
+	// Canvas zoom percentage cell. Updated by setZoomLabel whenever
+	// Cmd+= / Cmd+- / Cmd+0 fires.
+	statusBarZoomLabel = gui.NewLabel("100%")
+	sb.AddPermanentWidget(statusBarZoomLabel)
+
 	sb.AddPermanentWidget(gui.NewLabel("v0.1.3"))
 
 	frame.SetStatusBar(sb)
 	return sb
+}
+
+// setZoomLabel formats `zoom` as a percentage and pushes it into the
+// status-bar zoom cell. Called by zoomCanvas / zoomCanvasTo after
+// SetZoomFactor.
+func setZoomLabel(zoom float64) {
+	if statusBarZoomLabel == nil {
+		return
+	}
+	statusBarZoomLabel.SetText(fmt.Sprintf("%.0f%%", zoom*100))
 }
 
 // itemDisplayName returns a human-friendly identifier for a scene

@@ -289,4 +289,33 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// bug report. Same handler as the hamburger menu's "Dump A11y
 	// Tree" entry — output goes to stderr.
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'A', dumpA11yTree)
+
+	// Canvas zoom shortcuts. Cmd+= / Cmd+- step by 1.25x (typical
+	// designer-tool muscle memory: each press makes the canvas 25%
+	// bigger or 80% of current). Cmd+0 resets to 1.0 (= 100%).
+	// VK_EQUAL = 0xBB, VK_MINUS = 0xBD, '0' = 0x30.
+	gui.RegisterShortcut(gui.ModAction, 0xBB, func() { zoomCanvas(designCanvas, 1.25) })
+	gui.RegisterShortcut(gui.ModAction, 0xBD, func() { zoomCanvas(designCanvas, 1.0/1.25) })
+	gui.RegisterShortcut(gui.ModAction, '0', func() { zoomCanvasTo(designCanvas, 1.0) })
+}
+
+// zoomCanvas multiplies the design canvas's zoom factor by `factor`.
+// 1.25 zooms in, 0.8 zooms out. limitZoomFactor inside graph caps
+// the absolute range so back-to-back +/- presses don't run away.
+func zoomCanvas(canvas *ged.GedView, factor float64) {
+	if canvas == nil {
+		return
+	}
+	zoomCanvasTo(canvas, canvas.ZoomFactor()*factor)
+}
+
+// zoomCanvasTo sets the design canvas's zoom factor absolutely and
+// triggers a layout/redraw. Used by Cmd+0 (reset to 1.0).
+func zoomCanvasTo(canvas *ged.GedView, z float64) {
+	if canvas == nil {
+		return
+	}
+	canvas.SetZoomFactor(z)
+	canvas.Update()
+	setZoomLabel(canvas.ZoomFactor())
 }
