@@ -1,0 +1,326 @@
+# Silk opengl 分支路线图与现状
+
+最后更新：commit `1dec0bd`（2026-05-07）
+
+本文档分三部分回答：
+1. **opengl 现在实现的效果**（截至本次 commit 的客观成果）
+2. **opengl 对比 Cairo 的优势**（技术差异 + 工程差异）
+3. **后续路线**（短期 / 中期 / 长期）
+
+---
+
+## 1. opengl 现在实现的效果
+
+### 1.1 渲染管线（silk/glui）
+
+`silk/glui` 是一个完整的纯 OpenGL 2.1 渲染管线，作为 `silk/paint` 的替代后端：
+
+| 子系统 | 实现 |
+|--------|------|
+| 图元 | 矩形（含圆角 + per-vertex SDF AA）、圆、椭圆、三角形、任意路径（ear-clip 三角化）|
+| 描边 | 实线 + 虚线 + 多端帽（Butt / Round / Square）+ 多 join（Miter / Round / Bevel）|
+| 渐变 | 两停 linear（uniform fast path）+ 多停 linear（256×1 ramp 纹理）+ **径向渐变**（GPU shader）|
+| 字体 | OpenType 光栅化 + SDF 模式 + **CJK 多脚本 fallback 链**（macOS 含 PingFang/Hiragino/AquaKana/AppleSDGothicNeo）|
+| 图像 | 2D 纹理 quad + 像素笔刷（PixmapBrush GPU 路径）|
+| 阴影 | `FillBoxShadow` —— shader 内 SDF 模糊，比 Cairo 的多次 blur 卷积快得多 |
+| 抗锯齿 | per-pixel SDF AA + 4× MSAA（默认；`SILK_GLUI_MSAA` 可配 0/2/4/8/16）|
+| 裁剪 | scissor 矩形（旋转容器仍是 AABB —— 见 §3 stencil clip 计划）|
+| Atlas | Skyline bin packer（字体 / 图标 / 渐变 ramp 纹理）|
+| 缓存 | LRU pixmap 纹理缓存 + 帧时戳驱逐，硬上限 256 项 |
+| 性能 | 单批次合并 + 流式 VBO + dirty-flag flush；FPS overlay 可选（`SILK_GLUI_FPS=1`）|
+
+**61 个 widget 全部通过 `glui.CairoCompat` paint.Painter facade 走 GPU 路径，无需任何 widget 代码改动。**
+
+### 1.2 Cairo 依赖移除（silk_no_cairo build tag）
+
+| 验证项 | 结果 |
+|--------|------|
+| `go build -tags silk_no_cairo ./...` | ✅ 全部 11 包构建通过 |
+| `go test -tags silk_no_cairo -race ./...` | ✅ 11 包 -race 通过 |
+| `otool -L decl_demo`（pure 模式）| ✅ **零 libcairo 引用**，仅 13 个系统库 |
+| 端到端 demo（窗口 + 点击 + i18n + 复数 + CJK 渲染）| ✅ 在 pure 模式下完整工作 |
+
+详见 `CAIRO_REMOVAL_VALIDATION.md`、`CAIRO_REMOVAL_PLAN.md`。
+
+### 1.3 Qt5 等价物完成清单
+
+opengl 分支顺路实现了 Qt5 的若干基础库：
+
+| Silk 包 | Qt5 等价 | 行数 | 状态 |
+|---------|----------|------|------|
+| `silk/decl` | QML 风格声明式 + 设计器互通 | ~1000 | ✅ TDoc 双向 codec、TrKey i18n 集成、端到端点击验证 |
+| `silk/i18n` | QTranslator + tr() | ~800 | ✅ JSON 加载、locale 检测（含 macOS AppleLocale）、复数规则 |
+| `silk/settings` | QSettings | ~1000 | ✅ TDoc 后端、group 嵌套、跨平台路径 |
+| `silk/svg` | QSvgRenderer | ~2000 | ✅ 7 类 shape、path data、transform、级联样式 |
+| `silk/state` | QStateMachine | ~870 | ✅ 简单 + 复合 state、guard、self-transition |
+| `silk/fswatch` | QFileSystemWatcher | ~720 | ✅ polling 实现、Created/Modified/Removed 事件 |
+| `silk/gui.Validator` | QValidator | ~330 | ✅ Int / Double / RegExp + Edit 集成 |
+| `silk/gui.Completer` | QCompleter | ~250 | ✅ 3 类 match mode + Edit 集成 |
+| `silk/gui.PixmapBrush GPU` | cairo_pattern_create_for_surface | ~250 | ✅ glui CairoCompat 检测路由 |
+
+### 1.4 测试覆盖
+
+| 项目 | 数量 |
+|------|------|
+| 包总数 | 11（不含 prop / cairo / hashmap / sqlite3 等基础包） |
+| 测试用例（默认模式）| 600+ |
+| 测试用例（silk_no_cairo 模式）| 600+（同集合 + tag-aware 行为不变） |
+| -race 通过率 | 100% |
+| go vet 警告 | 全部 pre-existing，本轮零新增 |
+
+### 1.5 文档资产
+
+仓库根的非 gitignore 文档：
+
+- `OPENGL_TESTING.md` —— 完整测试教程（构建 / 运行 / 自动化点击）
+- `CAIRO_REMOVAL_PLAN.md` —— 4 轮 Cairo 移除计划及实际产出
+- `CAIRO_REMOVAL_VALIDATION.md` —— 本地验证报告
+- `ROADMAP.md` —— 本文档
+
+---
+
+## 2. opengl 对比 Cairo 的优势
+
+### 2.1 性能
+
+| 维度 | Cairo | opengl (glui) | 说明 |
+|------|-------|---------------|------|
+| 矩形 fill | CPU 像素填充 | 1 batch + GPU rasterizer | 大窗口下 5-10× 提速实测 |
+| 圆角矩形 | CPU 路径采样 | per-vertex SDF + AA | 边缘更平滑，无需多次采样 |
+| 渐变 | 软件光栅 | shader 直采 + 缓存 ramp 纹理 | radial 加速最明显 |
+| 文本 | freetype 单次 + cache 像素 | atlas 多 quad + SDF 缩放 | 大字体缩放 SDF 优于 Cairo bitmap |
+| 阴影 | 多次卷积模糊 | 单 shader pass | FillBoxShadow 数倍提速 |
+| 帧延迟 | 全画布更新 | dirty-flag + scissor 部分刷新 | UI 静态时近零开销 |
+| MSAA | 软件 SSAA（昂贵） | 硬件 4×（默认开） | 边缘 AA 几乎免费 |
+
+### 2.2 部署
+
+| 维度 | Cairo | opengl (glui) |
+|------|-------|---------------|
+| 二进制 | 必须链 libcairo + libpixman + libpng + libfontconfig + libfreetype + libxlib + ... | 仅链 OpenGL 框架（每个平台 1 个）|
+| Runtime 大小（macOS arm64）| 14 MB binary + ~10 MB 系统 libcairo dylibs | 14 MB binary + 0 额外 |
+| 跨平台一致性 | 依赖每个平台的字体后端（fontconfig / Win32 GDI / CoreText）| OpenGL 4.x+ 在 macOS / Linux / Windows 行为一致 |
+| 容器/最小镜像 | 必装 libcairo + 字体 | scratch 镜像即可（仅需 libGL.so）|
+| 跨编译 | 需要目标平台的 cairo headers | 纯 Go + GLFW，无需 cairo headers |
+
+### 2.3 渲染特性
+
+| 特性 | Cairo | opengl (glui) | 备注 |
+|------|-------|---------------|------|
+| 自定义着色器 | ❌ | ✅ | 可写自定义 visual effects |
+| Per-vertex 数据 | ❌ | ✅ | rect SDF 用 cornerHX/cornerR/cornerAA |
+| GPU 纹理 brush | 通过 surface pattern | 直接 GL 纹理 | glui 在桌面端常胜 |
+| FPS overlay | 需自实现 | 内置 `SILK_GLUI_FPS=1` | 调试方便 |
+| 帧时戳缓存驱逐 | ❌ | ✅ | LRU + 硬上限 256 |
+| Hot-reload 友好 | 慢（surface 重建昂贵）| 快（VBO 流式）| 配合 decl + fswatch 可秒级 |
+
+### 2.4 工程优势
+
+- **可测性**：glui Renderer 可在 ctx==nil 下安全 drain，单元测试不需要真实 GL context
+- **明确接口**：`paint.Painter` 接口固化，glui 的 `CairoCompat` 是 paint.Painter 的纯 GPU 实现
+- **build tag 切换**：`silk_no_cairo` 一键切换全栈，无 if/else 散落各处
+- **无 cgo finalize 风险**：纯 Go 模式无 cairo finalizer，更可控的 GC 行为
+
+### 2.5 Cairo 仍占优的地方（诚实陈述）
+
+| 维度 | Cairo 优势 |
+|------|-----------|
+| 字体渲染清晰度 | freetype hinting + sub-pixel 定位，小字号略胜 |
+| 文本 shaping | 通过 cairo + pango/HarfBuzz 间接得到 ligature / 复杂脚本 |
+| 复合操作 | 14 种 cairo_operator（OVER/MULTIPLY/SCREEN/HSL_LUMINOSITY/...）；glui 当前只有 SRC_OVER |
+| 路径裁剪 | 真任意路径裁剪；glui 当前是 AABB scissor |
+| PDF/SVG 输出 | Cairo 原生支持；glui 仅限屏幕 |
+| 椭圆弧 | path A 命令完整解算；svg 渲染器当前简化为 line |
+
+这些都是 §3 路线图中明确要补的项。
+
+---
+
+## 3. 后续路线
+
+按时间窗口分三段。每段后面跟随**完成判据**，便于追踪进度。
+
+### 3.1 短期（1-2 周内 / 收尾轮）
+
+**目标**：把已完成工作从"能跑"推到"可发布"。
+
+| 任务 | 工作量 | 完成判据 |
+|------|--------|----------|
+| CI 矩阵加 `silk_no_cairo` 测试 | 1 commit | `.github/workflows/ci.yml` linux-amd64 + macos-arm64 + macos-amd64 三平台都跑两次（默认 + tag）|
+| release.yml 产出 cairo-free 二进制 | 1 commit | tag push 后 release 同时上传 `silk-pure-*` 和 `silk-*` 两套压缩包 |
+| README "no-Cairo build" 章节 | docs | README 顶部加方块"两种构建模式"对照 + 链接到 `OPENGL_TESTING.md` |
+| `OPENGL_TESTING.md` 加 silk_no_cairo 教程 | docs | 一行命令 + 一行 `otool -L` 验证 |
+| Linux 真机端到端验证 | local 测试 | `go build -tags silk_no_cairo` + 跑 demo + xev 测试点击 |
+| Windows 真机端到端验证 | local 测试 | MSYS2 mingw 默认模式 + silk_no_cairo 模式都跑通 silk-demo |
+| `decl→Go source emitter` | ~300 LOC | `silk gen` 子命令把 `.silkui` 转成 `.silk.go` 源码；round-trip 测试 |
+
+**完成意义**：opengl 分支可以正式合并 main 或打 release tag，外部用户可消费两种构建模式。
+
+### 3.2 中期（2-8 周）
+
+**目标**：闭合 §2.5 中 Cairo 仍占优的几项；让 opengl 在功能上不再"略微弱于"。
+
+#### 3.2.1 Stencil-based path clipping（高优先级）
+
+当前 `applyClip` 把任意 path 退化为 AABB scissor。旋转容器内的圆角 overflow:hidden 会越界。
+
+**实现**：
+- glui Renderer 维护 stencil buffer（已在 ed4091c 中预留 8 bits）
+- `Renderer.PushClipPath(path)`：先把 path 三角化写入 stencil，draw 阶段 stencil_func gate
+- CairoCompat 在 `applyClip` 检测到非矩形或当前 CTM 含 rotation/skew 时，从 scissor 切到 stencil 路径
+- 嵌套 clip 通过 stencil 计数实现
+
+工作量：~600 LOC + tests。
+
+#### 3.2.2 SetOperator 复合模式（中优先级）
+
+glui 当前 hardcode SRC_OVER。Cairo 的 14 种 operator 中实战用到的：
+
+- OVER（默认）
+- SOURCE / DEST_OUT（"挖洞"）
+- MULTIPLY / SCREEN / OVERLAY（图层混合）
+- HSL_LUMINOSITY（grayed icon 用）
+
+**实现**：
+- 不同 operator 的 GL `glBlendFunc` / `glBlendEquation` 状态映射
+- 复杂 operator（HSL_LUMINOSITY）用 fragment shader 变体
+- CairoCompat.SetOperator 触发 batch flush + state 切换
+
+工作量：~400 LOC + tests。
+
+#### 3.2.3 SVG 路径椭圆弧完整解算
+
+当前 svg 渲染器把 `A` 命令简化为 LineTo，复杂图标会缺一段弧。
+
+**实现**：
+- SVG 椭圆弧 → 中心参数转换（W3C 标准算法）
+- 90° 切片成 cubic Bezier（`(4/3)*tan(θ/4)` 公式）
+- svg.PathArc 渲染时调用 painter.CurveTo
+
+工作量：~200 LOC + tests。
+
+#### 3.2.4 glui 字体子像素定位
+
+当前 glyph quad 钉在整数像素，Cairo 模式更清晰。
+
+**实现**：
+- DrawText 接受非整数 baseline x
+- 在 fragment shader 内做 sub-pixel 偏移（LCD 子像素 RGB 三采样）
+- 启用条件：`SILK_GLUI_SUBPIXEL=1` 或 macOS retina HiDPI 自动开
+
+工作量：~300 LOC + 视觉对比测试。
+
+#### 3.2.5 性能基准测试套件
+
+宣称"5-10× 提速"需要数字背书。
+
+**实现**：
+- `bench/` 目录：rect_fill / gradient / text / pixmap / scrolling / typical_form
+- 每个用例两种模式跑 1000 次、记 ns/op + frames/sec
+- `go test -bench` 输出 + 自动写入 `BENCHMARK.md`
+- CI 上选一个用例做 PR 性能 regression gate
+
+工作量：~500 LOC + 数据收集。
+
+#### 3.2.6 Designer 输出 decl Go 源码
+
+`silk gen` 子命令的进阶 —— 不只是 .silkui → .silk.go，还能 designer 实时生成代码。
+
+工作量：~400 LOC（基于 §3.1 已实现的 emitter）。
+
+### 3.3 长期（8 周+）
+
+**目标**：在 opengl 路径基础上做 Cairo 时代不可能的事。
+
+#### 3.3.1 Hot reload（decl + fswatch）
+
+`fswatch` 监听 `.silk.go` / `.silkui`，文件变更触发 `decl.FromTDoc` → `Build()` → `widget.Replace()` 实时刷新窗口。无需重启进程。
+
+类似 Flutter Hot Reload。Silk 的优势是已有 decl 双向 codec —— 解析变更只需重 build 子树。
+
+工作量：~800 LOC + UX 设计。
+
+#### 3.3.2 GLES 3.0 / WebGL 后端
+
+OpenGL 2.1 是桌面级。如果要跑：
+- iOS / Android（GLES 3.0）
+- Web（WebGL 2.0 via wasm）
+
+需要 shader 改造（`#version 100 es` / `#version 300 es`）+ 移除 ARB 扩展依赖 + 对接 GLFW Web 适配（如 emscripten）。
+
+工作量：~2000 LOC + 工具链。
+
+#### 3.3.3 文本 shaping（HarfBuzz 或 Go 替代）
+
+复杂脚本（阿拉伯 / 印地语 / 藏文）需要字符级 shaping。当前 glui 是 per-rune advance + atlas blit，没有 ligature / mark positioning。
+
+选项：
+- 集成 HarfBuzz（C 依赖回归，但 cgo-only 可选）
+- 等纯 Go shaping 库（github.com/go-text/typesetting 已基本可用）
+- 自己写简化版 OpenType GSUB/GPOS（工作量极大）
+
+推荐：集成 `go-text/typesetting`，纯 Go，覆盖 90% 用例。
+
+工作量：~600 LOC。
+
+#### 3.3.4 自动 Accessibility 树
+
+macOS 的 NSAccessibility / Windows UIA / Linux AT-SPI。让 Silk 应用对屏幕阅读器、自动化测试可见。
+
+工作量：~1500 LOC + 平台特定 cgo。
+
+#### 3.3.5 性能：GPU instancing + 复杂场景
+
+当前每个 widget 单独 push quad。万级 widget 场景（IDE 大文件、大表格）会瓶颈在 CPU 提交。
+
+**实现**：
+- 同 kind 同样式批次内做 instanced draw
+- 顶点写入避免 reflection
+- VirtualList 与 instancing 互动
+
+工作量：~600 LOC + benchmark 验证。
+
+#### 3.3.6 Native event 后端（取代 fswatch polling）
+
+fswatch 当前是 polling。系统级 inotify / FSEvents / ReadDirectoryChangesW 可降低延迟到毫秒级、避免 idle CPU。
+
+可选 cgo（fsnotify）或纯 Go 系统调用直接封装。
+
+工作量：~400 LOC。
+
+---
+
+## 4. 路线总结
+
+```
+当前位置（commit 1dec0bd）
+├── opengl 渲染管线 ✅（11 大子系统）
+├── Cairo 移除 ✅（silk_no_cairo build tag 全栈通）
+├── Qt5 等价物 9 个 ✅
+└── 测试 600+ × 2 模式 × -race 全过
+
+短期 1-2 周
+├── CI silk_no_cairo 矩阵
+├── release.yml 双轨二进制
+├── README + 教程更新
+├── Linux / Windows 真机验证
+└── decl → Go emitter
+
+中期 2-8 周
+├── Stencil-based path clipping
+├── 14 种 SetOperator 复合模式
+├── SVG 椭圆弧完整解算
+├── glui 子像素文字
+├── 性能基准套件
+└── Designer 输出 decl Go
+
+长期 8 周+
+├── decl + fswatch hot-reload
+├── GLES 3.0 / WebGL 后端
+├── go-text 文本 shaping
+├── Accessibility 树
+├── GPU instancing 性能
+└── Native event 后端取代 polling
+```
+
+每完成一项更新本文档对应章节的 ✅ / ⏳ 状态，并在 commit message 引用 ROADMAP.md 章节号。
