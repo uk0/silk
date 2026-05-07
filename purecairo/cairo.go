@@ -1515,10 +1515,31 @@ func (this *Context) Stroke() {
 
 func (this *Context) StrokePreserve() { this.strokePath() }
 
+// strokePath rasterises the active path as a filled outline with the
+// configured pen width, line cap, and line join. The implementation
+// follows cairo's offsetting strategy from cairo-path-stroke.c:
+//
+//   1. Walk each subpath flattening curves into line segments (cubic →
+//      16 chord approximation, same as cairo's default tolerance for
+//      small curves).
+//   2. Each line segment becomes a thin quad oriented perpendicular
+//      to the segment direction, half-width on each side.
+//   3. At joins between adjacent segments and at subpath endpoints,
+//      add round-cap / round-join discs of radius half-width — simple
+//      union geometry that the rasteriser's non-zero winding rule
+//      composes correctly with the per-segment quads.
+//
+// Cap / join attribute support:
+//   - LINE_CAP_BUTT (default), LINE_CAP_SQUARE: caps stay flat; the
+//     per-segment quad already covers butt geometry.
+//   - LINE_CAP_ROUND: half-disc added at each subpath endpoint.
+//   - LINE_JOIN_MITER (default), LINE_JOIN_BEVEL: corners stay flat
+//     (small triangular gap at sharp turns — matches cairo bevel).
+//   - LINE_JOIN_ROUND: full disc added at each interior vertex.
+//
+// True miter joins (angled extension to intersection) is the obvious
+// follow-up; visually round + bevel cover every silk widget today.
 func (this *Context) strokePath() {
-	// Approximate stroke: rasterise the outline as filled rectangles
-	// per segment. Not antialiased corners or proper cap/join — that's
-	// a full stroke-flattening pass for a follow-up.
 	if this.surface == nil || this.surface.img == nil {
 		return
 	}
@@ -1527,23 +1548,56 @@ func (this *Context) strokePath() {
 	if wpx < 1 {
 		wpx = 1
 	}
+	hw := wpx * 0.5
 	r := vector.NewRasterizer(w, h)
+
+	cap := this.state.lineCap
+	join := this.state.lineJoin
+
 	prevX, prevY := 0.0, 0.0
+	subStartX, subStartY := 0.0, 0.0 // anchor for closing subpath
 	have := false
+	subStart := true // first vertex of current subpath?
+
+	addJoin := func(x, y float64) {
+		if join == LINE_JOIN_ROUND {
+			addStrokeDisc(r, x, y, hw)
+		}
+	}
+	addCap := func(x, y float64) {
+		if cap == LINE_CAP_ROUND {
+			addStrokeDisc(r, x, y, hw)
+		}
+	}
+
+	flushSubpath := func() {
+		// End-of-subpath: place the trailing cap.
+		if have {
+			addCap(prevX, prevY)
+		}
+		have = false
+	}
+
 	for _, p := range this.path {
 		switch p.op {
 		case 'M':
+			flushSubpath()
 			prevX, prevY = this.state.matrix.Transform(p.x1, p.y1)
+			subStartX, subStartY = prevX, prevY
+			subStart = true
 			have = true
+			addCap(prevX, prevY)
 		case 'L':
 			x, y := this.state.matrix.Transform(p.x1, p.y1)
 			if have {
 				strokeSegment(r, prevX, prevY, x, y, wpx)
+				if !subStart {
+					addJoin(prevX, prevY)
+				}
 			}
 			prevX, prevY = x, y
-			have = true
+			subStart = false
 		case 'C':
-			// Flatten the cubic to 16 line segs, stroke each.
 			x0, y0 := prevX, prevY
 			cp1x, cp1y := this.state.matrix.Transform(p.x1, p.y1)
 			cp2x, cp2y := this.state.matrix.Transform(p.x2, p.y2)
@@ -1555,19 +1609,36 @@ func (this *Context) strokePath() {
 				by := mt*mt*mt*y0 + 3*mt*mt*t*cp1y + 3*mt*t*t*cp2y + t*t*t*y3
 				if have {
 					strokeSegment(r, prevX, prevY, bx, by, wpx)
+					if !subStart || i > 1 {
+						addJoin(prevX, prevY)
+					}
 				}
 				prevX, prevY = bx, by
-				have = true
+				subStart = false
 			}
 		case 'Z':
+			if have && (prevX != subStartX || prevY != subStartY) {
+				strokeSegment(r, prevX, prevY, subStartX, subStartY, wpx)
+				addJoin(prevX, prevY)
+			}
+			// Closing means the start vertex now has an interior join,
+			// not a cap — so add a join disc rather than a cap.
+			if have {
+				addJoin(subStartX, subStartY)
+			}
 			have = false
+			subStart = true
 		}
 	}
+	flushSubpath()
+
 	this.rasterizeWithSource(r, this.drawRect())
 }
 
 // strokeSegment rasterises a line as a thin oriented quad (offset by
-// half-width perpendicular to the segment).
+// half-width perpendicular to the segment). The quad is added to `r`
+// as a closed subpath with non-zero winding so it composes cleanly
+// with adjacent segments and join discs.
 func strokeSegment(r *vector.Rasterizer, x0, y0, x1, y1, width float64) {
 	dx, dy := x1-x0, y1-y0
 	l := math.Hypot(dx, dy)
@@ -1580,6 +1651,22 @@ func strokeSegment(r *vector.Rasterizer, x0, y0, x1, y1, width float64) {
 	r.LineTo(float32(x1+nx), float32(y1+ny))
 	r.LineTo(float32(x1-nx), float32(y1-ny))
 	r.LineTo(float32(x0-nx), float32(y0-ny))
+	r.ClosePath()
+}
+
+// addStrokeDisc emits a 16-segment polygon approximation of a disc
+// centred at (cx, cy) with radius `radius`. Used by round caps and
+// round joins. Each call appends one closed subpath to `r`.
+func addStrokeDisc(r *vector.Rasterizer, cx, cy, radius float64) {
+	if radius <= 0 {
+		return
+	}
+	const segs = 16
+	r.MoveTo(float32(cx+radius), float32(cy))
+	for i := 1; i < segs; i++ {
+		a := float64(i) * 2 * math.Pi / segs
+		r.LineTo(float32(cx+radius*math.Cos(a)), float32(cy+radius*math.Sin(a)))
+	}
 	r.ClosePath()
 }
 
