@@ -11,8 +11,12 @@ permissions:
   contents: write  # required to create the GitHub Release
 
 jobs:
-  build:
-    name: Build ${{ matrix.label }}
+  # ───────────────────────────────────────────────────────────────────
+  # Default build — links libcairo. Produces silk-${platform}.tar.gz
+  # (or .zip on Windows) packages.
+  # ───────────────────────────────────────────────────────────────────
+  build-cairo:
+    name: Build ${{ matrix.label }} (cairo)
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +93,10 @@ jobs:
 
       # ─── Test ───
       - name: Run tests
-        run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+        run: |
+          go test -short -count=1 \
+            ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ \
+            ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
 
       # ─── Build artifacts ───
       - name: Build designer
@@ -116,7 +123,7 @@ jobs:
           cp silk-designer-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-designer
           cp silk-demo-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-demo
           cp -r icon dist/silk-${{ matrix.label }}/
-          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
+          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/ 2>/dev/null || true
           cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
 
       - name: Package (Windows)
@@ -127,7 +134,7 @@ jobs:
           cp silk-designer-${{ matrix.label }}.exe dist/silk-${{ matrix.label }}/silk-designer.exe
           cp silk-demo-${{ matrix.label }}.exe dist/silk-${{ matrix.label }}/silk-demo.exe
           cp -r icon dist/silk-${{ matrix.label }}/
-          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
+          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/ 2>/dev/null || true
           # Bundle MSYS2 cairo DLLs so the binary runs on systems without MSYS2.
           cp /c/msys64/mingw64/bin/libcairo-2.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
           cp /c/msys64/mingw64/bin/libpixman-1-0.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
@@ -149,9 +156,125 @@ jobs:
           path: dist/silk-${{ matrix.label }}.*
           retention-days: 7
 
+  # ───────────────────────────────────────────────────────────────────
+  # silk_no_cairo build — does NOT link libcairo. Produces
+  # silk-pure-${platform}.tar.gz packages.
+  #
+  # Linux + macOS only for now. Windows pure-mode build is on the
+  # roadmap but blocked by the win32 backend (gui/window_windows.go)
+  # still using Cairo+GDI; once that's tagged the matrix here can
+  # gain windows-amd64-pure.
+  # ───────────────────────────────────────────────────────────────────
+  build-pure:
+    name: Build ${{ matrix.label }} (silk_no_cairo)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-amd64-pure
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - label: macos-arm64-pure
+            os: macos-15
+            goos: darwin
+            goarch: arm64
+          - label: macos-amd64-pure
+            os: macos-15-intel
+            goos: darwin
+            goarch: amd64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # No libcairo install — proving the pure build does not need it.
+      # Linux still needs the X11 / GL system headers because GLFW links
+      # them via cgo. CJK fonts are a runtime ask not a build ask, but
+      # we install fonts-noto-cjk anyway so the test phase's CJK
+      # fallback test runs (instead of t.Skip).
+      - name: Install GLFW + CJK system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libgl1-mesa-dev \
+            fonts-noto-cjk
+
+      - name: Run tests (silk_no_cairo)
+        run: |
+          go test -short -count=1 -tags silk_no_cairo \
+            ./core/ ./geom/ ./paint/ ./gui/ \
+            ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
+
+      - name: Build designer (silk_no_cairo)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          go build -tags silk_no_cairo -v -ldflags="-s -w" \
+            -o silk-designer-${{ matrix.label }} design.go
+
+      - name: Build demo (silk_no_cairo)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          go build -tags silk_no_cairo -v -ldflags="-s -w" \
+            -o silk-demo-${{ matrix.label }} demo.go
+
+      - name: Verify zero libcairo linkage (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ldd silk-designer-${{ matrix.label }} 2>/dev/null | grep -i cairo; then
+            echo "ERROR: pure binary links libcairo" >&2
+            exit 1
+          fi
+          echo "OK: silk-designer-${{ matrix.label }} has zero libcairo references"
+
+      - name: Verify zero libcairo linkage (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if otool -L silk-designer-${{ matrix.label }} | grep -i cairo; then
+            echo "ERROR: pure binary links libcairo" >&2
+            exit 1
+          fi
+          echo "OK: silk-designer-${{ matrix.label }} has zero libcairo references"
+
+      - name: Package (Unix)
+        run: |
+          mkdir -p dist/silk-${{ matrix.label }}
+          cp silk-designer-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-designer
+          cp silk-demo-${{ matrix.label }} dist/silk-${{ matrix.label }}/silk-demo
+          cp -r icon dist/silk-${{ matrix.label }}/
+          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: silk-${{ matrix.label }}
+          path: dist/silk-${{ matrix.label }}.*
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────
+  # Publish — gathers both build matrices' artefacts into one Release.
+  # ───────────────────────────────────────────────────────────────────
   release:
     name: Publish Release
-    needs: build
+    needs: [build-cairo, build-pure]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for release notes)
@@ -168,8 +291,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # tarball matching catches both default (silk-linux-amd64.tar.gz)
+          # and pure (silk-linux-amd64-pure.tar.gz) variants.
           files: artifacts/**/silk-*.tar.gz
-          # Also attach Windows zip — second pattern (separate file pattern):
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}

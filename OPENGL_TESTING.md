@@ -4,18 +4,30 @@
 
 本文档帮助你在本地拉这个分支并跑通验证。
 
+## 0. 两种构建模式
+
+opengl 分支支持两种构建模式：
+
+| 模式 | 命令 | 链接库 | 何时用 |
+|------|------|--------|--------|
+| **默认（Cairo）** | `go build` | libcairo + libpixman + libfontconfig + libfreetype + ... | 兼容现有 Cairo 应用 / 字体小字号渲染要求最佳清晰度 |
+| **silk_no_cairo（纯 Go）** | `go build -tags silk_no_cairo` | **零 libcairo 依赖**，仅链 OpenGL + 系统库 | 容器最小镜像 / 跨平台简化部署 / 不希望 cgo Cairo 链 |
+
+两种模式下功能基本一致——布局、颜色、CJK 渲染、点击交互、i18n、复数规则全部相同。详见 §10 对比表。
+
 ## 1. 环境要求
 
-| 平台 | 必须 | 说明 |
-|------|------|------|
-| Go | 1.21+ | 推荐用 `g` 版本管理器，避免和系统 brew Go 串台 |
-| Cairo | 1.16+ | macOS `brew install cairo`；Linux `libcairo2-dev`；Windows MSYS2 mingw-w64-x86_64-cairo |
-| pkg-config | 0.29+ | macOS `brew install pkg-config` |
-| GLFW 3.3 | 自动 | 由 go modules 拉取 |
-| C 编译器 | clang/gcc | macOS Xcode CLT；Linux build-essential；Windows MSYS2 mingw |
-| CGO | 启用 | `CGO_ENABLED=1` 默认即开 |
+| 平台 | 必须 | silk_no_cairo 是否需要 | 说明 |
+|------|------|--------------------|------|
+| Go | 1.21+ | ✅ 同样需要 | 推荐用 `g` 版本管理器，避免和系统 brew Go 串台 |
+| Cairo | 1.16+ | ❌ 无需 | 仅默认模式：macOS `brew install cairo`；Linux `libcairo2-dev`；Windows MSYS2 mingw-w64-x86_64-cairo |
+| pkg-config | 0.29+ | ❌ 无需（不调 cairo） | macOS `brew install pkg-config` |
+| GLFW 3.3 | 自动 | ✅ 同样需要 | 由 go modules 拉取 |
+| C 编译器 | clang/gcc | ✅ 同样需要 | macOS Xcode CLT；Linux build-essential；Windows MSYS2 mingw |
+| CGO | 启用 | ✅ 同样需要 | `CGO_ENABLED=1` 默认即开 |
 
 > **macOS Apple Silicon**：cairo 装在 `/opt/homebrew/Cellar/cairo/...`；下面命令里有 `CGO_CFLAGS` / `CGO_LDFLAGS` 的路径模板可以直接套。
+> **silk_no_cairo 模式**：完全不需要上面所有 Cairo 路径，下面 §3.2 直接给命令。
 
 ## 2. 拉代码
 
@@ -25,7 +37,9 @@ cd silk
 git checkout opengl
 ```
 
-## 3. 构建（macOS Apple Silicon 模板）
+## 3. 构建
+
+### 3.1 默认模式（Cairo）— macOS Apple Silicon 模板
 
 ```bash
 export PATH="/opt/homebrew/bin:$PATH"
@@ -45,15 +59,46 @@ export CGO_CFLAGS="$(pkg-config --cflags cairo)"
 export CGO_LDFLAGS="$(pkg-config --libs cairo)"
 ```
 
+### 3.2 silk_no_cairo 模式（纯 Go，无 libcairo）
+
+无任何 Cairo 环境变量、无任何 brew/apt cairo 安装：
+
+```bash
+go build -tags silk_no_cairo -o /tmp/silk-designer-pure design.go
+go build -tags silk_no_cairo -o /tmp/silk-demo-pure demo.go
+go build -tags silk_no_cairo -o /tmp/decl-demo-pure decl_demo.go
+go build -tags silk_no_cairo -o /tmp/i18n-demo-pure i18n_demo.go
+```
+
+**验证产物无 libcairo 依赖**：
+
+```bash
+# macOS
+otool -L /tmp/silk-designer-pure | grep -ci cairo
+# 输出应为 0
+
+# Linux
+ldd /tmp/silk-designer-pure | grep -ci cairo
+# 输出应为 0
+```
+
+silk_no_cairo 模式自动启用 `silk/glui` OpenGL 渲染（无需 `SILK_GLUI=1`）。
+
 ## 4. 跑全套单元测试
 
 ```bash
+# 默认（Cairo）模式
 go test -short -count=1 \
   ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ \
   ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
+
+# silk_no_cairo 模式
+go test -short -count=1 -tags silk_no_cairo \
+  ./core/ ./geom/ ./paint/ ./gui/ \
+  ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
 ```
 
-预期：每个包都 `ok`。
+预期：两种模式每个包都 `ok`。也可加 `-race` 跑并发安全检查（已验证全过）。
 
 各包测试数量速览：
 
@@ -205,6 +250,10 @@ Silk 的 button 在 `OnLeftUp` 里检查 `IsHover()`。CGEvent 走 `cghidEventTa
 
 | commit | 内容 |
 |--------|------|
+| `1dec0bd` | paint: hashScaledFontCacheKey checkptr fix + 验证报告 |
+| `afe4ee0` | gui: silk_no_cairo 自动启 glui + Round 3+4 收尾 |
+| `6568924` | paint: Round 2 of Cairo removal — 包内按 build tag 切分 |
+| `d1f2558` | cairo: 加 silk_no_cairo build tag 脚手架 + removal plan |
 | `7163b4b` | fswatch: QFileSystemWatcher 等价 |
 | `09636d1` | glui: PixmapBrush GPU 渲染 |
 | `63e31b0` | state: QStateMachine 等价 |
@@ -220,13 +269,29 @@ Silk 的 button 在 `OnLeftUp` 里检查 `IsHover()`。CGEvent 走 `cghidEventTa
 | `1810a2a` | glui: GPU 径向渐变 |
 | `4c955de` | glui: CJK 字体回退链 |
 
-## 10. 反馈与下一步
+## 10. Cairo vs 纯 Go（silk_no_cairo）功能对比
 
-剩余 gap（按优先级）：
+| 维度 | 默认（Cairo）| silk_no_cairo | 注 |
+|------|--------------|---------------|-----|
+| 布局 / 颜色 / hover | 一致 | 一致 | — |
+| CJK 渲染 | freetype + fontconfig | glui CJK 多脚本回退 | 字体覆盖均完整 |
+| 字体小字号清晰度 | 略胜（freetype hinting）| 略软（SDF atlas + AA halo）| 12-16pt 正常 UI 字号都可读 |
+| 布局测量 | 准确（freetype）| 估算（ASCII 0.5×size、CJK 1.0×size）| 标签 / 按钮 / 输入框完全够用 |
+| 复合操作 | 14 种 cairo_operator | SRC_OVER | grayed 图标用 RGB×0.6/A×0.7 近似 |
+| 路径裁剪 | 任意路径 | AABB scissor | 旋转容器圆角会越界（roadmap §3.2.1）|
+| PNG/JPEG 解码 | 通过 libpng | image/png + image/jpeg | 纯 Go |
+| `paint.TextToPixmap` / `IconTextToPixmap` | 渲染纹理 | 返回空白 stub | 仅 3 widget 视觉装饰受影响 |
+| 9-patch theme | 渲染 tile | 空白 tile（默认 theme 不用 9-patch）| 视觉无差别 |
+| 二进制依赖 | libcairo + libpixman + libfontconfig + libfreetype + libpng + ... | 仅 OpenGL + 系统库 | 见 §3.2 验证 |
 
-- **Stencil-based path clipping** — 旋转容器才用得上，是真正的非 AABB 限制
-- **SetOperator / 复合模式** — 14 种 Cairo blend mode 当前都映射成 SRC_OVER
-- **decl→Go source emitter** — 让设计器输出可读 .silk.go，闭合 round-trip
-- **跨平台 release pipeline 在 Windows 真机端到端验证**
+完整对比详见仓库根 `CAIRO_REMOVAL_VALIDATION.md`。
+
+## 11. 反馈与下一步
+
+按 `ROADMAP.md` 三段：
+
+- **短期 1-2 周** — CI silk_no_cairo 矩阵（已加，本次 commit）/ release 双轨二进制（已加）/ Linux+Windows 真机验证 / decl→Go emitter
+- **中期 2-8 周** — Stencil-based path clipping / SetOperator 14 种 blend / SVG 椭圆弧 / glui 子像素文字 / 性能基准套件 / Designer 输出 decl Go
+- **长期 8 周+** — decl + fswatch 热重载 / GLES 3.0/WebGL 后端 / go-text 文本 shaping / Accessibility 树 / GPU instancing / Native event APIs
 
 发现问题或新想法直接开 issue。

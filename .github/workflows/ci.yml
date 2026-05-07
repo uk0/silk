@@ -8,8 +8,12 @@ on:
     branches: [main, opengl]
 
 jobs:
-  test:
-    name: Test ${{ matrix.label }}
+  # ───────────────────────────────────────────────────────────────────
+  # Default build — links libcairo. Tests every package including the
+  # paint Cairo path.
+  # ───────────────────────────────────────────────────────────────────
+  test-cairo:
+    name: Test ${{ matrix.label }} (cairo)
     strategy:
       fail-fast: false
       matrix:
@@ -53,12 +57,97 @@ jobs:
           echo "CGO_LDFLAGS=-L$(brew --prefix)/lib -lcairo" >> $GITHUB_ENV
 
       - name: Vet
-        run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+        run: |
+          go vet \
+            ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ \
+            ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
 
       - name: Test
-        run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+        run: |
+          go test -short -count=1 \
+            ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ \
+            ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
 
       - name: Build entry points
         run: |
           go build -v -o /tmp/silk-designer design.go
           go build -v -o /tmp/silk-demo demo.go
+
+  # ───────────────────────────────────────────────────────────────────
+  # silk_no_cairo build — does NOT link libcairo. The pure-Go path
+  # exercised by ROADMAP §1.2.
+  # ───────────────────────────────────────────────────────────────────
+  test-pure:
+    name: Test ${{ matrix.label }} (silk_no_cairo)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+          - label: macos-arm
+            os: macos-15
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # No libcairo install — verifying that the pure build truly does
+      # not need it. Linux still needs the X11 / GL system headers for
+      # GLFW; CJK fonts also help glui's font fallback chain test pass
+      # (TestFontCJKMultiScriptCoverage skips when no CJK font found).
+      - name: Install GLFW + CJK system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libgl1-mesa-dev \
+            fonts-noto-cjk
+
+      - name: Vet (silk_no_cairo)
+        run: |
+          go vet -tags silk_no_cairo \
+            ./core/ ./geom/ ./paint/ ./gui/ \
+            ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
+
+      - name: Test (silk_no_cairo)
+        run: |
+          go test -short -count=1 -tags silk_no_cairo \
+            ./core/ ./geom/ ./paint/ ./gui/ \
+            ./glui/ ./decl/ ./i18n/ ./settings/ ./svg/ ./state/ ./fswatch/
+
+      - name: Build entry points (silk_no_cairo)
+        run: |
+          go build -tags silk_no_cairo -v -o /tmp/silk-designer-pure design.go
+          go build -tags silk_no_cairo -v -o /tmp/silk-demo-pure demo.go
+
+      # Sanity check: the pure-mode binary must NOT link libcairo.
+      # Greps the platform dependency listing for any 'cairo' reference;
+      # fails the job if any is found.
+      - name: Verify zero libcairo linkage (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ldd /tmp/silk-designer-pure 2>/dev/null | grep -i cairo; then
+            echo "ERROR: silk-designer-pure links libcairo" >&2
+            exit 1
+          fi
+          echo "OK: no libcairo references in silk-designer-pure"
+
+      - name: Verify zero libcairo linkage (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if otool -L /tmp/silk-designer-pure | grep -i cairo; then
+            echo "ERROR: silk-designer-pure links libcairo" >&2
+            exit 1
+          fi
+          echo "OK: no libcairo references in silk-designer-pure"
