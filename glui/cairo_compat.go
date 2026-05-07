@@ -34,7 +34,11 @@ import (
 //   - Radial gradients use the radial-gradient shader against axis-
 //     aligned rect paths and fall back to a solid inner-stop fill on any
 //     other shape — same gating policy as linear gradients.
-//   - SetOperator / blend modes (we always run SRC_OVER)
+//   - SetOperator handles separable Porter-Duff + ADD / MULTIPLY / SCREEN /
+//     DARKEN / LIGHTEN via fixed-function blending; non-separable operators
+//     (OVERLAY, COLOR_DODGE/BURN, SOFT/HARD_LIGHT, DIFFERENCE, EXCLUSION,
+//     HSL_*) silently fall back to OVER until a fragment-shader variant
+//     lands
 //   - Clip-by-path (only axis-aligned bounding-box clip is supported —
 //     proper stencil-buffer path clipping is a TODO)
 //   - Cairo glyph IDs in DrawGlyphs/DrawGlyph (no-op; widgets that route
@@ -1115,12 +1119,15 @@ func (c *CairoCompat) ClipBounds() (x, y, width, height float64) {
 
 func (c *CairoCompat) ClipBounds1() geom.Rect { return c.clipRect }
 
-// --- Operator (no-op for now) -----------------------------------------
+// --- Operator ---------------------------------------------------------
 
 func (c *CairoCompat) SetOperator(op paint.Operator) {
-	// glui hard-codes SRC_OVER blending (set up in Context.Init). Honouring
-	// arbitrary operators would require flushing + flipping gl.BlendFunc on
-	// each change — deferred until a real widget needs it.
+	// Renderer.SetBlendOp flushes the current batch before reprogramming
+	// gl.BlendFunc / gl.BlendEquation, so already-emitted geometry blends
+	// against the framebuffer using the previously-active operator. Ops
+	// the fixed-function pipeline can't express fall back to OVER inside
+	// SetBlendOp.
+	c.r.SetBlendOp(op)
 }
 
 // --- Pen / Brush ------------------------------------------------------

@@ -4,6 +4,8 @@ import (
 	"unsafe"
 
 	"github.com/go-gl/gl/v2.1/gl"
+
+	"silk/paint"
 )
 
 // Renderer records draw commands per frame and flushes them in batches.
@@ -61,6 +63,12 @@ type Renderer struct {
 	// component forces a flush before the next quad joins the batch.
 	radR0 float32
 	radR1 float32
+
+	// curOp is the active Cairo-style blend operator. Begin() resets this
+	// to OpOver so cross-frame state can't leak. SetBlendOp flushes the
+	// batch and reprograms gl.BlendFunc / gl.BlendEquation when the op
+	// changes — same flush semantics as gradient stops or texture binds.
+	curOp paint.Operator
 }
 
 type batchKind uint8
@@ -106,6 +114,12 @@ func (c *Context) Begin(fbW, fbH float32) *Renderer {
 	r.gradStart = Color{}
 	r.gradEnd = Color{}
 
+	// Reset blend op to OVER. We don't trust whatever op the previous
+	// frame left set — apply the GL state explicitly so Begin() lands in
+	// a known configuration.
+	r.curOp = paint.OpOver
+	r.applyBlendState(defaultBlendState)
+
 	return r
 }
 
@@ -114,6 +128,12 @@ func (r *Renderer) End() {
 	r.flush()
 	// Make sure scissor is off for whatever runs after us.
 	gl.Disable(gl.SCISSOR_TEST)
+	// Restore the default OVER blend state so external GL code (or the next
+	// Begin) doesn't inherit whatever the last widget left set.
+	if r.curOp != paint.OpOver {
+		r.applyBlendState(defaultBlendState)
+		r.curOp = paint.OpOver
+	}
 	rendererPool.put(r)
 }
 

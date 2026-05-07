@@ -174,21 +174,21 @@ opengl 分支顺路实现了 Qt5 的若干基础库：
 
 约 350 LOC（比预估 600 少，因为 stencil triangle render 复用了 kindPath batch）。
 
-#### 3.2.2 SetOperator 复合模式（中优先级）
+#### 3.2.2 SetOperator 复合模式 ✅（已完成）
 
-glui 当前 hardcode SRC_OVER。Cairo 的 14 种 operator 中实战用到的：
+glui 之前 hardcode SRC_OVER，CairoCompat.SetOperator 是 no-op。Cairo 14 种 operator 中固定功能管线能精确表达的全部接通：
 
-- OVER（默认）
-- SOURCE / DEST_OUT（"挖洞"）
-- MULTIPLY / SCREEN / OVERLAY（图层混合）
-- HSL_LUMINOSITY（grayed icon 用）
+**已完成**：
+- ✅ `glui/blend.go`: `blendStateFor(op)` 把 paint.Operator 映射到 `(srcFactor, dstFactor, equation)` GL 状态三元组
+- ✅ 17 种可分 Porter-Duff + 算术 operator（CLEAR / SOURCE / OVER / IN / OUT / ATOP / DEST / DEST_OVER / DEST_IN / DEST_OUT / DEST_ATOP / XOR / ADD / MULTIPLY / SCREEN / DARKEN / LIGHTEN）— 后两者用 `gl.MIN` / `gl.MAX` blend equation
+- ✅ Renderer 加 `curOp` 字段；`SetBlendOp(op)` 在 op 变化时 flush 当前 batch 后重写 GL 状态；同 op 短路无 flush
+- ✅ Begin() 复位 curOp = OpOver + 默认 GL 状态；End() 把 GL 状态还原到 OVER 防泄漏到外部 GL 客户
+- ✅ CairoCompat.SetOperator 直接代理到 Renderer.SetBlendOp
+- ✅ 9 个测试覆盖：17 种 op 映射查表、11 种不可表达 op fallback OVER、curOp 切换正确、unsupported op 记录为 OpOver 防 redundant flush、op 切换 flush 待 batch、同 op 不 flush、no-ctx 路径安全、CairoCompat 路由、混合 fill+SetOperator flush
 
-**实现**：
-- 不同 operator 的 GL `glBlendFunc` / `glBlendEquation` 状态映射
-- 复杂 operator（HSL_LUMINOSITY）用 fragment shader 变体
-- CairoCompat.SetOperator 触发 batch flush + state 切换
+非可分 / HSL operator（OVERLAY, COLOR_DODGE, COLOR_BURN, HARD_LIGHT, SOFT_LIGHT, DIFFERENCE, EXCLUSION, HSL_*）需要 framebuffer 读回的 fragment shader 变体，已记录为 fallback OVER；后续 milestone 再上 shader path（grayed icon 当前在 cairo_compat 路径里用固定 0.6/0.7 tint 近似 HSL_LUMINOSITY，仍工作正常）。
 
-工作量：~400 LOC + tests。
+约 250 LOC（实现 + 测试）。
 
 #### 3.2.3 SVG 路径椭圆弧完整解算 ✅（已完成）
 
