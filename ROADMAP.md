@@ -362,6 +362,14 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（SVG clip path）**：
+- ✅ `svgexport.Clip()` / `ClipPreserve()`: 之前 no-op，现在 emit `<defs><clipPath id="cN"><path d="..."/></clipPath></defs>` + 打开 `<g clip-path="url(#cN)">` 包裹后续内容
+- ✅ `Save/Restore` 跟踪 `openGroups` 计数 —— Restore 自动关闭对应数量的 `</g>`，clip 区域跟着 graphics-state 走（与 Cairo / PDF 行为对齐）
+- ✅ Nested clip 自动分配 c0/c1/c2 唯一 ID
+- ✅ `WriteTo` 在 `</svg>` 前自动关闭剩余 open `<g>`，输出永远是 well-formed XML（即便 caller 没有 Restore）
+- ✅ 9 个测试覆盖：clipPath + g 元素出现、fill 在 g 内部、Save/Restore 正确闭合、嵌套 clip ID 唯一、ClipPreserve 不消路径、空 clip no-op、含 clip SVG `encoding/xml` 通过、未配对 clip 自动闭合、ResetClip 仍 no-op
+- ✅ macOS `qlmanage` 渲染含 clip 的 SVG 缩略图成功 —— 系统 SVG parser 接受输出
+
 **已完成（PDF clip + 内容流压缩）**：
 - ✅ `Clip()` / `ClipPreserve()`: 之前 no-op，现在 emit `W\nn\n`（winding clip + no-paint）。`ResetClip` 仍 no-op（PDF 没办法在不退出 graphics state 的情况下"拆 clip"，文档明确建议用 Save/Restore 包 clip 区间）
 - ✅ `SetCompression(bool)` / `CompressionEnabled()`: 默认关，opt-in 后 per-page content stream 走 zlib FlateDecode + Contents 字典加 `/Filter /FlateDecode`

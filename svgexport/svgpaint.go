@@ -68,15 +68,30 @@ type SVGPainter struct {
 	// curX, curY is the running pen position used by relative-path
 	// segments and by DrawText with no explicit (x, y).
 	curX, curY float64
+
+	// nextClipID is the running counter for unique clipPath/element
+	// ids. Each Clip / ClipPreserve emits a clipPath#cN with N from
+	// here (post-increment).
+	nextClipID int
+
+	// openGroups tracks how many <g clip-path="..."> tags are
+	// currently open in body. Each Save records the open count at
+	// snapshot time; Restore closes (current - snapshot) </g> tags
+	// before unwinding the rest of the state. This makes clip
+	// regions follow Cairo's "clip is a graphics-state property"
+	// semantics — exiting the Save scope automatically removes the
+	// clip.
+	openGroups int
 }
 
 type state struct {
-	ctm   geom.Mat3x2
-	brush paint.Brush
-	pen   paint.Pen
-	font  paint.Font
-	curX  float64
-	curY  float64
+	ctm        geom.Mat3x2
+	brush      paint.Brush
+	pen        paint.Pen
+	font       paint.Font
+	curX       float64
+	curY       float64
+	openGroups int
 }
 
 // New constructs a fresh SVGPainter with the given canvas size in
@@ -93,6 +108,12 @@ func New(width, height float64) *SVGPainter {
 // WriteTo serialises the recorded scene as a complete SVG document.
 // The painter is not consumed — multiple calls produce identical
 // output.
+//
+// Any clip <g> tags still open at WriteTo time (i.e., the caller
+// installed a clip but never Restored past it) are closed before
+// </svg> so the output is always well-formed XML. Callers that want
+// strict scope discipline should pair Save/Restore around clip
+// regions.
 func (p *SVGPainter) WriteTo(w io.Writer) (int64, error) {
 	var buf strings.Builder
 	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
@@ -100,6 +121,9 @@ func (p *SVGPainter) WriteTo(w io.Writer) (int64, error) {
 		`<svg xmlns="http://www.w3.org/2000/svg" width="%g" height="%g" viewBox="0 0 %g %g">`+"\n",
 		p.width, p.height, p.width, p.height)
 	buf.WriteString(p.body.String())
+	for i := 0; i < p.openGroups; i++ {
+		buf.WriteString("</g>\n")
+	}
 	buf.WriteString("</svg>\n")
 	n, err := io.WriteString(w, buf.String())
 	return int64(n), err
@@ -131,6 +155,7 @@ func (p *SVGPainter) Save() int {
 	p.stack = append(p.stack, state{
 		ctm: p.ctm, brush: p.brush, pen: p.pen, font: p.font,
 		curX: p.curX, curY: p.curY,
+		openGroups: p.openGroups,
 	})
 	return len(p.stack)
 }
@@ -141,6 +166,13 @@ func (p *SVGPainter) Restore() int {
 	}
 	s := p.stack[len(p.stack)-1]
 	p.stack = p.stack[:len(p.stack)-1]
+	// Close any clip groups opened since this Save was recorded so
+	// the clip region follows Cairo's "clip is graphics-state"
+	// semantics — exiting the Save scope removes the clip.
+	for p.openGroups > s.openGroups {
+		p.body.WriteString("</g>\n")
+		p.openGroups--
+	}
 	p.ctm, p.brush, p.pen, p.font = s.ctm, s.brush, s.pen, s.font
 	p.curX, p.curY = s.curX, s.curY
 	return len(p.stack)
@@ -346,9 +378,48 @@ func (p *SVGPainter) PaintWithAlpha(alpha uint8) {
 // and route subsequent geometry through the clip group. That's a
 // non-trivial refactor — for now we no-op and document the limitation.
 
-func (p *SVGPainter) ResetClip()                                   {}
-func (p *SVGPainter) Clip()                                        { p.path.Reset() }
-func (p *SVGPainter) ClipPreserve()                                {}
+// ResetClip can't be expressed in SVG without leaving the current
+// element scope. Callers that need scoped clipping should bracket
+// the clipped region in Save/Restore — Restore closes any clip <g>
+// tags opened since the Save. This matches the PDF surface's
+// approach and Cairo's "clip is graphics-state" model.
+func (p *SVGPainter) ResetClip() {}
+
+// Clip uses the current path as a clipPath and wraps subsequent
+// emissions in a <g clip-path="url(#cN)"> element. The path buffer
+// is reset; ClipPreserve keeps the path for follow-on Fill/Stroke.
+func (p *SVGPainter) Clip() {
+	if p.path.Len() == 0 {
+		return
+	}
+	p.openClipGroup()
+	p.path.Reset()
+}
+
+// ClipPreserve installs the current path as a clip but keeps it on
+// the path buffer so a subsequent Fill/Stroke renders the same
+// geometry. Useful for "clip and stroke its border" patterns.
+func (p *SVGPainter) ClipPreserve() {
+	if p.path.Len() == 0 {
+		return
+	}
+	p.openClipGroup()
+}
+
+// openClipGroup writes the current path as a <clipPath> definition
+// in <defs>, then opens a <g clip-path="url(#cN)"> element. The g
+// will be closed by the next matching Restore (see openGroups
+// bookkeeping in Save / Restore).
+func (p *SVGPainter) openClipGroup() {
+	id := p.nextClipID
+	p.nextClipID++
+	d := strings.TrimSpace(p.path.String())
+	fmt.Fprintf(&p.body,
+		`<defs><clipPath id="c%d"><path d="%s"/></clipPath></defs>`+"\n",
+		id, d)
+	fmt.Fprintf(&p.body, `<g clip-path="url(#c%d)">`+"\n", id)
+	p.openGroups++
+}
 func (p *SVGPainter) ClipBounds() (float64, float64, float64, float64) { return 0, 0, p.width, p.height }
 func (p *SVGPainter) ClipBounds1() geom.Rect {
 	return geom.Rect{X: 0, Y: 0, Width: p.width, Height: p.height}
