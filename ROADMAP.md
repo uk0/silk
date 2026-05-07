@@ -362,6 +362,15 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（多页 PDF）**：
+- ✅ `PDFPainter.NewPage()` / `NewPage1(w, h)`：finalise 当前页 content stream + 起新页；CTM/state stack/brush/pen/font/curX/Y 全部 reset，每页独立
+- ✅ `PDFPainter.PageCount()`：实时报告"finished + 当前打开页"总数
+- ✅ document.go 重构成 N 页对象布局：Catalog(1) → Pages(2) → 交替 Page/Contents(3,4,5,6,…) → Font(2N+3) → Image XObjects。单页文档对象 ID 维持 1-5 与之前完全一致，旧测试零修改通过
+- ✅ Pages tree `/Kids` + `/Count` 跟着实际页数动态生成；每页有独立 MediaBox 支持竖横混合（A4 portrait + landscape 同 PDF）
+- ✅ Image XObject 池仍是 document-scoped 跨页共享（无 dedup，每次 DrawPixmap 单独 XObject —— dedup 是 follow-up）
+- ✅ 8 个测试覆盖：Kids/Count 正确、PageCount 报告、自定义 page size、每页独立 Contents 对象、CTM 跨页 reset、image XObject 跨页布局、xref 偏移精确到字节、单页向后兼容
+- ✅ `qlmanage` 渲染 3 页 PDF（red portrait / blue landscape / green portrait）成功；`file` 输出 "3 pages" 确认
+
 **已完成（recording surface 等价物）**：
 - ✅ `recpaint/recpaint.go`: `RecordingPainter` 实现 paint.Painter 全部 30+ 方法 —— 每次调用把闭包追加到 ops slice，捕获参数 by value
 - ✅ `Replay(target paint.Painter)`：迭代 ops 调用 target，幂等（可对多个 target 重放，可对同一 target 重放多次）

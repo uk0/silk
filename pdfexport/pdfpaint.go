@@ -86,6 +86,12 @@ type PDFPainter struct {
 	// modest because typical designer scenes use a small palette of
 	// pixmaps; deduplication is a follow-up.
 	images []imageData
+
+	// finishedPages holds the content streams of pages that have been
+	// completed via NewPage / NewPage1. The current open page's content
+	// lives in p.content; finalising assembles them into a slice along
+	// with each page's MediaBox dimensions.
+	finishedPages []pageData
 }
 
 type state struct {
@@ -118,19 +124,74 @@ func (p *PDFPainter) transformPoint(x, y float64) (float64, float64) {
 	return tx, p.transformY(ty)
 }
 
-// WriteTo serialises the recorded page as a complete PDF 1.4 document.
-// The painter is not consumed — multiple calls produce identical
-// output.
+// snapshotPages assembles every finished page plus the current open
+// page into a single []pageData ready for buildDocument. Used by
+// WriteTo / Bytes / String — non-mutating so the painter remains
+// usable for additional pages after a partial save.
+func (p *PDFPainter) snapshotPages() []pageData {
+	out := make([]pageData, 0, len(p.finishedPages)+1)
+	out = append(out, p.finishedPages...)
+	out = append(out, pageData{
+		width:   p.width,
+		height:  p.height,
+		content: p.content.String(),
+	})
+	return out
+}
+
+// WriteTo serialises the recorded pages as a complete PDF 1.4
+// document. The painter is not consumed — multiple calls produce
+// identical output, and additional NewPage / NewPage1 calls are
+// allowed afterward.
 func (p *PDFPainter) WriteTo(w io.Writer) (int64, error) {
-	doc := buildDocument(p.width, p.height, p.content.String(), p.images)
+	doc := buildDocument(p.snapshotPages(), p.images)
 	n, err := io.WriteString(w, doc)
 	return int64(n), err
 }
 
 // Bytes returns the complete PDF document as a byte slice.
 func (p *PDFPainter) Bytes() []byte {
-	doc := buildDocument(p.width, p.height, p.content.String(), p.images)
+	doc := buildDocument(p.snapshotPages(), p.images)
 	return []byte(doc)
+}
+
+// NewPage finalises the current page and starts a fresh page with the
+// same dimensions. State (CTM / brush / pen / font / curX-Y) is reset
+// to the painter's construction defaults — each page is independent,
+// matching cairo_show_page's contract.
+func (p *PDFPainter) NewPage() {
+	p.NewPage1(p.width, p.height)
+}
+
+// NewPage1 is the explicit-size variant — useful when a document
+// alternates between portrait and landscape, or carries one
+// title page at a different size from the rest. Width / height are
+// in PDF user units (1/72 inch).
+func (p *PDFPainter) NewPage1(width, height float64) {
+	// Snapshot the current page.
+	p.finishedPages = append(p.finishedPages, pageData{
+		width:   p.width,
+		height:  p.height,
+		content: p.content.String(),
+	})
+	// Reset for the next page. State stack is wiped (PDF q/Q is
+	// per-page in the content stream, no leakage between pages).
+	p.width = width
+	p.height = height
+	p.content.Reset()
+	p.path.Reset()
+	p.ctm.InitIdentity()
+	p.stack = p.stack[:0]
+	p.brush = &paint.SolidBrush{Color: paint.Color{R: 0, G: 0, B: 0, A: 255}}
+	p.pen = paint.NewPen(paint.Color{R: 0, G: 0, B: 0, A: 255}, 1)
+	p.font = nil
+	p.curX, p.curY = 0, 0
+}
+
+// PageCount returns the total page count after the next WriteTo —
+// finished pages plus the current open page (always at least 1).
+func (p *PDFPainter) PageCount() int {
+	return len(p.finishedPages) + 1
 }
 
 // String returns the document as a string. Convenient for tests; PDF
