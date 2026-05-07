@@ -60,15 +60,39 @@ func (this *GedScene) DrawSelf(g paint.Painter) {
 	g.Rectangle(this.Bounds())
 	g.Fill()
 
-	// Draw a subtle alignment grid
-	g.SetPen1(paint.Color{230, 230, 235, 100}, 0.05)
 	x0, y0, w, h := this.Bounds()
-	gridSize := 5.0 // 5mm grid
-	for x := x0; x <= x0+w; x += gridSize {
+
+	// Two-tier alignment grid for design-mode rulers:
+	//
+	//   - Minor lines every 5mm in light grey (230, 230, 235, 220) at
+	//     0.1mm pen width — visible enough to align widgets against
+	//     without overpowering the design itself.
+	//   - Major lines every 50mm in slightly darker (200, 210, 220, 240)
+	//     at 0.15mm — give the eye an "every 10 squares" anchor for
+	//     judging form size without counting cells.
+	//
+	// Both tiers paint the same path system as the original single-
+	// tier grid; the only cost is one extra Stroke pass, well below
+	// the per-frame budget.
+	g.SetPen1(paint.Color{230, 230, 235, 220}, 0.1)
+	const minorStep = 5.0
+	for x := x0; x <= x0+w; x += minorStep {
 		g.MoveTo(x, y0)
 		g.LineTo(x, y0+h)
 	}
-	for y := y0; y <= y0+h; y += gridSize {
+	for y := y0; y <= y0+h; y += minorStep {
+		g.MoveTo(x0, y)
+		g.LineTo(x0+w, y)
+	}
+	g.Stroke()
+
+	g.SetPen1(paint.Color{200, 210, 220, 240}, 0.15)
+	const majorStep = 50.0
+	for x := x0; x <= x0+w; x += majorStep {
+		g.MoveTo(x, y0)
+		g.LineTo(x, y0+h)
+	}
+	for y := y0; y <= y0+h; y += majorStep {
 		g.MoveTo(x0, y)
 		g.LineTo(x0+w, y)
 	}
