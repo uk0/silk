@@ -249,6 +249,15 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	}
 	tb.AddSeparator()
 
+	// New (+ glyph): clears the design canvas to a fresh scene. Bound
+	// to Cmd+N too via registerShortcuts. silk doesn't ship a "new"
+	// icon yet, so we fall back to a glyph label.
+	if btn := tb.AddAction("+", nil, func() {
+		newDesignCanvas(designCanvas)
+	}); btn != nil {
+		gui.SetToolTip(btn, i18n.T("New"))
+	}
+
 	// Open: route .silkui to the design canvas, everything else to a
 	// new editor tab. SaveFileDialog / OpenFileDialog are the only
 	// platform-aware bits and silk's gui package wraps each OS's
@@ -446,6 +455,11 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	if rightDock, ok := rightDockI.(*gui.Dock); ok {
 		inspector := ged.NewObjectInspector()
 		inspector.SetScene(designCanvas.GedScene())
+		// Expose at the package level so the File→New action
+		// (registerShortcuts and the toolbar "+" button) can retarget
+		// the inspector at the freshly-created scene without threading
+		// a third return value out of buildPanels.
+		globalInspector = inspector
 		rightDock.AddView(inspector)
 
 		// Trigger an inspector rebuild whenever the design canvas's
@@ -601,6 +615,34 @@ var globalPrefs *preferences
 // constructed when the first .silkui opens — silkide instances that
 // only edit code never spin up the watcher.
 var globalReloader *hotreload.Reloader
+
+// globalInspector is the package-level reference to the right-dock
+// Object Inspector. The "New" toolbar action and Cmd+N shortcut both
+// need to retarget the inspector at the fresh scene after a
+// SetScene, and the buildPanels closure that originally captured it
+// has gone out of scope by the time those callbacks fire.
+var globalInspector *ged.ObjectInspector
+
+// newDesignCanvas wipes the active design canvas and replaces it
+// with a fresh GedScene — the IDE-level File→New. Selection
+// callbacks survive (they hang off the GedView, not the scene), but
+// the inspector needs to be re-pointed at the new scene's tree.
+//
+// Doesn't prompt to save the current dirty state; that's a follow-up
+// once silkide grows a confirmation dialog. The 99% case for File→New
+// is "I'm exploring, throw it away".
+func newDesignCanvas(canvas *ged.GedView) {
+	if canvas == nil {
+		return
+	}
+	scene := ged.NewGedScene()
+	canvas.SetScene(scene)
+	if globalInspector != nil {
+		globalInspector.SetScene(scene)
+		globalInspector.Rebuild()
+	}
+	canvas.Update()
+}
 
 // startReloader spins up the file-system watcher on first .silkui
 // open. The onReload closure captures the design canvas so changes

@@ -179,6 +179,7 @@ func registerSilkideTranslations() {
 		"Export...": "导出...",
 		"Settings":  "设置",
 		"Menu":      "菜单",
+		"New":       "新建",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
@@ -215,6 +216,9 @@ func localeIsChinese() bool {
 //	Cmd+Shift+Z / Cmd+Y → redo
 //	Cmd+R    → refresh the design canvas
 func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
+	gui.RegisterShortcut(gui.ModAction, 'N', func() {
+		newDesignCanvas(designCanvas)
+	})
 	gui.RegisterShortcut(gui.ModAction, 'O', func() {
 		path := gui.OpenFileDialog()
 		if path == "" {
