@@ -1,8 +1,12 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"silk/ged"
 )
 
 // TestSampleMainGoLooksLikeReference locks in the sample seed code so
@@ -63,4 +67,66 @@ func TestIDTitleFormat(t *testing.T) {
 	if !strings.Contains(got, " — silkide") {
 		t.Errorf("idTitle() = %q; should contain ' — silkide' separator", got)
 	}
+}
+
+// TestExportDesignCanvasSVG drives the export wiring without the
+// SaveFileDialog: build a fresh GedView, hand exportDesignCanvas a
+// .svg path inside t.TempDir, and confirm the file ends up with the
+// SVG XML preamble. Locks in the toolbar's "preview" action contract
+// against accidental dispatch regressions.
+func TestExportDesignCanvasSVG(t *testing.T) {
+	view := ged.NewGedView()
+	tmp := filepath.Join(t.TempDir(), "scene.svg")
+	if err := exportDesignCanvas(tmp, view); err != nil {
+		t.Fatalf("exportDesignCanvas: %v", err)
+	}
+	data, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "<?xml") {
+		t.Fatalf("svg output missing XML preamble: %q", string(data[:min(80, len(data))]))
+	}
+	if !strings.Contains(string(data), "<svg") {
+		t.Errorf("svg output missing <svg> root")
+	}
+}
+
+// TestExportDesignCanvasPDF: same shape, .pdf path → PDFPainter →
+// %PDF header.
+func TestExportDesignCanvasPDF(t *testing.T) {
+	view := ged.NewGedView()
+	tmp := filepath.Join(t.TempDir(), "scene.pdf")
+	if err := exportDesignCanvas(tmp, view); err != nil {
+		t.Fatalf("exportDesignCanvas: %v", err)
+	}
+	data, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "%PDF-") {
+		t.Fatalf("pdf output missing %%PDF- header: %q", string(data[:min(80, len(data))]))
+	}
+}
+
+// TestExportDesignCanvasUnknownExtension: paths without a recognised
+// extension default to SVG and the output filename gets ".svg"
+// appended so the saved file is recognisable.
+func TestExportDesignCanvasUnknownExtension(t *testing.T) {
+	view := ged.NewGedView()
+	base := filepath.Join(t.TempDir(), "scene")
+	if err := exportDesignCanvas(base, view); err != nil {
+		t.Fatalf("exportDesignCanvas: %v", err)
+	}
+	want := base + ".svg"
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected %q to exist: %v", want, err)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

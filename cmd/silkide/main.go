@@ -30,14 +30,19 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"silk/core"
 	"silk/ged"
 	"silk/graph"
 	"silk/gui"
 	"silk/paint"
+	"silk/pdfexport"
+	"silk/svgexport"
 )
 
 func main() {
@@ -169,10 +174,73 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	tb.AddAction("", paint.LoadIcon("run"), func() {})
 	tb.AddAction("Debug", nil, func() {})
 	tb.AddSeparator()
-	tb.AddAction("", paint.LoadIcon("preview"), func() {})
+	// Export (preview-eye icon): pops SaveFileDialog, dispatches by
+	// extension to silk/svgexport or silk/pdfexport, draws the active
+	// design canvas via scene.DrawAll(painter), writes the resulting
+	// document to the chosen path. Restores the missing
+	// "designer scene → SVG/PDF" path that cairo_*_surface used to
+	// provide before the Cairo removal effort split out export
+	// surfaces into pure-Go packages.
+	tb.AddAction("", paint.LoadIcon("preview"), func() {
+		if designCanvas == nil {
+			return
+		}
+		path := gui.SaveFileDialog()
+		if path == "" {
+			return
+		}
+		if err := exportDesignCanvas(path, designCanvas); err != nil {
+			core.Warn("export failed: ", err)
+		}
+	})
 	tb.AddAction("", paint.LoadIcon("propsheet"), func() {})
 
 	frame.SetToolBar(tb)
+}
+
+// exportDesignCanvas renders the design canvas's scene to the file at
+// `path`, picking SVG vs PDF by file extension. The unrecognised case
+// defaults to SVG since it's the more universal format. Both painter
+// implementations satisfy paint.Painter, so scene.DrawAll() drives the
+// export the same way it drives the live screen render.
+func exportDesignCanvas(path string, designCanvas *ged.GedView) error {
+	scene := designCanvas.GedScene()
+	if scene == nil {
+		return fmt.Errorf("design canvas has no scene")
+	}
+	_, _, w, h := scene.Bounds()
+	if w <= 0 || h <= 0 {
+		w, h = 200, 150
+	}
+
+	lower := strings.ToLower(path)
+	var painter paint.Painter
+	var writeOut func(io.Writer) error
+
+	switch {
+	case strings.HasSuffix(lower, ".pdf"):
+		pp := pdfexport.New(w, h)
+		painter = pp
+		writeOut = func(w io.Writer) error { _, err := pp.WriteTo(w); return err }
+	default:
+		// Default to SVG for unknown extensions; rename the path if it
+		// has none so the user gets a recognisable file.
+		if !strings.HasSuffix(lower, ".svg") {
+			path += ".svg"
+		}
+		sp := svgexport.New(w, h)
+		painter = sp
+		writeOut = func(w io.Writer) error { _, err := sp.WriteTo(w); return err }
+	}
+
+	scene.DrawAll(painter)
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return writeOut(f)
 }
 
 // buildPanels installs the central content area:
