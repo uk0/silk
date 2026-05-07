@@ -21,10 +21,7 @@ func (this *comboPopup) Draw(g paint.Painter) {
 	w, h := this.Size()
 	radius := 4.0
 
-	// Draw shadow behind the popup
-	roundedRect(g, 2, 2, w, h, radius)
-	g.SetBrush1(paint.Color{0, 0, 0, 30})
-	g.Fill()
+	paint.DrawShadowRect(g, 0, 0, w, h, radius, 4, paint.Color{0, 0, 0, 90})
 
 	// Draw the normal list content
 	this.ListWidget.Draw(g)

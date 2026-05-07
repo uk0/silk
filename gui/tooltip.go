@@ -38,10 +38,7 @@ func (this *tooltipWindow) Draw(g paint.Painter) {
 	padY := 4.0
 	radius := 4.0
 
-	// Drop shadow (offset 1px down-right, semi-transparent)
-	roundedRect(g, 1, 1, w, h, radius)
-	g.SetBrush1(paint.Color{0, 0, 0, 40})
-	g.Fill()
+	paint.DrawShadowRect(g, 0, 0, w, h, radius, 3, paint.Color{0, 0, 0, 120})
 
 	// Dark background (modern tooltip style)
 	bg := paint.Color{33, 37, 41, 245}

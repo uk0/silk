@@ -110,11 +110,8 @@ func (this *Card) Draw(g paint.Painter) {
 
 	g.Save()
 
-	// shadow (simple offset rectangle)
 	if this.shadow {
-		this.drawRoundedRect(g, 2, 2, w, h, r)
-		g.SetBrush1(paint.Color{0, 0, 0, 20})
-		g.Fill()
+		paint.DrawShadowRect(g, 0, 0, w, h, r, 4, paint.Color{0, 0, 0, 80})
 	}
 
 	// main card background

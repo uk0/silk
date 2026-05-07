@@ -169,10 +169,7 @@ func (this *toastEntry) Draw(g paint.Painter) {
 
 	r := 6.0
 
-	// Drop shadow (offset 2px, semi-transparent)
-	roundedRect(g, 2, 2, w, h, r)
-	g.SetBrush1(paint.Color{0, 0, 0, 40})
-	g.Fill()
+	paint.DrawShadowRect(g, 0, 0, w, h, r, 5, paint.Color{0, 0, 0, 100})
 
 	// Rounded rectangle background
 	roundedRect(g, 0, 0, w, h, r)
