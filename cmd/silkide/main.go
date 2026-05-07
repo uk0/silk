@@ -77,12 +77,14 @@ func main() {
 	buildToolBar(frame, editorTabs, designCanvas)
 	buildStatusBar(frame)
 
-	// Persist the final window size on close so the next launch picks
-	// up the user's chosen geometry.
+	// Persist the final window size + position on close so the next
+	// launch restores the user's geometry instead of bouncing through
+	// a default.
 	frame.SetClosedCallback(func(*gui.Frame) {
 		if win := frame.Window(); win != nil {
-			_, _, w, h := win.Bounds()
+			x, y, w, h := win.Bounds()
 			prefs.SetWindowSize(int(w), int(h))
+			prefs.SetWindowPos(int(x), int(y))
 		}
 		core.Quit()
 	})
@@ -90,7 +92,14 @@ func main() {
 	if win := frame.Window(); win != nil {
 		w, h := prefs.WindowSize()
 		win.SetSize(float64(w), float64(h))
-		win.MoveToCenter()
+		// Restore prior position when present, else centre. Negative
+		// saved coords (multi-monitor reshuffle) fall back to centre
+		// so silkide doesn't open off-screen.
+		if x, y := prefs.WindowPos(); x >= 0 && y >= 0 {
+			win.SetPos(float64(x), float64(y))
+		} else {
+			win.MoveToCenter()
+		}
 	}
 
 	frame.Show()

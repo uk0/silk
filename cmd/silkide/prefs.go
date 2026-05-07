@@ -48,6 +48,27 @@ func (p *preferences) SetWindowSize(w, h int) {
 	_ = p.store.Sync()
 }
 
+// WindowPos returns the saved window position. (-1, -1) means
+// "nothing saved yet — the caller should centre the window".
+// Negative coords are also reported as "no preference" so the IDE
+// doesn't restore to off-screen positions left behind by an earlier
+// monitor configuration.
+func (p *preferences) WindowPos() (int, int) {
+	x := int(p.store.Int("window/x", -1))
+	y := int(p.store.Int("window/y", -1))
+	if x < 0 || y < 0 {
+		return -1, -1
+	}
+	return x, y
+}
+
+// SetWindowPos persists window screen position.
+func (p *preferences) SetWindowPos(x, y int) {
+	_ = p.store.SetInt("window/x", int64(x))
+	_ = p.store.SetInt("window/y", int64(y))
+	_ = p.store.Sync()
+}
+
 // LastOpenedDir is the directory the next OpenFileDialog should start
 // in. Empty means "cwd".
 func (p *preferences) LastOpenedDir() string {
