@@ -629,6 +629,21 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 	case key == gui.KeyDelete || key == gui.KeyBackSpace:
 		this.DeleteSelectedItems()
 
+	// Arrow keys nudge the selection by 1mm (5mm with Shift). Goes
+	// through the UndoStack so a stray arrow press in the middle of a
+	// layout can be reversed with Cmd+Z. Designer-tool muscle memory:
+	// every IDE from Qt Creator to Figma binds the arrow keys to a
+	// "fine move" of the selection, and not having it forces drag-by-
+	// pixel work for sub-millimetre alignment.
+	case key == gui.KeyLeft:
+		this.nudgeSelection(-1, 0)
+	case key == gui.KeyRight:
+		this.nudgeSelection(1, 0)
+	case key == gui.KeyUp:
+		this.nudgeSelection(0, -1)
+	case key == gui.KeyDown:
+		this.nudgeSelection(0, 1)
+
 	case ctrl && (key == 'Z' || key == 'z'):
 		if stack := this.Scene().UndoStack(); stack != nil {
 			stack.Undo()
@@ -782,6 +797,28 @@ func (this *GedView) selectPrevWidget() {
 	prev := (idx - 1 + len(sorted)) % len(sorted)
 	sel.Clear()
 	sel.Add(sorted[prev])
+	this.Self().Update()
+}
+
+// nudgeSelection shifts every selected item by (dx, dy) millimetres,
+// scaling by 5x when Shift is held. The move is wrapped in a
+// MoveCommand so it lands on the UndoStack alongside drag-moves —
+// undo treats a Shift+Right press the same as a 5mm mouse drag.
+//
+// No-op if the selection is empty or contains only locked items;
+// GenerateMoveCommand handles both edge cases internally and returns
+// nil, which we forward as a quiet no-op rather than pushing an
+// empty command.
+func (this *GedView) nudgeSelection(dx, dy float64) {
+	if gui.IsKeyDown(gui.KeyShift) {
+		dx *= 5
+		dy *= 5
+	}
+	cmd := this.Selection().GenerateMoveCommand(dx, dy)
+	if cmd == nil {
+		return
+	}
+	this.Scene().UndoStack().Push(cmd)
 	this.Self().Update()
 }
 
