@@ -37,6 +37,7 @@ import (
 	"silk/ged"
 	"silk/graph"
 	"silk/gui"
+	"silk/paint"
 )
 
 func main() {
@@ -81,36 +82,44 @@ func idTitle() string {
 	return filepath.Base(cwd) + " — silkide"
 }
 
-// buildToolBar adds the icon-only top toolbar matching the mockup's
-// "hamburger / open / refresh / save / back / forward … run / debug
-// / search / settings" layout. We use AddAction with empty icons
-// (text labels only) so the demo runs without bundled icon assets;
-// real apps register paint.Icon values via paint.LoadIcon.
+// buildToolBar adds the icon top toolbar matching the JetBrains-style
+// mockup. Each AddAction takes a paint.Icon loaded from the silk icon
+// catalog (icon/16x16/*.png). The text label remains as a tooltip-
+// style fallback when the icon fails to load — paint.LoadIcon returns
+// the "image-missing" red-cross sentinel rather than nil for unknown
+// names, so the toolbar always renders SOMETHING.
 func buildToolBar(frame *gui.Frame) {
 	tb := gui.NewToolBar()
 
+	// Hamburger menu — no glyph in the silk icon catalog, so we keep
+	// the unicode bars. AddAction's icon param accepts nil for text-
+	// only buttons.
 	tb.AddAction("☰", nil, func() {})
 	tb.AddSeparator()
 
-	tb.AddAction("Open", nil, func() {})
-	tb.AddAction("Refresh", nil, func() {})
-	tb.AddAction("Save", nil, func() {})
+	// File ops. folder.png stands in for "open file"; save.png is
+	// direct; refresh has no asset yet, falls back to label "↻".
+	tb.AddAction("", paint.LoadIcon("folder"), func() {})
+	tb.AddAction("↻", nil, func() {})
+	tb.AddAction("", paint.LoadIcon("save"), func() {})
 	tb.AddSeparator()
 
-	tb.AddAction("Back", nil, func() {})
-	tb.AddAction("Forward", nil, func() {})
+	// Navigation. Mock-up shows back / forward arrows; we re-use the
+	// undo / redo glyphs which carry the same left / right semantics
+	// in most icon sets.
+	tb.AddAction("", paint.LoadIcon("edit-undo"), func() {})
+	tb.AddAction("", paint.LoadIcon("edit-redo"), func() {})
 	tb.AddSeparator()
 
-	// The mockup keeps run/debug/search/settings on the right-hand
-	// side. ToolBar lays children left-to-right; for the demo we
-	// just append everything in order. A future enhancement could
-	// add ToolBar.AddSpacer() to push trailing actions to the right
-	// edge — out of scope for this round.
-	tb.AddAction("Run", nil, func() {})
+	// Run / Debug / Search / Settings. run.png and preview.png exist
+	// natively; debug + search + settings don't yet have assets so
+	// we fall back to short text labels — easy to swap once the icon
+	// catalog grows.
+	tb.AddAction("", paint.LoadIcon("run"), func() {})
 	tb.AddAction("Debug", nil, func() {})
 	tb.AddSeparator()
-	tb.AddAction("Search", nil, func() {})
-	tb.AddAction("Settings", nil, func() {})
+	tb.AddAction("", paint.LoadIcon("preview"), func() {})
+	tb.AddAction("", paint.LoadIcon("propsheet"), func() {})
 
 	frame.SetToolBar(tb)
 }
@@ -154,7 +163,7 @@ func buildPanels(frame *gui.Frame) {
 		fileExplorer := ged.NewFileExplorer()
 		fileExplorer.SetRootDir(".")
 		fileExplorer.SigFileOpen(func(path string) {
-			openFileInEditor(editorTabs, path)
+			openFromTree(path, editorTabs, designCanvas, dock)
 		})
 		leftDock.AddView(fileExplorer)
 
@@ -263,8 +272,33 @@ func buildStatusBar(frame *gui.Frame) {
 	frame.SetStatusBar(sb)
 }
 
-// openFileInEditor adds (or focuses) a tab for path in tabs. Used by
-// the FileExplorer click handler so the demo behaves like a real IDE.
+// openFromTree dispatches a FileExplorer click. .silkui files load
+// straight into the design canvas (closing the declarative loop —
+// designer-authored layouts open in the designer); everything else
+// goes into a fresh code-editor tab as plain text.
+//
+// Switching the active dock view is intentional: when the user opens
+// a .silkui we want them looking at the design canvas, not at the
+// code editor that was visible before.
+func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerDock *gui.Dock) {
+	if filepath.Ext(path) == ".silkui" {
+		if canvas == nil {
+			return
+		}
+		if err := canvas.GedScene().OpenFile(path); err == nil && centerDock != nil {
+			// Bring the design canvas to the front so the user sees
+			// the loaded scene immediately.
+			if idx := centerDock.IndexOfView(canvas); idx >= 0 {
+				centerDock.SetActiveIndex(idx)
+			}
+		}
+		return
+	}
+	openFileInEditor(tabs, path)
+}
+
+// openFileInEditor adds a fresh code-editor tab for path in tabs.
+// Used as the default branch of openFromTree.
 func openFileInEditor(tabs *gui.TabWidget, path string) {
 	if tabs == nil {
 		return
