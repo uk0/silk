@@ -2,11 +2,30 @@ package glui
 
 import "github.com/go-gl/gl/v2.1/gl"
 
+// clipKind discriminates the two clip mechanisms — rectangular
+// scissor (the historic path) and path-shaped stencil (added for
+// rotated containers, ROADMAP §3.2.1). The kind drives PopClip's
+// teardown and Save/Restore's matching pop selection.
+type clipKind uint8
+
+const (
+	clipKindNone         clipKind = iota // no clip / cleared
+	clipKindScissor                      // rectangular scissor
+	clipKindStencil                      // path-shaped stencil with ref = depth
+	clipKindStencilEmpty                 // degenerate stencil push (path < 3 pts)
+)
+
 // clipState describes a GL scissor rect in framebuffer pixels (NOT logical
 // points). The (x, y) origin is bottom-left, matching gl.Scissor.
+//
+// For stencil clips (kind = clipKindStencil), x/y/w/h are unused; the
+// active polygon mask lives in the GL stencil buffer and depth holds
+// the stencil ref the eventual color draws compare against.
 type clipState struct {
 	x, y, w, h int32
 	enabled    bool
+	kind       clipKind
+	depth      uint8 // stencil ref for clipKindStencil
 }
 
 // PushClip intersects the current clip with rc (specified in logical
@@ -58,7 +77,7 @@ func (r *Renderer) PushClip(rc Rect) {
 	fbH := int32(r.frameH * scale)
 	glY := fbH - (py + ph)
 
-	r.curClip = clipState{x: px, y: glY, w: pw, h: ph, enabled: true}
+	r.curClip = clipState{x: px, y: glY, w: pw, h: ph, enabled: true, kind: clipKindScissor}
 	if r.ctx == nil {
 		// Off-GL test renderer: stack state already updated. Skip the
 		// driver calls so unit tests that exercise Clip / Save / Restore

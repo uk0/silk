@@ -133,7 +133,11 @@ type CairoCompat struct {
 	clipRect      geom.Rect
 	clipStack     []geom.Rect
 	clipDepth     int
-	clipPushedAt  []int // matched against len(stateStack) so Restore can pop
+	// clipPushedAt tracks every Renderer-level clip currently on the
+	// stack. depth is the Save scope at push time (for Restore-time
+	// matching). When isStencil is true, stencilPath holds the
+	// triangulated polygon for PopClipPath's decrement-write pass.
+	clipPushedAt []clipPushRecord
 
 	// Default font to use when SetFont(nil) — only resolved on demand so
 	// we don't pay the rasteriser cost upfront.
@@ -176,6 +180,16 @@ type pixmapEntry struct {
 type iconCacheKey struct {
 	ico  paint.Icon
 	size int
+}
+
+// clipPushRecord is one entry on CairoCompat.clipPushedAt. Each
+// records whether the active Renderer clip at that point was a
+// rectangular scissor (PushClip) or a path-shaped stencil
+// (PushClipPath); Restore matches the kind to pick the right Pop.
+type clipPushRecord struct {
+	depth       int            // len(stateStack) at push time
+	isStencil   bool           // false → PushClip; true → PushClipPath
+	stencilPath [][2]float32   // triangulated polygon vertices for PopClipPath
 }
 
 type cairoCompatState struct {
@@ -472,8 +486,13 @@ func (c *CairoCompat) Restore() int {
 	// Restore in a Save→Clip→Save→Clip nesting because, after the inner
 	// pop, len(stateStack) drops to the outer scope's depth and the outer
 	// clip's tag matches, popping it prematurely.
-	for len(c.clipPushedAt) > 0 && c.clipPushedAt[len(c.clipPushedAt)-1] > len(c.stateStack) {
-		c.r.PopClip()
+	for len(c.clipPushedAt) > 0 && c.clipPushedAt[len(c.clipPushedAt)-1].depth > len(c.stateStack) {
+		rec := c.clipPushedAt[len(c.clipPushedAt)-1]
+		if rec.isStencil {
+			c.r.PopClipPath(rec.stencilPath)
+		} else {
+			c.r.PopClip()
+		}
 		c.clipPushedAt = c.clipPushedAt[:len(c.clipPushedAt)-1]
 	}
 	c.clipRect = s.clipRect
@@ -962,8 +981,27 @@ func (c *CairoCompat) applyClip() {
 	if len(c.pathPts) == 0 {
 		return
 	}
-	// Compute path AABB in logical coords, then transform corners through
-	// the current CTM so the scissor rect is in window-space.
+
+	// Decide between scissor (AABB) and stencil (path-shaped). The CTM
+	// has rotation / skew when off-diagonal terms (Xy, Yx) are non-zero;
+	// in that case an AABB scissor would clip too generously and let
+	// content leak past the rotated container's visual bounds. Scaling-
+	// only CTMs (Xy == Yx == 0) still produce axis-aligned clip rects
+	// after transformation, so they keep the scissor fast path.
+	rotated := c.ctm.Xy != 0 || c.ctm.Yx != 0
+
+	if rotated {
+		c.applyStencilClip()
+		return
+	}
+	c.applyScissorClip()
+}
+
+// applyScissorClip computes the AABB of the current path under the CTM
+// and pushes a rectangular scissor. Historical fast path retained for
+// the dominant case (no rotation; widget-tree clips are translation +
+// scale only).
+func (c *CairoCompat) applyScissorClip() {
 	minX, minY := float64(c.pathPts[0][0]), float64(c.pathPts[0][1])
 	maxX, maxY := minX, minY
 	for _, p := range c.pathPts {
@@ -981,9 +1019,7 @@ func (c *CairoCompat) applyClip() {
 		}
 	}
 
-	// Transform the four corners through the CTM, then re-aabb. Important
-	// for scrolled/rotated containers: a Rectangle(0,0,w,h) at a translated
-	// origin must scissor at the translated location.
+	// Transform the four corners through the CTM, then re-aabb.
 	tx0, ty0 := c.ctm.Transform(minX, minY)
 	tx1, ty1 := c.ctm.Transform(maxX, minY)
 	tx2, ty2 := c.ctm.Transform(maxX, maxY)
@@ -995,7 +1031,6 @@ func (c *CairoCompat) applyClip() {
 
 	winRect := geom.Rect{X: wx0, Y: wy0, Width: wx1 - wx0, Height: wy1 - wy0}
 
-	// Intersect with active clip if any.
 	if c.clipRect.Width > 0 && c.clipRect.Height > 0 {
 		winRect = intersectGeomRect(winRect, c.clipRect)
 	}
@@ -1005,10 +1040,46 @@ func (c *CairoCompat) applyClip() {
 		X: float32(winRect.X), Y: float32(winRect.Y),
 		W: float32(winRect.Width), H: float32(winRect.Height),
 	})
-	// Tag with the current Save depth so Restore() can pop only clips
-	// pushed inside (or below) the scope being restored. See the matching
-	// comment in Restore() for the predicate's correctness rationale.
-	c.clipPushedAt = append(c.clipPushedAt, len(c.stateStack))
+	c.clipPushedAt = append(c.clipPushedAt, clipPushRecord{
+		depth:     len(c.stateStack),
+		isStencil: false,
+	})
+}
+
+// applyStencilClip transforms the current path through the CTM and
+// pushes a path-shaped stencil clip. Used when the CTM contains
+// rotation or skew so an AABB scissor would over-clip.
+//
+// The resulting stencil mask is in window-space coordinates — the
+// renderer's project() applies its own transform stack, so we transform
+// each path point here before pushing.
+func (c *CairoCompat) applyStencilClip() {
+	pts := make([][2]float32, 0, len(c.pathPts))
+	for _, p := range c.pathPts {
+		// Transform through the CairoCompat CTM (which mirrors the
+		// renderer's xform). Renderer.PushClipPath then re-projects
+		// to NDC inside the renderer's pipeline.
+		x, y := c.ctm.Transform(float64(p[0]), float64(p[1]))
+		pts = append(pts, [2]float32{float32(x), float32(y)})
+	}
+	// PushClipPath emits triangles in identity space because we already
+	// applied the CTM. Save the renderer's xform, switch to identity,
+	// push the clip, then restore.
+	prevXform := c.r.xform
+	c.r.xform = identityMatrix3()
+	c.r.PushClipPath(pts)
+	c.r.xform = prevXform
+
+	// clipRect (the AABB shadow used by ClipBounds and Paint full-clip)
+	// stays at its previous value — stencil clip doesn't have a
+	// meaningful AABB without re-aabb'ing the rotated polygon's bounds,
+	// which we leave for callers that explicitly query.
+
+	c.clipPushedAt = append(c.clipPushedAt, clipPushRecord{
+		depth:       len(c.stateStack),
+		isStencil:   true,
+		stencilPath: pts,
+	})
 }
 
 func intersectGeomRect(a, b geom.Rect) geom.Rect {
@@ -1027,7 +1098,12 @@ func intersectGeomRect(a, b geom.Rect) geom.Rect {
 
 func (c *CairoCompat) ResetClip() {
 	for len(c.clipPushedAt) > 0 {
-		c.r.PopClip()
+		rec := c.clipPushedAt[len(c.clipPushedAt)-1]
+		if rec.isStencil {
+			c.r.PopClipPath(rec.stencilPath)
+		} else {
+			c.r.PopClip()
+		}
 		c.clipPushedAt = c.clipPushedAt[:len(c.clipPushedAt)-1]
 	}
 	c.clipRect = geom.Rect{}

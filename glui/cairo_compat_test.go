@@ -210,22 +210,22 @@ func TestCairoCompatNestedClipPopPredicate(t *testing.T) {
 	// Outer Save.
 	c.Save()
 	// Tag a fake outer clip at the current Save depth.
-	c.clipPushedAt = append(c.clipPushedAt, len(c.stateStack))
-	if c.clipPushedAt[0] != 1 {
-		t.Fatalf("outer clip tagged at %d, want 1", c.clipPushedAt[0])
+	c.clipPushedAt = append(c.clipPushedAt, clipPushRecord{depth: len(c.stateStack)})
+	if c.clipPushedAt[0].depth != 1 {
+		t.Fatalf("outer clip tagged at %d, want 1", c.clipPushedAt[0].depth)
 	}
 
 	// Inner Save.
 	c.Save()
-	c.clipPushedAt = append(c.clipPushedAt, len(c.stateStack))
-	if c.clipPushedAt[1] != 2 {
-		t.Fatalf("inner clip tagged at %d, want 2", c.clipPushedAt[1])
+	c.clipPushedAt = append(c.clipPushedAt, clipPushRecord{depth: len(c.stateStack)})
+	if c.clipPushedAt[1].depth != 2 {
+		t.Fatalf("inner clip tagged at %d, want 2", c.clipPushedAt[1].depth)
 	}
 
 	// Simulate restoring the inner Save: the predicate must pop only the
 	// inner clip (tag 2 > new depth 1) and leave the outer (tag 1 == 1).
-	innerTag := c.clipPushedAt[1]
-	outerTag := c.clipPushedAt[0]
+	innerTag := c.clipPushedAt[1].depth
+	outerTag := c.clipPushedAt[0].depth
 	newDepth := len(c.stateStack) - 1
 	if !(innerTag > newDepth) {
 		t.Fatalf("predicate fails: inner tag %d, new depth %d — should pop", innerTag, newDepth)

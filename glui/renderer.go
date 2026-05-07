@@ -41,6 +41,12 @@ type Renderer struct {
 	curClip   clipState
 	clipStack []clipState
 
+	// curStencilRef is the stencil ref value for the topmost active
+	// path-shaped clip (clipKindStencil). 0 means no stencil clip in
+	// effect. Each PushClipPath bumps + writes; PopClipPath rewinds.
+	// Bounded at 255 — well beyond realistic UI clip nesting.
+	curStencilRef uint8
+
 	// Active two-stop linear-gradient colours. Bound as the u_color0 /
 	// u_color1 uniforms on the gradient shader at flush time. A batch can
 	// contain only ONE pair of stops because uniforms are per-program global,
@@ -91,6 +97,7 @@ func (c *Context) Begin(fbW, fbH float32) *Renderer {
 	// Reset clip stack — prior-frame scissor state must not leak.
 	r.curClip = clipState{}
 	r.clipStack = r.clipStack[:0]
+	r.curStencilRef = 0
 	gl.Disable(gl.SCISSOR_TEST)
 
 	// Reset gradient stop cache so the first FillGradientRect of the frame

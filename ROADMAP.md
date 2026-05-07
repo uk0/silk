@@ -160,17 +160,19 @@ opengl 分支顺路实现了 Qt5 的若干基础库：
 
 **目标**：闭合 §2.5 中 Cairo 仍占优的几项；让 opengl 在功能上不再"略微弱于"。
 
-#### 3.2.1 Stencil-based path clipping（高优先级）
+#### 3.2.1 Stencil-based path clipping ✅（已完成）
 
 当前 `applyClip` 把任意 path 退化为 AABB scissor。旋转容器内的圆角 overflow:hidden 会越界。
 
-**实现**：
-- glui Renderer 维护 stencil buffer（已在 ed4091c 中预留 8 bits）
-- `Renderer.PushClipPath(path)`：先把 path 三角化写入 stencil，draw 阶段 stencil_func gate
-- CairoCompat 在 `applyClip` 检测到非矩形或当前 CTM 含 rotation/skew 时，从 scissor 切到 stencil 路径
-- 嵌套 clip 通过 stencil 计数实现
+**已完成**：
+- ✅ glui `Renderer.PushClipPath(points)` / `PopClipPath(points)` —— 走 stencil INCR_WRAP / DECR_WRAP
+- ✅ `clipKind` 枚举区分 scissor 与 stencil；`clipState` 携带 stencil ref depth
+- ✅ `Renderer.curStencilRef` 跟踪当前嵌套深度，8-bit stencil 上限 255
+- ✅ CairoCompat `applyClip` 检测 CTM 含 rotation/skew (`Xy != 0 || Yx != 0`) 时路由到 `applyStencilClip`，否则保持 scissor 快路径
+- ✅ Save/Restore 通过 `clipPushedAt []clipPushRecord` 区分两类 clip 并匹配正确的 Pop
+- ✅ 9 个测试覆盖：push/pop ref 计数、嵌套深度、scissor+stencil 混合栈、退化 path 防御、CairoCompat rotation 检测、Save/Restore 跨两类 clip 正确退栈
 
-工作量：~600 LOC + tests。
+约 350 LOC（比预估 600 少，因为 stencil triangle render 复用了 kindPath batch）。
 
 #### 3.2.2 SetOperator 复合模式（中优先级）
 
