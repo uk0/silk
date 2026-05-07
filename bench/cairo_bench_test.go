@@ -45,11 +45,12 @@ func BenchmarkCairoRoundedRect(b *testing.B) {
 }
 
 func BenchmarkCairoLinearGradient(b *testing.B) {
-	// cairoPainter.SetBrush doesn't accept *LinearGradient — gradients are
-	// expected to go through native Cairo APIs directly. Skipping rather
-	// than rewriting the scenario keeps the bench surface honest about
-	// what each backend implements through paint.Painter.
-	b.Skip("cairoPainter.SetBrush does not handle *LinearGradient; cross-backend scenario unavailable")
+	g, _ := newCairoPainter()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		LinearGradient(g, 200)
+	}
 }
 
 func BenchmarkCairoTextPaint(b *testing.B) {

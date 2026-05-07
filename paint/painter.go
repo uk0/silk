@@ -165,6 +165,8 @@ func (this *cairoPainter) SetBrush(br Brush) {
 	switch p := br.(type) {
 	case *SolidBrush:
 	case *PixmapBrush:
+	case *LinearGradient:
+	case *RadialGradient:
 	case nil:
 	case Color:
 		this.SetBrush1(p)
@@ -186,6 +188,10 @@ func (this *cairoPainter) applyBrush() {
 		this.cairo.SetSourceRGBA(p.Color.NRGBAf())
 	case *PixmapBrush:
 		this.cairo.SetSource(p.pat)
+	case *LinearGradient:
+		this.cairo.SetSource(p.cairoPattern())
+	case *RadialGradient:
+		this.cairo.SetSource(p.cairoPattern())
 	case nil:
 		this.cairo.SetSourceRGBA(0, 0, 0, 0)
 	default:
