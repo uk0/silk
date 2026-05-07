@@ -1,10 +1,7 @@
 package paint
 
 import (
-	"silk/cairo"
 	"silk/core"
-	//	"silk/geom"
-	//"silk/shell"
 	"os"
 	"strconv"
 	"strings"
@@ -25,11 +22,15 @@ type Icon interface {
 	Pixmap(size int) Pixmap
 }
 
+// subIcon is one (size, file) pair within a parent icon. img is
+// the loaded pixmap (Pixmap interface so both Cairo and pure-Go
+// builds work). The legacy pat field for cached scaled Cairo
+// patterns has been removed — the active code path goes through
+// DrawPixmap5 which doesn't need it.
 type subIcon struct {
 	size int
 	path string
-	img  *cairoSurface
-	pat  *cairo.Pattern
+	img  Pixmap
 }
 
 type icon struct {
@@ -122,7 +123,7 @@ func LoadIcon(name string) Icon {
 		//im = src.load(size)
 		ico = new(icon)
 		for _, ss := range src.subs {
-			ico.subs = append(ico.subs, &subIcon{ss.size, ss.path, nil, nil})
+			ico.subs = append(ico.subs, &subIcon{size: ss.size, path: ss.path})
 		}
 		ico.name = name
 	} else if name == "image-missing" {
@@ -180,8 +181,7 @@ func genMissingIcon() *icon {
 		errIcon = new(icon)
 		for _, size := range []int{16, 22, 32, 48} {
 			img := genMissingSubIcon(size)
-			//pat := NewPatternForSurface(img)
-			errIcon.subs = append(errIcon.subs, &subIcon{size, "", img, nil})
+			errIcon.subs = append(errIcon.subs, &subIcon{size: size, img: img})
 		}
 		errIcon.name = "image-missing"
 	}
@@ -189,31 +189,10 @@ func genMissingIcon() *icon {
 	return errIcon
 }
 
-func genMissingSubIcon(size int) *cairoSurface {
-
-	w := float64(size)
-	s := NewPixmap(size, size)
-	cc := s.NewContext()
-	lw := 1 + w*0.05
-	cc.Rectangle(lw, lw, w-lw*2, w-lw*2)
-	cc.SetSourceRGBA(1, 1, 1, 0.5)
-	cc.SetOperator(cairo.OPERATOR_SOURCE)
-	cc.FillPreserve()
-	cc.SetOperator(cairo.OPERATOR_OVER)
-
-	cc.MoveTo(lw, lw)
-	cc.LineTo(w-lw, w-lw)
-	cc.MoveTo(w-lw, lw)
-	cc.LineTo(lw, w-lw)
-	//pen := NewPen(lw, 1, 0, 0, 1)
-	//cc.SetPen(pen)
-	cc.SetSourceRGB(1, 0, 0)
-	cc.SetLineWidth(lw)
-	//	pen := paint.NewPen(paint.Color{255, 0, 0, 255}, lw)
-	cc.Stroke()
-
-	return s
-}
+// genMissingSubIcon implementation lives in icon_cairo.go (Cairo
+// build) and icon_pure.go (pure-Go stub). The pure-Go stub returns
+// a blank pixmap; both keep the same signature so callers don't need
+// build-tag awareness.
 
 func (this *icon) AvailableSize() []int {
 	var ret []int

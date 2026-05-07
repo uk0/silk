@@ -3,7 +3,6 @@ package glui
 import (
 	"image"
 	"io"
-	"silk/cairo"
 	"silk/geom"
 	"silk/paint"
 	"testing"
@@ -392,7 +391,7 @@ type fakePixmapKey struct {
 	w, h int
 }
 
-func (p *fakePixmapKey) SurfaceType() cairo.SurfaceType   { return 0 }
+func (p *fakePixmapKey) SurfaceType() int                 { return 0 }
 func (p *fakePixmapKey) NewPainter() paint.Painter        { return nil }
 func (p *fakePixmapKey) Flush()                           {}
 func (p *fakePixmapKey) Format() paint.Format             { return paint.FormatARGB32 }

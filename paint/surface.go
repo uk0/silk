@@ -1,71 +1,22 @@
 package paint
 
-import (
-	"silk/cairo"
-	"silk/core"
-	//	"fmt"
-	"runtime"
-)
-
-var cairoSurfaceCount = 0
-
+// Surface is the abstract drawing target interface. Concrete impls
+// vary by build tag:
+//
+//   - default build (Cairo enabled): cairoSurface in surface_cairo.go
+//   - silk_no_cairo:                imagePixmap in pixmap_pure.go
+//
+// Surface is embedded by Pixmap so every drawable target has a
+// SurfaceType / NewPainter / Flush triple. SurfaceType returns an
+// integer; the cairo.SurfaceType constants are mapped through it
+// when Cairo is in play, else 0.
+//
+// Why interface-only here: this file must compile in BOTH build
+// configurations. The Cairo-specific cairoSurface struct used to
+// live alongside; it has been moved to surface_cairo.go to keep
+// this file Cairo-free.
 type Surface interface {
-	SurfaceType() cairo.SurfaceType
+	SurfaceType() int
 	NewPainter() Painter
-	// NewSimilar(w, h int, color, alpha bool) Pixmap  // should be NewSimilarPixmap
 	Flush()
-}
-
-type cairoSurface struct {
-	*cairo.Surface
-}
-
-/*
-func (this *cairoSurface) NewSimilar(w, h int, color, alpha bool) Surface {
-
-	var content cairo.Content
-	if color && alpha {
-		content = cairo.CONTENT_COLOR_ALPHA
-	} else if color {
-		content = cairo.CONTENT_COLOR
-	} else if alpha {
-		content = cairo.CONTENT_ALPHA
-	} else {
-		core.Warn(`both "color" and "aplha" is flase`)
-		content = cairo.CONTENT_COLOR_ALPHA
-	}
-
-	//	w32s := this.Surface.NewSimilar(content, w, h)
-
-	p := new(cairoSurface)
-	p.Surface = this.Surface.NewSimilar(content, w, h)
-	p.setFinalizer()
-	return p
-
-}
-*/
-func (this *cairoSurface) setFinalizer() {
-	cairoSurfaceCount++
-	//fmt.Println("cairoSurfaceCount =", cairoSurfaceCount)
-	if cairoSurfaceCount > 2000 && cairoSurfaceCount%100 == 0 {
-		core.Warn("seems cairo surface leaks, count = ", cairoSurfaceCount)
-	}
-	runtime.SetFinalizer(this, func(p *cairoSurface) {
-		p.Surface.Destroy()
-		cairoSurfaceCount--
-	})
-}
-
-func (this *cairoSurface) SurfaceType() cairo.SurfaceType {
-	return this.Surface.Type()
-}
-
-func (this *cairoSurface) NewPainter() Painter {
-	painter := new(cairoPainter)
-	painter.setFinalizer()
-	painter.cairo = this.Surface.NewContext()
-	painter.SetPen(NewPen(Color{0, 0, 0, 255}, 1))
-	//painter.surface = this
-	//core.Warn("x")
-	return painter
 }

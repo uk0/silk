@@ -36,9 +36,42 @@ paint 包中 7 个文件仍 import `silk/cairo`：
 - `paint/icon.go`（icon 用 cairoSurface）
 - `paint/paint_windows.go`（Win32 surface bridges）
 
-### Round 2（下轮，90 分钟后）— paint 包按构建 tag 切分
+### Round 2 ✅（已完成，commit `<TBD>`）— paint 包按构建 tag 切分
 
 **目标**：让 `silk/paint` 在两种 tag 下都能构建。
+
+**实际产出**：
+- ✅ `paint/surface.go` 简化为只含 `Surface` interface（无 tag）
+- ✅ `paint/surface_cairo.go` 持 `cairoSurface` 实现（`!silk_no_cairo`）
+- ✅ `paint/pixmap.go` 简化为 `Pixmap` interface + `Format` 常量
+- ✅ `paint/pixmap_cairo.go` 持 Cairo NewPixmap/LoadPngFile/TextToPixmap/IconTextToPixmap
+- ✅ `paint/pixmap_pure.go` 提供 `imagePixmap`(image.RGBA + image/png) 实现
+- ✅ `paint/painter.go` 简化为 `Painter` + `ShadowPainter` interface + `Round` helper
+- ✅ `paint/painter_cairo.go` 持 cairoPainter 全部 60 方法
+- ✅ `paint/painter_pure.go` 提供 `nullPainter` 桩满足接口
+- ✅ `paint/brush.go` 拆分：SolidBrush/LinearGradient/RadialGradient 无 tag；PixmapBrush 数据/Pixmap() accessor 移到 cairo+pure 两个文件
+- ✅ `paint/font.go` 重定义 FontExtents/TextExtents/Glyph 为独立 struct（不再是 Cairo type alias）
+- ✅ `paint/font_cairo.go` 持完整 Cairo font 实现 + cache
+- ✅ `paint/font_pure.go` 提供 `pureFont` 估算实现（ASCII 0.5×size、CJK 1.0×size）
+- ✅ `paint/icon.go` 中 `subIcon.img` 改为 `Pixmap` 接口；移除 cached `subIcon.pat`
+- ✅ `paint/icon_cairo.go` 持 `genMissingSubIcon`（红叉缺失图标）
+- ✅ `paint/icon_pure.go` 桩 `genMissingSubIcon` 返回空白
+- ✅ `paint/paint_windows.go` 加 `!silk_no_cairo` tag
+- ✅ `painter_cairo.go` 中 icon 缩放 pattern 改为 per-draw 临时分配（消除 subIcon.pat 依赖）
+
+**已验证**：
+```
+go build ./paint/                     # ✓
+go build -tags silk_no_cairo ./paint/ # ✓
+go test ./paint/                      # ✓
+go test -tags silk_no_cairo ./paint/  # ✓
+```
+
+paint 包是 Cairo 移除链上的最大瓶颈，Round 2 把它打通了。下游包（gui / glui）目前在 silk_no_cairo 下还会失败（它们直接依赖 cairoSurface 等 paint-internal），是 Round 3 的目标。
+
+### Round 3（下轮 30min 后）— gui 包窗口路径切分
+
+**目标**：`silk/gui` 在 silk_no_cairo 模式下使用 glui 路径（不走 Cairo backbuffer）。
 
 **步骤**：
 
