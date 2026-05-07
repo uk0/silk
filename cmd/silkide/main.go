@@ -177,26 +177,30 @@ func buildPanels(frame *gui.Frame) {
 		leftDock.AddView(widgetList)
 	}
 
+	// Right dock: property inspector. Conventional IDE layout (Qt
+	// Creator, Visual Studio, IntelliJ) puts the property panel on
+	// the right edge so the user's eye flows code/canvas (centre) →
+	// properties (right) without crossing the bottom toolchain panel.
+	rightDockI := dock.SplitNewDock(false, false)
+	if rightDock, ok := rightDockI.(*gui.Dock); ok {
+		inspector := ged.NewObjectInspector()
+		inspector.SetScene(designCanvas.GedScene())
+		rightDock.AddView(inspector)
+
+		// Trigger an inspector rebuild whenever the design canvas's
+		// selection changes. Without this the inspector stays stuck
+		// on whatever was selected when SetScene fired.
+		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
+			inspector.Rebuild()
+		})
+	}
+
+	// Bottom dock: terminal + build output. Toolchain stuff a
+	// developer glances at without leaving their main work.
 	bottomDockI := dock.SplitNewDock(false, true)
 	if bottomDock, ok := bottomDockI.(*gui.Dock); ok {
 		bottomDock.AddView(buildTerminalPane())
 		bottomDock.AddView(buildOutputPane())
-
-		// Property inspector — bottom-right tab. Tied to the
-		// design canvas's scene so selection on the canvas
-		// updates the inspector's property table for the
-		// currently-selected widget. Lives in the bottom dock so
-		// the file-tree column on the left edge stays free.
-		inspector := ged.NewObjectInspector()
-		inspector.SetScene(designCanvas.GedScene())
-		bottomDock.AddView(inspector)
-
-		// Trigger an inspector rebuild whenever the design
-		// canvas's selection changes. Without this the inspector
-		// stays stuck on whatever was selected when SetScene fired.
-		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
-			inspector.Rebuild()
-		})
 	}
 }
 
