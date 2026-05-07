@@ -362,7 +362,18 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
-**已完成（cmd/silkide IDE 布局参考实现）**：
+**未闭合（ged 子系统在 silk_no_cairo 模式下的渲染兼容）⚠️**：
+- 用 `go build -tags silk_no_cairo` 跑现有 `design.go` 或 `cmd/silkide` 时发现：
+  - `ged.WidgetList` 文字渲染左侧被裁约 15px（"Button" 显示为 "tton"，"CheckBox" 显示为 "leckBox"）
+  - `ged.GedView` 设计画布完全空白
+  - `ged.ObjectInspector` 同样空白
+- 顶部 toolbar / 菜单条 / mode selector 都能正常渲染；只有 **ged 内嵌的 ScrollArea 子 widget + GedScene 画布**有问题
+- 根因方向：`glui.CairoCompat` 路径下某些坐标变换或 clip 区域计算与 Cairo 路径有偏差，特别是 ScrollArea 内部 viewport offset 的处理
+- 默认（Cairo）模式下完全正常 —— `silk_no_cairo` 是真实的兼容性 gap，不是渲染管线本身的问题
+- 当前 silkide 文档里提示用户用默认 build 模式跑（Cairo 路径），等 ged-on-pure-OpenGL 修好后再宣称"完整 OpenGL IDE"
+- 修复思路（下一轮）：从 ScrollArea 在 silk_no_cairo 下的 clip rect 出发，对比 Cairo 路径的同一 widget Draw call 序列，找 offset/clip 差异
+
+**已完成（cmd/silkide IDE 布局参考实现 — Cairo 模式下完整工作）**：
 - ✅ `cmd/silkide/main.go`: 独立二进制，按设计稿 (JetBrains 风格 mockup) 把现有 silk widgets 组合出 IDE 壳子 —— Frame + ToolBar (顶部 ☰/Open/Refresh/Save/Back/Forward/Run/Debug/Search/Settings) + Dock split (左 FileExplorer / 中 多 tab CodeEditor / 下 Terminal+Output) + StatusBar (project/branch/cursor/encoding/runtime/version)
 - ✅ 三个预置 tab：main.go (含 net/http handler 样例) / server.go / go.mod，与 mockup 截图对齐
 - ✅ FileExplorer 点击文件 → 自动 `os.ReadFile` + 新 tab 加载

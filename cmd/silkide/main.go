@@ -40,6 +40,16 @@ import (
 )
 
 func main() {
+	// Compatibility note: ged widgets (WidgetList / GedView /
+	// ObjectInspector) currently have rendering issues under the
+	// silk_no_cairo build tag — text is left-clipped, the design
+	// canvas renders blank. The default (Cairo) build path works
+	// end-to-end (drag-drop, selection handles, inspector tree).
+	// See ROADMAP §3.3.7 "未闭合: ged 子系统在 silk_no_cairo 模式下"
+	// for the open follow-up. silkide opts into the default Cairo
+	// path automatically (no build tag); users who explicitly want
+	// the pure-OpenGL binary should expect the documented ged
+	// rendering gaps until that follow-up lands.
 	frame := gui.NewFrameWindow()
 	frame.SetUuidStr("c1d8e2f0-1a3b-4c2d-9e7f-silkide00001")
 	frame.SetTitle(idTitle())
