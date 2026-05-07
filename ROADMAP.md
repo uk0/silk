@@ -362,6 +362,15 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（cmd/silkide IDE 布局参考实现）**：
+- ✅ `cmd/silkide/main.go`: 独立二进制，按设计稿 (JetBrains 风格 mockup) 把现有 silk widgets 组合出 IDE 壳子 —— Frame + ToolBar (顶部 ☰/Open/Refresh/Save/Back/Forward/Run/Debug/Search/Settings) + Dock split (左 FileExplorer / 中 多 tab CodeEditor / 下 Terminal+Output) + StatusBar (project/branch/cursor/encoding/runtime/version)
+- ✅ 三个预置 tab：main.go (含 net/http handler 样例) / server.go / go.mod，与 mockup 截图对齐
+- ✅ FileExplorer 点击文件 → 自动 `os.ReadFile` + 新 tab 加载
+- ✅ Terminal/Output 用 CodeEditor 占位 (`go test`/`go build`/`Server starting on :8080` 模拟输出) 与 mockup 一致
+- ✅ design.go 主设计器零修改 —— silkide 是参考布局，让以后想把现有 designer 切到 IDE 风格的迁移工作有现成模板
+- ✅ 4 个测试覆盖 sample 代码字面量与 idTitle 标题格式
+- ✅ 两种 build 模式编译通过
+
 **已完成（pen 扩展属性 in SVG + PDF）**：
 - ✅ 之前两个 export 的 `SetPen` 只读 `Color()` + `Width()`；optional `DashedPen` / `CappedPen` 扩展接口完全忽略 —— 图表虚线分隔、报表圆头线条全部退化成默认实线 butt cap
 - ✅ `svgexport` `writePenExtensionAttrs`: 检测 DashedPen → `stroke-dasharray="..."`+ `stroke-dashoffset` (非零)；CappedPen → `stroke-linecap="round|square"` (非 butt 默认)、`stroke-linejoin="round|bevel"` (非 miter 默认)、`stroke-miterlimit` (非 Cairo 默认 10)
