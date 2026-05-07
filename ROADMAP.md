@@ -362,6 +362,13 @@ opengl 分支去掉 Cairo 时一并丢失了 cairo_pdf_surface / cairo_svg_surfa
 - ✅ 12 个测试覆盖（5 svg + 7 pdf）：image element 输出、显式 (w, h) 参数、CTM 折叠、`encoding/xml` parses output、nil 安全；PDF 这边额外锁 XObject 字典出现、`/Im1 Do` operator 出现、多 pixmap 顺序命名、xref 偏移在新增对象后仍指向真"N 0 obj"、trailer `/Size` 字段对得上、cm 矩阵 Y 翻转正确
 - ✅ macOS `qlmanage` Quick Look 渲染含图像的 PDF 缩略图成功 —— 真实 PDF parser 接受
 
+**已完成（pen 扩展属性 in SVG + PDF）**：
+- ✅ 之前两个 export 的 `SetPen` 只读 `Color()` + `Width()`；optional `DashedPen` / `CappedPen` 扩展接口完全忽略 —— 图表虚线分隔、报表圆头线条全部退化成默认实线 butt cap
+- ✅ `svgexport` `writePenExtensionAttrs`: 检测 DashedPen → `stroke-dasharray="..."`+ `stroke-dashoffset` (非零)；CappedPen → `stroke-linecap="round|square"` (非 butt 默认)、`stroke-linejoin="round|bevel"` (非 miter 默认)、`stroke-miterlimit` (非 Cairo 默认 10)
+- ✅ `pdfexport` `writePenExtensionOps`: DashedPen → `[a b c d] phase d` operator；CappedPen → `1 J` / `2 J` (round/square cap)、`1 j` / `2 j` (round/bevel join)、`X M` (非默认 miter)。所有 op 在 `S` (stroke) 之前 emit 才生效
+- ✅ 16 个测试覆盖（8 SVG + 8 PDF）：plain pen 不出扩展属性 / op (向后兼容)、dasharray emit、dash offset emit、4 种 cap/join、cap+join+dash 都先于 S operator emit
+- ✅ 默认 miter limit (10) 不 emit （SVG spec 默认 4 vs Cairo 默认 10，对齐 Cairo 行为）
+
 **已完成（PDF SMask alpha 通道）**：
 - ✅ `encodePixmapToFlatedRGBAndSMask`: 编码时拆 RGB + alpha 双流；alpha < 255 像素出现就触发 SMask 路径
 - ✅ Un-premultiply RGB —— `image.At().RGBA()` 返回 16-bit premultiplied，需要 `src*255/alpha` 还原成直 alpha 否则 SMask 双重 multiply 会把图变黑

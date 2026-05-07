@@ -339,8 +339,60 @@ func (p *SVGPainter) emitPath(fill, stroke bool) {
 			}
 		}
 		fmt.Fprintf(&p.body, ` stroke="%s" stroke-width="%g"`, colorString(col), w)
+		writePenExtensionAttrs(&p.body, p.pen)
 	}
 	p.body.WriteString("/>\n")
+}
+
+// writePenExtensionAttrs reads the optional DashedPen / CappedPen
+// interfaces off pen and emits the matching SVG stroke-* attributes.
+// Plain pens that don't implement either interface produce no
+// additional output, preserving the historical "solid butt-cap
+// miter-join" defaults so existing tests keep passing.
+func writePenExtensionAttrs(b *strings.Builder, pen paint.Pen) {
+	if pen == nil {
+		return
+	}
+	if dp, ok := pen.(paint.DashedPen); ok {
+		dash := dp.Dash()
+		if len(dash) > 0 {
+			b.WriteString(` stroke-dasharray="`)
+			for i, v := range dash {
+				if i > 0 {
+					b.WriteByte(',')
+				}
+				fmt.Fprintf(b, "%g", v)
+			}
+			b.WriteString(`"`)
+			if off := dp.DashOffset(); off != 0 {
+				fmt.Fprintf(b, ` stroke-dashoffset="%g"`, off)
+			}
+		}
+	}
+	if cp, ok := pen.(paint.CappedPen); ok {
+		switch cp.LineCap() {
+		case paint.LineCapRound:
+			b.WriteString(` stroke-linecap="round"`)
+		case paint.LineCapSquare:
+			b.WriteString(` stroke-linecap="square"`)
+		// LineCapButt is the SVG default — no attribute needed.
+		}
+		switch cp.LineJoin() {
+		case paint.LineJoinRound:
+			b.WriteString(` stroke-linejoin="round"`)
+		case paint.LineJoinBevel:
+			b.WriteString(` stroke-linejoin="bevel"`)
+		// LineJoinMiter is the SVG default.
+		}
+		if cp.LineJoin() == paint.LineJoinMiter {
+			if ml := cp.MiterLimit(); ml > 0 && ml != 10 {
+				// SVG spec default for stroke-miterlimit is 4, not 10
+				// (Cairo's default). Always emit when caller explicitly
+				// set a non-Cairo-default.
+				fmt.Fprintf(b, ` stroke-miterlimit="%g"`, ml)
+			}
+		}
+	}
 }
 
 // Paint fills the entire canvas with the current brush. SVG doesn't

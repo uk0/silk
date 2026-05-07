@@ -422,7 +422,54 @@ func (p *PDFPainter) emitStroke() {
 	p.content.WriteString(p.path.String())
 	fmt.Fprintf(&p.content, "%g %g %g RG\n", float64(col.R)/255, float64(col.G)/255, float64(col.B)/255)
 	fmt.Fprintf(&p.content, "%g w\n", w)
+	writePenExtensionOps(&p.content, p.pen)
 	p.content.WriteString("S\n")
+}
+
+// writePenExtensionOps reads the optional DashedPen / CappedPen
+// interfaces off pen and emits the matching PDF graphics-state
+// operators. The operators must precede the S (stroke) so they take
+// effect for that stroke. Plain pens that don't implement either
+// interface produce no additional output, preserving the historical
+// "solid butt-cap miter-join" defaults so existing tests pass.
+func writePenExtensionOps(b *strings.Builder, pen paint.Pen) {
+	if pen == nil {
+		return
+	}
+	if dp, ok := pen.(paint.DashedPen); ok {
+		dash := dp.Dash()
+		if len(dash) > 0 {
+			b.WriteByte('[')
+			for i, v := range dash {
+				if i > 0 {
+					b.WriteByte(' ')
+				}
+				fmt.Fprintf(b, "%g", v)
+			}
+			fmt.Fprintf(b, "] %g d\n", dp.DashOffset())
+		}
+	}
+	if cp, ok := pen.(paint.CappedPen); ok {
+		// PDF line cap codes: 0=butt (default), 1=round, 2=square.
+		switch cp.LineCap() {
+		case paint.LineCapRound:
+			b.WriteString("1 J\n")
+		case paint.LineCapSquare:
+			b.WriteString("2 J\n")
+		}
+		// PDF line join codes: 0=miter (default), 1=round, 2=bevel.
+		switch cp.LineJoin() {
+		case paint.LineJoinRound:
+			b.WriteString("1 j\n")
+		case paint.LineJoinBevel:
+			b.WriteString("2 j\n")
+		}
+		if cp.LineJoin() == paint.LineJoinMiter {
+			if ml := cp.MiterLimit(); ml > 0 && ml != 10 {
+				fmt.Fprintf(b, "%g M\n", ml)
+			}
+		}
+	}
 }
 
 // Paint fills the entire page with the active brush.
