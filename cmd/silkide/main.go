@@ -259,7 +259,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// Empty initial callback then re-bind: lets us reference the
 	// returned *Button from inside the closure (used as the popup
 	// anchor point).
-	hamburger := tb.AddAction("☰", nil, func() {})
+	hamburger := tb.AddAction("", paint.LoadIcon("menu"), func() {})
 	if hamburger != nil {
 		gui.SetToolTip(hamburger, i18n.T("Menu"))
 		hamburger.Action().BindFunc0(func() {
@@ -268,14 +268,13 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	}
 	tb.AddSeparator()
 
-	// New (+ glyph): clears the design canvas to a fresh scene. Bound
-	// to Cmd+N too via registerShortcuts. silk doesn't ship a "new"
-	// icon yet, so we fall back to a glyph label.
-	if btn := tb.AddAction("+", nil, func() {
+	// New: clears the design canvas to a fresh scene. Bound to
+	// Cmd+N too via registerShortcuts. silk's resource theme has no
+	// "plus" PNG; the procedural fallback in paint draws a simple
+	// crosshair so the toolbar reads icon-only consistently.
+	addIconAction("", "plus", "New", func() {
 		newDesignCanvas(designCanvas)
-	}); btn != nil {
-		gui.SetToolTip(btn, i18n.T("New"))
-	}
+	})
 
 	// Open: route .silkui to the design canvas, everything else to a
 	// new editor tab. SaveFileDialog / OpenFileDialog are the only
@@ -288,15 +287,15 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		}
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
-	if btn := tb.AddAction("↻", nil, func() {
-		// Refresh: force-redraw active design canvas. Useful when
-		// editing the underlying .silkui file in another editor.
+	addIconAction("", "refresh", "Refresh", func() {
+		// Force-redraw the active design canvas. Useful when the
+		// underlying .silkui has been edited in another editor (the
+		// hotreload watcher should pick that up on its own; the
+		// button is a manual fallback).
 		if designCanvas != nil {
 			designCanvas.Update()
 		}
-	}); btn != nil {
-		gui.SetToolTip(btn, i18n.T("Refresh"))
-	}
+	})
 	addIconAction("", "save", "Save", func() {
 		// Save the current design canvas as .silkui. GedScene.Save()
 		// pops a SaveFileDialog if the scene has no filename yet.

@@ -21,6 +21,9 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"expander-expanded":   drawExpanderExpanded,
 	"arrow-tool":          drawArrowTool,
 	"rect-tool":           drawRectTool,
+	"menu":                drawMenuBars,
+	"refresh":             drawRefreshArrow,
+	"plus":                drawPlus,
 }
 
 // genProceduralIcon constructs an icon whose subs come from running
@@ -167,6 +170,44 @@ func drawRectTool(size int, cc *cairo.Context) {
 	setIconStroke(cc, size)
 	pad := w * 0.18
 	cc.Rectangle(pad, pad, w-pad*2, w-pad*2)
+	cc.Stroke()
+}
+
+func drawMenuBars(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	pad := w * 0.20
+	for _, y := range []float64{w * 0.30, w * 0.50, w * 0.70} {
+		cc.MoveTo(pad, y)
+		cc.LineTo(w-pad, y)
+	}
+	cc.Stroke()
+}
+
+func drawRefreshArrow(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	// Open arc with a small triangle arrowhead at one end.
+	cc.Arc(w*0.5, w*0.5, w*0.32, -2.6, 1.8)
+	cc.Stroke()
+	// Arrowhead at the start of the arc (top-right).
+	tipX := w*0.5 + w*0.32*0.85
+	tipY := w*0.5 - w*0.32*0.5
+	cc.MoveTo(tipX, tipY)
+	cc.LineTo(tipX-w*0.10, tipY-w*0.08)
+	cc.MoveTo(tipX, tipY)
+	cc.LineTo(tipX+w*0.05, tipY+w*0.14)
+	cc.Stroke()
+}
+
+func drawPlus(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	pad := w * 0.25
+	cc.MoveTo(w*0.5, pad)
+	cc.LineTo(w*0.5, w-pad)
+	cc.MoveTo(pad, w*0.5)
+	cc.LineTo(w-pad, w*0.5)
 	cc.Stroke()
 }
 
