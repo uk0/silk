@@ -72,6 +72,52 @@ func TestIDTitleFormat(t *testing.T) {
 	}
 }
 
+// TestConfirmDiscardDirtyAllowsCleanScene: a clean scene short-
+// circuits the dialog and returns true, so File→New / Open / Quit
+// don't pester the user when there's nothing to lose. The dirty
+// branch is exercised manually since it requires a modal window.
+func TestConfirmDiscardDirtyAllowsCleanScene(t *testing.T) {
+	if got := confirmDiscardDirty(nil); !got {
+		t.Errorf("nil canvas: got false, want true (no work to lose)")
+	}
+
+	view := ged.NewGedView()
+	if !confirmDiscardDirty(view) {
+		t.Errorf("fresh canvas: got false, want true (no dirty state)")
+	}
+
+	// Mark the scene dirty by pushing a real command; the helper
+	// must NOT short-circuit through the clean-scene branch when
+	// this happens. We can't drive the modal here, so just verify
+	// the precondition flips.
+	scene := view.GedScene()
+	stack := scene.UndoStack()
+	if stack == nil {
+		t.Fatal("scene has no undo stack")
+	}
+	if !stack.IsClean() {
+		t.Fatal("expected clean stack before mutation")
+	}
+	scene.SetSize(10, 10)
+	// SceneItem.SetSize doesn't push a command on its own — we need
+	// to fabricate dirtiness for the precondition check. Use a real
+	// MoveCommand-equivalent via a fake widget.
+	fake, err := ged.NewFakeWidgetFromFactory("gui.Button")
+	if err != nil {
+		t.Fatalf("create fake: %v", err)
+	}
+	fake.SetParent(scene)
+	view.Selection().Add(fake)
+	cmd := view.Selection().GenerateMoveCommand(5, 5)
+	if cmd == nil {
+		t.Fatal("expected non-nil MoveCommand")
+	}
+	stack.Push(cmd)
+	if stack.IsClean() {
+		t.Errorf("stack should be dirty after Push; helper would short-circuit incorrectly")
+	}
+}
+
 // TestItemBoundsLabelFormatsRect: status-bar bounds cell shape
 // "(x, y) w×h" with integer-rounded values. Drives the formatting
 // helper directly so the wiring in the SelectionCallback can

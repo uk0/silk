@@ -182,6 +182,10 @@ func registerSilkideTranslations() {
 		"Menu":           "菜单",
 		"New":            "新建",
 		"Dump A11y Tree": "导出无障碍树",
+		"Unsaved changes": "有未保存的修改",
+		"The current design has unsaved changes. Save before continuing?": "当前设计有未保存的修改。在继续前保存吗？",
+		"Discard": "丢弃",
+		"Cancel":  "取消",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
@@ -281,6 +285,12 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		}
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Q', func() {
+		// Same dirty-save guard as File→New: don't quit on top of
+		// unsaved work. confirmDiscardDirty handles the clean-scene
+		// case as a quick no-op.
+		if !confirmDiscardDirty(designCanvas) {
+			return
+		}
 		core.Quit()
 	})
 

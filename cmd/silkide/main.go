@@ -648,6 +648,12 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		if canvas == nil {
 			return
 		}
+		// Replacing the scene wipes the current design, so guard the
+		// open against losing unsaved work the same way newDesignCanvas
+		// does. confirmDiscardDirty no-ops on a clean scene.
+		if !confirmDiscardDirty(canvas) {
+			return
+		}
 		if err := canvas.GedScene().OpenFile(path); err == nil {
 			recordRecentFile(path)
 			watchForReload(canvas, path)
@@ -856,11 +862,14 @@ func capitalise(s string) string {
 // callbacks survive (they hang off the GedView, not the scene), but
 // the inspector needs to be re-pointed at the new scene's tree.
 //
-// Doesn't prompt to save the current dirty state; that's a follow-up
-// once silkide grows a confirmation dialog. The 99% case for File→New
-// is "I'm exploring, throw it away".
+// Prompts to save when the current scene has unsaved work; an
+// accidental Cmd+N on a dirty design used to wipe the work
+// silently. Save / Discard / Cancel — Cancel aborts the new.
 func newDesignCanvas(canvas *ged.GedView) {
 	if canvas == nil {
+		return
+	}
+	if !confirmDiscardDirty(canvas) {
 		return
 	}
 	scene := ged.NewGedScene()
@@ -870,6 +879,54 @@ func newDesignCanvas(canvas *ged.GedView) {
 		globalInspector.Rebuild()
 	}
 	canvas.Update()
+}
+
+// confirmDiscardDirty returns true when it's safe to wipe / replace
+// the current scene. If the scene has unsaved changes (UndoStack
+// not clean) the user gets a Save / Discard / Cancel dialog:
+//
+//   - Save     → call scene.Save(); proceed iff the save succeeded.
+//   - Discard  → proceed without saving.
+//   - Cancel   → abort the calling action.
+//
+// Returns true when the scene is clean (no dialog), the user picked
+// Discard, or the user picked Save and the save completed. Returns
+// false on Cancel and on a Save that the user aborted from the
+// SaveFileDialog. Sharing this helper keeps File→New, Open, and
+// future close/quit paths consistent.
+func confirmDiscardDirty(canvas *ged.GedView) bool {
+	if canvas == nil {
+		return true
+	}
+	scene := canvas.GedScene()
+	if scene == nil {
+		return true
+	}
+	if stack := scene.UndoStack(); stack == nil || stack.IsClean() {
+		return true
+	}
+	parent := gui.IWidget(canvas)
+	dlg := gui.NewDialog(i18n.T("Unsaved changes"), parent)
+	content := gui.NewVBox()
+	content.SetSpacing(12)
+	msg := gui.NewLabel(i18n.T("The current design has unsaved changes. Save before continuing?"))
+	msg.SetWrap(true)
+	content.AddWidget(msg)
+	dlg.SetContent(content)
+	dlg.AddButton(i18n.T("Save"), gui.DialogOK)
+	dlg.AddButton(i18n.T("Discard"), gui.DialogNo)
+	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	switch dlg.ShowModal() {
+	case gui.DialogOK:
+		// Save() returns false when the user cancelled the
+		// SaveFileDialog or the write failed; in both cases we
+		// must not proceed and lose the work.
+		return scene.Save()
+	case gui.DialogNo:
+		return true
+	default:
+		return false
+	}
 }
 
 // startReloader spins up the file-system watcher on first .silkui
