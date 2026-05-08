@@ -187,6 +187,8 @@ func registerSilkideTranslations() {
 		"The current design has unsaved changes. Save before continuing?": "当前设计有未保存的修改。在继续前保存吗？",
 		"Discard": "丢弃",
 		"Cancel":  "取消",
+		"Project Settings": "项目设置",
+		"Close":            "关闭",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",

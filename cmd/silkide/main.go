@@ -373,7 +373,9 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 			core.Warn("export failed: ", err)
 		}
 	})
-	addIconAction("", "propsheet", "Settings", func() {})
+	addIconAction("", "propsheet", "Settings", func() {
+		showProjectSettingsDialog(designCanvas)
+	})
 
 	frame.SetToolBar(tb)
 }
@@ -554,6 +556,30 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	}
 
 	return editorTabs, designCanvas
+}
+
+// showProjectSettingsDialog pops a modal dialog wrapping
+// ged.ProjectSettingsPanel — the panel reads go.mod from the
+// project directory and displays module / Go version / build tags
+// / output directory rows. Standalone widget exists in ged; silkide
+// surfaces it here on the Settings toolbar click.
+//
+// Sized to a JetBrains-style 560x420 dialog so the read-only rows
+// + 2 editable rows have room without scrolling.
+func showProjectSettingsDialog(parent gui.IWidget) {
+	if parent == nil {
+		return
+	}
+	dlg := gui.NewDialog(i18n.T("Project Settings"), parent)
+	panel := ged.NewProjectSettingsPanel()
+	panel.Refresh()
+	box := gui.NewVBox()
+	box.SetSpacing(0)
+	box.AddWidget(panel)
+	dlg.SetContent(box)
+	dlg.AddButton(i18n.T("Close"), gui.DialogOK)
+	dlg.SetSize(560, 420)
+	dlg.ShowModal()
 }
 
 // dockSetActiveView flips a Dock to show `view`, which must be one
@@ -946,7 +972,71 @@ func runProjectInTerminal(canvas *ged.GedView) {
 	if cwd != "" {
 		globalTerminal.SetCwd(cwd)
 	}
+	// Pre-flight: a designer-only project that hasn't grown a
+	// main.go yet would crash "go run ." with the cryptic
+	// "package . is not a main package" error. Detect that case up
+	// front and surface a friendly explanation in the terminal
+	// instead — points the user at the .silk.go silkgen produced
+	// and at silkide's File→New (Cmd+N).
+	if cwd != "" && !hasMainPackage(cwd) {
+		globalTerminal.Run("echo " + escapeShell(i18n.T(
+			"silkide: no main package found — add a main.go that imports the generated .silk.go to make this directory runnable.")))
+		return
+	}
 	globalTerminal.Run("go run .")
+}
+
+// hasMainPackage scans `dir` for any .go file whose first non-blank
+// non-comment line is `package main`. Cheap pre-flight before
+// dispatching `go run .`. Returns false when the directory has no
+// .go files at all (designer-only project) or only library files.
+func hasMainPackage(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// Conservative: when we can't tell, let go run . handle the
+		// real check. Better one confusing error than a false
+		// negative that blocks valid projects.
+		return true
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if firstPackageLineIsMain(string(data)) {
+			return true
+		}
+	}
+	return false
+}
+
+// firstPackageLineIsMain returns true if the first non-blank,
+// non-comment line of `src` is "package main". Stops scanning at
+// the first `package …` directive — comments and blank lines above
+// don't count as code.
+func firstPackageLineIsMain(src string) bool {
+	for _, line := range strings.Split(src, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "//") {
+			continue
+		}
+		return strings.HasPrefix(trim, "package main")
+	}
+	return false
+}
+
+// escapeShell wraps `s` in single quotes for safe injection into a
+// terminal echo. Single quotes in `s` get the standard '\''
+// trampoline so the surrounding shell quoting stays balanced.
+func escapeShell(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // buildProject runs "go build ./..." in the project directory and
