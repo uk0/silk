@@ -328,11 +328,14 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
 
 	// Cmd+Shift+F — focus the global-search panel in the left dock.
-	// VSCode / JetBrains muscle memory; the panel does the actual
-	// search via its own input field once focused.
+	// VSCode / JetBrains muscle memory; bringing the dock tab to
+	// the front isn't enough — the panel handles its own input via
+	// OnTextInput, so we also need to give it keyboard focus so the
+	// user can start typing immediately.
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'F', func() {
 		if globalSearch != nil {
 			dockSetActiveView(globalLeftDock, globalSearch)
+			globalSearch.SetFocus()
 		}
 	})
 }
