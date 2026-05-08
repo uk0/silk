@@ -507,6 +507,21 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// drop target (OnDragEnter / OnDragMove / OnDrop).
 		widgetList := ged.NewWidgetList()
 		leftDock.AddView(widgetList)
+
+		// Global search panel — VSCode-style search-across-files. The
+		// panel walks the project root and reports matches via SigOpen,
+		// which we route into openFileInEditorAt so a click jumps
+		// straight to file:line in the editor tabs (and refocuses the
+		// editor tab via the Stack().Page lookup).
+		globalSearch = ged.NewGlobalSearchPanel()
+		if cwd, err := os.Getwd(); err == nil {
+			globalSearch.SetRootDir(cwd)
+		}
+		globalSearch.SigOpen(func(path string, line int) {
+			openFileInEditorAt(editorTabs, path, line, 0)
+		})
+		leftDock.AddView(globalSearch)
+		globalLeftDock = leftDock
 	}
 
 	// Right dock: property inspector. Conventional IDE layout (Qt
@@ -648,6 +663,16 @@ var globalBottomDock *gui.Dock
 // created; rebindAutoSaver swaps it onto the new scene whenever
 // File→New or an Open replaces the current scene.
 var globalAutoSaver *ged.AutoSaver
+
+// globalSearch is the VSCode-style search-across-files panel that
+// lives in the left dock. The Cmd+Shift+F shortcut focuses it.
+var globalSearch *ged.GlobalSearchPanel
+
+// globalLeftDock holds the dock containing FileExplorer / WidgetList
+// / GlobalSearchPanel. Used by the Cmd+Shift+F shortcut to flip the
+// active tab to globalSearch without threading the dock reference
+// through every shortcut handler.
+var globalLeftDock *gui.Dock
 
 func buildTerminalPane() gui.IWidget {
 	if globalTerminal == nil {

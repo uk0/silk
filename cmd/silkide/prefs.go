@@ -319,6 +319,22 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// still fits". Goes through SetPageLayout so a manual Cmd+= after
 	// also clicks back into PL_FREE_ZOOM cleanly.
 	gui.RegisterShortcut(0, 'F', func() { fitCanvasToView(designCanvas) })
+
+	// F5 → Run, F6 → Build. Visual Studio / JetBrains muscle memory.
+	// No modifier so they don't clash with Cmd+R (canvas refresh)
+	// and Cmd+B (which we may bind to "build" with a modifier later
+	// if the function-keyless laptop crowd asks for it).
+	gui.RegisterShortcut(0, gui.KeyF5, func() { runProjectInTerminal(designCanvas) })
+	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
+
+	// Cmd+Shift+F — focus the global-search panel in the left dock.
+	// VSCode / JetBrains muscle memory; the panel does the actual
+	// search via its own input field once focused.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'F', func() {
+		if globalSearch != nil {
+			dockSetActiveView(globalLeftDock, globalSearch)
+		}
+	})
 }
 
 // fitCanvasToView switches the design canvas to PL_FIT_VIEW so the
