@@ -130,6 +130,19 @@ func RunPainterBattery(t PainterTestingT, p Painter) {
 	// Surface accessors
 	check("Target", func() { _ = p.Target() })
 
+	// Pixmap and Icon: build a tiny fallback icon (genMissingIcon-
+	// equivalent via AirIcon — always available, no external load) and
+	// a 16×16 pixmap. These exercise the image-blit paths that the
+	// path-and-fill battery above does not touch.
+	check("DrawIcon", func() { p.DrawIcon(AirIcon(), 16, false) })
+	check("DrawIcon1", func() { p.DrawIcon1(AirIcon(), 0, 0, 16, false) })
+
+	pix := NewPixmap(16, 16)
+	check("DrawPixmap", func() { p.DrawPixmap(pix) })
+	check("DrawPixmap1", func() { p.DrawPixmap1(0, 0, pix) })
+	check("DrawPixmap2", func() { p.DrawPixmap2(0, 0, pix, 0, 0) })
+	check("DrawPixmap5", func() { p.DrawPixmap5(0, 0, 16, 16, pix) })
+
 	// Restore matches the Save above. Putting Restore last keeps the
 	// painter's state stack balanced after the battery.
 	check("Restore", func() { p.Restore() })
