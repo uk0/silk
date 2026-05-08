@@ -83,6 +83,9 @@ func main() {
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
 	startTitleSync(frame, designCanvas)
+	if designCanvas != nil {
+		rebindAutoSaver(designCanvas.GedScene())
+	}
 
 	// Live selection feedback in the status bar's transient message
 	// slot. Without this the user has to mouse over to the right-side
@@ -639,6 +642,13 @@ var globalTerminal *ged.TerminalPanel
 // action's output starts arriving.
 var globalBottomDock *gui.Dock
 
+// globalAutoSaver writes `.autosave` companions next to the active
+// scene's filename every 60 seconds while the UndoStack is dirty.
+// Initial bind happens in main() right after the design canvas is
+// created; rebindAutoSaver swaps it onto the new scene whenever
+// File→New or an Open replaces the current scene.
+var globalAutoSaver *ged.AutoSaver
+
 func buildTerminalPane() gui.IWidget {
 	if globalTerminal == nil {
 		globalTerminal = ged.NewTerminalPanel()
@@ -760,7 +770,16 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		if !confirmDiscardDirty(canvas) {
 			return
 		}
+		// Recovery prompt: if a sibling .autosave is newer than the
+		// .silkui the user is trying to open, offer to load it
+		// instead. Picks up where a crash or sudden quit left off.
+		if recovery := ged.CheckRecovery(path); recovery != "" {
+			if confirmRecoverFromAutosave(canvas, path, recovery) {
+				path = recovery
+			}
+		}
 		if err := canvas.GedScene().OpenFile(path); err == nil {
+			rebindAutoSaver(canvas.GedScene())
 			recordRecentFile(path)
 			watchForReload(canvas, path)
 			if centerDock != nil {
@@ -1139,7 +1158,47 @@ func newDesignCanvas(canvas *ged.GedView) {
 		globalInspector.SetScene(scene)
 		globalInspector.Rebuild()
 	}
+	rebindAutoSaver(scene)
 	canvas.Update()
+}
+
+// rebindAutoSaver retargets the package-level auto-saver at `scene`.
+// Called whenever the active scene changes (File→New, opening a
+// .silkui from the tree, etc.) so the next 60-second tick writes
+// the `.autosave` companion next to the right file. Lazily
+// constructs the saver on first call.
+//
+// AutoSaver.tick is a no-op when the scene is clean or has no
+// filename, so re-binding to a fresh untitled scene doesn't
+// generate spurious empty `.autosave` files.
+func rebindAutoSaver(scene *ged.GedScene) {
+	if scene == nil {
+		return
+	}
+	if globalAutoSaver == nil {
+		globalAutoSaver = ged.NewAutoSaver()
+	} else {
+		globalAutoSaver.Stop()
+	}
+	globalAutoSaver.Start(scene)
+}
+
+// confirmRecoverFromAutosave prompts the user when an .autosave
+// companion exists that's newer than the .silkui being opened —
+// the autosave was written by ged.AutoSaver after the file was
+// last hand-saved, so it represents work-in-progress that would
+// otherwise be lost. Returns true when the user picks Recover and
+// the caller should load `recoveryPath` instead of the original
+// `path`.
+//
+// Yes/No only — picking No proceeds with the regular .silkui open.
+// The .autosave isn't deleted in either case so the user can still
+// inspect it manually if curiosity strikes.
+func confirmRecoverFromAutosave(parent gui.IWidget, path, recoveryPath string) bool {
+	msg := i18n.Tf(
+		"A more recent autosave was found for %s. Recover from it?",
+		filepath.Base(path))
+	return gui.ShowConfirmDialog(parent, i18n.T("Recover Autosave"), msg)
 }
 
 // confirmDiscardDirty returns true when it's safe to wipe / replace

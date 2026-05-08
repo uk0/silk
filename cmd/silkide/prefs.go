@@ -189,6 +189,8 @@ func registerSilkideTranslations() {
 		"Cancel":  "取消",
 		"Project Settings": "项目设置",
 		"Close":            "关闭",
+		"Recover Autosave": "从自动保存恢复",
+		"A more recent autosave was found for %s. Recover from it?": "检测到 %s 有更新的自动保存。是否恢复？",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
