@@ -123,6 +123,70 @@ func TestGenerateCodeWithEventHandler(t *testing.T) {
 	}
 }
 
+// TestGenerateCodeBindsCodeEditorChanged covers the new
+// gui.CodeEditor case in the codegen event-binding switch. Without
+// it the OnTextChanged handler dropped through the default branch
+// to a "// codegen: no binding" comment, leaving the editor's text
+// changes silently disconnected at runtime.
+func TestGenerateCodeBindsCodeEditorChanged(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("Editor")
+	scene.SetSize(120, 80)
+
+	ed, err := NewFakeWidgetFromFactory("gui.CodeEditor")
+	if err != nil {
+		t.Fatalf("create CodeEditor: %v", err)
+	}
+	ed.SetWidgetName("editor")
+	ed.SetBounds(5, 5, 100, 60)
+	ed.SetEventHandler("OnTextChanged", "onEditorTextChanged")
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(ed, scene)
+	scene.PushCommand(cmd)
+
+	code := scene.GenerateCode(CodeGenOptions{})
+
+	if !strings.Contains(code, "ui.Editor.SigChanged(onEditorTextChanged)") {
+		t.Errorf("missing CodeEditor.SigChanged binding\n----\n%s", code)
+	}
+	if strings.Contains(code, "// codegen: no binding") {
+		t.Errorf("unknown-pair fall-through fired for known pair\n----\n%s", code)
+	}
+}
+
+// TestGenerateCodeUnknownEventEmitsGuidance: an event name that
+// isn't in the codegen switch falls through to the new guidance
+// comment instead of the old terse "TODO: bind X.Y -> Z" line. The
+// guidance points at where to extend the table.
+func TestGenerateCodeUnknownEventEmitsGuidance(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("Misc")
+	scene.SetSize(60, 60)
+
+	btn, err := NewFakeWidgetFromFactory("gui.Button")
+	if err != nil {
+		t.Fatal(err)
+	}
+	btn.SetWidgetName("btn")
+	btn.SetBounds(0, 0, 30, 8)
+	btn.SetEventHandler("OnDragStart", "onBtnDrag") // not in codegen switch
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(btn, scene)
+	scene.PushCommand(cmd)
+
+	code := scene.GenerateCode(CodeGenOptions{})
+
+	for _, want := range []string{
+		"codegen: no binding for gui.Button.OnDragStart",
+		`Handler "onBtnDrag" is not connected at runtime`,
+		"add a case to ged/codegen.go",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("missing %q\n----\n%s", want, code)
+		}
+	}
+}
+
 func TestSanitizeIdentifier(t *testing.T) {
 	tests := []struct {
 		input, want string
