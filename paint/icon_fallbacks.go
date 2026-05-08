@@ -24,6 +24,7 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"menu":                drawMenuBars,
 	"refresh":             drawRefreshArrow,
 	"plus":                drawPlus,
+	"search":              drawSearchGlass,
 }
 
 // genProceduralIcon constructs an icon whose subs come from running
@@ -197,6 +198,22 @@ func drawRefreshArrow(size int, cc *cairo.Context) {
 	cc.LineTo(tipX-w*0.10, tipY-w*0.08)
 	cc.MoveTo(tipX, tipY)
 	cc.LineTo(tipX+w*0.05, tipY+w*0.14)
+	cc.Stroke()
+}
+
+func drawSearchGlass(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	// Magnifying-glass: circle in upper-left, short diagonal handle
+	// extending to lower-right corner.
+	cx, cy, r := w*0.40, w*0.40, w*0.22
+	cc.Arc(cx, cy, r, 0, 6.28319)
+	cc.Stroke()
+	// Handle: 45-degree line from circle edge to lower-right.
+	hx0 := cx + r*0.7071
+	hy0 := cy + r*0.7071
+	cc.MoveTo(hx0, hy0)
+	cc.LineTo(w*0.78, w*0.78)
 	cc.Stroke()
 }
 

@@ -25,6 +25,7 @@ func TestProceduralFallbackPaintsSomething(t *testing.T) {
 		"menu",
 		"refresh",
 		"plus",
+		"search",
 	} {
 		t.Run(name, func(t *testing.T) {
 			ic := LoadIcon(name)

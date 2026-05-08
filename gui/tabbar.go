@@ -94,6 +94,19 @@ func (this *_Tab) realText() (s string) {
 	} else if iString, ok := this.data.(IString); ok {
 		s = iString.String()
 	}
+	if s == "" {
+		// Fall back to the ToolViewDef registry — tool-view widgets
+		// (FileExplorer, ObjectInspector, etc.) declare their display
+		// name via RegisterToolView at init time but don't all
+		// implement Title()/Text()/String(). Without this lookup the
+		// dock tab strip showed empty tabs because the widget itself
+		// reported no name.
+		if iw, ok := this.data.(IWidget); ok {
+			if def, ok := GetToolViewDef(core.FactoryNameOf(iw)); ok {
+				s = def.Name
+			}
+		}
+	}
 	//s = EllipsisText(s, 16)
 	return
 }
@@ -106,6 +119,14 @@ func (this *_Tab) Icon() paint.Icon {
 func (this *_Tab) realIcon() paint.Icon {
 	if i, ok := this.data.(IIcon); ok {
 		return i.Icon()
+	}
+	// Same fallback as realText: tool-view widgets registered an Icon
+	// name in RegisterToolView, so resolve it through the registry
+	// when the widget itself doesn't expose one.
+	if iw, ok := this.data.(IWidget); ok {
+		if def, ok := GetToolViewDef(core.FactoryNameOf(iw)); ok && def.Icon != "" {
+			return paint.LoadIcon(def.Icon)
+		}
 	}
 	return nil
 }
