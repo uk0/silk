@@ -254,6 +254,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		}
 	}
 
+
 	// Hamburger menu — no glyph in the silk icon catalog, so we keep
 	// the unicode bars. Click pops a menu with File→New / Open /
 	// Save followed by the recent files MRU. Closes the visibility
@@ -347,10 +348,14 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 
 	// Run / Build / Debug / Preview / PropSheet. run.png and
 	// preview.png exist natively; build and debug don't have icons
-	// yet so they fall back to short text labels.
-	addIconAction("", "run", "Run", func() { runProjectInTerminal(designCanvas) })
+	// yet so they fall back to short text labels. Tooltips include
+	// the keyboard shortcut so users can discover F5/F6 from the
+	// hover affordance, JetBrains-style.
+	if btn := tb.AddAction("", paint.LoadIcon("run"), func() { runProjectInTerminal(designCanvas) }); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Run")+" (F5)")
+	}
 	if btn := tb.AddAction(i18n.T("Build"), nil, func() { buildProject(designCanvas) }); btn != nil {
-		gui.SetToolTip(btn, i18n.T("Build"))
+		gui.SetToolTip(btn, i18n.T("Build")+" (F6)")
 	}
 	if btn := tb.AddAction(i18n.T("Debug"), nil, func() {}); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Debug"))
@@ -881,6 +886,17 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 	menu.AddSeparator()
 	menu.AddButton1(i18n.T("Dump A11y Tree"), nil).Action().BindFunc0(func() {
 		dumpA11yTree()
+	})
+	menu.AddButton1(i18n.T("Project Settings"), nil).Action().BindFunc0(func() {
+		showProjectSettingsDialog(designCanvas)
+	})
+
+	// "About" entry — shows the version banner + runtime info via
+	// ged.ShowAboutDialog. Standard "main app menu → About" surface
+	// every IDE has.
+	menu.AddSeparator()
+	menu.AddButton1(i18n.T("About"), nil).Action().BindFunc0(func() {
+		ged.ShowAboutDialog(designCanvas)
 	})
 
 	// Recent files: skip if the MRU is empty so the menu doesn't show
