@@ -345,7 +345,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// Run / Debug / Preview / PropSheet. run.png and preview.png
 	// exist natively; debug doesn't yet have an asset so we fall
 	// back to a short text label.
-	addIconAction("", "run", "Run", func() {})
+	addIconAction("", "run", "Run", func() { runProjectInTerminal(designCanvas) })
 	if btn := tb.AddAction(i18n.T("Debug"), nil, func() {}); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Debug"))
 	}
@@ -531,28 +531,35 @@ func makeCodeEditor(text string) *gui.CodeEditor {
 	return ed
 }
 
-// buildTerminalPane returns a placeholder code-editor view mocked up
-// as a terminal session. A real Terminal widget would be wired here
-// (silk has ged.TerminalPanel); for the demo we keep dependencies
-// minimal so silkide builds in any silk checkout.
+// buildTerminalPane returns a live integrated terminal panel.
+// ged.TerminalPanel runs one shell command at a time in the project
+// directory, streaming stdout / stderr back into the scrollback —
+// the user can run go build, git, etc. without leaving silkide.
+// Held in a package global so future code (e.g. a "Run" toolbar
+// button) can dispatch commands into the same scrollback the user
+// sees.
+var globalTerminal *ged.TerminalPanel
+
 func buildTerminalPane() gui.IWidget {
-	ed := gui.NewCodeEditor()
-	ed.SetText(`PS> go build ./...
-PS> go test ./... -count=1
-ok  github.com/user/myproject/pkg/server   0.042s
-ok  github.com/user/myproject/internal     0.038s
-PS> go run cmd/main.go
-Server starting on :8080
-PS> _`)
-	return ed
+	if globalTerminal == nil {
+		globalTerminal = ged.NewTerminalPanel()
+	}
+	return globalTerminal
 }
 
-// buildOutputPane: another placeholder tab that real apps would
-// replace with a build-output / problems view.
+// buildOutputPane returns the build-output panel that ged ships.
+// SetOutput parses Go compiler errors and exposes a per-error
+// click callback the IDE can wire to "jump to file:line:col".
+// Held globally so a future "Build" action can route compiler
+// stdout through SetOutput without threading the reference back
+// up the call stack.
+var globalBuildOutput *ged.BuildOutput
+
 func buildOutputPane() gui.IWidget {
-	ed := gui.NewCodeEditor()
-	ed.SetText(`(build output)`)
-	return ed
+	if globalBuildOutput == nil {
+		globalBuildOutput = ged.NewBuildOutput()
+	}
+	return globalBuildOutput
 }
 
 // buildStatusBar populates the bottom status strip with project /
@@ -810,11 +817,13 @@ func regenerateGoForSilkui(silkuiPath string) {
 	}
 	doc, err := core.LoadTDocFile(silkuiPath)
 	if err != nil {
+		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen load failed: %v", silkuiPath, err))
 		core.Warn("silkgen: load ", silkuiPath, ": ", err)
 		return
 	}
 	tree, err := decl.FromTDoc(doc)
 	if err != nil {
+		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen parse failed: %v", silkuiPath, err))
 		core.Warn("silkgen: parse ", silkuiPath, ": ", err)
 		return
 	}
@@ -837,9 +846,47 @@ func %s() *decl.Node {
 
 	outPath := filepath.Join(filepath.Dir(silkuiPath), stem+".silk.go")
 	if err := os.WriteFile(outPath, []byte(src), 0o644); err != nil {
+		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen write failed: %v", outPath, err))
 		core.Warn("silkgen: write ", outPath, ": ", err)
 		return
 	}
+	reportBuildOutput(fmt.Sprintf("silkgen: wrote %s", outPath))
+}
+
+// reportBuildOutput pushes one line into the BuildOutput pane if the
+// pane is wired up. Lines that match Go's "file:line:col: …" format
+// become clickable in the pane; informational lines just show as
+// plain rows. Safe to call before buildOutputPane has been built —
+// the function noops in that case.
+func reportBuildOutput(line string) {
+	if globalBuildOutput == nil {
+		return
+	}
+	globalBuildOutput.SetOutput(line)
+}
+
+// runProjectInTerminal dispatches "go run ." through the integrated
+// terminal panel. The terminal's worker spawns the Go toolchain in
+// the cwd of the panel — we point it at the directory of the active
+// .silkui first so a multi-project workspace runs the right module.
+//
+// No-op when there's no terminal yet (terminal pane built lazily
+// on first focus) or no design canvas. Filenameless scenes fall
+// back to the terminal's existing cwd, which is the silkide
+// process's working directory.
+func runProjectInTerminal(canvas *ged.GedView) {
+	if globalTerminal == nil {
+		// Force-build the terminal pane so the user sees output.
+		buildTerminalPane()
+	}
+	if canvas != nil {
+		if scene := canvas.GedScene(); scene != nil {
+			if fn := scene.Filename(); fn != "" {
+				globalTerminal.SetCwd(filepath.Dir(fn))
+			}
+		}
+	}
+	globalTerminal.Run("go run .")
 }
 
 // capitalise upper-cases the first byte of s if it's an ASCII lower

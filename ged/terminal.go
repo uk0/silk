@@ -131,6 +131,20 @@ func (this *TerminalPanel) SigSubmit(fn func(cmd string)) {
 	this.cbSubmit = fn
 }
 
+// Run dispatches `cmd` as if the user typed it and pressed Enter.
+// Used by the IDE to wire toolbar "Run" / "Build" actions through
+// the same terminal scrollback the user types into. Returns
+// immediately — execution happens on a worker goroutine and output
+// streams in via pollPending. No-op if a command is already running
+// (the panel handles one command at a time).
+func (this *TerminalPanel) Run(cmd string) {
+	if cmd == "" || this.running {
+		return
+	}
+	this.inputText = cmd
+	this.submitCommand()
+}
+
 // ---------------------------------------------------------------------------
 // Scrollback management
 // ---------------------------------------------------------------------------
