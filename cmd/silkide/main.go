@@ -95,7 +95,7 @@ func main() {
 			}
 			if n == 1 {
 				name := itemDisplayName(items[0])
-				statusBar.SetMessage(i18n.Tf("Selected: %s", name))
+				statusBar.SetMessage(i18n.Tf("Selected: %s", name) + " " + itemBoundsLabel(items[0]))
 				return
 			}
 			statusBar.SetMessage(i18n.Tf("Selected: %d items", n))
@@ -614,6 +614,21 @@ func itemDisplayName(item graph.IItem) string {
 		}
 	}
 	return fmt.Sprintf("%T", item)
+}
+
+// itemBoundsLabel formats a "(x, y) w×h" description of an item's
+// current bounds for the status-bar selection cell. Click-time
+// snapshot only — the cell goes stale once the user starts dragging
+// the item; that's by design (keeping it live across drags would
+// need a per-Item move signal that doesn't currently exist on
+// graph.IItem).
+func itemBoundsLabel(item graph.IItem) string {
+	if item == nil {
+		return ""
+	}
+	x, y := item.Pos()
+	w, h := item.Size()
+	return fmt.Sprintf("(%.0f, %.0f) %.0f×%.0f", x, y, w, h)
 }
 
 // openFromTree dispatches a FileExplorer click. .silkui files load

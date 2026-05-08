@@ -72,6 +72,30 @@ func TestIDTitleFormat(t *testing.T) {
 	}
 }
 
+// TestItemBoundsLabelFormatsRect: status-bar bounds cell shape
+// "(x, y) w×h" with integer-rounded values. Drives the formatting
+// helper directly so the wiring in the SelectionCallback can
+// trust the format string.
+func TestItemBoundsLabelFormatsRect(t *testing.T) {
+	if got := itemBoundsLabel(nil); got != "" {
+		t.Errorf("nil item: got %q, want empty string", got)
+	}
+
+	view := ged.NewGedView()
+	scene := view.GedScene()
+	fake, err := ged.NewFakeWidgetFromFactory("gui.Button")
+	if err != nil {
+		t.Fatalf("create fake: %v", err)
+	}
+	fake.SetParent(scene)
+	fake.SetPos(10, 20)
+	fake.SetSize(80, 40)
+
+	if got := itemBoundsLabel(fake); got != "(10, 20) 80×40" {
+		t.Errorf("itemBoundsLabel = %q, want %q", got, "(10, 20) 80×40")
+	}
+}
+
 // TestExportDesignCanvasSVG drives the export wiring without the
 // SaveFileDialog: build a fresh GedView, hand exportDesignCanvas a
 // .svg path inside t.TempDir, and confirm the file ends up with the
