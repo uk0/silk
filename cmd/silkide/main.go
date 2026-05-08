@@ -530,11 +530,16 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	}
 
 	// Bottom dock: terminal + build output. Toolchain stuff a
-	// developer glances at without leaving their main work.
+	// developer glances at without leaving their main work. Stash
+	// the dock at package level so Run / Build can flip the active
+	// tab when their respective panes start receiving output —
+	// users shouldn't have to manually click the right tab to see
+	// what just happened.
 	bottomDockI := dock.SplitNewDock(false, true)
 	if bottomDock, ok := bottomDockI.(*gui.Dock); ok {
 		bottomDock.AddView(buildTerminalPane())
 		bottomDock.AddView(buildOutputPane())
+		globalBottomDock = bottomDock
 	}
 
 	// Wire build-error click navigation: when the user clicks a
@@ -627,6 +632,12 @@ func makeCodeEditor(text string) *gui.CodeEditor {
 // button) can dispatch commands into the same scrollback the user
 // sees.
 var globalTerminal *ged.TerminalPanel
+
+// globalBottomDock holds the dock containing the terminal +
+// build-output panes. Used by runProjectInTerminal / buildProject /
+// reportBuildOutput to focus the relevant tab when a long-running
+// action's output starts arriving.
+var globalBottomDock *gui.Dock
 
 func buildTerminalPane() gui.IWidget {
 	if globalTerminal == nil {
@@ -946,11 +957,17 @@ func %s() *decl.Node {
 // become clickable in the pane; informational lines just show as
 // plain rows. Safe to call before buildOutputPane has been built —
 // the function noops in that case.
+//
+// Side effect: brings the BuildOutput tab to the front of the
+// bottom dock if a dock has been recorded. Build / silkgen output
+// is the kind of thing the user expects to see immediately, not
+// "buried under whatever tab was last visible".
 func reportBuildOutput(line string) {
 	if globalBuildOutput == nil {
 		return
 	}
 	globalBuildOutput.SetOutput(line)
+	dockSetActiveView(globalBottomDock, globalBuildOutput)
 }
 
 // runProjectInTerminal dispatches "go run ." through the integrated
@@ -971,6 +988,7 @@ func runProjectInTerminal(canvas *ged.GedView) {
 	if cwd != "" {
 		globalTerminal.SetCwd(cwd)
 	}
+	dockSetActiveView(globalBottomDock, globalTerminal)
 	// Pre-flight: a designer-only project that hasn't grown a
 	// main.go yet would crash "go run ." with the cryptic
 	// "package . is not a main package" error. Detect that case up
