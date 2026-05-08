@@ -2,7 +2,6 @@ package ged
 
 import (
 	"fmt"
-	"path"
 	"path/filepath"
 
 	"silk/core"
@@ -121,7 +120,7 @@ func (this *GedScene) OpenFile(filename string) error {
 		return err
 	}
 	this.filename = filename
-	this.SetTitle(path.Base(this.filename))
+	this.SetTitle(filepath.Base(this.filename))
 	return nil
 }
 
@@ -168,7 +167,7 @@ func (this *GedScene) Save() bool {
 	err := doc.SaveFile(this.filename)
 	if err == nil {
 		this.UndoStack().SetClean()
-		this.SetTitle(path.Base(this.filename))
+		this.SetTitle(filepath.Base(this.filename))
 		return true
 	}
 	return false
