@@ -13,11 +13,12 @@ import (
 // must run on the goroutine that owns the GL context, typically the main
 // thread.
 type Context struct {
-	// Shader programs for the six core draw kinds.
+	// Shader programs for the seven core draw kinds.
 	rectProg           *shader.Program // solid + bordered rectangles, rounded corners
 	pathProg           *shader.Program // arbitrary paths via triangle fan
 	imageProg          *shader.Program // textured quads
-	glyphProg          *shader.Program // SDF glyph atlas blits
+	glyphProg          *shader.Program // alpha glyph atlas blits (LUMINANCE)
+	glyphLCDProg       *shader.Program // RGB-striped LCD subpixel glyph atlas
 	gradientProg       *shader.Program // two-stop linear gradient quads (uniforms)
 	gradientRampProg   *shader.Program // multi-stop gradient via 1-D ramp texture
 	gradientRadialProg *shader.Program // radial gradient via ramp texture + per-pixel distance
@@ -89,6 +90,12 @@ func (c *Context) Init() error {
 		return err
 	}
 	c.glyphProg = prog
+
+	prog, err = shader.Compile(glyphLCDVertSrc, glyphLCDFragSrc)
+	if err != nil {
+		return err
+	}
+	c.glyphLCDProg = prog
 
 	prog, err = shader.Compile(gradientVertSrc, gradientFragSrc)
 	if err != nil {
@@ -167,6 +174,9 @@ func (c *Context) Destroy() {
 	c.pathProg.Delete()
 	c.imageProg.Delete()
 	c.glyphProg.Delete()
+	if c.glyphLCDProg != nil {
+		c.glyphLCDProg.Delete()
+	}
 	if c.gradientProg != nil {
 		c.gradientProg.Delete()
 	}

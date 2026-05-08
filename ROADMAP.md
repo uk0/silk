@@ -1,6 +1,6 @@
 # Silk opengl 分支路线图与现状
 
-最后更新：commit `1dec0bd`（2026-05-07）
+最后更新：LCD 子像素文本（2026-05-08）
 
 本文档分三部分回答：
 1. **opengl 现在实现的效果**（截至本次 commit 的客观成果）
@@ -125,12 +125,12 @@ opengl 分支顺路实现了 Qt5 的若干基础库：
 
 | 维度 | Cairo 优势 |
 |------|-----------|
-| 字体渲染清晰度 | freetype hinting + sub-pixel 定位，小字号略胜 |
-| 文本 shaping | 通过 cairo + pango/HarfBuzz 间接得到 ligature / 复杂脚本 |
-| 复合操作 | 14 种 cairo_operator（OVER/MULTIPLY/SCREEN/HSL_LUMINOSITY/...）；glui 当前只有 SRC_OVER |
-| 路径裁剪 | 真任意路径裁剪；glui 当前是 AABB scissor |
-| PDF/SVG 输出 | Cairo 原生支持；glui 仅限屏幕 |
-| 椭圆弧 | path A 命令完整解算；svg 渲染器当前简化为 line |
+| 字体 hinting | freetype 字号-aware hinting 在小字号 (<10pt) 仍略胜；glui 已闭合 LCD 三通道条纹 (§3.2.4)，hinting 单独是另一项 |
+| 文本 shaping | 通过 cairo + pango/HarfBuzz 间接得到 ligature / 复杂脚本（§3.3.3 已规划 go-text 集成）|
+| 非可分复合操作 | OVERLAY / COLOR_DODGE / COLOR_BURN / SOFT_LIGHT / HARD_LIGHT / DIFFERENCE / EXCLUSION / HSL_*；glui 已覆盖 17 种可分 Porter-Duff + 算术（§3.2.2），非可分待 FBO + dst sampler shader 路径 |
+| 椭圆弧 | path A 命令完整解算（已闭合 §3.2.3，svg 渲染器同步）|
+
+§3.2 路线已经把"可在 fixed-function GL 路径表达的 Cairo 能力"全部接通；剩余真正缺口已合并进 §3.3 长期路线。
 
 这些都是 §3 路线图中明确要补的项。
 
@@ -202,11 +202,11 @@ glui 之前 hardcode SRC_OVER，CairoCompat.SetOperator 是 no-op。Cairo 14 种
 
 约 280 LOC（实现 + 测试）。
 
-#### 3.2.4 glui 字体子像素定位 ✅（已完成 — 灰度子像素，LCD shader 推迟）
+#### 3.2.4 glui 字体子像素定位 ✅（灰度子像素 + LCD 通道条纹两路均完成）
 
 之前 glyph quad 默认走 fractional 位置 + bilinear filtering，结果是"软糊"text。Cairo 在每次绘制时按实际亚像素位置重栅格化，因此清晰。
 
-**已完成**：
+**已完成（灰度子像素桶）**：
 - ✅ `glui/font.go`: glyph 缓存键从 `map[rune]glyphInfo` 改为 `map[glyphKey]glyphInfo`，key 含 `sub uint8` (0..3)
 - ✅ `numSubpixelBuckets=4`：在 0.0 / 0.25 / 0.5 / 0.75 px 各栅格化一份，传 `fixed.Point26_6{X: dotX}` 让 opentype 把亚像素偏移烘进 mask
 - ✅ `Font.subpixel` 字段 + `SetSubpixel(bool)` + `SubpixelEnabled()` 方法；构造时通过 `SILK_GLUI_SUBPIXEL=1` env var 也能开
@@ -214,9 +214,16 @@ glui 之前 hardcode SRC_OVER，CairoCompat.SetOperator 是 no-op。Cairo 14 种
 - ✅ `DrawText` 两条路径：subpixel off 保留旧 fractional 行为；subpixel on 时整数 snap quad X，亚像素清晰度全靠 mask 自身
 - ✅ 8 个测试覆盖：桶量化（含负数/越界）、默认关、开后两个桶 mask 字节级不同、`MeasureText` 不受影响（advance 与 sub 无关）、fractional 行为保留（off）、整数 snap（on）、`Glyph(r) == GlyphAt(r, 0)`、subpixel-off `GlyphAt(r, *)` 不爆缓存
 
-LCD 子像素三采样（RGB 通道分别偏移 1/3 px）需要 RGBA atlas + RGB-aware fragment shader，已写入 §3.3 待办，灰度桶缓存对 14pt 以上字号的清晰度提升已经显著。
+**已完成（LCD 三通道条纹）**：
+- ✅ `glui/font_lcd.go`: `rasteriseLCD` 在 0 / 1·3 / 2·3 px 三个 sub-position 各跑一遍 `face.Glyph`，立即 `snapshotAlpha` 拷贝（绕过 opentype.Face 复用单 buffer 导致 mask aliasing 的坑），把三份覆盖打进 R/G/B 通道，A 通道存平均覆盖
+- ✅ `Font.subpixelLCD` 字段 + `SetSubpixelLCD(bool)` + `SubpixelLCDEnabled()`；构造时通过 `SILK_GLUI_SUBPIXEL_LCD=1` env var 也能开；toggle 时 `resetAtlas` 清缓存并切换 RGBA / 单字节 buffer
+- ✅ `bytesPerAtlas` 与 `upload()` 在 LCD 模式上传 `gl.RGBA`，alpha 模式上传 `gl.LUMINANCE`，texture 资源不重叠
+- ✅ 新 `kindGlyphLCD` batch + `glyphLCDProg` 着色器：fragment 把 RGB 三通道 coverage 与文本颜色逐通道乘出预乘像素，A 通道走平均覆盖
+- ✅ Renderer.flush 在 LCD 批次临时切到 `glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR)`，每个目标通道按各自 coverage 衰减背景（GL 2.1 没有 dual-source blend，这是最近似的等价）；批次画完恢复 curOp 正常 blend func
+- ✅ `DrawText` 在 `SubpixelLCDEnabled()` 时走 `drawTextLCD`：整数 X snap，跨 LCD/alpha 模式时 batch kind 自动切换触发 flush
+- ✅ 12 个测试覆盖：默认关、setter idempotent、LCD on 后 atlas 字节数 ×4、'M' 三通道字节级不同、空 face → ok=false、空白字形 advance-only、toggle 失效缓存、LCD ignore fracX、`DrawText` 路由 `kindGlyphLCD`、整数 snap、空字符串保留 batch、`MeasureText` 不受影响
 
-约 280 LOC（实现 + 测试）。
+约 580 LOC（灰度 280 + LCD 300 实现/测试）。
 
 #### 3.2.5 性能基准测试套件 ✅（已完成）
 

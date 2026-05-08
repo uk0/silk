@@ -78,7 +78,8 @@ const (
 	kindRect                     // solid + rounded rectangles, AA via SDF
 	kindPath                     // arbitrary triangulated paths
 	kindImage                    // textured quad
-	kindGlyph                    // text from atlas
+	kindGlyph                    // text from alpha atlas
+	kindGlyphLCD                 // text from RGB-striped LCD subpixel atlas
 	kindGradient                 // two-stop linear gradient quads
 	kindGradientRamp             // multi-stop gradient via 1-D ramp texture
 	kindGradientRadial           // radial multi-stop gradient
@@ -361,7 +362,27 @@ func (r *Renderer) flush() {
 		prog.Set2f("u_radii", r.radR0, r.radR1)
 	}
 
+	// LCD glyph batches need per-channel destination weighting:
+	//
+	//   out_R = src_R * 1 + dst_R * (1 - src_R)
+	//
+	// The shader writes pre-multiplied (textRGB * cov, avgCov * textA), so
+	// glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR) gives each destination
+	// channel its own coverage factor — the GL 2.1 stand-in for dual-source
+	// blending. After the draw we restore whatever curOp's blend state was
+	// so subsequent batches don't inherit the LCD-specific factors.
+	lcdBlendActive := false
+	if r.curKind == kindGlyphLCD {
+		gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_COLOR)
+		lcdBlendActive = true
+	}
+
 	gl.DrawElements(gl.TRIANGLES, int32(len(r.indices)), gl.UNSIGNED_SHORT, unsafe.Pointer(uintptr(0)))
+
+	if lcdBlendActive {
+		state, _ := blendStateFor(r.curOp)
+		gl.BlendFunc(state.srcFactor, state.dstFactor)
+	}
 
 	gl.DisableVertexAttribArray(posLoc)
 	gl.DisableVertexAttribArray(uvLoc)

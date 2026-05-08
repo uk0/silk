@@ -130,6 +130,48 @@ void main() {
 }
 `
 
+// glyphLCDVertSrc is identical to glyphVertSrc — both use the shared 48-byte
+// vertex layout — but kept distinct so the LCD path can grow per-vertex
+// uniforms (e.g. RGB stripe order for inverted panels) later.
+const glyphLCDVertSrc = `
+#version 120
+attribute vec2 a_pos;
+attribute vec2 a_uv;
+attribute vec4 a_color;
+varying vec2 v_uv;
+varying vec4 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`
+
+// glyphLCDFragSrc samples a 4-channel atlas where the R/G/B channels carry
+// horizontally-shifted alpha masks (subpixel positions 0, 1/3 px, 2/3 px)
+// and the alpha channel carries the averaged coverage. The renderer pairs
+// this program with glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR) so each
+// destination channel is weighted by its own coverage — emulating the
+// per-channel destination factor that desktop drivers expose via
+// dual-source blending (which GL 2.1 lacks).
+//
+// Output is pre-multiplied: gl_FragColor.rgb is text colour × per-channel
+// coverage × overall alpha; gl_FragColor.a carries the averaged coverage
+// times text alpha so the blend correctly attenuates the destination on
+// translucent (a < 1) text.
+const glyphLCDFragSrc = `
+#version 120
+varying vec2 v_uv;
+varying vec4 v_color;
+uniform sampler2D u_tex;
+void main() {
+    vec4 mask = texture2D(u_tex, v_uv);
+    vec3 cov = mask.rgb;
+    float avg = mask.a;
+    gl_FragColor = vec4(v_color.rgb * cov * v_color.a, avg * v_color.a);
+}
+`
+
 // Two-stop linear gradient. The vertex shader passes a parametric
 // coordinate `t` packed into v_uv.x (0 at the start endpoint, 1 at the
 // end). The fragment mixes between u_color0 and u_color1 by t, then

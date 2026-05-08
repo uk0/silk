@@ -20,6 +20,10 @@ func (r *Renderer) DrawText(f *Font, text string, x, y float32, col Color) {
 	if f == nil || text == "" {
 		return
 	}
+	if f.SubpixelLCDEnabled() {
+		r.drawTextLCD(f, text, x, y, col)
+		return
+	}
 
 	subpixel := f.SubpixelEnabled()
 
@@ -85,6 +89,58 @@ func (r *Renderer) DrawText(f *Font, text string, x, y float32, col Color) {
 			}
 		} else {
 			gx = pen + g.offX
+		}
+		gy := y + g.offY
+		gw := float32(g.region.W)
+		gh := float32(g.region.H)
+
+		r.pushQuad(gx, gy, gw, gh, u0, v0, u1, v1, col)
+		pen += g.advance
+	}
+}
+
+// drawTextLCD is the LCD-subpixel rendering path. The pen always snaps to
+// integer X — sub-position is encoded in the per-pixel R/G/B channels of
+// the glyph mask, not in a fractional quad position. Sub-bucket indexing
+// is bypassed (the LCD cache is keyed by rune alone).
+//
+// The caller (DrawText) has already bypass-checked f for nil and text for
+// empty so we can dive straight into the rasterise+emit loop.
+func (r *Renderer) drawTextLCD(f *Font, text string, x, y float32, col Color) {
+	// Pre-rasterise so the atlas texture is consistent for the whole batch
+	// — same precaution as the alpha path. Glyph(ch) routes through
+	// glyphForKey which dispatches to lcdRasteriseAndCache when LCD is on.
+	for _, ch := range text {
+		f.Glyph(ch)
+	}
+
+	var tex uint32
+	if r.ctx != nil {
+		tex = f.Texture()
+	}
+	r.setBatch(kindGlyphLCD, tex)
+
+	atlasW := float32(f.atlasW)
+	atlasH := float32(f.atlasH)
+	pen := x
+
+	for _, ch := range text {
+		g := f.Glyph(ch)
+		if g.region.W == 0 || g.region.H == 0 {
+			pen += g.advance
+			continue
+		}
+		u0 := float32(g.region.X) / atlasW
+		v0 := float32(g.region.Y) / atlasH
+		u1 := float32(g.region.X+g.region.W) / atlasW
+		v1 := float32(g.region.Y+g.region.H) / atlasH
+
+		// Integer pen X snap. The R/G/B channel masks already carry the
+		// sub-pixel shift; sliding the quad on a fractional offset would
+		// blur the stripes back into a soft grayscale edge.
+		gx := float32(int32(pen)) + g.offX
+		if pen < 0 && pen != float32(int32(pen)) {
+			gx -= 1
 		}
 		gy := y + g.offY
 		gw := float32(g.region.W)

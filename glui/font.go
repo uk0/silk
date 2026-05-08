@@ -107,6 +107,16 @@ type Font struct {
 	// SILK_GLUI_SUBPIXEL=1; default off so existing tests and pixel-perfect
 	// baselines are unaffected.
 	subpixel bool
+
+	// subpixelLCD switches glyph storage to RGBA where each pixel encodes
+	// three horizontally-shifted alpha masks in the R/G/B channels (0,
+	// 1/3 px, 2/3 px). The LCD-aware fragment shader samples per-channel
+	// coverage, producing visibly sharper edges on LCD displays at the
+	// cost of mild colour fringing on bright backgrounds. Opt-in via
+	// SILK_GLUI_SUBPIXEL_LCD=1. Mutually orthogonal to `subpixel` —
+	// LCD already encodes subpixel position in channels so the bucket
+	// cache is bypassed when LCD is active.
+	subpixelLCD bool
 }
 
 // glyphKey identifies a cached glyph variant. r is the rune; sub is the
@@ -168,25 +178,34 @@ func subpixelBucket(fracX float32) uint8 {
 func NewFont(size float64) *Font {
 	useSDF := os.Getenv("SILK_GLUI_SDF") == "1"
 	useSubpixel := os.Getenv("SILK_GLUI_SUBPIXEL") == "1"
+	useLCD := os.Getenv("SILK_GLUI_SUBPIXEL_LCD") == "1"
 	face, err := newGoRegularFace(size)
 	if err != nil {
 		// Defensive: allocate a Font with no face. Glyph() will return
 		// zero-advance records so layout still terminates.
-		return &Font{
-			faces:    nil, // Glyph() walks faces; len==0 returns zero record
-			atlas:    atlas.New(defaultAtlasSize, defaultAtlasSize),
-			glyphs:   make(map[glyphKey]glyphInfo),
-			pixels:   make([]byte, defaultAtlasSize*defaultAtlasSize),
-			atlasW:   defaultAtlasSize,
-			atlasH:   defaultAtlasSize,
-			dirty:    true,
-			useSDF:   useSDF,
-			subpixel: useSubpixel,
+		f := &Font{
+			faces:       nil, // Glyph() walks faces; len==0 returns zero record
+			atlas:       atlas.New(defaultAtlasSize, defaultAtlasSize),
+			glyphs:      make(map[glyphKey]glyphInfo),
+			atlasW:      defaultAtlasSize,
+			atlasH:      defaultAtlasSize,
+			dirty:       true,
+			useSDF:      useSDF,
+			subpixel:    useSubpixel,
+			subpixelLCD: useLCD,
 		}
+		f.pixels = make([]byte, f.bytesPerAtlas())
+		return f
 	}
 	f := newFontFromFace(face, defaultAtlasSize, defaultAtlasSize)
 	f.useSDF = useSDF
 	f.subpixel = useSubpixel
+	f.subpixelLCD = useLCD
+	if useLCD {
+		// LCD allocates an RGBA buffer; the alpha buffer from
+		// newFontFromFace is the wrong size.
+		f.pixels = make([]byte, f.bytesPerAtlas())
+	}
 	// Append CJK fallbacks. discoverSystemCJKFaces is best-effort: missing
 	// system fonts return an empty slice and the font still renders Latin
 	// text correctly via the primary face. newFontFromFace already seeded
@@ -195,6 +214,26 @@ func NewFont(size float64) *Font {
 		f.faces = append(f.faces, fb)
 	}
 	return f
+}
+
+// bytesPerAtlas returns the size of f.pixels in bytes for the current
+// glyph storage mode. LCD packs three coverage masks plus alpha into RGBA
+// (4 bytes/px); standard alpha mode is one byte per pixel.
+func (f *Font) bytesPerAtlas() int {
+	if f.subpixelLCD {
+		return f.atlasW * f.atlasH * 4
+	}
+	return f.atlasW * f.atlasH
+}
+
+// resetAtlas drops the glyph cache and reallocates the pixel buffer for the
+// current storage mode. Called when SetSubpixelLCD changes the buffer
+// format — the old cached regions reference the old buffer layout and would
+// produce garbled glyphs against the new texture format.
+func (f *Font) resetAtlas() {
+	f.glyphs = make(map[glyphKey]glyphInfo)
+	f.atlas = atlas.New(f.atlasW, f.atlasH)
+	f.pixels = make([]byte, f.bytesPerAtlas())
 }
 
 // newGoRegularFace parses the bundled Go Regular TTF and creates a face at
@@ -289,6 +328,9 @@ func (f *Font) glyphForKey(key glyphKey) glyphInfo {
 		g := glyphInfo{}
 		f.glyphs[key] = g
 		return g
+	}
+	if f.subpixelLCD {
+		return f.lcdRasteriseAndCache(key.r)
 	}
 
 	// Encode the subpixel bucket as a fractional 26.6 dot. Bucket 0 means
@@ -390,6 +432,49 @@ func (f *Font) glyphForKey(key glyphKey) glyphInfo {
 	return g
 }
 
+// lcdRasteriseAndCache populates the LCD glyph cache for r. The atlas
+// buffer is treated as RGBA (4 bytes per pixel); region (X,Y) addresses
+// the upper-left of the glyph in pixel coordinates and the per-pixel write
+// goes through bytesPerAtlas-sized stride. Whitespace glyphs (zero w/h)
+// cache as zero-region records that just carry the advance.
+func (f *Font) lcdRasteriseAndCache(r rune) glyphInfo {
+	rgba, w, h, offX, offY, advance, ok := rasteriseLCD(f.faces, r)
+	key := glyphKey{r: r, sub: 0}
+	if !ok {
+		f.glyphs[key] = glyphInfo{}
+		return f.glyphs[key]
+	}
+	if w == 0 || h == 0 {
+		g := glyphInfo{advance: advance}
+		f.glyphs[key] = g
+		return g
+	}
+	region, fit := f.atlas.Pack(w+1, h+1) // 1-pixel bleed guard
+	if !fit {
+		// Atlas full — cache an advance-only record so the pen progresses
+		// without re-attempting pack each draw.
+		g := glyphInfo{advance: advance}
+		f.glyphs[key] = g
+		return g
+	}
+	// Stamp RGBA into the atlas pixel buffer with 4-byte stride. f.pixels
+	// has size atlasW*atlasH*4; row n starts at n*atlasW*4.
+	for yy := 0; yy < h; yy++ {
+		srcRow := rgba[yy*w*4 : (yy+1)*w*4]
+		dstOff := ((region.Y+yy)*f.atlasW + region.X) * 4
+		copy(f.pixels[dstOff:dstOff+w*4], srcRow)
+	}
+	g := glyphInfo{
+		region:  atlas.Region{X: region.X, Y: region.Y, W: w, H: h},
+		offX:    offX,
+		offY:    offY,
+		advance: advance,
+	}
+	f.glyphs[key] = g
+	f.dirty = true
+	return g
+}
+
 // SubpixelEnabled reports whether the font caches multiple subpixel
 // variants per glyph. Tests and tools that introspect rendering quality
 // can branch on this.
@@ -434,12 +519,21 @@ func (f *Font) upload() {
 	// skew the glyph rows. Set it every upload as defence-in-depth.
 	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 
-	gl.TexImage2D(
-		gl.TEXTURE_2D, 0, gl.LUMINANCE,
-		int32(f.atlasW), int32(f.atlasH),
-		0, gl.LUMINANCE, gl.UNSIGNED_BYTE,
-		gl.Ptr(f.pixels),
-	)
+	if f.subpixelLCD {
+		gl.TexImage2D(
+			gl.TEXTURE_2D, 0, gl.RGBA,
+			int32(f.atlasW), int32(f.atlasH),
+			0, gl.RGBA, gl.UNSIGNED_BYTE,
+			gl.Ptr(f.pixels),
+		)
+	} else {
+		gl.TexImage2D(
+			gl.TEXTURE_2D, 0, gl.LUMINANCE,
+			int32(f.atlasW), int32(f.atlasH),
+			0, gl.LUMINANCE, gl.UNSIGNED_BYTE,
+			gl.Ptr(f.pixels),
+		)
+	}
 	f.dirty = false
 }
 
