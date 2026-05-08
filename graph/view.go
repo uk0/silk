@@ -833,8 +833,16 @@ func (this *GraphView) SetPageLayout(mode PageLayout) {
 	if this.pageLayout == mode {
 		return
 	}
+	prevZoom := this.zoom
 	this.pageLayout = mode
 	this.Layout()
+	// PL_FIT_WIDTH / FIT_HEIGHT / FIT_VIEW recompute zoom inside
+	// Layout(); silkide's status-bar zoom %% cell only sees changes
+	// through SigZoomChanged, so emit here too when the new layout
+	// settled on a different zoom value.
+	if this.zoom != prevZoom && this.cbZoomChanged != nil {
+		this.cbZoomChanged(this.Self(), this.zoom)
+	}
 }
 
 func (this *GraphView) ZoomFactor() float64 {

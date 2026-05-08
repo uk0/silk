@@ -7,6 +7,7 @@ import (
 
 	"silk/core"
 	"silk/ged"
+	"silk/graph"
 	"silk/gui"
 	"silk/i18n"
 	"silk/settings"
@@ -297,6 +298,24 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction, 0xBB, func() { zoomCanvas(designCanvas, 1.25) })
 	gui.RegisterShortcut(gui.ModAction, 0xBD, func() { zoomCanvas(designCanvas, 1.0/1.25) })
 	gui.RegisterShortcut(gui.ModAction, '0', func() { zoomCanvasTo(designCanvas, 1.0) })
+
+	// F: fit the form to the viewport. JetBrains / Figma muscle memory
+	// — one keystroke says "show me everything at the largest zoom that
+	// still fits". Goes through SetPageLayout so a manual Cmd+= after
+	// also clicks back into PL_FREE_ZOOM cleanly.
+	gui.RegisterShortcut(0, 'F', func() { fitCanvasToView(designCanvas) })
+}
+
+// fitCanvasToView switches the design canvas to PL_FIT_VIEW so the
+// whole form is visible at the largest zoom that fits. SetPageLayout
+// emits SigZoomChanged when the new layout settles on a different
+// zoom, so the status-bar zoom %% cell tracks this automatically.
+func fitCanvasToView(canvas *ged.GedView) {
+	if canvas == nil {
+		return
+	}
+	canvas.SetPageLayout(graph.PL_FIT_VIEW)
+	canvas.Update()
 }
 
 // zoomCanvas multiplies the design canvas's zoom factor by `factor`.
