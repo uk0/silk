@@ -127,6 +127,12 @@ func LoadIcon(name string) Icon {
 		ico.name = name
 	} else if name == "image-missing" {
 		ico = genMissingIcon()
+	} else if drawer, ok := proceduralFallbacks[name]; ok {
+		// Procedural fallback for known UI affordances. Lets silkide
+		// look right even when the resource theme hasn't been
+		// installed (the red-X "image-missing" is reserved for truly
+		// unknown names so the divergence is still loud).
+		ico = genProceduralIcon(name, drawer)
 	} else {
 		core.Log(`icon not found: "` + name + `"`)
 		ico = LoadIcon("image-missing").(*icon)
