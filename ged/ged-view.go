@@ -672,6 +672,17 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		this.CopySelected()
 		this.DeleteSelectedItems()
 
+	// Cmd+D / Ctrl+D: duplicate selection in place. Re-uses the
+	// CopySelected → PasteItems pipeline rather than introducing a
+	// separate "duplicate" command — PasteItems already offsets the
+	// new copies so they don't sit directly on top of the originals,
+	// and the round-trip puts them on the UndoStack the same way an
+	// explicit Cmd+C; Cmd+V would. Designer-tool muscle memory: Figma,
+	// JetBrains, and Sketch all bind Cmd+D this way.
+	case ctrl && (key == 'D' || key == 'd'):
+		this.CopySelected()
+		this.PasteItems()
+
 	case ctrl && (key == 'P' || key == 'p'):
 		if QuickOpenCallback != nil {
 			QuickOpenCallback()
@@ -849,10 +860,18 @@ func (this *GedView) CopySelected() {
 	}
 }
 
-// PasteItems creates new FakeWidgets from the clipboard, slightly offset.
+// PasteItems creates new FakeWidgets from the clipboard, offset by
+// one grid cell so the copies don't sit on top of the originals
+// after snap-rounding. With the default 5mm grid, a fixed (2, 2)
+// nudge plus snap actually rounded BACK to the original cell — the
+// per-cell step here keeps the offset visible whatever the grid.
 func (this *GedView) PasteItems() {
 	if len(clipboard) == 0 {
 		return
+	}
+	step := this.gridSize
+	if step <= 0 {
+		step = 5
 	}
 	sel := this.Selection()
 	sel.Clear()
@@ -861,7 +880,7 @@ func (this *GedView) PasteItems() {
 		if err != nil {
 			continue
 		}
-		px, py := this.snapToGrid(ci.x+2, ci.y+2)
+		px, py := this.snapToGrid(ci.x+step, ci.y+step)
 		item.SetBounds(px, py, ci.w, ci.h)
 		item.SetWidgetName(ci.name)
 		item.Layout()
