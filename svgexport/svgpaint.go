@@ -82,6 +82,17 @@ type SVGPainter struct {
 	// semantics — exiting the Save scope automatically removes the
 	// clip.
 	openGroups int
+
+	// defs is the <defs> section emitted before <g>/<rect>/etc. in
+	// WriteTo. Linear and radial gradients are written here as
+	// <linearGradient>/<radialGradient> elements; brushFill returns
+	// "url(#id)" referring to the def. Empty defs are skipped at
+	// serialise time.
+	defs           strings.Builder
+	nextGradientID int
+	// gradientIDs caches a gradient's assigned id so the same brush
+	// reused across multiple Fill calls only emits one def.
+	gradientIDs map[paint.Brush]string
 }
 
 type state struct {
@@ -120,6 +131,11 @@ func (p *SVGPainter) WriteTo(w io.Writer) (int64, error) {
 	fmt.Fprintf(&buf,
 		`<svg xmlns="http://www.w3.org/2000/svg" width="%g" height="%g" viewBox="0 0 %g %g">`+"\n",
 		p.width, p.height, p.width, p.height)
+	if p.defs.Len() > 0 {
+		buf.WriteString("<defs>\n")
+		buf.WriteString(p.defs.String())
+		buf.WriteString("</defs>\n")
+	}
 	buf.WriteString(p.body.String())
 	for i := 0; i < p.openGroups; i++ {
 		buf.WriteString("</g>\n")
@@ -324,7 +340,7 @@ func (p *SVGPainter) emitPath(fill, stroke bool) {
 	p.body.WriteString(d)
 	p.body.WriteString(`"`)
 	if fill {
-		fmt.Fprintf(&p.body, ` fill="%s"`, brushFill(p.brush))
+		fmt.Fprintf(&p.body, ` fill="%s"`, p.brushFill(p.brush))
 	} else {
 		p.body.WriteString(` fill="none"`)
 	}
@@ -610,9 +626,10 @@ func pixmapToDataURI(pixmap paint.Pixmap) string {
 
 // brushFill returns the SVG fill attribute for the given brush. Solid
 // brushes map to "#RRGGBB" (or "rgba(r,g,b,a)" for non-opaque alpha);
-// gradients render as a single stop colour for now (the spec also
-// supports linearGradient/radialGradient defs but that's a follow-up).
-func brushFill(br paint.Brush) string {
+// gradients are emitted as <linearGradient>/<radialGradient> defs and
+// returned as "url(#gN)". Each gradient brush is deduped by pointer
+// so reusing a single brush across many Fill calls only emits one def.
+func (p *SVGPainter) brushFill(br paint.Brush) string {
 	if br == nil {
 		return "black"
 	}
@@ -620,15 +637,71 @@ func brushFill(br paint.Brush) string {
 	case *paint.SolidBrush:
 		return colorString(v.Color)
 	case *paint.LinearGradient:
-		if len(v.Stops) > 0 {
-			return colorString(v.Stops[0].Color)
+		if len(v.Stops) == 0 {
+			return "black"
 		}
+		return p.refGradient(v, func(id string) string {
+			var b strings.Builder
+			fmt.Fprintf(&b,
+				`<linearGradient id="%s" gradientUnits="userSpaceOnUse" x1="%g" y1="%g" x2="%g" y2="%g">`+"\n",
+				id, v.X0, v.Y0, v.X1, v.Y1)
+			for _, s := range v.Stops {
+				writeStop(&b, s)
+			}
+			b.WriteString("</linearGradient>\n")
+			return b.String()
+		})
 	case *paint.RadialGradient:
-		if len(v.Stops) > 0 {
-			return colorString(v.Stops[0].Color)
+		if len(v.Stops) == 0 {
+			return "black"
 		}
+		return p.refGradient(v, func(id string) string {
+			var b strings.Builder
+			// SVG radials use the outer circle (cx, cy, r) as the
+			// extent and (fx, fy, fr) as the focal — single-centre
+			// gradients collapse fx/fy/fr to cx/cy/0.
+			fmt.Fprintf(&b,
+				`<radialGradient id="%s" gradientUnits="userSpaceOnUse" cx="%g" cy="%g" r="%g" fx="%g" fy="%g" fr="%g">`+"\n",
+				id, v.Cx, v.Cy, v.R1, v.Cx, v.Cy, v.R0)
+			for _, s := range v.Stops {
+				writeStop(&b, s)
+			}
+			b.WriteString("</radialGradient>\n")
+			return b.String()
+		})
 	}
 	return "black"
+}
+
+// refGradient returns "url(#id)" for `br`, emitting a fresh def via
+// `emit(id)` on the first sighting and reusing the cached id on
+// repeats.
+func (p *SVGPainter) refGradient(br paint.Brush, emit func(id string) string) string {
+	if id, ok := p.gradientIDs[br]; ok {
+		return "url(#" + id + ")"
+	}
+	if p.gradientIDs == nil {
+		p.gradientIDs = make(map[paint.Brush]string)
+	}
+	id := fmt.Sprintf("g%d", p.nextGradientID)
+	p.nextGradientID++
+	p.gradientIDs[br] = id
+	p.defs.WriteString(emit(id))
+	return "url(#" + id + ")"
+}
+
+// writeStop emits one <stop> child of a gradient def. SVG 1.1 doesn't
+// support an alpha component on stop-color, so non-opaque stops use
+// the optional stop-opacity attribute.
+func writeStop(b *strings.Builder, s paint.GradientStop) {
+	if s.Color.A == 255 {
+		fmt.Fprintf(b, `<stop offset="%g" stop-color="%s"/>`+"\n",
+			s.Offset, colorString(s.Color))
+	} else {
+		fmt.Fprintf(b, `<stop offset="%g" stop-color="%s" stop-opacity="%g"/>`+"\n",
+			s.Offset, colorString(paint.Color{R: s.Color.R, G: s.Color.G, B: s.Color.B, A: 255}),
+			float64(s.Color.A)/255.0)
+	}
 }
 
 // colorString renders a paint.Color as an SVG-compatible string. Opaque
