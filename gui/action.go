@@ -81,12 +81,18 @@ func (this *Action) SetObjName(objname string) {
 //	this.mtime = time.Now()
 //}
 
+// Text returns the action's display text, or the empty string when no
+// text has been set. Earlier versions returned the literal "<EMPTY>"
+// placeholder for empty text — that propagated through Button.Text(),
+// which made Button.IsTextVisible report true for icon-only buttons,
+// which in turn made ToolBar.layoutHorizontal lay out icon-only buttons
+// using the wide text-aware formula (~105 px each instead of 36 px).
+// The result was icon buttons spread far apart on the silkide toolbar.
+// Returning "" lets the icon-only branches fire correctly throughout
+// the widget stack.
 func (this *Action) Text() string {
 	if this.targetAction != nil {
 		return this.targetAction.Text()
-	}
-	if this.text == "" {
-		return "<EMPTY>"
 	}
 	return this.text
 }
