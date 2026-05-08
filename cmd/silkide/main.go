@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -342,10 +343,13 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	})
 	tb.AddSeparator()
 
-	// Run / Debug / Preview / PropSheet. run.png and preview.png
-	// exist natively; debug doesn't yet have an asset so we fall
-	// back to a short text label.
+	// Run / Build / Debug / Preview / PropSheet. run.png and
+	// preview.png exist natively; build and debug don't have icons
+	// yet so they fall back to short text labels.
 	addIconAction("", "run", "Run", func() { runProjectInTerminal(designCanvas) })
+	if btn := tb.AddAction(i18n.T("Build"), nil, func() { buildProject(designCanvas) }); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Build"))
+	}
 	if btn := tb.AddAction(i18n.T("Debug"), nil, func() {}); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Debug"))
 	}
@@ -879,14 +883,61 @@ func runProjectInTerminal(canvas *ged.GedView) {
 		// Force-build the terminal pane so the user sees output.
 		buildTerminalPane()
 	}
+	cwd := projectDir(canvas)
+	if cwd != "" {
+		globalTerminal.SetCwd(cwd)
+	}
+	globalTerminal.Run("go run .")
+}
+
+// buildProject runs "go build ./..." in the project directory and
+// pushes combined stdout+stderr into the BuildOutput pane. Build
+// errors come through in Go's standard "file:line:col: msg" format
+// which BuildOutput already parses for click-to-jump navigation.
+//
+// Spawning happens on a goroutine so the IDE stays responsive while
+// the toolchain works; the result lands in the pane via
+// reportBuildOutput on the main thread (BuildOutput's SetOutput is
+// idempotent and replaces the prior content, so the pane shows the
+// latest run's full result).
+func buildProject(canvas *ged.GedView) {
+	if globalBuildOutput == nil {
+		buildOutputPane()
+	}
+	dir := projectDir(canvas)
+	reportBuildOutput(fmt.Sprintf("$ go build ./...   (cwd: %s)", dir))
+	go func() {
+		cmd := exec.Command("go", "build", "./...")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.CombinedOutput()
+		text := string(out)
+		if err != nil && text == "" {
+			text = err.Error()
+		} else if err == nil {
+			text += "\nbuild ok"
+		}
+		reportBuildOutput(text)
+	}()
+}
+
+// projectDir resolves the directory the toolchain should run in:
+// the active .silkui's containing directory if one is open, else
+// the silkide process's cwd. Empty string means "fall back to the
+// caller's existing cwd".
+func projectDir(canvas *ged.GedView) string {
 	if canvas != nil {
 		if scene := canvas.GedScene(); scene != nil {
 			if fn := scene.Filename(); fn != "" {
-				globalTerminal.SetCwd(filepath.Dir(fn))
+				return filepath.Dir(fn)
 			}
 		}
 	}
-	globalTerminal.Run("go run .")
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return ""
 }
 
 // capitalise upper-cases the first byte of s if it's an ASCII lower

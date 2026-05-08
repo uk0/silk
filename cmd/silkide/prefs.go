@@ -172,6 +172,7 @@ func registerSilkideTranslations() {
 	i18n.Default.AddMany("zh-CN", map[string]string{
 		"Debug":     "调试",
 		"Run":       "运行",
+		"Build":     "构建",
 		"Save":      "保存",
 		"Open":      "打开",
 		"Undo":      "撤销",

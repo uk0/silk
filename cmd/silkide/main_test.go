@@ -72,6 +72,35 @@ func TestIDTitleFormat(t *testing.T) {
 	}
 }
 
+// TestProjectDirResolvesFromActiveScene: a canvas with a scene whose
+// filename points at /tmp/work/Editor.silkui resolves to /tmp/work.
+// Falling back to os.Getwd happens only when the scene has no path,
+// so the resolver behaves like JetBrains' "run in module of the
+// active editor" rule.
+func TestProjectDirResolvesFromActiveScene(t *testing.T) {
+	view := ged.NewGedView()
+	scene := view.GedScene()
+
+	// Empty filename → falls back to process cwd.
+	got := projectDir(view)
+	wantCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != wantCwd {
+		t.Errorf("empty-filename canvas: projectDir = %q, want %q", got, wantCwd)
+	}
+
+	scene.SetFilename("/tmp/work/Editor.silkui")
+	if got = projectDir(view); got != "/tmp/work" {
+		t.Errorf("with filename: projectDir = %q, want %q", got, "/tmp/work")
+	}
+
+	if got = projectDir(nil); got != wantCwd {
+		t.Errorf("nil canvas: projectDir = %q, want %q (cwd fallback)", got, wantCwd)
+	}
+}
+
 // TestConfirmDiscardDirtyAllowsCleanScene: a clean scene short-
 // circuits the dialog and returns true, so File→New / Open / Quit
 // don't pester the user when there's nothing to lose. The dirty
