@@ -629,6 +629,17 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 	case key == gui.KeyDelete || key == gui.KeyBackSpace:
 		this.DeleteSelectedItems()
 
+	// ESC clears the selection. Designer-tool muscle memory: ESC
+	// is the universal "cancel context / deselect" key (JetBrains,
+	// Figma, Sketch, even Photoshop). No-op when nothing is
+	// selected — keeps the keystroke from triggering a layout
+	// dirty for nothing.
+	case key == gui.KeyEsc:
+		if !this.Selection().IsEmpty() {
+			this.Selection().Clear()
+			this.Self().Update()
+		}
+
 	// Arrow keys nudge the selection by 1mm (5mm with Shift). Goes
 	// through the UndoStack so a stray arrow press in the middle of a
 	// layout can be reversed with Cmd+Z. Designer-tool muscle memory:
