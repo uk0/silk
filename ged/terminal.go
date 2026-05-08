@@ -145,6 +145,16 @@ func (this *TerminalPanel) Run(cmd string) {
 	this.submitCommand()
 }
 
+// Hint pushes one system message line into the scrollback. Renders
+// in the dim-blue hint style (same as the welcome banner). Use
+// instead of Run("echo …") when the IDE wants to surface a
+// platform-neutral message — POSIX single-quote escaping doesn't
+// translate to cmd.exe and a real subprocess adds latency for
+// what's just text.
+func (this *TerminalPanel) Hint(msg string) {
+	this.appendLine(terminalLine{Text: msg, IsHint: true})
+}
+
 // ---------------------------------------------------------------------------
 // Scrollback management
 // ---------------------------------------------------------------------------

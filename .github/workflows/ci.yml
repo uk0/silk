@@ -20,8 +20,17 @@ jobs:
             os: macos-15
           - label: macos-intel
             os: macos-15-intel
+          - label: windows
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
+
+    # Default shell. Overridden for Windows where the cairo cgo build
+    # has to run inside an MSYS2 mingw64 environment so pkg-config
+    # finds the cairo headers.
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
@@ -51,13 +60,50 @@ jobs:
           echo "CGO_CFLAGS=-I$(brew --prefix)/include" >> $GITHUB_ENV
           echo "CGO_LDFLAGS=-L$(brew --prefix)/lib -lcairo" >> $GITHUB_ENV
 
+      - name: Install MSYS2 + Cairo (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-cairo
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-gcc
+
+      - name: Configure Windows cgo env
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          # Hand cgo the MSYS2 pkg-config + mingw64 toolchain so it
+          # can resolve cairo. setup-go's GOROOT/PATH ordering puts
+          # the Microsoft runtime in front of mingw64; clobber that
+          # so cgo picks up the gcc we just installed.
+          echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+          echo "/c/msys64/mingw64/bin" >> $GITHUB_PATH
+
       - name: Vet
         run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
 
       - name: Test
         run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
 
-      - name: Build entry points
+      - name: Build legacy entry points
+        if: runner.os != 'Windows'
         run: |
           go build -v -o /tmp/silk-designer design.go
           go build -v -o /tmp/silk-demo demo.go
+
+      - name: Build silkide
+        if: runner.os != 'Windows'
+        run: go build -v -o /tmp/silkide ./cmd/silkide/
+
+      - name: Build silkide (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: go build -v -o silkide.exe ./cmd/silkide/
+
+      - name: Build silkgen
+        run: go build -v ./cmd/silkgen/

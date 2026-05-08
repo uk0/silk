@@ -978,8 +978,11 @@ func runProjectInTerminal(canvas *ged.GedView) {
 	// instead — points the user at the .silk.go silkgen produced
 	// and at silkide's File→New (Cmd+N).
 	if cwd != "" && !hasMainPackage(cwd) {
-		globalTerminal.Run("echo " + escapeShell(i18n.T(
-			"silkide: no main package found — add a main.go that imports the generated .silk.go to make this directory runnable.")))
+		// Hint instead of "echo …": platform-neutral, no subprocess,
+		// no shell-quoting trap (cmd.exe doesn't understand POSIX
+		// single quotes).
+		globalTerminal.Hint(i18n.T(
+			"silkide: no main package found — add a main.go that imports the generated .silk.go to make this directory runnable."))
 		return
 	}
 	globalTerminal.Run("go run .")
@@ -1031,12 +1034,6 @@ func firstPackageLineIsMain(src string) bool {
 	return false
 }
 
-// escapeShell wraps `s` in single quotes for safe injection into a
-// terminal echo. Single quotes in `s` get the standard '\''
-// trampoline so the surrounding shell quoting stays balanced.
-func escapeShell(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
 
 // buildProject runs "go build ./..." in the project directory and
 // pushes combined stdout+stderr into the BuildOutput pane. Build

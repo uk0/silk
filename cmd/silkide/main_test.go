@@ -171,24 +171,6 @@ func TestFirstPackageLineIsMainSkipsCommentsAndBlanks(t *testing.T) {
 	}
 }
 
-// TestEscapeShellRoundTripsApostrophes: silkide's Run-preflight
-// echoes a translated guidance string through the terminal.
-// Single quotes in the message must survive the shell injection
-// without breaking the surrounding echo.
-func TestEscapeShellRoundTripsApostrophes(t *testing.T) {
-	cases := map[string]string{
-		"hello":            `'hello'`,
-		`it's`:             `'it'\''s'`,
-		`'`:                `''\'''`,
-		`a 'b' c`:          `'a '\''b'\'' c'`,
-	}
-	for in, want := range cases {
-		if got := escapeShell(in); got != want {
-			t.Errorf("escapeShell(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // TestProjectDirResolvesFromActiveScene: a canvas with a scene whose
 // filename points at /tmp/work/Editor.silkui resolves to /tmp/work.
 // Falling back to os.Getwd happens only when the scene has no path,

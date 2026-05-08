@@ -76,18 +76,62 @@ Add these to your `~/.zshrc` or `~/.bashrc` for persistent use.
 
 ### Windows
 
-```powershell
-# Install MSYS2 from https://www.msys2.org/
-# In MSYS2 MinGW64 shell:
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config mingw-w64-x86_64-cairo
+silk's Cairo bindings need `gcc + pkg-config + cairo` from MSYS2's MinGW64
+toolchain. Once those are on `PATH`, `go build` / `go run` / `go test` work
+from any of the three common Windows shells. Pick the one you prefer; the
+build flow is identical, only the env-var syntax differs.
 
-# Add MinGW64 to PATH:
-set PATH=C:\msys64\mingw64\bin;%PATH%
+#### One-time setup
 
-# Verify CGO works:
-go env CGO_ENABLED
-# Should output: 1
+1. Install **MSYS2** from <https://www.msys2.org/>.
+2. Open the **MSYS2 MinGW64** shell (Start → "MSYS2 MinGW64").
+3. Install the toolchain:
+   ```bash
+   pacman -S mingw-w64-x86_64-gcc \
+             mingw-w64-x86_64-pkgconf \
+             mingw-w64-x86_64-cairo
+   ```
+
+#### Build & run from each shell
+
+**MSYS2 MinGW64** (recommended — `PATH` is already set):
+```bash
+cd /c/path/to/silk
+go build -o silkide.exe ./cmd/silkide/
+./silkide.exe
+go test ./gui/ ./ged/ ./paint/ ./graph/ ./geom/
 ```
+
+**PowerShell**:
+```powershell
+$env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+cd C:\path\to\silk
+go build -o silkide.exe .\cmd\silkide\
+.\silkide.exe
+go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
+```
+
+**Command Prompt (cmd.exe)**:
+```cmd
+set PATH=C:\msys64\mingw64\bin;%PATH%
+cd C:\path\to\silk
+go build -o silkide.exe .\cmd\silkide\
+silkide.exe
+go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
+```
+
+#### Verify
+
+```bash
+go env CGO_ENABLED   # 1
+gcc --version        # mingw64 gcc, 13.x or newer
+pkg-config --modversion cairo  # 1.18.x
+```
+
+If `go build` errors with `'cairo.h' file not found`, the MinGW64 `bin/`
+isn't on `PATH` — re-run the env-var line for your shell. The `win32`
+package is compile-tagged Windows-only so it only enters the build on
+this platform; on macOS/Linux it's a no-op.
 
 ### Linux (Ubuntu/Debian)
 
