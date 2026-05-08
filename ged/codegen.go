@@ -206,59 +206,16 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.Form)\n", f.name))
 		buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 			f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
-		// Wire event handlers based on widget type and user code
+		// Wire event handlers based on widget type and user code.
+		// When the user wrote a func body, pick the "natural" event
+		// for the widget (Button → OnClick, Slider → OnValueChanged,
+		// etc.) via defaultEventForFactory, then emit through the
+		// shared emitEventBinding helper so this auto path stays in
+		// lockstep with the explicit eventHandlers path below.
 		handlerName := extractHandlerName(f.code)
 		if handlerName != "" {
-			switch f.factoryName {
-			case "gui.Button":
-				buf.WriteString(fmt.Sprintf("\tui.%s.Action().BindFunc0(%s)\n", f.name, handlerName))
-			case "gui.Edit":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigTextChanged(func(_ interface{}, s string) { %s(s) })\n", f.name, handlerName))
-			case "gui.CheckBox":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigCheck(func(checked bool) { %s(checked) })\n", f.name, handlerName))
-			case "gui.Slider":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetValueChangedCallback(func(_ interface{}, v float64) { %s(v) })\n", f.name, handlerName))
-			case "gui.SpinBox":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetValueChangedCallback(func(_ interface{}, v int) { %s(v) })\n", f.name, handlerName))
-			case "gui.RadioButton":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetChangedCallback(func(_ interface{}, selected bool) { %s(selected) })\n", f.name, handlerName))
-			case "gui.ToggleSwitch":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigToggle(func(on bool) { %s(on) })\n", f.name, handlerName))
-			case "gui.SearchBox":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigSearch(func(q string) { %s(q) })\n", f.name, handlerName))
-			case "gui.NumberInput":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigValueChanged(func(v float64) { %s(v) })\n", f.name, handlerName))
-			case "gui.Rating":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigRatingChanged(func(v int) { %s(v) })\n", f.name, handlerName))
-			case "gui.DatePicker":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigDateChanged(func(y, m, d int) { %s(y, m, d) })\n", f.name, handlerName))
-			case "gui.ColorPicker":
-				imports["silk/paint"] = true
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigColorChanged(func(c paint.Color) { %s(c) })\n", f.name, handlerName))
-			case "gui.DropdownButton":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigSelect(func(idx int, text string) { %s(idx, text) })\n", f.name, handlerName))
-			case "gui.SwitchGroup":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigChange(func(idx int, text string) { %s(idx, text) })\n", f.name, handlerName))
-			case "gui.Link":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigClick(func(url string) { %s(url) })\n", f.name, handlerName))
-			case "gui.ComboBox":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigSelectionChanged(func(_ interface{}, idx int) { %s(idx) })\n", f.name, handlerName))
-			case "gui.ListWidget":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigSelectionChanged(func(_ interface{}, idx []int) { %s(idx) })\n", f.name, handlerName))
-			case "gui.Table":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetSelectionChangedCallback(func(_ interface{}, row int) { %s(row) })\n", f.name, handlerName))
-			case "gui.Tag":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigClose(func() { %s() })\n", f.name, handlerName))
-			case "gui.Breadcrumb":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigClick(func(idx int, item gui.BreadcrumbItem) { %s(idx, item.Text) })\n", f.name, handlerName))
-			case "gui.Accordion":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigExpand(func(idx int, expanded bool) { %s(idx, expanded) })\n", f.name, handlerName))
-			case "gui.NotificationPanel":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigClick(func(idx int) { %s(idx) })\n", f.name, handlerName))
-			case "gui.TabWidget":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetCurrentChangedCallback(func(_ interface{}, idx int) { %s(idx) })\n", f.name, handlerName))
-			case "gui.CodeEditor":
-				buf.WriteString(fmt.Sprintf("\tui.%s.SigChanged(%s)\n", f.name, handlerName))
+			if evt := defaultEventForFactory(f.factoryName); evt != "" {
+				emitEventBinding(&buf, imports, f.factoryName, f.name, evt, handlerName)
 			}
 		}
 		// Generate event handler bindings from the eventHandlers map
@@ -442,6 +399,61 @@ func fmtFloat(v float64) string {
 // imports is the running import set the caller threads through; some
 // bindings (e.g. ColorPicker) need to pull in extra packages and
 // tag those here.
+// defaultEventForFactory returns the "natural" event a widget gets
+// auto-bound to when the user writes a single Go func and no
+// explicit event metadata is recorded — Button's natural event is
+// OnClick, a Slider's is OnValueChanged, and so on. Empty string
+// means the factory has no auto-default; the user must record an
+// explicit eventHandlers entry to bind anything.
+//
+// Co-located with emitEventBinding so both halves of the codegen's
+// event story live in one file. New factories that gain an auto-
+// default get one new line here plus the matching case in
+// emitEventBinding — both checked by the existing tests.
+func defaultEventForFactory(factoryName string) string {
+	switch factoryName {
+	case "gui.Button", "gui.Link":
+		return "OnClick"
+	case "gui.Edit":
+		return "OnChanged"
+	case "gui.CheckBox":
+		return "OnToggled"
+	case "gui.Slider", "gui.SpinBox", "gui.NumberInput":
+		return "OnValueChanged"
+	case "gui.RadioButton":
+		return "OnChanged"
+	case "gui.ToggleSwitch":
+		return "OnToggle"
+	case "gui.SearchBox":
+		return "OnSearch"
+	case "gui.Rating":
+		return "OnRatingChanged"
+	case "gui.DatePicker":
+		return "OnDateChanged"
+	case "gui.ColorPicker":
+		return "OnColorChanged"
+	case "gui.DropdownButton":
+		return "OnSelect"
+	case "gui.SwitchGroup":
+		return "OnChange"
+	case "gui.ComboBox", "gui.ListWidget", "gui.Table":
+		return "OnSelectionChanged"
+	case "gui.Tag":
+		return "OnClose"
+	case "gui.Breadcrumb":
+		return "OnNavigate"
+	case "gui.Accordion":
+		return "OnSectionToggle"
+	case "gui.NotificationPanel":
+		return "OnItemClick"
+	case "gui.TabWidget":
+		return "OnTabChanged"
+	case "gui.CodeEditor":
+		return "OnTextChanged"
+	}
+	return ""
+}
+
 func emitEventBinding(buf *strings.Builder, imports map[string]bool, factoryName, fieldName, evtName, handler string) bool {
 	// Locally-named aliases match the prior literal-source style in
 	// the switch bodies — keeps the table grep-friendly when readers

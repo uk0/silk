@@ -154,6 +154,65 @@ func TestGenerateCodeBindsCodeEditorChanged(t *testing.T) {
 	}
 }
 
+// TestGenerateCodeAutoDefaultRoutesThroughHelper: when the user
+// writes a func body (no explicit eventHandlers map) the codegen
+// auto-default path picks a widget-natural event via
+// defaultEventForFactory and dispatches through emitEventBinding —
+// the same helper the explicit eventHandlers path uses. This
+// guards against the auto-default and eventHandlers tables drifting
+// after they were unified.
+//
+// CodeEditor is the canary widget here because its auto-default
+// (OnTextChanged → SigChanged) was added in the unification pass;
+// a regression that broke the routing would surface as a missing
+// SigChanged binding even though the eventHandlers path still
+// works.
+func TestGenerateCodeAutoDefaultRoutesThroughHelper(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("Editor")
+	scene.SetSize(120, 80)
+
+	ed, err := NewFakeWidgetFromFactory("gui.CodeEditor")
+	if err != nil {
+		t.Fatalf("create CodeEditor: %v", err)
+	}
+	ed.SetWidgetName("editor")
+	ed.SetBounds(5, 5, 100, 60)
+	ed.SetCode("func onEditorChanged(s string) { _ = s }")
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(ed, scene)
+	scene.PushCommand(cmd)
+
+	code := scene.GenerateCode(CodeGenOptions{})
+	if !strings.Contains(code, "ui.Editor.SigChanged(onEditorChanged)") {
+		t.Errorf("auto-default CodeEditor binding missing\n----\n%s", code)
+	}
+}
+
+// TestDefaultEventForFactoryHasEntryForEveryHandledFactory: every
+// factory that emitEventBinding knows about should also have a
+// defaultEventForFactory mapping (or be deliberately excluded).
+// The unification relies on the auto-default switch picking SOME
+// event — a factory without a default but with a handler in the
+// eventHandlers table would silently lose its auto binding.
+func TestDefaultEventForFactoryHasEntryForEveryHandledFactory(t *testing.T) {
+	wantDefault := []string{
+		"gui.Button", "gui.Edit", "gui.CheckBox", "gui.Slider",
+		"gui.SpinBox", "gui.RadioButton", "gui.ToggleSwitch",
+		"gui.SearchBox", "gui.NumberInput", "gui.Rating",
+		"gui.DatePicker", "gui.ColorPicker", "gui.DropdownButton",
+		"gui.SwitchGroup", "gui.Link", "gui.ComboBox",
+		"gui.ListWidget", "gui.Table", "gui.Tag", "gui.Breadcrumb",
+		"gui.Accordion", "gui.NotificationPanel", "gui.TabWidget",
+		"gui.CodeEditor",
+	}
+	for _, f := range wantDefault {
+		if got := defaultEventForFactory(f); got == "" {
+			t.Errorf("defaultEventForFactory(%q) = \"\"; want a non-empty event", f)
+		}
+	}
+}
+
 // TestGenerateCodeUnknownEventEmitsGuidance: an event name that
 // isn't in the codegen switch falls through to the new guidance
 // comment instead of the old terse "TODO: bind X.Y -> Z" line. The
