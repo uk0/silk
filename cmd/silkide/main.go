@@ -455,6 +455,35 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	designCanvas := ged.NewGedView()
 	dock.AddView(designCanvas)
 
+	// Welcome screen — third sibling tab. Mirrors Qt Creator's start
+	// page: title, recent projects, New / Open buttons. The user
+	// clicks the dock's tab strip to flip between welcome and the
+	// real workspace; selecting any recent file or pressing New /
+	// Open dispatches through the same handlers the toolbar uses.
+	if globalPrefs != nil {
+		welcome := ged.NewWelcomeScreen()
+		welcome.SetRecentFiles(globalPrefs.RecentFiles())
+		welcome.SetNewProjectCallback(func() {
+			newDesignCanvas(designCanvas)
+			dockSetActiveView(dock, designCanvas)
+		})
+		welcome.SetOpenFileCallback(func() {
+			path := gui.OpenFileDialog()
+			if path == "" {
+				return
+			}
+			openFromTree(path, editorTabs, designCanvas, dock)
+		})
+		welcome.SetOpenRecentCallback(func(path string) {
+			openFromTree(path, editorTabs, designCanvas, dock)
+		})
+		dock.AddView(welcome)
+		// Make welcome the visible tab on first launch — user sees
+		// the recent-files list and the action buttons rather than a
+		// blank canvas.
+		dockSetActiveView(dock, welcome)
+	}
+
 	leftDockI := dock.SplitNewDock(true, false)
 	leftDock, _ := leftDockI.(*gui.Dock)
 
@@ -508,6 +537,19 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	}
 
 	return editorTabs, designCanvas
+}
+
+// dockSetActiveView flips a Dock to show `view`, which must be one
+// of the views previously AddView'd. Wraps the IndexOfView →
+// SetActiveIndex round-trip so callers don't have to bounce through
+// the type-asserted index lookup.
+func dockSetActiveView(d *gui.Dock, view gui.IWidget) {
+	if d == nil || view == nil {
+		return
+	}
+	if idx := d.IndexOfView(view); idx >= 0 {
+		d.SetActiveIndex(idx)
+	}
 }
 
 // buildEditorTabs composes the multi-tab code editor view. Each tab
