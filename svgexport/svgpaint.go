@@ -482,8 +482,12 @@ func (p *SVGPainter) openClipGroup() {
 	id := p.nextClipID
 	p.nextClipID++
 	d := strings.TrimSpace(p.path.String())
-	fmt.Fprintf(&p.body,
-		`<defs><clipPath id="c%d"><path d="%s"/></clipPath></defs>`+"\n",
+	// Hoist the <clipPath> definition into the shared defs block so
+	// the SVG output ends up with one top-level <defs>...</defs>
+	// section instead of many small inline ones. The body just opens
+	// the referencing <g clip-path="url(#cN)">.
+	fmt.Fprintf(&p.defs,
+		`<clipPath id="c%d"><path d="%s"/></clipPath>`+"\n",
 		id, d)
 	fmt.Fprintf(&p.body, `<g clip-path="url(#c%d)">`+"\n", id)
 	p.openGroups++

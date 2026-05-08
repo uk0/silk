@@ -19,9 +19,10 @@ func TestClipEmitsClipPathAndOpensGroup(t *testing.T) {
 
 	out := p.String()
 	for _, want := range []string{
-		`<defs><clipPath id="c0">`,
-		`<path d="M 10 10 L 90 10 L 90 90 L 10 90 Z"`,
-		`</clipPath></defs>`,
+		`<defs>`,
+		`<clipPath id="c0"><path d="M 10 10 L 90 10 L 90 90 L 10 90 Z"`,
+		`</clipPath>`,
+		`</defs>`,
 		`<g clip-path="url(#c0)">`,
 	} {
 		if !strings.Contains(out, want) {
