@@ -207,6 +207,7 @@ func (this *cairoPainter) applyPen() {
 	if this.state.pen == nil {
 		this.cairo.SetLineWidth(0)
 		this.cairo.SetSourceRGBA(0, 0, 0, 0)
+		this.cairo.SetDash(cairo.Dash{}) // clear any prior dash
 		return
 	}
 
@@ -226,6 +227,45 @@ func (this *cairoPainter) applyPen() {
 	}
 
 	this.cairo.SetLineWidth(w)
+
+	// DashedPen: dashed-stroke contract mirrors the SVG/PDF painters.
+	// An empty / nil pattern resets to a solid stroke so the cairo
+	// context doesn't carry dash state from a previous styled pen.
+	if dp, ok := this.state.pen.(DashedPen); ok {
+		this.cairo.SetDash(cairo.Dash{Dashes: dp.Dash(), Offset: dp.DashOffset()})
+	} else {
+		this.cairo.SetDash(cairo.Dash{})
+	}
+
+	// CappedPen: paint.LineCap and cairo.LineCap agree on enum order
+	// (Butt=0/Round=1/Square=2) so a direct cast is faithful, but
+	// paint.LineJoin (Miter/Bevel/Round) and cairo.LineJoin
+	// (MITER/ROUND/BEVEL) disagree at indices 1 and 2 — a translation
+	// table is required for joins.
+	if cp, ok := this.state.pen.(CappedPen); ok {
+		this.cairo.SetLineCap(cairo.LineCap(cp.LineCap()))
+		this.cairo.SetLineJoin(cairoLineJoin(cp.LineJoin()))
+	} else {
+		this.cairo.SetLineCap(cairo.LINE_CAP_BUTT)
+		this.cairo.SetLineJoin(cairo.LINE_JOIN_MITER)
+	}
+}
+
+// cairoLineJoin maps the paint package's LineJoin enum (Miter, Bevel,
+// Round) onto cairo's enum (MITER, ROUND, BEVEL). The paint side was
+// declared in alphabetical order; cairo follows the C library, which
+// chose visual order (MITER → softer ROUND → flat BEVEL). Without
+// this remap, asking for paint.LineJoinBevel would render with cairo's
+// ROUND join.
+func cairoLineJoin(j LineJoin) cairo.LineJoin {
+	switch j {
+	case LineJoinBevel:
+		return cairo.LINE_JOIN_BEVEL
+	case LineJoinRound:
+		return cairo.LINE_JOIN_ROUND
+	default: // LineJoinMiter and any unknown value
+		return cairo.LINE_JOIN_MITER
+	}
 }
 
 //func (this *cairoPainter) SetSourcePattern(pat *cairo.Pattern) {
