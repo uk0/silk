@@ -127,6 +127,14 @@ func RunPainterBattery(t PainterTestingT, p Painter) {
 	check("DrawText", func() { p.MoveTo(10, 20); p.DrawText("battery") })
 	check("DrawText1", func() { p.DrawText1(10, 30, "battery") })
 
+	// DrawGlyph / DrawGlyphs accept low-level glyph IDs. Most painters
+	// only honour these when a font has been resolved by SetFont above.
+	// Index 0 is .notdef on every font we ship, which the cairo and
+	// SVG/PDF painters render as an empty box rather than panicking.
+	g0 := Glyph{X: 10, Y: 40}
+	check("DrawGlyph", func() { p.DrawGlyph(&g0) })
+	check("DrawGlyphs", func() { p.DrawGlyphs([]Glyph{g0}) })
+
 	// Surface accessors
 	check("Target", func() { _ = p.Target() })
 
