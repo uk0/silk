@@ -711,6 +711,11 @@ func buildOutputPane() gui.IWidget {
 // without threading another argument through the shortcut wiring.
 var statusBarZoomLabel *gui.Label
 
+// statusBarBuildLabel shows the latest build's outcome — "build ok"
+// for clean compiles, "build: N errors" otherwise. Empty until the
+// first buildProject call.
+var statusBarBuildLabel *gui.Label
+
 func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	sb := gui.NewStatusBar()
 
@@ -730,10 +735,38 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	statusBarZoomLabel = gui.NewLabel("100%")
 	sb.AddPermanentWidget(statusBarZoomLabel)
 
+	// Build status cell. Empty before the first build runs; after a
+	// buildProject completes setBuildStatus updates it to "build ok"
+	// (no errors) or "build: N errors" — the user gets a glanceable
+	// summary even when the BuildOutput pane is hidden behind the
+	// Terminal tab.
+	statusBarBuildLabel = gui.NewLabel("")
+	sb.AddPermanentWidget(statusBarBuildLabel)
+
 	sb.AddPermanentWidget(gui.NewLabel("v0.1.3"))
 
 	frame.SetStatusBar(sb)
 	return sb
+}
+
+// setBuildStatus refreshes the status-bar build cell from the latest
+// BuildOutput pane content. Called after reportBuildOutput so the
+// cell reflects whatever just landed. Counts ErrorMap entries —
+// non-error info lines (silkgen messages, "$ go build" headers)
+// don't bump the count.
+func setBuildStatus() {
+	if statusBarBuildLabel == nil || globalBuildOutput == nil {
+		return
+	}
+	n := len(globalBuildOutput.ErrorMap())
+	switch {
+	case n == 0 && globalBuildOutput.HasErrors():
+		statusBarBuildLabel.SetText(i18n.T("build: error"))
+	case n == 0:
+		statusBarBuildLabel.SetText(i18n.T("build ok"))
+	default:
+		statusBarBuildLabel.SetText(fmt.Sprintf(i18n.T("build: %d errors"), n))
+	}
 }
 
 // setZoomLabel formats `zoom` as a percentage and pushes it into the
@@ -1028,6 +1061,7 @@ func reportBuildOutput(line string) {
 	}
 	globalBuildOutput.SetOutput(line)
 	dockSetActiveView(globalBottomDock, globalBuildOutput)
+	setBuildStatus()
 }
 
 // runProjectInTerminal dispatches "go run ." through the integrated

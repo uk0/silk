@@ -171,6 +171,35 @@ func TestFirstPackageLineIsMainSkipsCommentsAndBlanks(t *testing.T) {
 	}
 }
 
+// TestSetBuildStatusReflectsErrorCount: setBuildStatus reads the
+// active BuildOutput's ErrorMap and updates the status-bar cell to
+// "build ok" / "build: N errors" / empty depending on what's there.
+// Locks the format strings the i18n table maps so a translation
+// drift wouldn't silently skip the badge update.
+func TestSetBuildStatusReflectsErrorCount(t *testing.T) {
+	statusBarBuildLabel = gui.NewLabel("")
+	globalBuildOutput = ged.NewBuildOutput()
+
+	// Clean output → "build ok"
+	globalBuildOutput.SetOutput("build ok\n")
+	setBuildStatus()
+	if got := statusBarBuildLabel.Text(); got != "build ok" {
+		t.Errorf("clean: got %q, want %q", got, "build ok")
+	}
+
+	// Two file:line:col errors → "build: 2 errors"
+	globalBuildOutput.SetOutput(
+		"main.go:1:1: undefined: foo\nmain.go:2:1: undefined: bar\n")
+	setBuildStatus()
+	if got := statusBarBuildLabel.Text(); got != "build: 2 errors" {
+		t.Errorf("two errors: got %q, want %q", got, "build: 2 errors")
+	}
+
+	// Reset so other tests don't see stale state.
+	statusBarBuildLabel = nil
+	globalBuildOutput = nil
+}
+
 // TestProjectDirResolvesFromActiveScene: a canvas with a scene whose
 // filename points at /tmp/work/Editor.silkui resolves to /tmp/work.
 // Falling back to os.Getwd happens only when the scene has no path,
