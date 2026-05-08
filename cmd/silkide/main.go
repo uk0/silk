@@ -100,6 +100,14 @@ func main() {
 			}
 			statusBar.SetMessage(i18n.Tf("Selected: %d items", n))
 		})
+
+		// Status-bar zoom % cell stays in sync with Ctrl+wheel zoom
+		// thanks to GraphView.SigZoomChanged. Without this hookup the
+		// cell would only refresh on the keyboard shortcuts in
+		// prefs.go's zoomCanvas helpers.
+		designCanvas.SigZoomChanged(func(_ interface{}, zoom float64) {
+			setZoomLabel(zoom)
+		})
 	}
 
 	// Persist the final window size + position on close so the next

@@ -172,6 +172,7 @@ type GraphView struct {
 	cbItemDetached     func(s interface{}, item, parent IItem)
 	cbGenDecors        func(s interface{}, item IItem) []IDecor
 	cbSelectionChanged func(s interface{}, selection *Selection)
+	cbZoomChanged      func(s interface{}, zoom float64)
 
 	needEmitSelectionChanged bool
 
@@ -842,6 +843,7 @@ func (this *GraphView) ZoomFactor() float64 {
 
 func (this *GraphView) SetZoomFactor(z float64) {
 	changed := false
+	zoomChanged := false
 	if this.PageLayout() != PL_FREE_ZOOM {
 		this.pageLayout = PL_FREE_ZOOM
 		changed = true
@@ -850,10 +852,24 @@ func (this *GraphView) SetZoomFactor(z float64) {
 	if this.zoom != z {
 		this.zoom = z
 		changed = true
+		zoomChanged = true
 	}
 	if changed {
 		this.Layout()
 	}
+	if zoomChanged && this.cbZoomChanged != nil {
+		this.cbZoomChanged(this.Self(), z)
+	}
+}
+
+// SigZoomChanged registers a callback fired whenever the view's zoom
+// factor moves to a new value. Fires after Layout, so observers see
+// the new zoom AND a re-laid-out viewport. Used by silkide to keep
+// the status-bar zoom % cell synced with Ctrl+wheel zoom — without
+// the signal, only the keyboard shortcuts would update the cell and
+// wheel-driven zoom would silently desync the indicator.
+func (this *GraphView) SigZoomChanged(fn func(s interface{}, zoom float64)) {
+	this.cbZoomChanged = fn
 }
 
 func (this *GraphView) Icon() paint.Icon {
