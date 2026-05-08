@@ -6,6 +6,7 @@ import (
 	//	"silk/geom"
 	//"silk/shell"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -149,6 +150,13 @@ func preload1(path string) {
 	}
 	defer dir.Close()
 
+	// Resource icons may live in size subdirectories ("16x16/foo.png")
+	// rather than embedded in the filename ("foo_16.png"). Extract the
+	// size from the directory name when it matches the NxN pattern;
+	// the parse() filename suffix takes precedence so a file with an
+	// explicit "_NN" suffix can still override the directory size.
+	dirSize := dirSizeFromName(filepath.Base(path))
+
 	infos, err := dir.Readdir(-1)
 	for _, info := range infos {
 		n := info.Name()
@@ -164,6 +172,13 @@ func preload1(path string) {
 		if !ok {
 			continue
 		}
+		// "_NN" filename suffix returned size=1 means parse fell back
+		// to the no-suffix path. Prefer the directory size in that
+		// case so 16x16/edit-undo.png and 22x22/edit-undo.png stop
+		// colliding at size=1 and overwriting each other.
+		if size == 1 && dirSize > 0 {
+			size = dirSize
+		}
 		src, ok := iconSrcCache[name]
 		if !ok {
 			src = new(iconSrc)
@@ -171,6 +186,22 @@ func preload1(path string) {
 		}
 		src.add(path, n, size)
 	}
+}
+
+// dirSizeFromName extracts the side length from a "NxN" or "NxM"
+// directory name like "16x16" or "22x22". Returns 0 when the name
+// doesn't match — preload1's caller falls back to the filename
+// parse path in that case.
+func dirSizeFromName(dir string) int {
+	x := strings.Index(dir, "x")
+	if x <= 0 || x == len(dir)-1 {
+		return 0
+	}
+	n, err := strconv.Atoi(dir[:x])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func preloadPath() {
