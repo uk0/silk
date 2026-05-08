@@ -83,6 +83,13 @@ type SVGPainter struct {
 	// clip.
 	openGroups int
 
+	// op is the active blend operator. emitPath inlines a
+	// "style=mix-blend-mode: X" attribute when op resolves to a
+	// CSS-supported blend mode; OpOver and the pure-compositing
+	// operators leave the attribute off so the SVG renders with
+	// the default normal blend.
+	op paint.Operator
+
 	// defs is the <defs> section emitted before <g>/<rect>/etc. in
 	// WriteTo. Linear and radial gradients are written here as
 	// <linearGradient>/<radialGradient> elements; brushFill returns
@@ -103,6 +110,7 @@ type state struct {
 	curX       float64
 	curY       float64
 	openGroups int
+	op         paint.Operator
 }
 
 // New constructs a fresh SVGPainter with the given canvas size in
@@ -172,6 +180,7 @@ func (p *SVGPainter) Save() int {
 		ctm: p.ctm, brush: p.brush, pen: p.pen, font: p.font,
 		curX: p.curX, curY: p.curY,
 		openGroups: p.openGroups,
+		op:         p.op,
 	})
 	return len(p.stack)
 }
@@ -191,6 +200,7 @@ func (p *SVGPainter) Restore() int {
 	}
 	p.ctm, p.brush, p.pen, p.font = s.ctm, s.brush, s.pen, s.font
 	p.curX, p.curY = s.curX, s.curY
+	p.op = s.op
 	return len(p.stack)
 }
 
@@ -357,6 +367,9 @@ func (p *SVGPainter) emitPath(fill, stroke bool) {
 		fmt.Fprintf(&p.body, ` stroke="%s" stroke-width="%g"`, colorString(col), w)
 		writePenExtensionAttrs(&p.body, p.pen)
 	}
+	if mode := blendModeForOp(p.op); mode != "" {
+		fmt.Fprintf(&p.body, ` style="mix-blend-mode:%s"`, mode)
+	}
 	p.body.WriteString("/>\n")
 }
 
@@ -499,12 +512,55 @@ func (p *SVGPainter) ClipBounds1() geom.Rect {
 
 // --- paint.Painter: blend operator (SVG mix-blend-mode) ---------------
 //
-// Operator selection in SVG would map to mix-blend-mode on a group.
-// Our emitter currently doesn't open per-op groups, so SetOperator is
-// recorded but only honoured when the op is not OpOver — minimal
-// support for the dominant cases avoids a bigger refactor.
+// Operator selection in SVG maps to the mix-blend-mode CSS property,
+// inlined onto each emitted path element via a "style" attribute.
+// The 16 paint.Operator values that have a CSS counterpart pass
+// through; the pure-compositing operators (Source/In/Out/Atop/
+// Dest*/Clear/Xor/Add/Saturate) have no SVG analog and stay no-op
+// — emitPath skips the style attribute when the resolved name is
+// empty, so an OpSource Fill renders the same as OpOver in SVG.
 
-func (p *SVGPainter) SetOperator(op paint.Operator) { /* no-op stub */ }
+func (p *SVGPainter) SetOperator(op paint.Operator) { p.op = op }
+
+// blendModeForOp returns the CSS mix-blend-mode keyword that
+// matches `op`, or empty string when the op has no SVG counterpart
+// (or when the default OpOver is in effect — emitting "normal"
+// would just bloat the output).
+func blendModeForOp(op paint.Operator) string {
+	switch op {
+	case paint.OpMultiply:
+		return "multiply"
+	case paint.OpScreen:
+		return "screen"
+	case paint.OpOverlay:
+		return "overlay"
+	case paint.OpDarken:
+		return "darken"
+	case paint.OpLighten:
+		return "lighten"
+	case paint.OpColorDodge:
+		return "color-dodge"
+	case paint.OpColorBurn:
+		return "color-burn"
+	case paint.OpHardLigh:
+		return "hard-light"
+	case paint.OpSoftLigh:
+		return "soft-light"
+	case paint.OpDifference:
+		return "difference"
+	case paint.OpExclusion:
+		return "exclusion"
+	case paint.OpHslHue:
+		return "hue"
+	case paint.OpHslSaturate:
+		return "saturation"
+	case paint.OpHslColor:
+		return "color"
+	case paint.OpHslLuminosity:
+		return "luminosity"
+	}
+	return ""
+}
 
 // --- paint.Painter: transform stack -----------------------------------
 
