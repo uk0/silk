@@ -82,6 +82,7 @@ func main() {
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
+	registerPaletteCommands(editorTabs, designCanvas)
 	startTitleSync(frame, designCanvas)
 	if designCanvas != nil {
 		rebindAutoSaver(designCanvas.GedScene())

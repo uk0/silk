@@ -195,6 +195,9 @@ func registerSilkideTranslations() {
 		"build ok":         "构建成功",
 		"build: error":     "构建失败",
 		"build: %d errors": "构建错误: %d",
+		"Command Palette":  "命令面板",
+		"Fit to View":      "适应视口",
+		"Find in Files":    "在文件中查找",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
@@ -330,6 +333,15 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// if the function-keyless laptop crowd asks for it).
 	gui.RegisterShortcut(0, gui.KeyF5, func() { runProjectInTerminal(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
+
+	// Cmd+Shift+P — open the Command Palette. JetBrains "Find Action"
+	// / VSCode command palette muscle memory: every action in the IDE
+	// is searchable from here, including ones that don't have an
+	// explicit toolbar button or shortcut. The dialog-anchor parent
+	// is the design canvas so the modal centres over the workspace.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'P', func() {
+		showCommandPalette(designCanvas)
+	})
 
 	// Cmd+Shift+F — focus the global-search panel in the left dock.
 	// VSCode / JetBrains muscle memory; bringing the dock tab to
