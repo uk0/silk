@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -59,14 +60,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
 	add("Save", "Cmd+S", func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if scene.Save() {
-				regenerateGoForSilkui(scene.Filename())
-			}
-		}
+		performSave(designCanvas)
 	})
 	add("Quick Open File", "Cmd+P", func() {
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
@@ -84,11 +78,16 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			return
 		}
 		if err := exportDesignCanvas(path, designCanvas); err != nil {
-			// exportDesignCanvas already logs via core.Warn; here we
-			// also push the message into the BuildOutput pane so the
-			// user sees something even when the terminal is hidden.
+			// exportDesignCanvas already logs via core.Warn; we also
+			// push the message into the BuildOutput pane so the user
+			// sees something even when the terminal is hidden, and a
+			// transient toast for immediate visual feedback (the pane
+			// only auto-focuses on real build errors, not export ones).
 			reportBuildOutput("export failed: " + err.Error())
+			silkideToast(i18n.T("Export failed"), gui.ToastError)
+			return
 		}
+		silkideToast(i18n.Tf("Exported to %s", filepath.Base(path)), gui.ToastSuccess)
 	})
 
 	// Edit / canvas actions.

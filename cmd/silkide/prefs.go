@@ -200,6 +200,15 @@ func registerSilkideTranslations() {
 		"Find in Files":    "在文件中查找",
 		"Open File":        "打开文件",
 		"Quick Open File":  "快速打开文件",
+		"Saved %s":               "已保存 %s",
+		"Build successful":       "构建成功",
+		"Build failed":           "构建失败",
+		"Running...":             "运行中...",
+		"Run skipped: no main package": "未找到 main 包，已跳过运行",
+		"Opened %s":              "已打开 %s",
+		"Recovered from autosave": "已从自动保存恢复",
+		"Exported to %s":         "已导出到 %s",
+		"Export failed":          "导出失败",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
@@ -247,16 +256,7 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
 	gui.RegisterShortcut(gui.ModAction, 'S', func() {
-		if designCanvas == nil {
-			return
-		}
-		scene := designCanvas.GedScene()
-		if scene == nil {
-			return
-		}
-		if scene.Save() {
-			regenerateGoForSilkui(scene.Filename())
-		}
+		performSave(designCanvas)
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Z', func() {
 		if designCanvas == nil {

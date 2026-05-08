@@ -73,6 +73,7 @@ func main() {
 	frame.SetUuidStr("c1d8e2f0-1a3b-4c2d-9e7f-silkide00001")
 	frame.SetTitle(idTitle())
 	gui.SetDefaultFrame(frame)
+	globalFrame = frame
 
 	// Order: panels first so the toolbar can capture references to
 	// the editor tabs and design canvas, wiring Open / Save buttons
@@ -302,21 +303,11 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		}
 	})
 	addIconAction("", "save", "Save", func() {
-		// Save the current design canvas as .silkui. GedScene.Save()
-		// pops a SaveFileDialog if the scene has no filename yet.
-		// On success also regenerate the sibling .silk.go via the
-		// silkgen pipeline so the user has a compilable Go snippet
-		// to commit alongside the .silkui.
-		if designCanvas == nil {
-			return
-		}
-		scene := designCanvas.GedScene()
-		if scene == nil {
-			return
-		}
-		if scene.Save() {
-			regenerateGoForSilkui(scene.Filename())
-		}
+		// Save the current design canvas as .silkui. performSave covers
+		// the SaveFileDialog popup (filenameless scenes), the .silk.go
+		// regen on success, and the success toast. The dirty-discard
+		// flow has its own save path so it doesn't double-toast.
+		performSave(designCanvas)
 	})
 	tb.AddSeparator()
 
@@ -837,9 +828,11 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		// Recovery prompt: if a sibling .autosave is newer than the
 		// .silkui the user is trying to open, offer to load it
 		// instead. Picks up where a crash or sudden quit left off.
+		recovered := false
 		if recovery := ged.CheckRecovery(path); recovery != "" {
 			if confirmRecoverFromAutosave(canvas, path, recovery) {
 				path = recovery
+				recovered = true
 			}
 		}
 		if err := canvas.GedScene().OpenFile(path); err == nil {
@@ -852,6 +845,11 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 				if idx := centerDock.IndexOfView(canvas); idx >= 0 {
 					centerDock.SetActiveIndex(idx)
 				}
+			}
+			if recovered {
+				silkideToast(i18n.T("Recovered from autosave"), gui.ToastSuccess)
+			} else {
+				silkideToast(i18n.Tf("Opened %s", filepath.Base(path)), gui.ToastInfo)
 			}
 		}
 		return
@@ -903,14 +901,9 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
 	menu.AddButton1(i18n.T("Save"), nil).Action().BindFunc0(func() {
-		if designCanvas == nil {
-			return
-		}
-		if scene := designCanvas.GedScene(); scene != nil {
-			if scene.Save() {
-				regenerateGoForSilkui(scene.Filename())
-			}
-		}
+		// Same Save action as the toolbar / Cmd+S — performSave keeps
+		// the regen + success toast consistent across entry points.
+		performSave(designCanvas)
 	})
 
 	// "Dump a11y tree" — surfaces the cherry-picked silk/a11y package
@@ -1096,9 +1089,11 @@ func runProjectInTerminal(canvas *ged.GedView) {
 		// single quotes).
 		globalTerminal.Hint(i18n.T(
 			"silkide: no main package found — add a main.go that imports the generated .silk.go to make this directory runnable."))
+		silkideToast(i18n.T("Run skipped: no main package"), gui.ToastWarning)
 		return
 	}
 	globalTerminal.Run("go run .")
+	silkideToast(i18n.T("Running..."), gui.ToastInfo)
 }
 
 // hasMainPackage scans `dir` for any .go file whose first non-blank
@@ -1177,6 +1172,16 @@ func buildProject(canvas *ged.GedView) {
 			text += "\nbuild ok"
 		}
 		reportBuildOutput(text)
+		// Toast on completion. Goroutine-thread call into ShowToast is
+		// the same shape reportBuildOutput already uses to push into
+		// BuildOutput.SetOutput from here — the toast manager has its
+		// own mutex around the entry list, and the popup AttachWindow
+		// runs once on the next idle tick.
+		if err == nil {
+			silkideToast(i18n.T("Build successful"), gui.ToastSuccess)
+		} else {
+			silkideToast(i18n.T("Build failed"), gui.ToastError)
+		}
 	}()
 }
 
