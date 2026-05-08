@@ -68,6 +68,9 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			}
 		}
 	})
+	add("Quick Open File", "Cmd+P", func() {
+		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
+	})
 
 	// Run / Build / Export.
 	add("Run", "F5", func() { runProjectInTerminal(designCanvas) })

@@ -198,6 +198,8 @@ func registerSilkideTranslations() {
 		"Command Palette":  "命令面板",
 		"Fit to View":      "适应视口",
 		"Find in Files":    "在文件中查找",
+		"Open File":        "打开文件",
+		"Quick Open File":  "快速打开文件",
 		"main.go":   "main.go",
 		"server.go": "server.go",
 		"go.mod":    "go.mod",
@@ -341,6 +343,14 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// is the design canvas so the modal centres over the workspace.
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'P', func() {
 		showCommandPalette(designCanvas)
+	})
+
+	// Cmd+P — quick file open. Walks projectDir, lists every non-
+	// hidden file, filters by subsequence match. Pairs with Cmd+Shift+P
+	// the way VSCode / JetBrains do — actions vs files split across
+	// the modifier so power users build muscle memory for both.
+	gui.RegisterShortcut(gui.ModAction, 'P', func() {
+		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
 	})
 
 	// Cmd+Shift+F — focus the global-search panel in the left dock.
