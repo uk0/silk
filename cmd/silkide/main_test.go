@@ -9,6 +9,7 @@ import (
 	"silk/a11y"
 	"silk/decl"
 	"silk/ged"
+	"silk/gui"
 	"silk/i18n"
 )
 
@@ -69,6 +70,36 @@ func TestIDTitleFormat(t *testing.T) {
 	got := idTitle()
 	if !strings.Contains(got, " — silkide") {
 		t.Errorf("idTitle() = %q; should contain ' — silkide' separator", got)
+	}
+}
+
+// TestOpenFileInEditorReusesExistingTab: opening the same path
+// twice should focus the existing tab rather than stack a duplicate.
+// Without dedup, BuildOutput's click-to-jump would multiply tabs
+// every time the user clicked an error in the same file.
+func TestOpenFileInEditorReusesExistingTab(t *testing.T) {
+	// Reset the package map between tests to keep them order-
+	// independent.
+	openEditors = map[string]*gui.CodeEditor{}
+
+	tabs := gui.NewTabWidget()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hello.go")
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !openFileInEditor(tabs, path) {
+		t.Fatal("first open returned false")
+	}
+	first := tabs.Count()
+
+	if !openFileInEditor(tabs, path) {
+		t.Fatal("second open returned false")
+	}
+	if tabs.Count() != first {
+		t.Errorf("tab count grew on re-open: %d → %d (expected dedup)",
+			first, tabs.Count())
 	}
 }
 

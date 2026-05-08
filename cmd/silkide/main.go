@@ -536,6 +536,23 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		bottomDock.AddView(buildOutputPane())
 	}
 
+	// Wire build-error click navigation: when the user clicks a
+	// "file:line:col: ..." row in the BuildOutput pane, open that
+	// file in the editor tabs and scroll to the line. Resolves
+	// relative paths against projectDir(designCanvas) so the
+	// click-target matches what go build emitted regardless of
+	// silkide's own cwd.
+	if globalBuildOutput != nil {
+		globalBuildOutput.SigErrorClick(func(file string, line, col int) {
+			if !filepath.IsAbs(file) {
+				if dir := projectDir(designCanvas); dir != "" {
+					file = filepath.Join(dir, file)
+				}
+			}
+			openFileInEditorAt(editorTabs, file, line, col)
+		})
+	}
+
 	return editorTabs, designCanvas
 }
 
@@ -1127,12 +1144,23 @@ func recordRecentFile(path string) {
 	globalPrefs.AddRecentFile(path)
 }
 
-// openFileInEditor adds a fresh code-editor tab for path in tabs.
-// Used as the default branch of openFromTree. Returns true on
-// success so the caller can record it in the MRU list.
+// openEditors tracks which paths are already loaded in the editor
+// tabs and the CodeEditor that holds them. Lets a second open of
+// the same path re-focus the existing tab instead of stacking a
+// duplicate, and lets BuildOutput's click-to-jump scroll the right
+// editor without re-reading the file from disk.
+var openEditors = map[string]*gui.CodeEditor{}
+
+// openFileInEditor adds a fresh code-editor tab for path in tabs,
+// or focuses an existing one if the path is already open. Returns
+// true on success so the caller can record it in the MRU list.
 func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	if tabs == nil {
 		return false
+	}
+	if ed, ok := openEditors[path]; ok && ed != nil {
+		focusEditorTab(tabs, ed)
+		return true
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1140,7 +1168,48 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	}
 	ed := makeCodeEditor(string(data))
 	tabs.AddTab(ed, filepath.Base(path), nil)
+	openEditors[path] = ed
+	focusEditorTab(tabs, ed)
 	return true
+}
+
+// openFileInEditorAt is openFileInEditor + ScrollToLine; the entry
+// point BuildOutput's SigErrorClick uses to jump to a compile error.
+// `line` is 1-based per the standard Go error format; CodeEditor
+// uses 0-based indexing internally.
+func openFileInEditorAt(tabs *gui.TabWidget, path string, line, col int) {
+	if !openFileInEditor(tabs, path) {
+		return
+	}
+	ed := openEditors[path]
+	if ed == nil {
+		return
+	}
+	target := line - 1
+	if target < 0 {
+		target = 0
+	}
+	ed.ScrollToLine(target)
+}
+
+// focusEditorTab walks the editor tabs to find the one whose stack
+// page is `ed` and switches to it. Without this, clicking a
+// build-error in the BuildOutput pane would land on the right
+// scroll position but in whatever tab happened to be active.
+func focusEditorTab(tabs *gui.TabWidget, ed *gui.CodeEditor) {
+	if tabs == nil || ed == nil {
+		return
+	}
+	stack := tabs.Stack()
+	if stack == nil {
+		return
+	}
+	for i := 0; i < tabs.Count(); i++ {
+		if stack.Page(i) == gui.IWidget(ed) {
+			tabs.SetCurrentIndex(i)
+			return
+		}
+	}
 }
 
 // sampleMainGo returns the canonical "Hello, gogpu!" main.go
