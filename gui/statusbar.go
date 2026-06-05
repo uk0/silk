@@ -17,6 +17,7 @@ type StatusBar struct {
 	message   string
 	permanent []IWidget // permanent widgets anchored to the right
 	spacing   float64
+	msgTimer  Timer // auto-clears a timed transient message
 }
 
 func NewStatusBar() *StatusBar {
@@ -32,8 +33,22 @@ func (this *StatusBar) EnumProperties(list core.IPropertyList) {
 
 // ShowMessage displays a temporary status message (no timeout for now).
 func (this *StatusBar) ShowMessage(text string) {
+	this.msgTimer.Stop()
 	this.message = text
 	this.Self().Update()
+}
+
+// ShowMessageFor displays a transient status message that is automatically
+// cleared after timeoutMs milliseconds (like QStatusBar.showMessage with a
+// timeout). A pending timer from an earlier timed message is replaced.
+func (this *StatusBar) ShowMessageFor(text string, timeoutMs uint32) {
+	this.msgTimer.Stop()
+	this.message = text
+	this.Self().Update()
+	this.msgTimer.Start(timeoutMs, func() {
+		this.msgTimer.Stop()
+		this.ClearMessage()
+	})
 }
 
 // SetMessage sets the permanent status message.
@@ -97,6 +112,9 @@ func (this *StatusBar) Layout() {
 	x := w - m.R
 	for i := len(this.permanent) - 1; i >= 0; i-- {
 		pw := this.permanent[i]
+		if !pw.IsVisible() {
+			continue // hidden permanent widgets reserve no space
+		}
 		hints := pw.SizeHints()
 		iw := hints.Width
 		ih := hints.Height
@@ -153,6 +171,9 @@ func (this *StatusBar) SizeHints() SizeHints {
 	}
 	var pw float64
 	for _, w := range this.permanent {
+		if !w.IsVisible() {
+			continue // hidden permanent widgets are excluded from the width sum
+		}
 		hints := w.SizeHints()
 		pw += hints.Width + this.spacing
 	}
