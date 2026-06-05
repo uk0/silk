@@ -119,6 +119,71 @@ func (this *TabWidget) Count() int {
 	return len(this.refs)
 }
 
+// nextTabIndex returns the index to switch to when moving one step from cur
+// among count tabs. forward selects the next tab (wrapping past the last back
+// to 0); otherwise the previous tab (wrapping past 0 to the last). With fewer
+// than two tabs there is nothing to move to, so cur is returned unchanged.
+func nextTabIndex(cur, count int, forward bool) int {
+	if count < 2 {
+		return cur
+	}
+	if forward {
+		return (cur + 1) % count
+	}
+	return (cur - 1 + count) % count
+}
+
+// stepCurrent moves the current tab one step forward (next) or backward
+// (previous) with wrap-around, routing through SetCurrentIndex so the
+// current-changed callback and repaint fire exactly as a click would. It is a
+// no-op with fewer than two tabs. The key handler delegates here so the
+// wrap math stays unit-testable without simulating modifier key state.
+func (this *TabWidget) stepCurrent(forward bool) {
+	count := this.Count()
+	if count < 2 {
+		return
+	}
+	this.SetCurrentIndex(nextTabIndex(this.CurrentIndex(), count, forward))
+}
+
+// OnKeyDown implements IEventKeyDown, giving the TabWidget Qt QTabWidget style
+// keyboard tab switching while it (or its tab strip) holds focus:
+//   - Ctrl+PageDown / Ctrl+Tab           -> next tab (wraps to first)
+//   - Ctrl+PageUp / Ctrl+Shift+Tab       -> previous tab (wraps to last)
+//   - Left/Up (previous), Right/Down (next) when focused, no Ctrl required
+//
+// All moves wrap and are no-ops with fewer than two tabs. Note: focus is only
+// reached when the TabWidget itself holds focus; the tab strip's click path
+// lives in TabBar (a sibling file) and does not call SetFocus, so clicking a
+// tab does not by itself arm these shortcuts.
+func (this *TabWidget) OnKeyDown(key int, repeat bool) {
+	if this.Count() < 2 {
+		return
+	}
+	ctrl := IsKeyDown(KeyCtrl)
+	shift := IsKeyDown(KeyShift)
+	switch key {
+	case KeyPageDown:
+		if ctrl {
+			this.stepCurrent(true)
+		}
+	case KeyPageUp:
+		if ctrl {
+			this.stepCurrent(false)
+		}
+	case KeyTab:
+		// Ctrl+Tab -> next, Ctrl+Shift+Tab -> previous.
+		if ctrl {
+			this.stepCurrent(!shift)
+		}
+	case KeyRight, KeyDown:
+		// Plain arrows step within the strip when it has focus.
+		this.stepCurrent(true)
+	case KeyLeft, KeyUp:
+		this.stepCurrent(false)
+	}
+}
+
 func (this *TabWidget) TabBar() *TabBar {
 	return this.tabBar
 }
