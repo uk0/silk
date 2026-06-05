@@ -98,13 +98,19 @@ func (this *HeaderView) VisualSection(vid int) HeaderViewSection {
 	return *(this.sections[vid])
 }
 
+// LogicSection returns the section whose LogicIndex matches sid.
+// If no section matches (e.g. a stale or out-of-range logic index) it returns
+// the zero-value HeaderViewSection sentinel instead of panicking, so a bad
+// index can never crash the host application. A zero-value result has
+// Size == 0 and Hidden == false; callers that must distinguish a real match
+// can compare the returned LogicIndex against the requested sid.
 func (this *HeaderView) LogicSection(sid int) HeaderViewSection {
 	for i := 0; i < this.SectionCount(); i++ {
 		if this.sections[i].LogicIndex == sid {
 			return *(this.sections[i])
 		}
 	}
-	panic("index out of range")
+	return HeaderViewSection{}
 }
 
 func (this *HeaderView) SetScrollOffset(offset float64) {
