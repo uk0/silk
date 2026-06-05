@@ -939,7 +939,6 @@ func (this *GedView) layOutSelection(horizontal bool) {
 		return
 	}
 	container.SetBounds1(box)
-	container.SetParent(this.Scene())
 
 	// Reparent in layout order: VBox stacks by Y, HBox by X.
 	ordered := make([]graph.IItem, len(items))
@@ -951,9 +950,18 @@ func (this *GedView) layOutSelection(horizontal bool) {
 		}
 		return ra.Y < rb.Y
 	})
+
+	// Build one undoable command: attach the container to the scene
+	// first, then move each selected item into it. Parents are captured
+	// now (pre-apply); PushCommand's Redo() applies the whole move, and
+	// Ctrl+Z unwinds it (items return to their old parents, container
+	// detaches).
+	cmd := graph.NewReparentCommand("Lay Out")
+	cmd.Add(container, nil, this.Scene())
 	for _, it := range ordered {
-		it.SetParent(container)
+		cmd.Add(it, it.Parent(), container)
 	}
+	this.Scene().PushCommand(cmd)
 	container.Layout()
 
 	sel := this.Selection()
@@ -976,7 +984,10 @@ func (this *GedView) layOutSelection(horizontal bool) {
 func (this *GedView) breakLayoutSelection() {
 	raw := this.Selection().ItemList()
 	var freed []graph.IItem
-	broke := false
+	// One undoable command for the whole break: per container, lift each
+	// child to the container's parent, then detach the container. Redo
+	// applies it; Ctrl+Z re-nests the children and restores the container.
+	cmd := graph.NewReparentCommand("Break Layout")
 	for _, it := range raw {
 		fake, ok := it.(*FakeWidget)
 		if !ok || !fake.HasChildren() {
@@ -986,20 +997,21 @@ func (this *GedView) breakLayoutSelection() {
 		if parent == nil {
 			continue
 		}
-		// Snapshot children before reparenting — SetParent mutates the
-		// sibling ring we'd otherwise be iterating.
+		// Snapshot children before recording — building the command must
+		// read the current (pre-apply) tree.
 		kids := make([]graph.IItem, 0, len(fake.Children()))
 		kids = append(kids, fake.Children()...)
 		for _, c := range kids {
-			c.SetParent(parent)
+			cmd.Add(c, fake, parent) // child: container -> container's parent
 			freed = append(freed, c)
 		}
-		fake.Detach() // drop the emptied container
-		broke = true
+		cmd.Add(fake, parent, nil) // container: parent -> detached
 	}
-	if !broke {
+	if cmd.Count() == 0 {
 		return
 	}
+	this.Scene().PushCommand(cmd)
+
 	sel := this.Selection()
 	sel.Clear()
 	for _, c := range freed {
