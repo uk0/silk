@@ -22,12 +22,17 @@ type Menu struct {
 	Widget
 	items []IWidget
 	VerticalT
+	// 键盘导航高亮项的下标, -1 表示没有键盘高亮.
+	// 鼠标悬停仍走全局 mouseHoverWidget; 键盘高亮通过把高亮项设为
+	// 悬停项来复用既有的菜单项高亮绘制(见 setHighlight).
+	highlight int
 }
 
 // 新建菜单
 func NewMenu(popup bool) *Menu {
 	m := new(Menu)
 	m.Init(m)
+	m.highlight = -1
 	if popup {
 		m.SetVertical(true)
 		m.SetVisible(false)
@@ -506,4 +511,147 @@ func (this *Menu) ShowAsPopup(xg, yg float64, autoClose bool) {
 	LayoutPopup1(this, xg, yg)
 	this.SetVisible(true)
 	this.PushCapture()
+	// 让弹出菜单成为键盘焦点, 这样方向键/回车等按键会被投递到本菜单的
+	// OnKeyDown. WtPopup 窗口不抢操作系统焦点(FocusOnShow=false), 但
+	// 按键派发以全局 focusWidget 为目标(见 window_glfw.go onKey), 因此
+	// 这一步足以让键盘导航生效, 无需改动窗口/焦点层.
+	this.highlight = -1
+	this.SetFocus()
+}
+
+// menuItemKind 描述一个菜单项在键盘导航中的可选性, 用于把"下一个可选项"
+// 的查找逻辑抽成纯函数以便单元测试. selectable 为 false 表示分隔线或被
+// 禁用的项, 方向键会跳过它们.
+type menuItemKind struct {
+	selectable bool
+}
+
+// nextSelectableIndex 返回从 from 出发、沿 dir(+1 向下 / -1 向上)方向的下
+// 一个可选项下标. wrap 为 true 时到达边界后回绕(Qt QMenu 的行为). 当没有
+// 任何可选项时返回 -1. from 可以是 -1 表示"尚未高亮", 此时向下取第一个、
+// 向上取最后一个可选项.
+func nextSelectableIndex(items []menuItemKind, from, dir int, wrap bool) int {
+	n := len(items)
+	if n == 0 || dir == 0 {
+		return -1
+	}
+	// from 越界视为"尚未高亮"的哨兵, 此时按方向把起点放到对应的边界外侧,
+	// 使第一步恰好进入环的前缘: 向下(dir>0)从 -1 起 -> 第 0 项, 向上(dir<0)
+	// 从 n 起 -> 第 n-1 项. 这与 Home/End 传入 -1 / n 的用法一致.
+	if from < 0 || from >= n {
+		if dir > 0 {
+			from = -1
+		} else {
+			from = n
+		}
+	}
+	i := from
+	for k := 0; k < n; k++ {
+		i += dir
+		if i < 0 || i >= n {
+			if !wrap {
+				return -1 // 夹紧: 该方向上没有更多可选项
+			}
+			i = (i%n + n) % n
+		}
+		if items[i].selectable {
+			return i
+		}
+	}
+	return -1
+}
+
+// itemKinds 把当前菜单项映射为可选性切片, 供 nextSelectableIndex 使用.
+// 仅 IButton 且 IsEnabled() 的项可选, 分隔线与禁用项不可选.
+func (this *Menu) itemKinds() []menuItemKind {
+	kinds := make([]menuItemKind, len(this.items))
+	for i, c := range this.items {
+		if _, ok := c.(IButton); ok {
+			kinds[i].selectable = c.IsEnabled()
+		}
+	}
+	return kinds
+}
+
+// highlightedButton 返回当前键盘高亮的菜单项按钮, 没有则返回 nil.
+func (this *Menu) highlightedButton() *Button {
+	if this.highlight < 0 || this.highlight >= len(this.items) {
+		return nil
+	}
+	b, _ := this.items[this.highlight].(*Button)
+	return b
+}
+
+// setHighlight 设置键盘高亮项下标, 并复用菜单项既有的悬停高亮绘制:
+// 把高亮项设为全局悬停项即可让 DrawButton 渲染出与鼠标悬停一致的外观
+// (高亮背景 + 反白文字), 无需改动 theme. idx 为 -1 时清除高亮.
+func (this *Menu) setHighlight(idx int) {
+	this.highlight = idx
+	if b := this.highlightedButton(); b != nil {
+		setMouseHoverWidget(b.Self())
+	}
+	this.Update()
+}
+
+// OnKeyDown 实现弹出菜单的键盘导航(对标 Qt QMenu):
+//   - 上/下: 在可选项之间移动高亮, 跳过分隔线与禁用项, 越界回绕;
+//   - Home/End: 跳到第一个/最后一个可选项;
+//   - 回车/空格: 触发高亮项, 走与鼠标点击相同的 emit 路径;
+//   - Esc: 关闭整条弹出菜单链;
+//   - 右: 若高亮项有子菜单则打开并高亮其首个可选项;
+//   - 左: 关闭当前子菜单, 返回父菜单.
+// 仅弹出菜单处理按键; 菜单栏(非 popup)不参与键盘导航.
+func (this *Menu) OnKeyDown(key int, repeat bool) {
+	if !this.IsPopup() {
+		return
+	}
+	kinds := this.itemKinds()
+	switch key {
+	case KeyDown:
+		if idx := nextSelectableIndex(kinds, this.highlight, +1, true); idx >= 0 {
+			this.setHighlight(idx)
+		}
+	case KeyUp:
+		if idx := nextSelectableIndex(kinds, this.highlight, -1, true); idx >= 0 {
+			this.setHighlight(idx)
+		}
+	case KeyHome:
+		if idx := nextSelectableIndex(kinds, -1, +1, false); idx >= 0 {
+			this.setHighlight(idx)
+		}
+	case KeyEnd:
+		if idx := nextSelectableIndex(kinds, len(kinds), -1, false); idx >= 0 {
+			this.setHighlight(idx)
+		}
+	case KeyEnter, KeySpace:
+		if b := this.highlightedButton(); b != nil && b.IsEnabled() {
+			// 与点击一致: 切换/关闭弹出链并触发 Action.
+			b.emit()
+		}
+	case KeyEsc:
+		if root := findRootPopup(this.Self()); root != nil {
+			root.Hide()
+		} else {
+			this.Hide()
+		}
+	case KeyRight:
+		if b := this.highlightedButton(); b != nil && b.IsEnabled() && b.SubPopup() != nil {
+			b.ShowSubPopup()
+			if sub, ok := b.SubPopup().(*Menu); ok {
+				sub.SetFocus()
+				if idx := nextSelectableIndex(sub.itemKinds(), -1, +1, false); idx >= 0 {
+					sub.setHighlight(idx)
+				}
+			}
+		}
+	case KeyLeft:
+		// 关闭当前子菜单, 把焦点交还父菜单(若存在).
+		if parent, ok := this.Parent().(*Button); ok {
+			if pm, ok := parent.Parent().(*Menu); ok {
+				parent.HideSubPopup()
+				pm.SetFocus()
+				return
+			}
+		}
+	}
 }
