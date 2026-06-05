@@ -170,6 +170,12 @@ type CodeEditor struct {
 	// --- Bookmarks ---
 	bookmarks map[int]bool // bookmarked line numbers
 
+	// --- Breakpoints ---
+	// breakpoints holds lines (0-based, matching cursorLine/bookmarks) that carry
+	// a debugger breakpoint. UI/state layer only: no debugger is wired up here, and
+	// breakpoints are NOT re-mapped when lines are inserted/deleted (known limitation).
+	breakpoints map[int]bool
+
 	// --- Hover error tooltip ---
 	hoverErrorLine int // line currently hovered for error tooltip (-1 = none)
 
@@ -220,6 +226,7 @@ func (this *CodeEditor) Init(iw IWidget) {
 	this.statusBarHeight = 20
 	this.hoverErrorLine = -1
 	this.hoverLinkLine = -1
+	this.breakpoints = make(map[int]bool)
 }
 
 // SetText replaces the entire editor content.
@@ -1621,6 +1628,14 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			g.Fill()
 		}
 
+		// Breakpoint indicator: red filled circle at the gutter's left edge
+		// (VS Code / Qt Creator style). Drawn at the same y as the line number.
+		if this.breakpoints[i] {
+			g.SetBrush1(paint.Color{R: 230, G: 60, B: 60, A: 255})
+			g.Arc(10.0, gutterCenterY, 4.5, 0, 2*math.Pi)
+			g.Fill()
+		}
+
 		// Git gutter indicator (colored bar on left edge of gutter)
 		if gs, ok := this.gitStatus[i+1]; ok { // gitStatus uses 1-based line numbers
 			switch gs {
@@ -2385,6 +2400,17 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 		gotoBarTop = this.findBarHeight
 	}
 	if this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.findBarHeight {
+		return
+	}
+
+	// Breakpoint gutter: a click inside the gutter (left of the text area, below
+	// the breadcrumb) toggles the breakpoint on that line instead of moving the
+	// cursor. Normal text-area clicks fall through to the logic below unchanged.
+	if x < this.gutterW && y >= this.topOffset() {
+		line, _ := this.posFromXY(x, y)
+		if line >= 0 && line < len(this.lines) {
+			this.ToggleBreakpoint(line)
+		}
 		return
 	}
 
@@ -3387,6 +3413,13 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.NextBookmark()
 		}
 
+	case KeyF9:
+		// F9: toggle a breakpoint on the cursor line (Qt Creator / VS Code style).
+		if !ctrl && !shift {
+			this.clampCursor()
+			this.ToggleBreakpoint(this.cursorLine)
+		}
+
 	case '/':
 		if ctrl {
 			this.toggleComment()
@@ -3729,4 +3762,54 @@ func (this *CodeEditor) PrevBookmark() {
 	this.clearSelection()
 	this.ensureCursorVisible()
 	this.Self().Update()
+}
+
+// --- Breakpoints ---
+//
+// Breakpoints are part of the editor's UI/state layer only; toggling one renders
+// a red dot in the gutter but does NOT start, stop, or talk to any debugger.
+// Lines are keyed 0-based (same convention as cursorLine and bookmarks). The set
+// is NOT re-mapped when lines are inserted or deleted (known limitation).
+
+// ToggleBreakpoint flips the breakpoint state of a line.
+func (this *CodeEditor) ToggleBreakpoint(line int) {
+	if this.breakpoints == nil {
+		this.breakpoints = make(map[int]bool)
+	}
+	if this.breakpoints[line] {
+		delete(this.breakpoints, line)
+	} else {
+		this.breakpoints[line] = true
+	}
+	this.Self().Update()
+}
+
+// SetBreakpoint enables or disables the breakpoint on a line.
+func (this *CodeEditor) SetBreakpoint(line int, on bool) {
+	if this.breakpoints == nil {
+		this.breakpoints = make(map[int]bool)
+	}
+	if on {
+		this.breakpoints[line] = true
+	} else {
+		delete(this.breakpoints, line)
+	}
+	this.Self().Update()
+}
+
+// ClearBreakpoints removes all breakpoints.
+func (this *CodeEditor) ClearBreakpoints() {
+	this.breakpoints = make(map[int]bool)
+	this.Self().Update()
+}
+
+// Breakpoints returns the lines (0-based) that currently have a breakpoint,
+// sorted ascending.
+func (this *CodeEditor) Breakpoints() []int {
+	lines := make([]int, 0, len(this.breakpoints))
+	for ln := range this.breakpoints {
+		lines = append(lines, ln)
+	}
+	sort.Ints(lines)
+	return lines
 }
