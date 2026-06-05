@@ -901,20 +901,19 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 			this.Self().Update()
 		}
 
-	// Arrow keys nudge the selection by 1mm (5mm with Shift). Goes
-	// through the UndoStack so a stray arrow press in the middle of a
-	// layout can be reversed with Cmd+Z. Designer-tool muscle memory:
-	// every IDE from Qt Creator to Figma binds the arrow keys to a
-	// "fine move" of the selection, and not having it forces drag-by-
-	// pixel work for sub-millimetre alignment.
-	case key == gui.KeyLeft:
-		this.nudgeSelection(-1, 0)
-	case key == gui.KeyRight:
-		this.nudgeSelection(1, 0)
-	case key == gui.KeyUp:
-		this.nudgeSelection(0, -1)
-	case key == gui.KeyDown:
-		this.nudgeSelection(0, 1)
+	// Arrow keys nudge the selection by 1mm (nudgeGridStep mm with Shift).
+	// Goes through the UndoStack so a stray arrow press in the middle of a
+	// layout can be reversed with Cmd+Z. Designer-tool muscle memory: every
+	// IDE from Qt Creator to Figma binds the arrow keys to a "fine move" of
+	// the selection. The (key,shift)→(dx,dy) decision lives in the pure
+	// nudgeDelta helper; the key is only consumed when something is selected,
+	// so on empty canvas the arrows fall through to any default handling.
+	case key == gui.KeyLeft, key == gui.KeyRight, key == gui.KeyUp, key == gui.KeyDown:
+		if this.Selection().IsEmpty() {
+			return
+		}
+		dx, dy, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, nudgeGridStep)
+		this.nudgeSelection(dx, dy)
 
 	case ctrl && (key == 'Z' || key == 'z'):
 		if stack := this.Scene().UndoStack(); stack != nil {
@@ -1083,20 +1082,51 @@ func (this *GedView) selectPrevWidget() {
 	this.Self().Update()
 }
 
-// nudgeSelection shifts every selected item by (dx, dy) millimetres,
-// scaling by 5x when Shift is held. The move is wrapped in a
-// MoveCommand so it lands on the UndoStack alongside drag-moves —
-// undo treats a Shift+Right press the same as a 5mm mouse drag.
+// nudgeGridStep is the larger Shift+arrow step (in mm). Qt Designer and
+// every IDE bind plain arrows to a 1-unit "fine move" and Shift+arrow to a
+// coarse grid-sized jump; 10 mm matches the coarse-grid muscle memory.
+const nudgeGridStep = 10.0
+
+// nudgeDelta maps an arrow key plus the Shift modifier to a movement delta.
+// step is the fine (un-shifted) move; gridStep is the coarse Shift move.
+// Left/Right move on X, Up/Down on Y (Up is negative — screen Y grows down).
+// handled is false for any non-arrow key so the caller can fall through to
+// other handling without consuming the keystroke. Pure so the (key,shift)
+// → (dx,dy) decision is unit-testable without a live view.
+func nudgeDelta(key int, shift bool, step, gridStep float64) (dx, dy float64, handled bool) {
+	s := step
+	if shift {
+		s = gridStep
+	}
+	switch key {
+	case gui.KeyLeft:
+		return -s, 0, true
+	case gui.KeyRight:
+		return s, 0, true
+	case gui.KeyUp:
+		return 0, -s, true
+	case gui.KeyDown:
+		return 0, s, true
+	}
+	return 0, 0, false
+}
+
+// nudgeSelection shifts every selected item by (dx, dy) millimetres. The
+// move is wrapped in a MoveCommand so it lands on the UndoStack alongside
+// drag-moves — undo treats a Shift+Right press the same as a mouse drag.
+//
+// Note on undo: unlike alignSelection / reorderSelection (which mutate +
+// Update with no command), nudge keeps the MoveCommand path. A clean move
+// command already exists here and the arrow-key contract is test-locked to
+// it (ged/nudge_test.go), so routing nudges through the UndoStack is the
+// existing, deliberate choice — matching align's plain mutation would
+// regress that behaviour.
 //
 // No-op if the selection is empty or contains only locked items;
 // GenerateMoveCommand handles both edge cases internally and returns
 // nil, which we forward as a quiet no-op rather than pushing an
 // empty command.
 func (this *GedView) nudgeSelection(dx, dy float64) {
-	if gui.IsKeyDown(gui.KeyShift) {
-		dx *= 5
-		dy *= 5
-	}
 	cmd := this.Selection().GenerateMoveCommand(dx, dy)
 	if cmd == nil {
 		return
