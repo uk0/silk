@@ -14,11 +14,12 @@ func init() {
 // (similar to QSplitter).
 type Splitter struct {
 	Widget
-	vertical   bool      // true = vertical split (children stacked top/bottom)
-	sizes      []float64 // proportional sizes for each child
-	handleSize float64   // handle width/height between panes
-	dragging   int       // index of handle being dragged (-1 = none)
-	dragStart  float64   // mouse position at drag start
+	vertical    bool      // true = vertical split (children stacked top/bottom)
+	sizes       []float64 // proportional sizes for each child
+	handleSize  float64   // handle width/height between panes
+	dragging    int       // index of handle being dragged (-1 = none)
+	dragStart   float64   // mouse position at drag start
+	hoverHandle int       // index of handle under the mouse (-1 = none)
 }
 
 func NewSplitter(vertical bool) *Splitter {
@@ -27,6 +28,7 @@ func NewSplitter(vertical bool) *Splitter {
 	p.vertical = vertical
 	p.handleSize = 5
 	p.dragging = -1
+	p.hoverHandle = -1
 	return p
 }
 
@@ -183,10 +185,10 @@ func (this *Splitter) handleRect(i int) (hx, hy, hw, hh float64) {
 	return xOff, 0, this.handleSize, h
 }
 
-// hitTestHandle returns the handle index at point (x, y), or -1 if none.
+// handleAtPos returns the handle index at point (x, y), or -1 if none.
 // Walks handles inline rather than calling handleRect repeatedly so the
 // child-count fetch and total computation happen once per call.
-func (this *Splitter) hitTestHandle(x, y float64) int {
+func (this *Splitter) handleAtPos(x, y float64) int {
 	n := this.NakedWidget().childCount()
 	if n < 2 {
 		return -1
@@ -235,7 +237,7 @@ func (this *Splitter) hitTestHandle(x, y float64) int {
 }
 
 func (this *Splitter) OnLeftDown(x, y float64) {
-	idx := this.hitTestHandle(x, y)
+	idx := this.handleAtPos(x, y)
 	if idx >= 0 {
 		this.dragging = idx
 		if this.vertical {
@@ -297,8 +299,13 @@ func (this *Splitter) OnMouseMove(x, y float64) {
 		this.Layout()
 		this.Self().Update()
 	} else {
-		// Hover detection for cursor change
-		idx := this.hitTestHandle(x, y)
+		// Hover detection: track the handle under the cursor so Draw can
+		// highlight it, and swap in a resize cursor as an affordance.
+		idx := this.handleAtPos(x, y)
+		if idx != this.hoverHandle {
+			this.hoverHandle = idx
+			this.Self().Update()
+		}
 		if idx >= 0 {
 			if this.vertical {
 				SetOverrideCursor(cursorSizeNS)
@@ -323,6 +330,10 @@ func (this *Splitter) OnMouseLeave() {
 	if this.dragging < 0 {
 		SetOverrideCursor(nil)
 	}
+	if this.hoverHandle != -1 {
+		this.hoverHandle = -1
+		this.Self().Update()
+	}
 }
 
 func (this *Splitter) Cursor() *Cursor {
@@ -333,11 +344,26 @@ func (this *Splitter) Draw(g paint.Painter) {
 	n := this.NakedWidget().childCount()
 	t := Theme()
 
+	// Accent wash painted behind the active/hovered handle as a drag
+	// affordance: stronger while dragging, fainter on plain hover.
+	accent := t.HighLightColor
+
 	// Draw handles between children
 	for i := 0; i < n-1; i++ {
 		hx, hy, hw, hh := this.handleRect(i)
 		g.Save()
 		g.Translate(hx, hy)
+		if i == this.dragging || i == this.hoverHandle {
+			wash := accent
+			if i == this.dragging {
+				wash.A = 90
+			} else {
+				wash.A = 45
+			}
+			g.Rectangle(0, 0, hw, hh)
+			g.SetBrush1(wash)
+			g.Fill()
+		}
 		// Subtle handle: a centered line
 		g.SetPen1(t.SeperatorColor, 1)
 		if this.vertical {
