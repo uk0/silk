@@ -29,6 +29,30 @@ func NewCheckBox() *CheckBox {
 
 func (this *CheckBox) Draw(g paint.Painter) {
 	Theme().DrawCheckBox(g, this)
+	if this.HasFocus() {
+		this.drawFocusRing(g)
+	}
+}
+
+// drawFocusRing paints a subtle accent outline around the check icon while the
+// box holds keyboard focus, so keyboard users can see where they are. It uses
+// the theme highlight color at low alpha (the same accent the edit frame uses
+// when focused) and stays within the icon margins.
+func (this *CheckBox) drawFocusRing(g paint.Painter) {
+	t := Theme()
+	_, h := this.Size()
+	m := t.ButtonMargin
+	// Halo the icon box with a small inset so the ring reads as a focus cue.
+	pad := 2.0
+	x := m.L - pad
+	y := 0.5*(h-t.IconSize) - pad
+	w := t.IconSize + pad*2
+	rh := t.IconSize + pad*2
+	c := t.HighLightColor
+	c.A = 90 // low alpha keeps it subtle
+	roundedRect(g, x, y, w, rh, 4)
+	g.SetPen1(c, 1.5)
+	g.Stroke()
 }
 
 func (this *CheckBox) OnMouseEnter() {
@@ -53,6 +77,21 @@ func (this *CheckBox) OnLeftUp(x, y float64) {
 	this.Self().Update()
 	this.PopCapture()
 	if pushed && this.IsHover() && this.IsEnabled() {
+		this.Toggle()
+	}
+}
+
+// OnKeyDown implements IEventKeyDown, giving the check box Qt QCheckBox style
+// keyboard control while it holds focus: Space (and Enter, for convenience)
+// toggles the checked state. The widget is not tri-state, so this is a plain
+// toggle. It routes through Toggle so the change callback fires exactly as a
+// click does. Guarded on IsEnabled so a disabled box ignores keys.
+func (this *CheckBox) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
+	switch key {
+	case KeySpace, KeyEnter:
 		this.Toggle()
 	}
 }
