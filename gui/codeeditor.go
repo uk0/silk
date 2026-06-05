@@ -1348,7 +1348,80 @@ func (this *CodeEditor) moveLineDown() {
 
 // --- Comment Toggling ---
 
-func (this *CodeEditor) toggleComment() {
+// commentPrefix is the line-comment token inserted/removed by ToggleLineComment.
+// Go source uses "// "; the trailing space is part of the inserted text but is
+// treated as optional when detecting/removing an existing comment.
+const commentPrefix = "// "
+
+// toggleComment applies a line-comment toggle to the given lines and returns the
+// transformed slice (the input is not mutated). It is a pure helper so the
+// comment logic can be unit-tested without any GL/widget state.
+//
+// Semantics (Qt Creator / VS Code "Toggle Line Comment"):
+//   - Blank / whitespace-only lines are ignored: they never count toward the
+//     "already commented?" decision and are never commented.
+//   - If EVERY non-blank line already starts (after leading whitespace) with the
+//     comment token, the token is removed from each (also swallowing one trailing
+//     space, so "//x" and "// x" both uncomment cleanly).
+//   - Otherwise the token is inserted at each non-blank line's first
+//     non-whitespace column, preserving indentation.
+//   - A range containing only blank lines is returned unchanged.
+func toggleComment(lines []string, prefix string) []string {
+	out := make([]string, len(lines))
+	copy(out, lines)
+
+	// The bare comment token without a trailing space, used for detection and
+	// removal (e.g. "//" from "// ").
+	bare := strings.TrimRight(prefix, " ")
+
+	// Decide direction: comment unless every non-blank line is already commented.
+	allCommented := true
+	anyNonBlank := false
+	for _, ln := range out {
+		trimmed := strings.TrimLeft(ln, " \t")
+		if trimmed == "" {
+			continue // blank line: ignored for the decision
+		}
+		anyNonBlank = true
+		if !strings.HasPrefix(trimmed, bare) {
+			allCommented = false
+			break
+		}
+	}
+	if !anyNonBlank {
+		return out // nothing to do for an all-blank range
+	}
+
+	if allCommented {
+		// Uncomment: strip the leading comment token (and one following space).
+		for i, ln := range out {
+			indent := len(ln) - len(strings.TrimLeft(ln, " \t"))
+			rest := ln[indent:]
+			if !strings.HasPrefix(rest, bare) {
+				continue // blank line, untouched
+			}
+			rest = rest[len(bare):]
+			rest = strings.TrimPrefix(rest, " ")
+			out[i] = ln[:indent] + rest
+		}
+	} else {
+		// Comment: insert the token at the first non-whitespace column.
+		for i, ln := range out {
+			if strings.TrimLeft(ln, " \t") == "" {
+				continue // blank line, never commented
+			}
+			indent := len(ln) - len(strings.TrimLeft(ln, " \t"))
+			out[i] = ln[:indent] + prefix + ln[indent:]
+		}
+	}
+	return out
+}
+
+// ToggleLineComment toggles "// " line comments on the current line, or on every
+// line spanned by the active selection (Cmd/Ctrl+/). It delegates the transform
+// to the pure toggleComment helper, then fires the changed callback and repaints.
+func (this *CodeEditor) ToggleLineComment() {
+	this.clampCursor()
 	startLine := this.cursorLine
 	endLine := this.cursorLine
 	if this.hasSelection {
@@ -1356,44 +1429,35 @@ func (this *CodeEditor) toggleComment() {
 		startLine = sl
 		endLine = el
 	}
-	// Check if all lines in range are commented
-	allCommented := true
-	for i := startLine; i <= endLine; i++ {
-		trimmed := strings.TrimLeft(this.lines[i], " \t")
-		if !strings.HasPrefix(trimmed, "//") {
-			allCommented = false
-			break
-		}
-	}
-	if allCommented {
-		// Remove comments
-		for i := startLine; i <= endLine; i++ {
-			idx := strings.Index(this.lines[i], "//")
-			if idx >= 0 {
-				rest := this.lines[i][idx+2:]
-				if len(rest) > 0 && rest[0] == ' ' {
-					rest = rest[1:]
-				}
-				this.lines[i] = this.lines[i][:idx] + rest
-			}
-		}
+
+	// Remember whether a selection was active so we can restore a sensible one
+	// after the edit (the column offsets shift, but spanning the same lines is
+	// what users expect).
+	hadSelection := this.hasSelection
+
+	transformed := toggleComment(this.lines[startLine:endLine+1], commentPrefix)
+	copy(this.lines[startLine:endLine+1], transformed)
+
+	if hadSelection {
+		this.selStartLine = startLine
+		this.selStartCol = 0
+		this.selEndLine = endLine
+		this.selEndCol = len([]rune(this.lines[endLine]))
+		this.hasSelection = true
+		this.cursorLine = endLine
+		this.cursorCol = this.selEndCol
 	} else {
-		// Add comments
-		for i := startLine; i <= endLine; i++ {
-			// Find the indentation
-			indent := 0
-			for _, r := range this.lines[i] {
-				if r == ' ' || r == '\t' {
-					indent++
-				} else {
-					break
-				}
-			}
-			this.lines[i] = this.lines[i][:indent] + "// " + this.lines[i][indent:]
+		// Keep the caret on the same line; clamp the column to the new length.
+		this.clearSelection()
+		this.cursorLine = startLine
+		lineLen := len([]rune(this.lines[startLine]))
+		if this.cursorCol > lineLen {
+			this.cursorCol = lineLen
 		}
 	}
-	this.clearSelection()
+
 	this.rebuildText()
+	this.ensureCursorVisible()
 	this.Self().Update()
 }
 
@@ -3421,8 +3485,9 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 
 	case '/':
-		if ctrl {
-			this.toggleComment()
+		if ctrl || isActionModifier() {
+			// Cmd+/ (macOS) / Ctrl+/: toggle line comment
+			this.ToggleLineComment()
 		}
 
 	case 'R':
