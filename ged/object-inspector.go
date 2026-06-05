@@ -86,8 +86,19 @@ func (this *ObjectInspector) Rebuild() {
 		depth:    0,
 	})
 
-	// Children are flat (all direct children of the scene)
-	for _, child := range this.scene.Children() {
+	// Walk the tree so widgets nested inside layout containers show
+	// indented under their parent (depth grows per level), not as a flat
+	// scene-level list.
+	this.appendChildren(this.scene.Children(), 1)
+
+	this.Self().Update()
+}
+
+// appendChildren adds an inspector row for each item at the given depth,
+// then recurses into its children at depth+1 so the inspector mirrors the
+// scene's container nesting.
+func (this *ObjectInspector) appendChildren(items []graph.IItem, depth int) {
+	for _, child := range items {
 		name := ""
 		typeName := ""
 		if fake, ok := child.(*FakeWidget); ok {
@@ -106,11 +117,12 @@ func (this *ObjectInspector) Rebuild() {
 			item:     child,
 			name:     name,
 			typeName: typeName,
-			depth:    1,
+			depth:    depth,
 		})
+		if child.HasChildren() {
+			this.appendChildren(child.Children(), depth+1)
+		}
 	}
-
-	this.Self().Update()
 }
 
 // Draw renders the object inspector tree.

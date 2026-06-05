@@ -128,6 +128,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 
 	var fields []fieldInfo
 	nameCount := make(map[string]int)
+	usedNames := make(map[string]bool) // every field identifier emitted, for collision-free uniqueness
 
 	// collect walks the scene tree depth-first, appending a field for
 	// every FakeWidget and recursing into container children. parentField
@@ -157,6 +158,17 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				fieldName = fmt.Sprintf("%s_%d", base, nameCount[base])
 			}
 			fieldName = sanitizeIdentifier(fieldName)
+			// Guarantee struct-field uniqueness across the whole tree —
+			// an explicit widget name can collide with another widget's
+			// auto-derived name (e.g. a user-named "Button_1" vs the first
+			// unnamed Button). Suffix until unique so generated Go never
+			// declares two fields with the same identifier.
+			if base := fieldName; usedNames[fieldName] {
+				for i := 2; usedNames[fieldName]; i++ {
+					fieldName = fmt.Sprintf("%s_%d", base, i)
+				}
+			}
+			usedNames[fieldName] = true
 
 			var goType, constructor string
 			if known {

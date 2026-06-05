@@ -560,6 +560,30 @@ func (this *FakeWidget) Generate() gui.IWidget {
 	w := gui.MmToPixelZ(this.Width())
 	h := gui.MmToPixelZ(this.Height())
 	fake.widget.SetBounds(x, y, w, h)
+
+	// Recurse into nested children so the live preview matches the
+	// generated code (GenerateCode). Children of a simple-AddWidget
+	// container (VBox/HBox/Card/GroupBox) are added via AddWidget so the
+	// container arranges them; children of any other parent are reparented
+	// and keep their absolute bounds. Without this the preview showed an
+	// empty container while the emitted source had its children.
+	adder, hasAdd := fake.widget.(interface{ AddWidget(gui.IWidget) })
+	useAdd := hasAdd && isSimpleAddContainer(this.factoryName)
+	for _, c := range this.Children() {
+		cf, ok := c.(*FakeWidget)
+		if !ok {
+			continue
+		}
+		cw := cf.Generate()
+		if cw == nil {
+			continue
+		}
+		if useAdd {
+			adder.AddWidget(cw)
+		} else {
+			cw.SetParent(fake.widget)
+		}
+	}
 	return fake.widget
 }
 

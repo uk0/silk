@@ -827,6 +827,18 @@ func (this *GedView) alignSelection(mode alignMode) {
 	this.Self().Update()
 }
 
+// hasSelectedAncestor reports whether any ancestor of it is present in
+// set — used to drop a selected item that sits inside another selected
+// item before a layout reparent, preventing parent+child double-moves.
+func hasSelectedAncestor(it graph.IItem, set map[graph.IItem]bool) bool {
+	for p := it.Parent(); p != nil; p = p.Parent() {
+		if set[p] {
+			return true
+		}
+	}
+	return false
+}
+
 // boundingBoxOf returns the smallest rect enclosing all of rects. Empty
 // input returns the zero rect. Pure helper so layOutSelection's geometry
 // is unit-testable without a scene.
@@ -865,7 +877,41 @@ func boundingBoxOf(rects []geom.Rect) geom.Rect {
 // composite create+reparent command is a follow-up. No-op below 2
 // selected items.
 func (this *GedView) layOutSelection(horizontal bool) {
-	items := this.Selection().ItemList()
+	raw := this.Selection().ItemList()
+
+	// Guard the selection before reparenting anything:
+	//   - the scene/page root must never be reparented (would orphan the
+	//     whole design),
+	//   - position-locked items are immutable (consistent with align/nudge),
+	//   - an item whose ancestor is ALSO selected is dropped, so selecting a
+	//     container together with one of its own children lays out only the
+	//     container (no double-move / surprising re-nesting).
+	// selSet holds only the selected *widget* items (not the scene root):
+	// a child is suppressed when a selected CONTAINER ancestor is also in
+	// the layout, but the scene being in the selection must not suppress
+	// everything under it.
+	selSet := make(map[graph.IItem]bool, len(raw))
+	for _, it := range raw {
+		if _, ok := it.(*FakeWidget); ok {
+			selSet[it] = true
+		}
+	}
+	items := make([]graph.IItem, 0, len(raw))
+	for _, it := range raw {
+		// Only real designer widgets are layout-eligible. This excludes
+		// the scene/page root (a *GedScene, never a *FakeWidget) without
+		// relying on identity comparison.
+		if _, ok := it.(*FakeWidget); !ok {
+			continue
+		}
+		if it.IsLockPos() { // position-locked widgets are immutable
+			continue
+		}
+		if hasSelectedAncestor(it, selSet) {
+			continue
+		}
+		items = append(items, it)
+	}
 	if len(items) < 2 {
 		return
 	}
@@ -1310,11 +1356,20 @@ func (this *GedView) nudgeSelection(dx, dy float64) {
 func (this *GedView) selectAll() {
 	sel := this.Selection()
 	sel.Clear()
-	for _, item := range this.Scene().Children() {
-		if item.IsVisible() && item.IsSelectable() {
-			sel.Add(item)
+	// Recurse so widgets nested inside layout containers are selected too,
+	// not just scene-level items.
+	var addAll func(items []graph.IItem)
+	addAll = func(items []graph.IItem) {
+		for _, item := range items {
+			if item.IsVisible() && item.IsSelectable() {
+				sel.Add(item)
+			}
+			if item.HasChildren() {
+				addAll(item.Children())
+			}
 		}
 	}
+	addAll(this.Scene().Children())
 	this.Self().Update()
 }
 
