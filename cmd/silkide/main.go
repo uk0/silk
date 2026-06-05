@@ -125,6 +125,11 @@ func main() {
 			prefs.SetWindowSize(int(w), int(h))
 			prefs.SetWindowPos(int(x), int(y))
 		}
+		// Persist the open file set so the next launch reopens it
+		// (Qt Creator-style session restore). Mirrors the window-geometry
+		// save right above — both are last-known-good state captured on
+		// close and replayed at startup.
+		prefs.SetOpenSession(currentSessionPaths(designCanvas))
 		core.Quit()
 	})
 
@@ -140,6 +145,11 @@ func main() {
 			win.MoveToCenter()
 		}
 	}
+
+	// Reopen whatever was open at last close. Done after the frame is
+	// fully built (panels/tabs exist) but before Show() so the restored
+	// tabs are visible on first paint rather than popping in afterwards.
+	restoreSession(editorTabs, designCanvas)
 
 	frame.Show()
 	core.EventLoop()
@@ -943,6 +953,32 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 		}
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
+
+	// "Open Recent" submenu — Qt Creator-style MRU surfaced as a
+	// nested menu so the top level stays short. Each entry opens that
+	// file through the same openFromTree path the toolbar / tree use;
+	// a disabled "(empty)" placeholder shows when nothing's been
+	// opened yet so the submenu never dangles with no rows.
+	recentSub := gui.NewPopupMenu()
+	var recent []string
+	if globalPrefs != nil {
+		recent = globalPrefs.RecentFiles()
+	}
+	if len(recent) == 0 {
+		empty := recentSub.AddButton1(i18n.T("(empty)"), nil)
+		empty.SetEnabled(false)
+	} else {
+		for _, path := range recent {
+			p := path // capture per-iteration
+			btn := recentSub.AddButton1(filepath.Base(p), nil)
+			gui.SetToolTip(btn, p)
+			btn.Action().BindFunc0(func() {
+				openFromTree(p, editorTabs, designCanvas, nil)
+			})
+		}
+	}
+	menu.AddSubMenu(i18n.T("Open Recent"), nil, recentSub)
+
 	menu.AddButton1(i18n.T("Save"), nil).Action().BindFunc0(func() {
 		// Same Save action as the toolbar / Cmd+S — performSave keeps
 		// the regen + success toast consistent across entry points.
@@ -968,24 +1004,6 @@ func showHamburgerMenu(anchor *gui.Button, editorTabs *gui.TabWidget, designCanv
 	menu.AddButton1(i18n.T("About"), nil).Action().BindFunc0(func() {
 		ged.ShowAboutDialog(designCanvas)
 	})
-
-	// Recent files: skip if the MRU is empty so the menu doesn't show
-	// an orphan separator. globalPrefs is set up in main() before any
-	// toolbar callback fires.
-	if globalPrefs != nil {
-		if recent := globalPrefs.RecentFiles(); len(recent) > 0 {
-			menu.AddSeparator()
-			for _, path := range recent {
-				p := path // capture per-iteration
-				label := filepath.Base(p)
-				btn := menu.AddButton1(label, nil)
-				gui.SetToolTip(btn, p)
-				btn.Action().BindFunc0(func() {
-					openFromTree(p, editorTabs, designCanvas, nil)
-				})
-			}
-		}
-	}
 
 	xg, yg := anchor.MapToGlobal(0, 0)
 	_, h := anchor.Size()
@@ -1429,6 +1447,44 @@ func recordRecentFile(path string) {
 		return
 	}
 	globalPrefs.AddRecentFile(path)
+}
+
+// currentSessionPaths snapshots what's open right now so the next
+// launch can reopen it: the active design canvas's .silkui (if it has
+// a filename) followed by every open editor-tab path. The .silkui goes
+// first so restoreSession lands the user back on the design canvas the
+// same way openFromTree does for a .silkui. Editor paths come from the
+// openEditors map; iteration order isn't deterministic but the set is
+// what matters for restore. De-dup happens in existingPaths on the way
+// back in.
+func currentSessionPaths(canvas *ged.GedView) []string {
+	var paths []string
+	if canvas != nil {
+		if scene := canvas.GedScene(); scene != nil {
+			if fn := scene.Filename(); fn != "" {
+				paths = append(paths, fn)
+			}
+		}
+	}
+	for path := range openEditors {
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// restoreSession reopens the files persisted by SetOpenSession on the
+// previous close, skipping any that no longer exist (existingPaths).
+// Routes each through openFromTree so a .silkui re-lands in the design
+// canvas and code files re-open as editor tabs — identical to the user
+// having clicked them in the tree. No-op when prefs is unset (tests) or
+// nothing was saved.
+func restoreSession(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
+	if globalPrefs == nil {
+		return
+	}
+	for _, path := range existingPaths(globalPrefs.OpenSession()) {
+		openFromTree(path, editorTabs, designCanvas, nil)
+	}
 }
 
 // openEditors tracks which paths are already loaded in the editor

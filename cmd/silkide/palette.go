@@ -59,6 +59,19 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		}
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
+	// "Open Recent..." reopens the top entry of the MRU — the fast path
+	// for "get me back into what I was just editing" without walking the
+	// hamburger submenu. No-op when the MRU is empty.
+	add("Open Recent...", "", func() {
+		if globalPrefs == nil {
+			return
+		}
+		recent := globalPrefs.RecentFiles()
+		if len(recent) == 0 {
+			return
+		}
+		openFromTree(recent[0], editorTabs, designCanvas, nil)
+	})
 	add("Save", "Cmd+S", func() {
 		performSave(designCanvas)
 	})

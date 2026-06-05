@@ -147,6 +147,45 @@ func filepathAbs(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
+// OpenSession returns the file paths that were open when silkide last
+// closed: the active design canvas's .silkui (if any) plus every
+// open editor-tab path. Order is preserved as written by
+// SetOpenSession. Stale entries are NOT filtered here — restoreSession
+// does that via existingPaths so callers that want the raw list (e.g.
+// tests) still see it.
+func (p *preferences) OpenSession() []string {
+	return p.store.StringList("session/open", nil)
+}
+
+// SetOpenSession persists the set of currently-open file paths so the
+// next launch can reopen them. Same string-list idiom as RecentFiles;
+// best-effort Sync so a read-only settings file doesn't crash the
+// close path.
+func (p *preferences) SetOpenSession(paths []string) {
+	_ = p.store.SetStringList("session/open", paths)
+	_ = p.store.Sync()
+}
+
+// existingPaths filters a session path list down to the entries that
+// still exist on disk, preserving order and de-duplicating. Pure
+// helper (no globals, no I/O beyond os.Stat) so session restore can be
+// unit-tested without a frame. Empty / blank entries are dropped.
+func existingPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, path := range paths {
+		if path == "" || seen[path] {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
+}
+
 // installLocale picks the user's locale and registers the inline
 // silkide translations for Chinese. Detection order:
 //
@@ -196,6 +235,9 @@ func registerSilkideTranslations() {
 		"build: error":     "构建失败",
 		"build: %d errors": "构建错误: %d",
 		"Command Palette":  "命令面板",
+		"Open Recent":      "打开最近",
+		"Open Recent...":   "打开最近...",
+		"(empty)":          "(空)",
 		"Fit to View":      "适应视口",
 		"Find in Files":    "在文件中查找",
 		"Show Outline":     "显示大纲",
