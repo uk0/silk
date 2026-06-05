@@ -176,6 +176,14 @@ type CodeEditor struct {
 	// breakpoints are NOT re-mapped when lines are inserted/deleted (known limitation).
 	breakpoints map[int]bool
 
+	// --- Code Folding ---
+	// foldedLines holds the start-line (0-based) of every region the user has
+	// collapsed. The body of a folded region (start+1 .. end) is hidden from the
+	// rendered view and from the visual-row math used for cursor/scroll. Like
+	// breakpoints, this is a UI/state layer keyed 0-based and is NOT re-mapped on
+	// insert/delete; foldRegions is recomputed from the line slice on demand.
+	foldedLines map[int]bool
+
 	// --- Hover error tooltip ---
 	hoverErrorLine int // line currently hovered for error tooltip (-1 = none)
 
@@ -227,6 +235,7 @@ func (this *CodeEditor) Init(iw IWidget) {
 	this.hoverErrorLine = -1
 	this.hoverLinkLine = -1
 	this.breakpoints = make(map[int]bool)
+	this.foldedLines = make(map[int]bool)
 }
 
 // SetText replaces the entire editor content.
@@ -244,6 +253,7 @@ func (this *CodeEditor) SetText(s string) {
 	this.additionalCursors = nil
 	this.undoStack = nil
 	this.redoStack = nil
+	this.foldedLines = make(map[int]bool)
 	this.Self().Update()
 }
 
@@ -408,12 +418,14 @@ func (this *CodeEditor) ScrollToLine(line int) {
 	_, h := this.Size()
 	visibleLines := int((h - this.topOffset() - this.statusBarHeight) / lh)
 
-	// Center the target line in the viewport if possible.
-	targetScroll := float64(line)*lh - float64(visibleLines/2)*lh
+	// Center the target line in the viewport if possible. Positions are in
+	// visual-row space so folded bodies are skipped (no fold => row == line).
+	targetRow := this.lineToVisualRow(line)
+	targetScroll := float64(targetRow)*lh - float64(visibleLines/2)*lh
 	if targetScroll < 0 {
 		targetScroll = 0
 	}
-	maxScroll := float64(len(this.lines))*lh - h
+	maxScroll := float64(len(this.visibleLineIndices()))*lh - h
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -1497,11 +1509,14 @@ func (this *CodeEditor) ensureCursorVisible() {
 		visibleLines = 1
 	}
 
-	startLine := int(this.scrollY / lh)
-	if this.cursorLine < startLine {
-		this.scrollY = float64(this.cursorLine) * lh
-	} else if this.cursorLine >= startLine+visibleLines {
-		this.scrollY = float64(this.cursorLine-visibleLines+1) * lh
+	// Vertical scroll is measured in visual rows so folded bodies don't count;
+	// with no active fold cursorRow == cursorLine and this is unchanged.
+	cursorRow := this.lineToVisualRow(this.cursorLine)
+	startRow := int(this.scrollY / lh)
+	if cursorRow < startRow {
+		this.scrollY = float64(cursorRow) * lh
+	} else if cursorRow >= startRow+visibleLines {
+		this.scrollY = float64(cursorRow-visibleLines+1) * lh
 	}
 	if this.scrollY < 0 {
 		this.scrollY = 0
@@ -1565,9 +1580,26 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 	fe := this.font.FontExtents()
 	lh := fe.Height + 2
-	startLine := int(this.scrollY / lh)
-	if startLine < 0 {
-		startLine = 0
+
+	// Folding: vis is the ordered list of line indices currently drawn (folded
+	// bodies removed). Vertical positions are computed in visual-row space, so a
+	// line's y is its row among vis, not its raw index. With no active fold
+	// vis[r] == r and this collapses to the original 1:1 mapping.
+	vis := this.visibleLineIndices()
+	// foldStartEnd maps each foldable region's start line to its end line, so the
+	// render loop can draw a ▸/▾ marker and (when collapsed) a folded-line hint.
+	foldRegions := this.FoldRegions()
+	foldStartEnd := make(map[int]int, len(foldRegions))
+	for _, reg := range foldRegions {
+		foldStartEnd[reg.startLine] = reg.endLine
+	}
+	startRow := int(this.scrollY / lh)
+	if startRow < 0 {
+		startRow = 0
+	}
+	startLine := 0
+	if startRow < len(vis) {
+		startLine = vis[startRow]
 	}
 	visibleLines := int((editorBottom-topOff)/lh) + 2
 
@@ -1596,8 +1628,9 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	g.Rectangle(0, topOff, editorRight, editorBottom-topOff)
 	g.Clip()
 
-	for i := startLine; i < startLine+visibleLines && i < len(this.lines); i++ {
-		y := float64(i)*lh - this.scrollY + topOff
+	for row := startRow; row < startRow+visibleLines && row < len(vis); row++ {
+		i := vis[row]
+		y := float64(row)*lh - this.scrollY + topOff
 
 		// Error line background tint (draw before current line highlight)
 		if _, hasErr := this.errorLines[i]; hasErr {
@@ -1700,6 +1733,27 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			g.Fill()
 		}
 
+		// Fold marker: a small triangle at the right edge of the gutter for every
+		// foldable region start. ▾ (down) when expanded, ▸ (right) when collapsed
+		// (Qt Creator / VS Code style). Clicking it is handled in OnLeftDown.
+		if _, foldable := foldStartEnd[i]; foldable {
+			g.SetBrush1(paint.Color{R: 150, G: 150, B: 165, A: 230})
+			fx := this.gutterW - 4 // right edge of the marker, near the text area
+			s := 3.5               // half-size of the triangle
+			if this.foldedLines[i] {
+				// Collapsed: right-pointing triangle ▸
+				g.MoveTo(fx-s, gutterCenterY-s)
+				g.LineTo(fx, gutterCenterY)
+				g.LineTo(fx-s, gutterCenterY+s)
+			} else {
+				// Expanded: down-pointing triangle ▾
+				g.MoveTo(fx-s, gutterCenterY-s)
+				g.LineTo(fx+s, gutterCenterY-s)
+				g.LineTo(fx, gutterCenterY+s)
+			}
+			g.Fill()
+		}
+
 		// Git gutter indicator (colored bar on left edge of gutter)
 		if gs, ok := this.gitStatus[i+1]; ok { // gitStatus uses 1-based line numbers
 			switch gs {
@@ -1748,6 +1802,21 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			}
 		}
 		inBlock = this.drawHighlightedLine(g, lineText, textOffX, y+fe.Ascent, inBlock)
+
+		// Folded-region hint: on a collapsed start line, draw a subtle "⋯}" after
+		// the text so the user sees the block is collapsed and where it ends.
+		if end, foldable := foldStartEnd[i]; foldable && this.foldedLines[i] {
+			hintX := textOffX + this.measureText(lineText) + 8
+			hint := "⋯" // ⋯ (midline horizontal ellipsis)
+			if end >= 0 && end < len(this.lines) {
+				if last, ok := lastNonSpaceRune(this.lines[end]); ok && last == '}' {
+					hint = "⋯ }"
+				}
+			}
+			g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 200})
+			g.SetFont(this.font)
+			g.DrawText1(hintX, y+fe.Ascent, hint)
+		}
 
 		// Hover link: blue underline + blue text overlay for Cmd/Ctrl+hover word
 		if i == this.hoverLinkLine && this.hoverLinkStart < this.hoverLinkEnd {
@@ -1828,7 +1897,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			}
 			prefix := string(runes[:col])
 			cx := textOffX + this.measureText(prefix)
-			cy := float64(this.cursorLine)*lh - this.scrollY + topOff
+			cy := float64(this.lineToVisualRow(this.cursorLine))*lh - this.scrollY + topOff
 			g.SetBrush1(paint.Color{R: 200, G: 200, B: 230, A: 255})
 			g.Rectangle(cx, cy, 1.5, lh)
 			g.Fill()
@@ -1843,7 +1912,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			}
 			prefix := string(runes[:col])
 			cx := textOffX + this.measureText(prefix)
-			cy := float64(cc.line)*lh - this.scrollY + topOff
+			cy := float64(this.lineToVisualRow(cc.line))*lh - this.scrollY + topOff
 			// Dim color: same hue, half alpha.
 			g.SetBrush1(paint.Color{R: 200, G: 200, B: 230, A: 160})
 			g.Rectangle(cx, cy, 1.5, lh)
@@ -2389,9 +2458,20 @@ func (this *CodeEditor) posFromXY(x, y float64) (int, int) {
 	lh := fe.Height + 2
 	topOff := this.topOffset()
 
-	line := int((y - topOff + this.scrollY) / lh)
-	if line < 0 {
+	// The vertical hit lands on a visual row; folding maps that row back to the
+	// underlying line index. With no active fold vis[row] == row.
+	row := int((y - topOff + this.scrollY) / lh)
+	if row < 0 {
+		row = 0
+	}
+	vis := this.visibleLineIndices()
+	var line int
+	if len(vis) == 0 {
 		line = 0
+	} else if row >= len(vis) {
+		line = vis[len(vis)-1]
+	} else {
+		line = vis[row]
 	}
 	if line >= len(this.lines) {
 		line = len(this.lines) - 1
@@ -2467,12 +2547,20 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 		return
 	}
 
-	// Breakpoint gutter: a click inside the gutter (left of the text area, below
-	// the breadcrumb) toggles the breakpoint on that line instead of moving the
-	// cursor. Normal text-area clicks fall through to the logic below unchanged.
+	// Gutter clicks (left of the text area, below the breadcrumb): the right strip
+	// of the gutter carries the fold ▸/▾ marker, so a click there on a foldable
+	// start line toggles the fold; anywhere else in the gutter toggles the
+	// breakpoint. Normal text-area clicks fall through to the logic below.
 	if x < this.gutterW && y >= this.topOffset() {
 		line, _ := this.posFromXY(x, y)
 		if line >= 0 && line < len(this.lines) {
+			// Fold-marker hit zone: the ~12px strip at the gutter's right edge.
+			if x >= this.gutterW-12 {
+				if _, foldable := this.foldRegionAt(line); foldable {
+					this.ToggleFold(line)
+					return
+				}
+			}
 			this.ToggleBreakpoint(line)
 		}
 		return
@@ -3339,7 +3427,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 		this.clampCursor()
 		this.scrollY += float64(pageLines) * lh
-		maxScroll := float64(len(this.lines))*lh - h + this.topOffset() + this.statusBarHeight
+		maxScroll := float64(len(this.visibleLineIndices()))*lh - h + this.topOffset() + this.statusBarHeight
 		if maxScroll < 0 {
 			maxScroll = 0
 		}
@@ -3497,13 +3585,23 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 
 	case '[':
-		if ctrl || isActionModifier() {
+		if (ctrl || isActionModifier()) && alt {
+			// Cmd+Option+[ (macOS) / Ctrl+Alt+[: fold the region at the cursor.
+			if reg, ok := this.foldRegionEnclosing(this.cursorLine); ok && !this.IsFolded(reg.startLine) {
+				this.ToggleFold(reg.startLine)
+			}
+		} else if ctrl || isActionModifier() {
 			// Cmd+[ (macOS) / Ctrl+[: navigate back
 			this.NavGoBack()
 		}
 
 	case ']':
-		if ctrl || isActionModifier() {
+		if (ctrl || isActionModifier()) && alt {
+			// Cmd+Option+] (macOS) / Ctrl+Alt+]: unfold the region at the cursor.
+			if reg, ok := this.foldRegionEnclosing(this.cursorLine); ok && this.IsFolded(reg.startLine) {
+				this.ToggleFold(reg.startLine)
+			}
+		} else if ctrl || isActionModifier() {
 			// Cmd+] (macOS) / Ctrl+]: navigate forward
 			this.NavGoForward()
 		}
@@ -3877,4 +3975,242 @@ func (this *CodeEditor) Breakpoints() []int {
 	}
 	sort.Ints(lines)
 	return lines
+}
+
+// --- Code Folding ---
+//
+// Folding collapses a brace block so its body lines are hidden from the view.
+// A foldRegion is the start line that ends in '{' and the line carrying the
+// matching '}'. The user collapses a region by clicking the ▸/▾ marker in the
+// gutter (or via the public API); collapsed regions hide lines start+1 .. end.
+//
+// Folding heuristic: a straightforward brace-depth scan. A line whose last
+// non-space rune is '{' opens a region; it closes on the line whose '}' brings
+// the depth back to where the opener sat. This is a Qt Creator / VS Code style
+// brace fold. Limitation: braces inside string literals, runes, or comments are
+// counted like any other brace, so pathological lines (e.g. a '{' inside a
+// string with no real block) can mis-pair. Regions spanning a single line
+// (open and close on the same line) are not foldable.
+
+// foldRegion is a foldable brace block: lines startLine .. endLine inclusive,
+// where startLine ends in '{' and endLine carries the matching '}'.
+type foldRegion struct {
+	startLine int
+	endLine   int
+}
+
+// lastNonSpaceRune returns the final non-whitespace rune of s and true, or
+// (0, false) when s is blank.
+func lastNonSpaceRune(s string) (rune, bool) {
+	trimmed := strings.TrimRight(s, " \t\r")
+	if trimmed == "" {
+		return 0, false
+	}
+	r := []rune(trimmed)
+	return r[len(r)-1], true
+}
+
+// computeFoldRegions scans lines and returns every foldable brace block using a
+// brace-depth match. Only multi-line regions (endLine > startLine) are returned;
+// an opener with no matching closer (unbalanced '{') is dropped. The result is
+// ordered by startLine. See the heuristic note above for the string/comment
+// limitation.
+func computeFoldRegions(lines []string) []foldRegion {
+	type opener struct {
+		line  int
+		depth int
+	}
+	var stack []opener
+	var regions []foldRegion
+	depth := 0
+	for i, line := range lines {
+		// Count brace deltas on this line so a "} else {" both closes and opens.
+		for _, r := range line {
+			switch r {
+			case '{':
+				depth++
+			case '}':
+				if depth > 0 {
+					depth--
+				}
+				// Close the most recent opener sitting at this depth.
+				if n := len(stack); n > 0 && stack[n-1].depth == depth {
+					op := stack[n-1]
+					stack = stack[:n-1]
+					if i > op.line {
+						regions = append(regions, foldRegion{startLine: op.line, endLine: i})
+					}
+				}
+			}
+		}
+		// A line whose last visible rune is '{' opens a region at this line.
+		if last, ok := lastNonSpaceRune(line); ok && last == '{' {
+			stack = append(stack, opener{line: i, depth: depth - 1})
+		}
+	}
+	sort.Slice(regions, func(a, b int) bool {
+		return regions[a].startLine < regions[b].startLine
+	})
+	return regions
+}
+
+// visibleLines returns the ordered indices of lines that should be drawn given
+// the set of folded start-lines and the foldable regions. A folded region hides
+// its body (start+1 .. end); the start line itself stays visible. Nested folds
+// compose: the outermost folded region wins, so a region whose start is hidden
+// by an enclosing fold contributes nothing extra. Pure; no GL, no receiver.
+func visibleLines(total int, folded map[int]bool, regions []foldRegion) []int {
+	// hidden[i] marks a line concealed by some folded region.
+	hidden := make([]bool, total)
+	for _, reg := range regions {
+		if reg.startLine < 0 || reg.startLine >= total {
+			continue
+		}
+		if !folded[reg.startLine] {
+			continue
+		}
+		end := reg.endLine
+		if end >= total {
+			end = total - 1
+		}
+		for i := reg.startLine + 1; i <= end; i++ {
+			hidden[i] = true
+		}
+	}
+	out := make([]int, 0, total)
+	for i := 0; i < total; i++ {
+		if !hidden[i] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// foldRegionAt returns the region that opens on the given start line, or false.
+func (this *CodeEditor) foldRegionAt(startLine int) (foldRegion, bool) {
+	for _, reg := range this.FoldRegions() {
+		if reg.startLine == startLine {
+			return reg, true
+		}
+	}
+	return foldRegion{}, false
+}
+
+// foldRegionEnclosing returns the innermost foldable region whose span contains
+// the given line (start <= line <= end), or false. Used by the keyboard
+// fold/unfold-at-cursor shortcuts.
+func (this *CodeEditor) foldRegionEnclosing(line int) (foldRegion, bool) {
+	var best foldRegion
+	found := false
+	for _, reg := range this.FoldRegions() {
+		if line >= reg.startLine && line <= reg.endLine {
+			// Prefer the tightest (largest start) enclosing region.
+			if !found || reg.startLine > best.startLine {
+				best = reg
+				found = true
+			}
+		}
+	}
+	return best, found
+}
+
+// FoldRegions returns the foldable brace regions for the current text, ordered
+// by start line. Recomputed each call from the line slice (cheap brace scan).
+func (this *CodeEditor) FoldRegions() []foldRegion {
+	return computeFoldRegions(this.lines)
+}
+
+// IsFolded reports whether the region starting at the given line is collapsed.
+func (this *CodeEditor) IsFolded(startLine int) bool {
+	return this.foldedLines[startLine]
+}
+
+// ToggleFold collapses or expands the foldable region that starts at the given
+// line. A line that is not the start of a foldable region is ignored.
+func (this *CodeEditor) ToggleFold(startLine int) {
+	if this.foldedLines == nil {
+		this.foldedLines = make(map[int]bool)
+	}
+	if _, ok := this.foldRegionAt(startLine); !ok {
+		return
+	}
+	if this.foldedLines[startLine] {
+		delete(this.foldedLines, startLine)
+	} else {
+		this.foldedLines[startLine] = true
+	}
+	this.clampCursorVisible()
+	this.Self().Update()
+}
+
+// FoldAll collapses every foldable region.
+func (this *CodeEditor) FoldAll() {
+	if this.foldedLines == nil {
+		this.foldedLines = make(map[int]bool)
+	}
+	for _, reg := range this.FoldRegions() {
+		this.foldedLines[reg.startLine] = true
+	}
+	this.clampCursorVisible()
+	this.Self().Update()
+}
+
+// UnfoldAll expands every collapsed region.
+func (this *CodeEditor) UnfoldAll() {
+	this.foldedLines = make(map[int]bool)
+	this.Self().Update()
+}
+
+// visibleLineIndices returns the ordered line indices currently drawn, honoring
+// the active folds. It is the bridge between the pure visibleLines helper and
+// the editor's live state.
+func (this *CodeEditor) visibleLineIndices() []int {
+	return visibleLines(len(this.lines), this.foldedLines, this.FoldRegions())
+}
+
+// lineToVisualRow maps a line index to its visual row (its position among the
+// visible lines). If the line is hidden inside a fold, the row of the nearest
+// preceding visible line is returned so cursor math lands on the fold header.
+func (this *CodeEditor) lineToVisualRow(line int) int {
+	vis := this.visibleLineIndices()
+	row := 0
+	for r, ln := range vis {
+		if ln == line {
+			return r
+		}
+		if ln > line {
+			break
+		}
+		row = r
+	}
+	return row
+}
+
+// clampCursorVisible nudges the cursor onto a visible line when the line it sat
+// on has just been hidden by a fold, so the caret never disappears into a
+// collapsed block.
+func (this *CodeEditor) clampCursorVisible() {
+	vis := this.visibleLineIndices()
+	if len(vis) == 0 {
+		return
+	}
+	visset := make(map[int]bool, len(vis))
+	for _, ln := range vis {
+		visset[ln] = true
+	}
+	if visset[this.cursorLine] {
+		return
+	}
+	// Walk back to the nearest visible line at or above the cursor (the fold
+	// header that now stands in for the hidden body).
+	target := vis[0]
+	for _, ln := range vis {
+		if ln <= this.cursorLine {
+			target = ln
+		} else {
+			break
+		}
+	}
+	this.cursorLine = target
+	this.clampCursor()
 }
