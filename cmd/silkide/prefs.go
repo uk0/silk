@@ -198,6 +198,7 @@ func registerSilkideTranslations() {
 		"Command Palette":  "命令面板",
 		"Fit to View":      "适应视口",
 		"Find in Files":    "在文件中查找",
+		"Show Outline":     "显示大纲",
 		"Open File":        "打开文件",
 		"Quick Open File":  "快速打开文件",
 		"Saved %s":               "已保存 %s",
@@ -362,6 +363,17 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		if globalSearch != nil {
 			dockSetActiveView(globalLeftDock, globalSearch)
 			globalSearch.SetFocus()
+		}
+	})
+
+	// Cmd+Shift+O — bring the code-outline tab to the front of the
+	// right dock. VSCode "Go to Symbol" muscle memory; the outline
+	// reacts to clicks rather than typed input, so flipping the tab
+	// (and focusing it for wheel scrolling) is all the shortcut needs.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'O', func() {
+		if globalOutline != nil {
+			dockSetActiveView(globalRightDock, globalOutline)
+			globalOutline.SetFocus()
 		}
 	})
 }

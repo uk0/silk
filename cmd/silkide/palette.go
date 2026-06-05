@@ -127,6 +127,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			globalSearch.SetFocus()
 		}
 	})
+	add("Show Outline", "Cmd+Shift+O", func() {
+		if globalOutline != nil {
+			dockSetActiveView(globalRightDock, globalOutline)
+			globalOutline.SetFocus()
+		}
+	})
 
 	// Surfaces.
 	add("Project Settings", "", func() { showProjectSettingsDialog(designCanvas) })

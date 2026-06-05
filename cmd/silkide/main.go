@@ -542,6 +542,38 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
 			inspector.Rebuild()
 		})
+
+		// Code outline — sibling tab of the Object Inspector in the
+		// right dock. The panel existed and was factory-registered but
+		// was never added to a dock, so the symbol tree was invisible.
+		// It mirrors the active editor: SetEditor re-parses the current
+		// file's functions / types / vars, and clicking a symbol scrolls
+		// that editor to the declaration (the same file:line jump the
+		// BuildOutput pane uses). syncOutlineToActiveEditor keeps it in
+		// step with the editor tabs.
+		outline := ged.NewCodeOutlinePanel()
+		outline.SetNavigateCallback(func(line int) {
+			if ed := activeEditor(editorTabs); ed != nil {
+				ed.ScrollToLine(line)
+			}
+		})
+		globalOutline = outline
+		rightDock.AddView(outline)
+
+		// Stash the right dock so the Cmd+Shift+O shortcut can flip its
+		// active tab to the outline without threading the dock reference
+		// through the shortcut wiring (mirrors globalLeftDock).
+		globalRightDock = rightDock
+
+		// Seed the outline from whichever editor tab is active now, then
+		// re-bind it every time the user switches tabs. The panel
+		// self-refreshes on content change via its own Draw-time hash
+		// check, so binding the editor once per tab switch is enough —
+		// no per-keystroke hook needed.
+		syncOutlineToActiveEditor(editorTabs)
+		editorTabs.SetCurrentChangedCallback(func(_ interface{}, _ int) {
+			syncOutlineToActiveEditor(editorTabs)
+		})
 	}
 
 	// Bottom dock: terminal + build output. Toolchain stuff a
@@ -876,6 +908,17 @@ var globalReloader *hotreload.Reloader
 // SetScene, and the buildPanels closure that originally captured it
 // has gone out of scope by the time those callbacks fire.
 var globalInspector *ged.ObjectInspector
+
+// globalOutline is the right-dock code-outline panel — a symbol tree
+// for the active editor. The Cmd+Shift+O shortcut focuses it, and the
+// editor-tabs current-changed callback re-binds it to the active
+// editor via syncOutlineToActiveEditor.
+var globalOutline *ged.CodeOutlinePanel
+
+// globalRightDock holds the dock containing the Object Inspector and
+// the code outline. Used by the Cmd+Shift+O shortcut to bring the
+// outline tab to the front (mirrors globalLeftDock for global search).
+var globalRightDock *gui.Dock
 
 // showHamburgerMenu pops the silkide application menu next to the
 // hamburger toolbar button. Hosts the four standard file actions
@@ -1454,6 +1497,42 @@ func focusEditorTab(tabs *gui.TabWidget, ed *gui.CodeEditor) {
 			return
 		}
 	}
+}
+
+// activeEditor returns the CodeEditor backing the currently-active
+// editor tab, or nil when the active tab isn't a code editor (the
+// design canvas and welcome screen live in the center dock, not these
+// tabs, but a future caller could add non-editor pages here). The
+// outline panel's navigate callback uses it to scroll the right
+// editor to a clicked symbol.
+func activeEditor(tabs *gui.TabWidget) *gui.CodeEditor {
+	if tabs == nil {
+		return nil
+	}
+	stack := tabs.Stack()
+	if stack == nil {
+		return nil
+	}
+	idx := tabs.CurrentIndex()
+	if idx < 0 || idx >= stack.Count() {
+		return nil
+	}
+	ed, _ := stack.Page(idx).(*gui.CodeEditor)
+	return ed
+}
+
+// syncOutlineToActiveEditor re-points the right-dock outline panel at
+// the active editor tab so its symbol tree reflects the file the user
+// is looking at. Called once at startup and again on every tab switch
+// (editorTabs.SetCurrentChangedCallback). SetEditor re-parses symbols
+// immediately; the panel keeps following content edits on its own via
+// a Draw-time line-count/length hash, so no per-keystroke hook is
+// needed here. No-op when the active tab isn't a code editor.
+func syncOutlineToActiveEditor(tabs *gui.TabWidget) {
+	if globalOutline == nil {
+		return
+	}
+	globalOutline.SetEditor(activeEditor(tabs))
 }
 
 // sampleMainGo returns the canonical "Hello, gogpu!" main.go
