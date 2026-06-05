@@ -16,11 +16,12 @@ func init() {
 // equivalent to QSpinBox in Qt.
 type SpinBox struct {
 	Widget
-	value  int
-	min    int
-	max    int
-	step   int
-	suffix string
+	value    int
+	min      int
+	max      int
+	step     int
+	pageStep int // PageUp/PageDown step; 0 means auto = 10*step
+	suffix   string
 
 	hoverPart int // 0=none, 1=up, 2=down
 	pushed    bool
@@ -111,6 +112,34 @@ func (this *SpinBox) SetStep(s int) {
 		s = 1
 	}
 	this.step = s
+}
+
+// PageStep returns the larger step used by PageUp/PageDown. When unset it
+// defaults to 10*step, mirroring QSpinBox's page jump.
+func (this *SpinBox) PageStep() int {
+	if this.pageStep > 0 {
+		return this.pageStep
+	}
+	return this.step * 10
+}
+
+func (this *SpinBox) SetPageStep(s int) {
+	if s < 0 {
+		s = 0
+	}
+	this.pageStep = s
+}
+
+// spinStepped returns cur+delta clamped to [min, max]. Pure helper so the
+// keyboard stepping logic stays unit-testable.
+func spinStepped(cur, delta, min, max int) int {
+	v := cur + delta
+	if v < min {
+		v = min
+	} else if v > max {
+		v = max
+	}
+	return v
 }
 
 func (this *SpinBox) Suffix() string {
@@ -282,16 +311,27 @@ func (this *SpinBox) OnMouseWheel(x, y, z float64) {
 	}
 }
 
+// OnKeyDown implements IEventKeyDown, giving the spin box Qt QSpinBox style
+// keyboard navigation while it holds focus: Up/Down step by step, PageUp/
+// PageDown by the larger page step, and Home/End jump to min/max. The spin box
+// always has a bounded [min, max] range, so Home/End are always meaningful.
+// All paths route through SetValue, so clamping and the change callback behave
+// exactly as the up/down buttons do (callback fires only on a real change).
 func (this *SpinBox) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
+	step := this.step
+	page := this.PageStep()
 	switch key {
 	case KeyUp:
-		this.SetValue(this.value + this.step)
+		this.SetValue(spinStepped(this.value, step, this.min, this.max))
 	case KeyDown:
-		this.SetValue(this.value - this.step)
+		this.SetValue(spinStepped(this.value, -step, this.min, this.max))
 	case KeyPageUp:
-		this.SetValue(this.value + this.step*10)
+		this.SetValue(spinStepped(this.value, page, this.min, this.max))
 	case KeyPageDown:
-		this.SetValue(this.value - this.step*10)
+		this.SetValue(spinStepped(this.value, -page, this.min, this.max))
 	case KeyHome:
 		this.SetValue(this.min)
 	case KeyEnd:
