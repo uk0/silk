@@ -119,11 +119,16 @@ func (this *TreeView) initRoots() {
 	y := 0.0 // y坐标独立于client, 这样在隐藏header时不用重算y坐标
 	for ri := 0; ri < rootCount; ri++ {
 		mi := this.model.Index(ri, 0, ModelIndex{})
+		// 容错: 模型自报rootCount行, 却为某行返回空/不一致的索引时,
+		// 不能让控件崩溃宿主程序. 记录告警并跳过这个坏根节点 (连同其子树),
+		// 其余有效根节点照常构建.
 		if mi.IsNil() {
-			panic("")
+			core.Warn("TreeView.initRoots: model.Index(", ri, ", 0, root) is nil while RowCount=", rootCount, "; skipping root")
+			continue
 		}
 		if ri != mi.Row {
-			panic("")
+			core.Warn("TreeView.initRoots: model returned row ", mi.Row, " for requested root ", ri, "; skipping inconsistent root")
+			continue
 		}
 		row := this.getRow(mi, true)
 		row.ri = ri
