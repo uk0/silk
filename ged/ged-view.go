@@ -522,6 +522,14 @@ func (this *GedView) OnRightUp(x, y float64) {
 		lMenu.AddButton1("水平布局 (HBox)", nil).Action().BindFunc0(func() {
 			this.layOutSelection(true)
 		})
+		lMenu.AddSeparator()
+		// "Break Layout" — the inverse of Lay Out: dissolve the selected
+		// container(s), lifting their children back up to the container's
+		// parent (Qt Designer's "Break Layout"). No-op when no selected
+		// item is a container with children.
+		lMenu.AddButton1("解散布局 (Break)", nil).Action().BindFunc0(func() {
+			this.breakLayoutSelection()
+		})
 
 		menu.AddSeparator()
 
@@ -951,6 +959,52 @@ func (this *GedView) layOutSelection(horizontal bool) {
 	sel := this.Selection()
 	sel.Clear()
 	sel.Add(container)
+	this.Self().Update()
+}
+
+// breakLayoutSelection is the inverse of layOutSelection: for every
+// selected container widget it lifts the children back up to the
+// container's own parent and removes the now-empty container (Qt
+// Designer's "Break Layout"). Children keep their absolute designer
+// positions (containers use absolute coords in the canvas), so they
+// stay put visually. The freed children become the new selection.
+//
+// Only *FakeWidget items that actually hold children are affected;
+// anything else in the selection is ignored, so the action is a no-op
+// when nothing container-like is selected. Like the other structural
+// ops it mutates directly without an undo command.
+func (this *GedView) breakLayoutSelection() {
+	raw := this.Selection().ItemList()
+	var freed []graph.IItem
+	broke := false
+	for _, it := range raw {
+		fake, ok := it.(*FakeWidget)
+		if !ok || !fake.HasChildren() {
+			continue
+		}
+		parent := fake.Parent()
+		if parent == nil {
+			continue
+		}
+		// Snapshot children before reparenting — SetParent mutates the
+		// sibling ring we'd otherwise be iterating.
+		kids := make([]graph.IItem, 0, len(fake.Children()))
+		kids = append(kids, fake.Children()...)
+		for _, c := range kids {
+			c.SetParent(parent)
+			freed = append(freed, c)
+		}
+		fake.Detach() // drop the emptied container
+		broke = true
+	}
+	if !broke {
+		return
+	}
+	sel := this.Selection()
+	sel.Clear()
+	for _, c := range freed {
+		sel.Add(c)
+	}
 	this.Self().Update()
 }
 
