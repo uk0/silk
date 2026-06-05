@@ -130,6 +130,15 @@ func buildFakeDeclNode(fake *FakeWidget) *decl.Node {
 			}
 		}
 	}
+
+	// Recurse into nested children so a container widget (VBox/HBox/...)
+	// emits its laid-out widgets as decl child nodes, mirroring the
+	// designer's tree. Flat widgets have no children and add nothing.
+	for _, c := range fake.Children() {
+		if child, ok := c.(*FakeWidget); ok {
+			n.Children = append(n.Children, buildFakeDeclNode(child))
+		}
+	}
 	return n
 }
 
