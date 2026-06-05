@@ -26,6 +26,40 @@ const (
 	SCROLL_TRACK_BAR
 )
 
+// scrollPartKind 把滚动条轴向上的一个坐标归类到 Qt 风格的交互"部件".
+// 抽成纯函数(不依赖 GL/主题/控件状态)便于单元测试; 整型 PointToPart(1..5) 由它派生.
+type scrollPartKind int
+
+const (
+	partArrowDec    scrollPartKind = iota // 起始箭头按钮(上/左)
+	partBeforeThumb                       // 滑块前方的空白槽 -> 向后翻页
+	partOnThumb                           // 可拖动的滑块本体
+	partAfterThumb                        // 滑块后方的空白槽 -> 向前翻页
+	partArrowInc                          // 末端箭头按钮(下/右)
+)
+
+// scrollPart 把轴向坐标 pos(竖直取 y, 水平取 x)映射为 scrollPartKind.
+// thumbStart/thumbLen 为滑块在该轴上的绝对偏移与长度(thumbStart 已含起始箭头内缩);
+// trackLen 为控件在该轴上的总长度, arrowSize 为单个端部箭头按钮长度(若不绘制则传 0).
+// 优先级与原 PointToPart 一致: 滑块优先于箭头, 箭头优先于两侧空白槽.
+func scrollPart(pos, thumbStart, thumbLen, trackLen, arrowSize float64) scrollPartKind {
+	if pos >= thumbStart && pos < thumbStart+thumbLen {
+		return partOnThumb
+	}
+	if arrowSize > 0 {
+		if pos < arrowSize {
+			return partArrowDec
+		}
+		if pos >= trackLen-arrowSize {
+			return partArrowInc
+		}
+	}
+	if pos < thumbStart {
+		return partBeforeThumb
+	}
+	return partAfterThumb
+}
+
 type IOnHorzScroll interface {
 	OnHorzScroll(sender IWidget)
 }
@@ -271,35 +305,25 @@ func (this *ScrollBar) PointToPart(x, y float64) int {
 	}
 	ss := Theme().ScrollWidth
 	tx, ty, tw, th := this.TrackRect()
+	// 取轴向上的坐标/滑块/轨道长度, 复用纯函数分类(端部绘制箭头按钮, 故 arrowSize = ss).
+	var kind scrollPartKind
 	if this.IsVertical() {
-		if y >= ty && y < ty+th {
-			return 3
-		}
-		if y < ss {
-			return 1
-		}
-		if y >= this.h-ss {
-			return 5
-		}
-		if y < ty {
-			return 2
-		}
-		return 4
+		kind = scrollPart(y, ty, th, this.h, ss)
 	} else {
-		if x >= tx && x < tx+tw {
-			return 3
-		}
-		if x < ss {
-			return 1
-		}
-		if x >= this.w-ss {
-			return 5
-		}
-		if x < tx {
-			return 2
-		}
+		kind = scrollPart(x, tx, tw, this.w, ss)
+	}
+	// 映射回既有的 1..5 部件编号(onTimer 依赖之).
+	switch kind {
+	case partArrowDec:
+		return 1
+	case partBeforeThumb:
+		return 2
+	case partOnThumb:
+		return 3
+	case partAfterThumb:
 		return 4
-
+	default: // partArrowInc
+		return 5
 	}
 }
 
