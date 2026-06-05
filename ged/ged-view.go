@@ -8,6 +8,7 @@ import (
 	"silk/paint"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -510,6 +511,18 @@ func (this *GedView) OnRightUp(x, y float64) {
 			this.alignSelection(DistributeV)
 		})
 
+		// "Lay Out" — wrap the current multi-selection in a VBox/HBox
+		// container so the generated code arranges them via the layout
+		// (Qt Designer's "Lay Out Vertically/Horizontally"). No-ops below
+		// 2 selected items.
+		lMenu, _ := menu.AddSubMenu("布局", nil, nil)
+		lMenu.AddButton1("垂直布局 (VBox)", nil).Action().BindFunc0(func() {
+			this.layOutSelection(false)
+		})
+		lMenu.AddButton1("水平布局 (HBox)", nil).Action().BindFunc0(func() {
+			this.layOutSelection(true)
+		})
+
 		menu.AddSeparator()
 
 		// "Select All" — canvas-wide convenience, mirrors the Cmd/Ctrl+A
@@ -811,6 +824,87 @@ func (this *GedView) alignSelection(mode alignMode) {
 	for i, it := range items {
 		it.SetPos(aligned[i].X, aligned[i].Y)
 	}
+	this.Self().Update()
+}
+
+// boundingBoxOf returns the smallest rect enclosing all of rects. Empty
+// input returns the zero rect. Pure helper so layOutSelection's geometry
+// is unit-testable without a scene.
+func boundingBoxOf(rects []geom.Rect) geom.Rect {
+	if len(rects) == 0 {
+		return geom.Rect{}
+	}
+	minX, minY := rects[0].X, rects[0].Y
+	maxX, maxY := rects[0].X+rects[0].Width, rects[0].Y+rects[0].Height
+	for _, r := range rects[1:] {
+		if r.X < minX {
+			minX = r.X
+		}
+		if r.Y < minY {
+			minY = r.Y
+		}
+		if r.X+r.Width > maxX {
+			maxX = r.X + r.Width
+		}
+		if r.Y+r.Height > maxY {
+			maxY = r.Y + r.Height
+		}
+	}
+	return geom.Rect{X: minX, Y: minY, Width: maxX - minX, Height: maxY - minY}
+}
+
+// layOutSelection wraps the current multi-selection in a new VBox (or
+// HBox when horizontal) container and reparents the selected widgets
+// into it, so codegen arranges them through the container's AddWidget
+// path. The container is sized to the selection's bounding box and the
+// children are reparented in layout order (top-to-bottom for a VBox,
+// left-to-right for an HBox). The new container becomes the selection.
+//
+// Like the other structural designer ops (Z-order, align, nudge), this
+// mutates the scene directly without an undo command — wrapping it in a
+// composite create+reparent command is a follow-up. No-op below 2
+// selected items.
+func (this *GedView) layOutSelection(horizontal bool) {
+	items := this.Selection().ItemList()
+	if len(items) < 2 {
+		return
+	}
+
+	rects := make([]geom.Rect, len(items))
+	for i, it := range items {
+		rects[i] = it.Bounds1()
+	}
+	box := boundingBoxOf(rects)
+
+	factory := "gui.VBox"
+	if horizontal {
+		factory = "gui.HBox"
+	}
+	container, err := NewFakeWidgetFromFactory(factory)
+	if err != nil {
+		return
+	}
+	container.SetBounds1(box)
+	container.SetParent(this.Scene())
+
+	// Reparent in layout order: VBox stacks by Y, HBox by X.
+	ordered := make([]graph.IItem, len(items))
+	copy(ordered, items)
+	sort.SliceStable(ordered, func(a, b int) bool {
+		ra, rb := ordered[a].Bounds1(), ordered[b].Bounds1()
+		if horizontal {
+			return ra.X < rb.X
+		}
+		return ra.Y < rb.Y
+	})
+	for _, it := range ordered {
+		it.SetParent(container)
+	}
+	container.Layout()
+
+	sel := this.Selection()
+	sel.Clear()
+	sel.Add(container)
 	this.Self().Update()
 }
 
