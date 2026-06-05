@@ -884,6 +884,10 @@ func (this *GedView) PasteItems() {
 	if step <= 0 {
 		step = 5
 	}
+	// Track names already present in the scene plus names handed out
+	// earlier in this same paste so a multi-item paste doesn't collide
+	// with itself.
+	taken := this.sceneWidgetNames()
 	sel := this.Selection()
 	sel.Clear()
 	for _, ci := range clipboard {
@@ -893,7 +897,9 @@ func (this *GedView) PasteItems() {
 		}
 		px, py := this.snapToGrid(ci.x+step, ci.y+step)
 		item.SetBounds(px, py, ci.w, ci.h)
-		item.SetWidgetName(ci.name)
+		name := uniqueWidgetName(ci.name, func(n string) bool { return taken[n] })
+		taken[name] = true
+		item.SetWidgetName(name)
 		item.Layout()
 
 		cmd := graph.NewAddCommand()
@@ -902,6 +908,38 @@ func (this *GedView) PasteItems() {
 		sel.Add(item)
 	}
 	this.Self().Update()
+}
+
+// sceneWidgetNames returns the set of non-empty widget names currently
+// present in the scene. Used to keep pasted/duplicated widget names
+// unique.
+func (this *GedView) sceneWidgetNames() map[string]bool {
+	taken := map[string]bool{}
+	for _, item := range this.Scene().Children() {
+		if fake, ok := item.(*FakeWidget); ok {
+			if n := fake.WidgetName(); n != "" {
+				taken[n] = true
+			}
+		}
+	}
+	return taken
+}
+
+// uniqueWidgetName returns base if it is free, otherwise the first
+// "base_N" (N starting at 1) for which exists reports false. An empty
+// base is returned unchanged: unnamed widgets carry no name to collide,
+// and codegen synthesizes their field names separately. exists reports
+// whether a candidate name is already in use.
+func uniqueWidgetName(base string, exists func(string) bool) string {
+	if base == "" || !exists(base) {
+		return base
+	}
+	for i := 1; ; i++ {
+		cand := fmt.Sprintf("%s_%d", base, i)
+		if !exists(cand) {
+			return cand
+		}
+	}
 }
 
 func (this *GedView) OpenFile(filename string) error {
