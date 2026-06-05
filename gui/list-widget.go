@@ -532,3 +532,104 @@ func (this *ListWidget) Layout() {
 func (this *ListWidget) OnMouseWheel(x, y, z float64) {
 	this.SetScrollY(this.ScrollY() - z*defaultWheelScrollLines)
 }
+
+// 键盘导航 (仿Qt QListWidget):
+//
+//	上/下          : 当前/选中项上移/下移一行, 到头/到尾时夹住
+//	Home/End       : 跳到第一/最后一项
+//	PageUp/PageDown: 按一个视口页的行数上移/下移
+//	回车/空格      : 激活当前项 (走与点击相同的提交回调)
+//
+// 仅在控件持有焦点时被调用(OnLeftDown里SetFocus后才能收到键盘事件).
+func (this *ListWidget) OnKeyDown(key int, repeat bool) {
+	n := this.Count()
+	if n == 0 {
+		return
+	}
+
+	switch key {
+	case KeyDown:
+		this.setActiveIndex(this.activeIndex + 1)
+	case KeyUp:
+		this.setActiveIndex(this.activeIndex - 1)
+	case KeyHome:
+		this.setActiveIndex(0)
+	case KeyEnd:
+		this.setActiveIndex(n - 1)
+	case KeyPageDown:
+		this.setActiveIndex(pageStepIndex(this.activeIndex, n, this.rowsPerPage(), +1))
+	case KeyPageUp:
+		this.setActiveIndex(pageStepIndex(this.activeIndex, n, this.rowsPerPage(), -1))
+	case KeyEnter, KeySpace:
+		this.activateCurrent()
+	}
+}
+
+// setActiveIndex 把当前/选中行切到idx(夹在有效范围内), 触发选中变化回调,
+// 并把该行滚入可见区. 是键盘导航各分支的统一入口.
+func (this *ListWidget) setActiveIndex(idx int) {
+	idx = clampIndex(idx, this.Count())
+	if idx < 0 || idx == this.activeIndex {
+		return
+	}
+	old := this.activeIndex
+	this.activeIndex = idx
+	this.emitSelectionChanged(old)
+	this.scrollRowIntoView(idx)
+	this.Layout()
+}
+
+// activateCurrent 激活当前项, 与鼠标释放(OnLeftUp)走同一条提交路径.
+func (this *ListWidget) activateCurrent() {
+	if this.activeIndex < 0 || this.activeIndex >= this.Count() {
+		return
+	}
+	this.Submit()
+}
+
+// rowsPerPage 返回视口当前能容纳的整行数(至少1), 作为PageUp/PageDown的步长.
+func (this *ListWidget) rowsPerPage() int {
+	_, _, _, clientH := this.padding.Apply(0, 0, this.w, this.h)
+	rh := this.RowHeight()
+	n := int(clientH / rh)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// scrollRowIntoView 调整垂直滚动位置(以行为单位), 让第r行落入可见窗口.
+// 复用Layout里"可见行数 = 视口高度 / 行高"的思路.
+func (this *ListWidget) scrollRowIntoView(r int) {
+	if r < 0 || r >= this.Count() {
+		return
+	}
+	top := int(this.ScrollY())
+	if r < top {
+		this.SetScrollY(float64(r))
+		return
+	}
+	per := this.rowsPerPage()
+	if r >= top+per {
+		this.SetScrollY(float64(r - per + 1))
+	}
+}
+
+// pageStepIndex 计算PageUp/PageDown后落到的行下标: 从cur沿dir方向移动page行,
+// 再夹到[0, n)内. cur为-1(无当前行)时, 一次翻页落到首行或末行.
+// 拆成纯函数便于在无GL渲染的情况下单测翻页步进逻辑.
+func pageStepIndex(cur, n, page, dir int) int {
+	if n <= 0 {
+		return -1
+	}
+	if page < 1 {
+		page = 1
+	}
+	if cur < 0 {
+		if dir < 0 {
+			return n - 1
+		}
+		return 0
+	}
+	return clampIndex(cur+dir*page, n)
+}
