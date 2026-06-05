@@ -1,9 +1,10 @@
 package gui
 
 import (
+	"math"
 	"silk/core"
 	"silk/paint"
-	"math"
+	"time"
 )
 
 func init() {
@@ -20,6 +21,10 @@ type Splitter struct {
 	dragging    int       // index of handle being dragged (-1 = none)
 	dragStart   float64   // mouse position at drag start
 	hoverHandle int       // index of handle under the mouse (-1 = none)
+
+	lastClickHandle int             // handle index of the last click (-1 = none)
+	lastClickTime   time.Time       // time of the last handle click (double-click detection)
+	collapsedSizes  map[int]float64 // prior proportional size of a collapsed pane, keyed by pane index
 }
 
 func NewSplitter(vertical bool) *Splitter {
@@ -29,6 +34,8 @@ func NewSplitter(vertical bool) *Splitter {
 	p.handleSize = 5
 	p.dragging = -1
 	p.hoverHandle = -1
+	p.lastClickHandle = -1
+	p.collapsedSizes = make(map[int]float64)
 	return p
 }
 
@@ -236,21 +243,105 @@ func (this *Splitter) handleAtPos(x, y float64) int {
 	return -1
 }
 
+// paneToCollapse picks which pane a double-click on handle h collapses: the
+// smaller of the two adjacent panes, defaulting to the pane before the handle
+// (index h) when they are equal. Pure decision logic; no layout side effects.
+func (this *Splitter) paneToCollapse(h int) int {
+	n := this.NakedWidget().childCount()
+	if h < 0 || h >= n-1 {
+		return -1
+	}
+	sizes := this.normalizeSizes(n)
+	if sizes[h+1] < sizes[h] {
+		return h + 1
+	}
+	return h
+}
+
+// collapsePane stores the pane's current proportional size and sets it to 0.
+// The proportional layout redistributes the freed space across the other panes
+// automatically. No-op for an out-of-range index or an already-collapsed pane.
+func (this *Splitter) collapsePane(pane int) {
+	n := this.NakedWidget().childCount()
+	if pane < 0 || pane >= n {
+		return
+	}
+	this.normalizeSizes(n)
+	if this.collapsedSizes == nil {
+		this.collapsedSizes = make(map[int]float64)
+	}
+	if _, ok := this.collapsedSizes[pane]; ok {
+		return
+	}
+	this.collapsedSizes[pane] = this.sizes[pane]
+	this.sizes[pane] = 0
+}
+
+// restorePane returns a previously collapsed pane to its stored size. The size
+// is reclaimed from the other panes via the proportional layout. Reports
+// whether a restore happened.
+func (this *Splitter) restorePane(pane int) bool {
+	if this.collapsedSizes == nil {
+		return false
+	}
+	prior, ok := this.collapsedSizes[pane]
+	if !ok {
+		return false
+	}
+	n := this.NakedWidget().childCount()
+	if pane >= 0 && pane < n {
+		this.normalizeSizes(n)
+		this.sizes[pane] = prior
+	}
+	delete(this.collapsedSizes, pane)
+	return true
+}
+
+// toggleHandleCollapse implements Qt-style double-click-to-collapse for handle
+// h: if either adjacent pane is already collapsed, restore it; otherwise
+// collapse the smaller adjacent pane to zero. This is the method the
+// double-click path drives, kept free of GL so it can be unit-tested.
+func (this *Splitter) toggleHandleCollapse(h int) {
+	n := this.NakedWidget().childCount()
+	if h < 0 || h >= n-1 {
+		return
+	}
+	if this.restorePane(h) || this.restorePane(h+1) {
+		return
+	}
+	this.collapsePane(this.paneToCollapse(h))
+}
+
 func (this *Splitter) OnLeftDown(x, y float64) {
 	idx := this.handleAtPos(x, y)
-	if idx >= 0 {
-		this.dragging = idx
-		if this.vertical {
-			this.dragStart = y
-		} else {
-			this.dragStart = x
-		}
-		this.PushCapture()
-		if this.vertical {
-			SetOverrideCursor(cursorSizeNS)
-		} else {
-			SetOverrideCursor(cursorSizeWE)
-		}
+	if idx < 0 {
+		return
+	}
+
+	now := time.Now()
+	// Double-click on the same handle toggles collapse/restore of an adjacent
+	// pane (Qt QSplitter behaviour) instead of starting a drag.
+	if idx == this.lastClickHandle && now.Sub(this.lastClickTime) < 400*time.Millisecond {
+		this.toggleHandleCollapse(idx)
+		this.lastClickTime = time.Time{} // reset to avoid triple-click
+		this.Layout()
+		this.Self().Update()
+		return
+	}
+	this.lastClickTime = now
+	this.lastClickHandle = idx
+
+	this.dragging = idx
+	if this.vertical {
+		this.dragStart = y
+	} else {
+		this.dragStart = x
+	}
+	this.PushCapture()
+	if this.vertical {
+		SetOverrideCursor(cursorSizeNS)
+	} else {
+		SetOverrideCursor(cursorSizeWE)
 	}
 }
 
