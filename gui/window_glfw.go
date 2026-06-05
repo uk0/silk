@@ -1808,6 +1808,22 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 		return
 	}
 
+	// Tab / Shift+Tab moves keyboard focus along the focus chain (see
+	// focus.go). Intercepted at the window layer because none of silk's
+	// widgets use a literal Tab for their own input, so the window owns it.
+	// Only fires on press/repeat; Shift+Tab goes backward.
+	if vk == KeyTab && (action == glfw.Press || action == glfw.Repeat) {
+		root := win.widget
+		if root != nil {
+			forward := !IsKeyDown(KeyShift)
+			next := nextFocusable(root, focusWidget, forward)
+			if next != nil {
+				next.SetFocus() // OnFocusChanged -> Update() refreshes focus rings
+			}
+		}
+		return
+	}
+
 	// Determine the target widget: use focusWidget if set, otherwise
 	// fall back to the root widget of the window receiving the key event.
 	target := focusWidget

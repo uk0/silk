@@ -132,6 +132,8 @@ type Widget struct {
 	disabled     bool
 	redrawParent bool
 
+	focusPolicy FocusPolicy
+
 	extraData interface{}
 
 	wt  WindowType
@@ -588,6 +590,18 @@ func (this *Widget) IsRedrawParent() bool {
 
 func (this *Widget) HasFocus() bool {
 	return focusWidget == this.Self()
+}
+
+// FocusPolicy 返回控件的 Tab 焦点策略. 零值 (AutoFocus) 表示按启发式判定:
+// 控件可见、可用且实现了 IEventKeyDown 时即可被 Tab 聚焦. 见 focus.go.
+func (this *Widget) FocusPolicy() FocusPolicy {
+	return this.focusPolicy
+}
+
+// SetFocusPolicy 设置控件的 Tab 焦点策略. 例如纯展示控件可设为 NoFocus 以
+// 排除出焦点链.
+func (this *Widget) SetFocusPolicy(p FocusPolicy) {
+	this.focusPolicy = p
 }
 
 func (this *Widget) SetFocus() {
