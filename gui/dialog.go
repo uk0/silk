@@ -30,6 +30,8 @@ type Dialog struct {
 	buttons       []*Button
 	resultMap     map[string]DialogResult
 	closed        bool
+	defaultBtn    *Button      // 默认按钮(回车触发), nil 时按隐式规则推断
+	cancelResult  DialogResult // Esc 关闭对话框返回的结果, 默认 DialogCancel
 }
 
 // NewDialog creates a new Dialog with the given title and parent widget.
@@ -38,6 +40,7 @@ func NewDialog(title string, parent IWidget) *Dialog {
 	p.Init(p)
 	p.SetTitle(title)
 	p.resultMap = make(map[string]DialogResult)
+	p.cancelResult = DialogCancel
 	if parent != nil {
 		p.SetParent(parent)
 	}
@@ -144,6 +147,85 @@ func (this *Dialog) onBtnClick(key string) {
 	if this.Window() != nil {
 		this.Window().EndModal(result)
 	}
+}
+
+// SetDefaultButton marks btn (one returned from AddButton) as the dialog's
+// default button — the one Enter/Return activates. Passing nil clears it and
+// reverts to the implicit heuristic (see defaultButton). Matches Qt
+// QPushButton::setDefault on a QDialog's button.
+func (this *Dialog) SetDefaultButton(btn *Button) {
+	this.defaultBtn = btn
+}
+
+// SetCancelResult overrides the result returned when Esc closes the dialog
+// (DialogCancel by default), mirroring Qt's reject role.
+func (this *Dialog) SetCancelResult(r DialogResult) {
+	this.cancelResult = r
+}
+
+// defaultButton returns the button Enter should activate. An explicitly set
+// default wins. Otherwise we follow Qt QDialogButtonBox's "first AcceptRole"
+// heuristic: the first affirmative button (OK, then Yes); failing that, the
+// last-added button (Qt makes the sole/last button default when no accept
+// role exists). Hidden or disabled buttons are skipped. Returns nil only when
+// there are no usable buttons.
+func (this *Dialog) defaultButton() *Button {
+	if this.defaultBtn != nil {
+		return this.defaultBtn
+	}
+	for _, want := range []DialogResult{DialogOK, DialogYes} {
+		for _, b := range this.buttons {
+			if b.IsVisible() && b.IsEnabled() && this.resultMap[btnKey(b)] == want {
+				return b
+			}
+		}
+	}
+	for i := len(this.buttons) - 1; i >= 0; i-- {
+		if b := this.buttons[i]; b.IsVisible() && b.IsEnabled() {
+			return b
+		}
+	}
+	return nil
+}
+
+// resolveDefault ends the modal with the default button's result, taking the
+// exact same path a click on that button takes (onBtnClick). Reports whether a
+// default button was found. Exposed for headless testing of the Enter path.
+func (this *Dialog) resolveDefault() bool {
+	b := this.defaultButton()
+	if b == nil {
+		return false
+	}
+	this.onBtnClick(btnKey(b))
+	return true
+}
+
+// resolveCancel ends the modal with the cancel result, as if a cancel button
+// were clicked. Exposed for headless testing of the Esc path.
+func (this *Dialog) resolveCancel() {
+	this.onBtnClick(dialogResultKey(this.cancelResult))
+}
+
+// OnKeyDown implements IEventKeyDown so the dialog itself handles Enter/Esc
+// (Qt QDialog behavior). Enter/Return activates the default button; Esc
+// cancels/rejects. Key events route here only when no child widget holds focus
+// (window_glfw dispatches to focusWidget first), so a focused multi-line editor
+// keeps its own Enter — the dialog only catches these as the focus fallback.
+func (this *Dialog) OnKeyDown(key int, repeat bool) {
+	switch key {
+	case KeyEnter:
+		this.resolveDefault()
+	case KeyEsc:
+		this.resolveCancel()
+	}
+}
+
+// btnKey returns the result key a Dialog button was tagged with in AddButton.
+func btnKey(b *Button) string {
+	if k, ok := b.ExtraData().(string); ok {
+		return k
+	}
+	return "@cancel"
 }
 
 func (this *Dialog) EnumProperties(list core.IPropertyList) {
