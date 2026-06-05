@@ -272,6 +272,7 @@ type Table struct {
 	hoverBoundary      int       // column boundary currently hovered, -1 when none
 	cbSelectionChanged func(interface{}, int)
 	cbSortChanged      func(col int, ascending bool)
+	cbRowActivated     func(interface{}, int) // fired when the current row is activated (Enter/Space)
 }
 
 // columnResizeGrab is the half-width, in pixels, of the grab zone around a
@@ -336,6 +337,137 @@ func (this *Table) SetSelectedRow(row int) {
 // SetSelectionChangedCallback sets a callback invoked when the selected row changes.
 func (this *Table) SetSelectionChangedCallback(cb func(interface{}, int)) {
 	this.cbSelectionChanged = cb
+}
+
+// CurrentRow returns the index of the current row, or -1 if none. The table's
+// current row and selected row are the same concept, so this mirrors
+// SelectedRow; both keyboard navigation and clicks move it.
+func (this *Table) CurrentRow() int {
+	return this.selectedRow
+}
+
+// SetCurrentRow sets the current row, clamped to the valid range. It is an
+// alias for SetSelectedRow so the navigation API reads consistently.
+func (this *Table) SetCurrentRow(row int) {
+	this.SetSelectedRow(row)
+}
+
+// SigRowActivated sets the callback invoked when the current row is activated
+// (Enter or Space). The argument is the activated row index.
+func (this *Table) SigRowActivated(fn func(interface{}, int)) {
+	this.cbRowActivated = fn
+}
+
+// activateSelected fires the row-activated callback for the current row, if a
+// valid row is selected and a callback is set. Shared by Enter and Space.
+func (this *Table) activateSelected() {
+	if this.cbRowActivated == nil || this.model == nil {
+		return
+	}
+	if this.selectedRow < 0 || this.selectedRow >= this.model.RowCount() {
+		return
+	}
+	this.cbRowActivated(this.Self(), this.selectedRow)
+}
+
+// visibleRowsPerPage returns the number of whole data rows that fit in the body
+// (below the header), at least 1, used as the PageUp/PageDown step.
+func (this *Table) visibleRowsPerPage() int {
+	rh := this.RowHeight()
+	if rh <= 0 {
+		return 1
+	}
+	n := int((this.h - this.HeaderHeight()) / rh)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// scrollRowIntoView adjusts the vertical scroll (measured in rows, matching
+// updateScroll) so row r is visible. If r is above the viewport it becomes the
+// top row; if below, the view scrolls just far enough to reveal it.
+func (this *Table) scrollRowIntoView(r int) {
+	if this.model == nil || r < 0 || r >= this.model.RowCount() {
+		return
+	}
+	top := int(this.scrollArea.ScrollY())
+	if r < top {
+		this.scrollArea.SetScrollY(float64(r))
+		return
+	}
+	perPage := this.visibleRowsPerPage()
+	if r >= top+perPage {
+		this.scrollArea.SetScrollY(float64(r - perPage + 1))
+	}
+}
+
+// OnKeyDown provides Qt QTableView-style row navigation (it coexists with the
+// header click-to-sort and column-resize handling, which are mouse-only):
+//
+//	Up/Down       : move the current row by one, clamped to the ends
+//	PageUp/PageDown: move by a viewport page of rows
+//	Home/End      : jump to the first/last row
+//	Enter/Space   : activate the current row (fires SigRowActivated)
+func (this *Table) OnKeyDown(key int, repeat bool) {
+	if this.model == nil {
+		return
+	}
+	n := this.model.RowCount()
+	if n == 0 {
+		return
+	}
+	page := this.visibleRowsPerPage()
+
+	switch key {
+	case KeyDown:
+		this.moveCurrentRow(tableRowStep(this.selectedRow, n, 1))
+	case KeyUp:
+		this.moveCurrentRow(tableRowStep(this.selectedRow, n, -1))
+	case KeyPageDown:
+		this.moveCurrentRow(tableRowStep(this.selectedRow, n, page))
+	case KeyPageUp:
+		this.moveCurrentRow(tableRowStep(this.selectedRow, n, -page))
+	case KeyHome:
+		this.moveCurrentRow(0)
+	case KeyEnd:
+		this.moveCurrentRow(n - 1)
+	case KeyEnter, KeySpace:
+		this.activateSelected()
+	}
+}
+
+// moveCurrentRow selects row r and scrolls it into view; the entry point for
+// every keyboard navigation key.
+func (this *Table) moveCurrentRow(r int) {
+	this.SetSelectedRow(r)
+	this.scrollRowIntoView(r)
+}
+
+// tableRowStep moves a current-row index by delta within a list of n rows,
+// clamping to [0, n-1]. A delta from a "no current row" state (cur < 0) lands
+// on the first row for a downward step and stays put otherwise. Pulled out as a
+// pure function so the clamp + page-step math is unit-testable without a window.
+func tableRowStep(cur, n, delta int) int {
+	if n <= 0 {
+		return -1
+	}
+	if cur < 0 {
+		if delta > 0 {
+			cur = 0
+			delta--
+		} else {
+			return 0
+		}
+	}
+	r := cur + delta
+	if r < 0 {
+		r = 0
+	}
+	if r >= n {
+		r = n - 1
+	}
+	return r
 }
 
 // SigSortChanged sets the callback invoked when the sort column or direction
