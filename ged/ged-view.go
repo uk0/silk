@@ -2,6 +2,7 @@ package ged
 
 import (
 	"silk/core"
+	"silk/geom"
 	"silk/graph"
 	"silk/gui"
 	"silk/paint"
@@ -437,6 +438,38 @@ func (this *GedView) OnRightUp(x, y float64) {
 			this.reorderSelection(graph.IItem.SendToBack)
 		})
 
+		// Align submenu (Qt Designer's Form → Align). The six align entries act
+		// on the whole multi-selection; the two distribute entries even out the
+		// gaps between widgets. Each entry routes through alignSelection, which
+		// no-ops below its threshold (2 items for align, 3 for distribute) — the
+		// entries stay visible so the menu layout is stable regardless of count.
+		aMenu, _ := menu.AddSubMenu("对齐", nil, nil)
+		aMenu.AddButton1("左对齐", nil).Action().BindFunc0(func() {
+			this.alignSelection(AlignLeft)
+		})
+		aMenu.AddButton1("右对齐", nil).Action().BindFunc0(func() {
+			this.alignSelection(AlignRight)
+		})
+		aMenu.AddButton1("水平居中", nil).Action().BindFunc0(func() {
+			this.alignSelection(AlignHCenter)
+		})
+		aMenu.AddButton1("顶端对齐", nil).Action().BindFunc0(func() {
+			this.alignSelection(AlignTop)
+		})
+		aMenu.AddButton1("底端对齐", nil).Action().BindFunc0(func() {
+			this.alignSelection(AlignBottom)
+		})
+		aMenu.AddButton1("垂直居中", nil).Action().BindFunc0(func() {
+			this.alignSelection(AlignVCenter)
+		})
+		aMenu.AddSeparator()
+		aMenu.AddButton1("水平分布", nil).Action().BindFunc0(func() {
+			this.alignSelection(DistributeH)
+		})
+		aMenu.AddButton1("垂直分布", nil).Action().BindFunc0(func() {
+			this.alignSelection(DistributeV)
+		})
+
 		menu.AddSeparator()
 
 		// "Set Name" menu item
@@ -523,6 +556,202 @@ func (this *GedView) reorderSelection(op func(graph.IItem)) {
 	sel := this.Selection()
 	for _, item := range sel.ItemList() {
 		op(item)
+	}
+	this.Self().Update()
+}
+
+// alignMode selects an align-or-distribute operation for a multi-selection.
+// The first six entries reposition every rect onto a shared edge or centre
+// line; the last two even out the gaps between rects along one axis.
+type alignMode int
+
+const (
+	AlignLeft alignMode = iota
+	AlignRight
+	AlignHCenter
+	AlignTop
+	AlignBottom
+	AlignVCenter
+	DistributeH
+	DistributeV
+)
+
+// alignRects returns a copy of rects repositioned per mode. Only X/Y are ever
+// touched — widths and heights pass through unchanged, and the returned slice
+// keeps the input order so callers can map results straight back onto the
+// items they came from.
+//
+// Align{Left,Right,HCenter} snap each rect's left edge / right edge / centre to
+// the selection's min-left / max-right / mean-centre on X; the Top/Bottom/
+// VCenter trio is the Y analogue. Distribute{H,V} keep the two extreme rects
+// fixed and re-space the interior ones (sorted along the axis) so consecutive
+// gaps are equal; with fewer than three rects there is nothing to even out, so
+// distribute is a no-op. Fewer than two rects is a no-op for every mode.
+func alignRects(rects []geom.Rect, mode alignMode) []geom.Rect {
+	out := make([]geom.Rect, len(rects))
+	copy(out, rects)
+	if len(rects) < 2 {
+		return out
+	}
+
+	switch mode {
+	case AlignLeft:
+		left := rects[0].Left()
+		for _, r := range rects[1:] {
+			if r.Left() < left {
+				left = r.Left()
+			}
+		}
+		for i := range out {
+			out[i].X = left
+		}
+
+	case AlignRight:
+		right := rects[0].Right()
+		for _, r := range rects[1:] {
+			if r.Right() > right {
+				right = r.Right()
+			}
+		}
+		for i := range out {
+			out[i].X = right - out[i].Width
+		}
+
+	case AlignHCenter:
+		var sum float64
+		for _, r := range rects {
+			cx, _ := r.Center()
+			sum += cx
+		}
+		cx := sum / float64(len(rects))
+		for i := range out {
+			out[i].X = cx - out[i].Width/2
+		}
+
+	case AlignTop:
+		top := rects[0].Top()
+		for _, r := range rects[1:] {
+			if r.Top() < top {
+				top = r.Top()
+			}
+		}
+		for i := range out {
+			out[i].Y = top
+		}
+
+	case AlignBottom:
+		bottom := rects[0].Bottom()
+		for _, r := range rects[1:] {
+			if r.Bottom() > bottom {
+				bottom = r.Bottom()
+			}
+		}
+		for i := range out {
+			out[i].Y = bottom - out[i].Height
+		}
+
+	case AlignVCenter:
+		var sum float64
+		for _, r := range rects {
+			_, cy := r.Center()
+			sum += cy
+		}
+		cy := sum / float64(len(rects))
+		for i := range out {
+			out[i].Y = cy - out[i].Height/2
+		}
+
+	case DistributeH:
+		distributeAxis(out, true)
+
+	case DistributeV:
+		distributeAxis(out, false)
+	}
+
+	return out
+}
+
+// distributeAxis evens out the gaps between rects along one axis (horizontal
+// when horizontal is true, vertical otherwise). The leftmost/topmost and
+// rightmost/bottommost rects stay put; the interior rects are slid so every
+// consecutive gap is identical. Operates in place on out. No-op for <3 rects.
+func distributeAxis(out []geom.Rect, horizontal bool) {
+	n := len(out)
+	if n < 3 {
+		return
+	}
+
+	// Sort indices by leading edge along the chosen axis (insertion sort —
+	// selections are tiny). idx[k] is the rect that comes k-th along the axis.
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	lead := func(i int) float64 {
+		if horizontal {
+			return out[i].X
+		}
+		return out[i].Y
+	}
+	extent := func(i int) float64 {
+		if horizontal {
+			return out[i].Width
+		}
+		return out[i].Height
+	}
+	for i := 1; i < n; i++ {
+		k := idx[i]
+		j := i - 1
+		for j >= 0 && lead(idx[j]) > lead(k) {
+			idx[j+1] = idx[j]
+			j--
+		}
+		idx[j+1] = k
+	}
+
+	// Total free space = span between the outer edges minus the widths of all
+	// rects; share it equally across the n-1 gaps.
+	first, last := idx[0], idx[n-1]
+	span := lead(last) + extent(last) - lead(first)
+	var occupied float64
+	for _, i := range idx {
+		occupied += extent(i)
+	}
+	gap := (span - occupied) / float64(n-1)
+
+	cursor := lead(first) + extent(first)
+	for k := 1; k < n-1; k++ {
+		i := idx[k]
+		pos := cursor + gap
+		if horizontal {
+			out[i].X = pos
+		} else {
+			out[i].Y = pos
+		}
+		cursor = pos + extent(i)
+	}
+}
+
+// alignSelection reads the selected items' bounds, runs them through the pure
+// alignRects helper, and writes the new positions back. Like the Z-order
+// reorder and the Lock/Delete entries, the move is applied directly with
+// SetPos + Update rather than pushed onto the UndoStack — align is a
+// structural layout op and has no command type yet (matches reorderSelection).
+//
+// Below the mode's threshold (2 items for align, 3 for distribute) alignRects
+// returns the bounds unchanged, so this quietly no-ops without a redraw.
+func (this *GedView) alignSelection(mode alignMode) {
+	items := this.Selection().ItemList()
+	if len(items) < 2 {
+		return
+	}
+	rects := make([]geom.Rect, len(items))
+	for i, it := range items {
+		rects[i] = it.Bounds1()
+	}
+	aligned := alignRects(rects, mode)
+	for i, it := range items {
+		it.SetPos(aligned[i].X, aligned[i].Y)
 	}
 	this.Self().Update()
 }
