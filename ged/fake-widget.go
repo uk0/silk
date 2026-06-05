@@ -442,6 +442,25 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 		}
 		doc.AddChild(evtDoc)
 	}
+	// Persist nested child widgets under "children" — mirrors
+	// GedScene.SaveDesign so a FakeWidget acting as a layout container
+	// (VBox/HBox/...) round-trips the widgets laid out inside it. Flat
+	// designs (no nested children) emit no "children" node and are
+	// byte-identical to before.
+	if this.HasChildren() {
+		childrenDoc := core.NewTDoc()
+		childrenDoc.SetKey("children")
+		for _, c := range this.Children() {
+			if ia, ok := c.(interface {
+				SaveDesign() *core.TDoc
+			}); ok {
+				if p := ia.SaveDesign(); p != nil {
+					childrenDoc.AddChild(p)
+				}
+			}
+		}
+		doc.AddChild(childrenDoc)
+	}
 	return doc
 }
 
@@ -467,6 +486,25 @@ func (this *FakeWidget) LoadDesign(doc *core.TDoc) error {
 			child.Value(&handler)
 			if key != "" && handler != "" {
 				this.eventHandlers[key] = handler
+			}
+		}
+	}
+	// Reconstruct nested child widgets from the "children" block —
+	// mirrors GedScene.LoadDesign. Each child is created from its
+	// factory name and reparented under this FakeWidget, recursing for
+	// arbitrarily deep container nesting.
+	childrenDoc := doc.ChildByKey("children", false)
+	if childrenDoc != nil {
+		for _, v := range childrenDoc.Childdren() {
+			var factoryName string
+			v.Value(&factoryName)
+			child, err := NewFakeWidgetFromFactory(factoryName)
+			if err != nil {
+				return err
+			}
+			child.SetParent(this)
+			if err := child.LoadDesign(v); err != nil {
+				return err
 			}
 		}
 	}
