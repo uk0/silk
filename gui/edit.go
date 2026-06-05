@@ -5,6 +5,7 @@ import (
 	//	"silk/factory"
 	"silk/paint"
 	"math"
+	"unicode"
 )
 
 // defaultWheelScrollLines is the number of lines to scroll per wheel notch.
@@ -448,6 +449,14 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 		if this.readonly {
 			return
 		}
+		// Ctrl+Backspace deletes the word before the caret; a plain
+		// Backspace with no selection eats one rune. With a selection
+		// active either form just removes the selection (handled by the
+		// sel0==sel1 guard staying false).
+		if this.sel0 == this.sel1 && IsKeyDown(KeyCtrl) {
+			this.deleteWordBefore()
+			return
+		}
 		if this.sel0 == this.sel1 {
 			this.sel0 = this.sel1 - 1
 		}
@@ -455,6 +464,12 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 		this.emitEdited()
 	case KeyDelete:
 		if this.readonly {
+			return
+		}
+		// Ctrl+Delete deletes the word after the caret; otherwise fall
+		// back to the existing forward-delete / delete-selection logic.
+		if this.sel0 == this.sel1 && IsKeyDown(KeyCtrl) {
+			this.deleteWordAfter()
 			return
 		}
 		this.DeleteSelection()
@@ -483,12 +498,28 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 			this.SelectAll()
 		}
 	case KeyLeft:
-		r, c := this.CaretRowCol()
-		this.SetCaretRowCol(r, c-1)
+		// Ctrl/Alt+Left jumps a word; Shift extends the selection.
+		shift := IsKeyDown(KeyShift)
+		if IsKeyDown(KeyCtrl) || IsKeyDown(KeyMenu) {
+			this.moveWordLeft(shift)
+		} else if shift {
+			this.moveCaret(this.sel1-1, true)
+		} else {
+			r, c := this.CaretRowCol()
+			this.SetCaretRowCol(r, c-1)
+		}
 		this.caretXSaved = false
 	case KeyRight:
-		r, c := this.CaretRowCol()
-		this.SetCaretRowCol(r, c+1)
+		// Ctrl/Alt+Right jumps a word; Shift extends the selection.
+		shift := IsKeyDown(KeyShift)
+		if IsKeyDown(KeyCtrl) || IsKeyDown(KeyMenu) {
+			this.moveWordRight(shift)
+		} else if shift {
+			this.moveCaret(this.sel1+1, true)
+		} else {
+			r, c := this.CaretRowCol()
+			this.SetCaretRowCol(r, c+1)
+		}
 		this.caretXSaved = false
 	case KeyPageUp:
 		fallthrough
@@ -532,11 +563,21 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 		this.caretXSaved = true
 		//this.Ow().Update()
 	case KeyHome:
-		r, _ := this.CaretRowCol()
-		this.SetCaretRowCol(r, 0)
+		// Shift+Home extends the selection to the line start; plain Home
+		// collapses the caret there (existing behaviour).
+		if IsKeyDown(KeyShift) {
+			this.moveCaret(this.RowColToPos(this.posRow(), 0), true)
+		} else {
+			r, _ := this.CaretRowCol()
+			this.SetCaretRowCol(r, 0)
+		}
 	case KeyEnd:
-		r, _ := this.CaretRowCol()
-		this.SetCaretRowCol(r, 1<<30)
+		if IsKeyDown(KeyShift) {
+			this.moveCaret(this.RowColToPos(this.posRow(), 1<<30), true)
+		} else {
+			r, _ := this.CaretRowCol()
+			this.SetCaretRowCol(r, 1<<30)
+		}
 	case KeyEnter:
 		if this.ml && !this.readonly {
 			this.OnTextInput(DefultLineEnd)
@@ -544,6 +585,157 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 			this.Submit()
 		}
 	}
+}
+
+// posRow returns the row index of the current caret. Single-line edits
+// always report 0; multi-line ones report the soft row the caret sits on.
+func (this *Edit) posRow() int {
+	r, _ := this.PosToRowCol(this.sel1)
+	return r
+}
+
+// moveCaret moves the caret (sel1) to pos. When extend is false the
+// selection collapses (anchor sel0 follows the caret); when true the
+// anchor is left in place so the selection grows/shrinks. pos is clamped
+// into [0, RunesCount()]. Mirrors SetCaretPos' scroll + repaint side
+// effects so a Shift-navigation paints exactly like a plain caret move.
+func (this *Edit) moveCaret(pos int, extend bool) {
+	rc := this.RunesCount()
+	if pos < 0 {
+		pos = 0
+	} else if pos > rc {
+		pos = rc
+	}
+	this.sel1 = pos
+	if !extend {
+		this.sel0 = pos
+	}
+	this.caretXSaved = false
+	this.ScrollToCaret()
+	this.Self().Update()
+}
+
+// runesNoSentinel returns the logical text runes (the buffer minus the
+// trailing "\n" sentinel TextBlock keeps). Used by the word-motion
+// helpers; returns nil for an empty edit.
+func (this *Edit) runesNoSentinel() []rune {
+	rc := this.RunesCount()
+	if rc <= 0 {
+		return nil
+	}
+	return this.text[:rc]
+}
+
+// moveWordLeft moves the caret to the previous word boundary; extend
+// keeps the selection anchor (Shift+Ctrl/Alt+Left).
+func (this *Edit) moveWordLeft(extend bool) {
+	this.moveCaret(prevWordBoundary(this.runesNoSentinel(), this.sel1), extend)
+}
+
+// moveWordRight moves the caret to the next word boundary; extend keeps
+// the selection anchor (Shift+Ctrl/Alt+Right).
+func (this *Edit) moveWordRight(extend bool) {
+	this.moveCaret(nextWordBoundary(this.runesNoSentinel(), this.sel1), extend)
+}
+
+// deleteWordBefore removes the word to the left of the caret (Ctrl+
+// Backspace). No-op at the start of the text.
+func (this *Edit) deleteWordBefore() {
+	if this.readonly {
+		return
+	}
+	begin := prevWordBoundary(this.runesNoSentinel(), this.sel1)
+	if begin == this.sel1 {
+		return
+	}
+	this.replace(begin, this.sel1, "")
+	this.caretXSaved = false
+	this.emitEdited()
+}
+
+// deleteWordAfter removes the word to the right of the caret (Ctrl+
+// Delete). No-op at the end of the text.
+func (this *Edit) deleteWordAfter() {
+	if this.readonly {
+		return
+	}
+	end := nextWordBoundary(this.runesNoSentinel(), this.sel1)
+	if end == this.sel1 {
+		return
+	}
+	this.replace(this.sel1, end, "")
+	this.caretXSaved = false
+	this.emitEdited()
+}
+
+// isWordRune reports whether r counts as part of a word for caret
+// word-motion. Matches the editor's double-click convention: letters,
+// digits and the underscore form words; everything else is punctuation.
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+// prevWordBoundary returns the rune index of the start of the word at or
+// before caret, suitable for Ctrl+Left / Ctrl+Backspace. It first skips
+// any whitespace immediately left of the caret, then skips a run of
+// like-classed runes (word runes, or a run of punctuation). Pure: no GL
+// or widget state, so it is unit-testable in isolation. caret is clamped
+// into [0, len(runes)].
+func prevWordBoundary(runes []rune, caret int) int {
+	if caret > len(runes) {
+		caret = len(runes)
+	}
+	i := caret
+	// Skip whitespace to the left.
+	for i > 0 && unicode.IsSpace(runes[i-1]) {
+		i--
+	}
+	if i == 0 {
+		return 0
+	}
+	// Skip the run the caret now abuts — all word runes, or all
+	// non-word/non-space runes (a punctuation cluster).
+	if isWordRune(runes[i-1]) {
+		for i > 0 && isWordRune(runes[i-1]) {
+			i--
+		}
+	} else {
+		for i > 0 && !isWordRune(runes[i-1]) && !unicode.IsSpace(runes[i-1]) {
+			i--
+		}
+	}
+	return i
+}
+
+// nextWordBoundary returns the rune index of the start of the next word
+// after caret, suitable for Ctrl+Right / Ctrl+Delete. It skips the run
+// the caret sits in (word runes, or a punctuation cluster) and then any
+// trailing whitespace, landing on the first rune of the following word.
+// Pure: no GL or widget state. caret is clamped into [0, len(runes)].
+func nextWordBoundary(runes []rune, caret int) int {
+	if caret < 0 {
+		caret = 0
+	}
+	n := len(runes)
+	i := caret
+	if i >= n {
+		return n
+	}
+	// Skip the current run.
+	if isWordRune(runes[i]) {
+		for i < n && isWordRune(runes[i]) {
+			i++
+		}
+	} else if !unicode.IsSpace(runes[i]) {
+		for i < n && !isWordRune(runes[i]) && !unicode.IsSpace(runes[i]) {
+			i++
+		}
+	}
+	// Skip trailing whitespace to reach the next word.
+	for i < n && unicode.IsSpace(runes[i]) {
+		i++
+	}
+	return i
 }
 
 func (this *Edit) paste() {
