@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"silk/core"
+	"silk/geom"
 	"silk/gui"
 	"silk/paint"
 )
@@ -38,9 +39,10 @@ type EditorTabs struct {
 	scrollX    float64
 
 	// --- Split View ---
-	splitMode   bool
-	splitEditor *gui.CodeEditor
-	splitRatio  float64 // 0.5 = equal split
+	splitMode     bool
+	splitEditor   *gui.CodeEditor
+	splitRatio    float64 // 0.5 = equal split
+	splitVertical bool    // true = side-by-side (left/right), false = stacked (top/bottom)
 }
 
 func NewEditorTabs() *EditorTabs {
@@ -232,6 +234,55 @@ func (this *EditorTabs) SaveAll() {
 	this.Self().Update()
 }
 
+// splitDividerSize is the gap (in pixels) reserved between the two split
+// panes for the drag divider.
+const splitDividerSize = 4.0
+
+// splitPaneRects computes the two pane rectangles for a split editor area.
+// The area (x, y, w, h) is divided into a primary and secondary rect with a
+// `gap`-pixel divider between them: left/right when vertical is true,
+// top/bottom otherwise. `ratio` is the primary pane's fraction of the usable
+// space (clamped to a sane range); each pane is kept to a small minimum so it
+// never collapses. This is pure math so it can be unit-tested without GL.
+func splitPaneRects(x, y, w, h float64, vertical bool, ratio, gap float64) (primary, secondary geom.Rect) {
+	if ratio <= 0 || ratio >= 1 {
+		ratio = 0.5
+	}
+	const minPane = 20.0
+	if vertical {
+		usable := w - gap
+		if usable < 0 {
+			usable = 0
+		}
+		leftW := usable * ratio
+		rightW := usable - leftW
+		if leftW < minPane {
+			leftW = minPane
+		}
+		if rightW < minPane {
+			rightW = minPane
+		}
+		primary = geom.Rect{X: x, Y: y, Width: leftW, Height: h}
+		secondary = geom.Rect{X: x + leftW + gap, Y: y, Width: rightW, Height: h}
+		return
+	}
+	usable := h - gap
+	if usable < 0 {
+		usable = 0
+	}
+	topH := usable * ratio
+	bottomH := usable - topH
+	if topH < minPane {
+		topH = minPane
+	}
+	if bottomH < minPane {
+		bottomH = minPane
+	}
+	primary = geom.Rect{X: x, Y: y, Width: w, Height: topH}
+	secondary = geom.Rect{X: x, Y: y + topH + gap, Width: w, Height: bottomH}
+	return
+}
+
 // Layout positions the tab bar and the active editor(s).
 func (this *EditorTabs) Layout() {
 	w, h := this.Size()
@@ -242,30 +293,19 @@ func (this *EditorTabs) Layout() {
 	}
 
 	if this.splitMode && this.splitEditor != nil && this.activeIdx >= 0 {
-		// Split layout: primary on top, divider, secondary on bottom
-		dividerH := 4.0
-		ratio := this.splitRatio
-		if ratio <= 0 || ratio >= 1 {
-			ratio = 0.5
-		}
-		topH := (editorH - dividerH) * ratio
-		bottomH := editorH - dividerH - topH
-		if topH < 20 {
-			topH = 20
-		}
-		if bottomH < 20 {
-			bottomH = 20
-		}
+		// Split layout: active tab in the primary pane, splitEditor in the
+		// secondary pane, with a divider gap between them.
+		primary, secondary := splitPaneRects(0, editorY, w, editorH, this.splitVertical, this.splitRatio, splitDividerSize)
 
 		for i, tab := range this.tabs {
 			if i == this.activeIdx {
-				tab.editor.SetBounds(0, editorY, w, topH)
+				tab.editor.SetBounds(primary.X, primary.Y, primary.Width, primary.Height)
 				tab.editor.Show()
 			} else {
 				tab.editor.Hide()
 			}
 		}
-		this.splitEditor.SetBounds(0, editorY+topH+dividerH, w, bottomH)
+		this.splitEditor.SetBounds(secondary.X, secondary.Y, secondary.Width, secondary.Height)
 		this.splitEditor.Show()
 	} else {
 		// Normal single-editor layout
@@ -315,6 +355,7 @@ func (this *EditorTabs) ToggleSplit() {
 	this.splitEditor.SetParent(this.Self())
 	this.splitEditor.SetText(tab.editor.Text())
 	this.splitRatio = 0.5
+	this.splitVertical = true // default to side-by-side (left/right)
 	this.splitMode = true
 
 	// Sync content changes: when primary changes, update secondary
@@ -344,6 +385,11 @@ func (this *EditorTabs) ToggleSplit() {
 
 	this.Layout()
 	this.Self().Update()
+}
+
+// IsSplit reports whether the split editor view is currently active.
+func (this *EditorTabs) IsSplit() bool {
+	return this.splitMode
 }
 
 // OnResize re-layouts when the widget size changes.
@@ -521,30 +567,42 @@ func (this *EditorTabs) Draw(g paint.Painter) {
 		g.Fill()
 	}
 
-	// Draw split divider if split mode is active
+	// Draw split divider if split mode is active. The divider occupies the
+	// gap between the primary and secondary panes (computed by the same
+	// helper Layout uses, so the two never drift apart).
 	if this.splitMode && this.splitEditor != nil && this.activeIdx >= 0 {
 		editorY := this.tabBarH
 		editorH := h - editorY
-		dividerH := 4.0
-		ratio := this.splitRatio
-		if ratio <= 0 || ratio >= 1 {
-			ratio = 0.5
+		primary, _ := splitPaneRects(0, editorY, w, editorH, this.splitVertical, this.splitRatio, splitDividerSize)
+
+		var divX, divY, divW, divH float64
+		if this.splitVertical {
+			divX, divY = primary.X+primary.Width, editorY
+			divW, divH = splitDividerSize, editorH
+		} else {
+			divX, divY = 0, primary.Y+primary.Height
+			divW, divH = w, splitDividerSize
 		}
-		topH := (editorH - dividerH) * ratio
-		divY := editorY + topH
 
 		// Divider background
 		g.SetBrush1(paint.Color{R: 180, G: 185, B: 200, A: 255})
-		g.Rectangle(0, divY, w, dividerH)
+		g.Rectangle(divX, divY, divW, divH)
 		g.Fill()
 
-		// Drag handle dots in center
-		centerX := w / 2
-		centerY := divY + dividerH/2
+		// Drag handle dots in the divider center
+		centerX := divX + divW/2
+		centerY := divY + divH/2
 		g.SetBrush1(paint.Color{R: 120, G: 125, B: 140, A: 255})
-		for dx := -8.0; dx <= 8.0; dx += 4.0 {
-			g.Arc(centerX+dx, centerY, 1.2, 0, 2*math.Pi)
-			g.Fill()
+		if this.splitVertical {
+			for dy := -8.0; dy <= 8.0; dy += 4.0 {
+				g.Arc(centerX, centerY+dy, 1.2, 0, 2*math.Pi)
+				g.Fill()
+			}
+		} else {
+			for dx := -8.0; dx <= 8.0; dx += 4.0 {
+				g.Arc(centerX+dx, centerY, 1.2, 0, 2*math.Pi)
+				g.Fill()
+			}
 		}
 	}
 
