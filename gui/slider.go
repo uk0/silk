@@ -10,6 +10,9 @@ import (
 type Slider struct {
 	Widget
 	min, max, value float64
+	step            float64 // single-step size (arrow keys); 0 means auto = (max-min)/100
+	pageStep        float64 // page-step size (PageUp/PageDown); 0 means auto = (max-min)/10
+	tickInterval    float64 // spacing of tick marks along the track; 0 means none
 	vertical        bool
 	dragging        bool
 	cbValueChanged  func(interface{}, float64)
@@ -82,6 +85,70 @@ func (this *Slider) SetRange(min, max float64) {
 
 func (this *Slider) Range() (min, max float64) {
 	return this.min, this.max
+}
+
+// Step returns the single-step size used by the arrow keys. When unset it
+// defaults to 1/100 of the range, mirroring Qt's QAbstractSlider.
+func (this *Slider) Step() float64 {
+	if this.step > 0 {
+		return this.step
+	}
+	if s := (this.max - this.min) / 100; s > 0 {
+		return s
+	}
+	return 1
+}
+
+func (this *Slider) SetStep(s float64) {
+	if s < 0 {
+		s = 0
+	}
+	this.step = s
+}
+
+// PageStep returns the larger step used by PageUp/PageDown. When unset it
+// defaults to 1/10 of the range.
+func (this *Slider) PageStep() float64 {
+	if this.pageStep > 0 {
+		return this.pageStep
+	}
+	if s := (this.max - this.min) / 10; s > 0 {
+		return s
+	}
+	return 1
+}
+
+func (this *Slider) SetPageStep(s float64) {
+	if s < 0 {
+		s = 0
+	}
+	this.pageStep = s
+}
+
+// TickInterval is the spacing between tick marks drawn along the track.
+// A value of 0 disables tick marks.
+func (this *Slider) TickInterval() float64 {
+	return this.tickInterval
+}
+
+func (this *Slider) SetTickInterval(v float64) {
+	if v < 0 {
+		v = 0
+	}
+	this.tickInterval = v
+	this.Self().Update()
+}
+
+// steppedValue returns cur+delta clamped to [min, max]. Pure helper so the
+// keyboard stepping logic stays unit-testable.
+func steppedValue(cur, delta, min, max float64) float64 {
+	v := cur + delta
+	if v < min {
+		v = min
+	} else if v > max {
+		v = max
+	}
+	return v
 }
 
 func (this *Slider) SetVertical(b bool) {
@@ -169,6 +236,31 @@ func (this *Slider) OnMouseMove(x, y float64) {
 	}
 }
 
+// OnKeyDown implements IEventKeyDown, giving the slider Qt QSlider style
+// keyboard navigation while it holds focus. The same key mapping is used for
+// both orientations: Up/Right increase, Down/Left decrease.
+func (this *Slider) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
+	step := this.Step()
+	page := this.PageStep()
+	switch key {
+	case KeyLeft, KeyDown:
+		this.SetValue(steppedValue(this.value, -step, this.min, this.max))
+	case KeyRight, KeyUp:
+		this.SetValue(steppedValue(this.value, step, this.min, this.max))
+	case KeyPageDown:
+		this.SetValue(steppedValue(this.value, -page, this.min, this.max))
+	case KeyPageUp:
+		this.SetValue(steppedValue(this.value, page, this.min, this.max))
+	case KeyHome:
+		this.SetValue(this.min)
+	case KeyEnd:
+		this.SetValue(this.max)
+	}
+}
+
 // --- Drawing ---
 
 func (this *Slider) Draw(g paint.Painter) {
@@ -185,6 +277,9 @@ func (this *Slider) Draw(g paint.Painter) {
 		g.Rectangle(tx, half, trackThickness, h-thumbSize)
 		g.SetBrush1(t.BorderColor)
 		g.Fill()
+
+		// tick marks
+		this.drawTicks(g, w, h, thumbSize, half)
 
 		// thumb position
 		track := h - thumbSize
@@ -211,6 +306,9 @@ func (this *Slider) Draw(g paint.Painter) {
 		g.SetBrush1(t.BorderColor)
 		g.Fill()
 
+		// tick marks
+		this.drawTicks(g, w, h, thumbSize, half)
+
 		// thumb position
 		track := w - thumbSize
 		var ratio float64
@@ -230,6 +328,36 @@ func (this *Slider) Draw(g paint.Painter) {
 		g.SetPen1(t.BorderColor, 1)
 		g.Stroke()
 	}
+}
+
+// drawTicks paints evenly-spaced tick marks along the track when a
+// tickInterval is set. Each tick is a short line perpendicular to the track,
+// drawn under the thumb so it never obscures the handle.
+func (this *Slider) drawTicks(g paint.Painter, w, h, thumbSize, half float64) {
+	if this.tickInterval <= 0 || this.max <= this.min {
+		return
+	}
+	t := Theme()
+	tickLen := 4.0
+	if this.vertical {
+		track := h - thumbSize
+		for v := this.min; v <= this.max+this.tickInterval*0.001; v += this.tickInterval {
+			ratio := (v - this.min) / (this.max - this.min)
+			ty := half + ratio*track
+			g.MoveTo(w*0.5+half, ty)
+			g.LineTo(w*0.5+half+tickLen, ty)
+		}
+	} else {
+		track := w - thumbSize
+		for v := this.min; v <= this.max+this.tickInterval*0.001; v += this.tickInterval {
+			ratio := (v - this.min) / (this.max - this.min)
+			tx := half + ratio*track
+			g.MoveTo(tx, h*0.5+half)
+			g.LineTo(tx, h*0.5+half+tickLen)
+		}
+	}
+	g.SetPen1(t.BorderColor, 1)
+	g.Stroke()
 }
 
 // --- SizeHints ---
