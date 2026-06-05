@@ -42,6 +42,46 @@ func (g *RadioGroup) SelectedIndex() int {
 	return g.selected
 }
 
+// nextEnabledRadio returns the index of the next enabled button starting from
+// index `from` and stepping by `dir` (+1 forward, -1 backward), wrapping at the
+// ends of the slice and skipping disabled buttons. It returns -1 when no other
+// enabled button exists. Pure helper kept free of widgets so arrow navigation
+// can be unit-tested over a plain slice.
+func nextEnabledRadio(buttons []*RadioButton, from, dir int) int {
+	n := len(buttons)
+	if n == 0 {
+		return -1
+	}
+	for i := 1; i <= n; i++ {
+		idx := ((from+dir*i)%n + n) % n
+		if buttons[idx].IsEnabled() {
+			return idx
+		}
+	}
+	return -1
+}
+
+// navigate moves selection one step (dir +1/-1) from rb to the next enabled
+// sibling in the group, wrapping at the ends. The newly selected radio also
+// takes keyboard focus so subsequent arrow keys continue from there (Qt moves
+// selection and focus together among radios in the same group).
+func (g *RadioGroup) navigate(rb *RadioButton, dir int) {
+	from := -1
+	for i, b := range g.buttons {
+		if b == rb {
+			from = i
+			break
+		}
+	}
+	idx := nextEnabledRadio(g.buttons, from, dir)
+	if idx < 0 {
+		return
+	}
+	target := g.buttons[idx]
+	g.selectButton(target)
+	target.SetFocus()
+}
+
 // RadioButton is a mutually-exclusive toggle within a RadioGroup
 type RadioButton struct {
 	Widget
@@ -133,6 +173,36 @@ func (this *RadioButton) OnLeftDown(x, y float64) {
 	}
 }
 
+// OnKeyDown implements Qt QRadioButton keyboard behaviour. Space selects this
+// radio (firing the exclusive-select path so siblings deselect and callbacks
+// fire). Within a group the arrow keys move the selection AND focus to the
+// previous (Up/Left) or next (Down/Right) enabled radio, wrapping at the ends.
+func (this *RadioButton) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
+	switch key {
+	case KeySpace:
+		if !this.checked {
+			if this.group != nil {
+				this.group.selectButton(this)
+			} else {
+				this.checked = true
+				this.fireChanged(true)
+				this.Self().Update()
+			}
+		}
+	case KeyUp, KeyLeft:
+		if this.group != nil {
+			this.group.navigate(this, -1)
+		}
+	case KeyDown, KeyRight:
+		if this.group != nil {
+			this.group.navigate(this, +1)
+		}
+	}
+}
+
 // --- Drawing ---
 
 func (this *RadioButton) Draw(g paint.Painter) {
@@ -143,6 +213,14 @@ func (this *RadioButton) Draw(g paint.Painter) {
 	radius := t.CheckBoxSize * 0.5
 	cx := m.L + radius
 	cy := h * 0.5
+
+	// subtle focus ring just outside the outer circle when focused, matching
+	// the highlight-colour focus convention used by DrawEditFrame.
+	if this.HasFocus() {
+		g.Arc(cx, cy, radius+2, 0, 2*math.Pi)
+		g.SetPen1(t.HighLightColor, 1)
+		g.Stroke()
+	}
 
 	// outer circle
 	g.Arc(cx, cy, radius, 0, 2*math.Pi)
