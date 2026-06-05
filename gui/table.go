@@ -263,11 +263,23 @@ type Table struct {
 	selectedRow        int
 	rowHeight          float64
 	headerHeight       float64
-	sortColumn         int  // currently sorted column, -1 when unsorted
-	sortAscending      bool // direction of the current sort
+	sortColumn         int       // currently sorted column, -1 when unsorted
+	sortAscending      bool      // direction of the current sort
+	colWidths          []float64 // per-column override widths, lazily seeded from the model
+	resizeCol          int       // column being resized via a header-boundary drag, -1 when idle
+	resizeStartX       float64   // pointer x at drag start (widget space)
+	resizeStartW       float64   // width of resizeCol at drag start
+	hoverBoundary      int       // column boundary currently hovered, -1 when none
 	cbSelectionChanged func(interface{}, int)
 	cbSortChanged      func(col int, ascending bool)
 }
+
+// columnResizeGrab is the half-width, in pixels, of the grab zone around a
+// column boundary that starts a resize drag instead of a sort.
+const columnResizeGrab = 4.0
+
+// columnMinWidth is the smallest width a column may be dragged down to.
+const columnMinWidth = 20.0
 
 // NewTable creates a new Table widget.
 func NewTable() *Table {
@@ -275,6 +287,8 @@ func NewTable() *Table {
 	p.Init(p)
 	p.selectedRow = -1
 	p.sortColumn = -1
+	p.resizeCol = -1
+	p.hoverBoundary = -1
 	p.scrollArea = NewScrollArea()
 	p.scrollArea.SetParent(p)
 	return p
@@ -284,6 +298,7 @@ func NewTable() *Table {
 func (this *Table) SetModel(m TableModel) {
 	this.model = m
 	this.sortColumn = -1
+	this.colWidths = nil // reseed widths from the new model on next use
 	this.updateScroll()
 	this.Layout()
 }
@@ -406,13 +421,57 @@ func (this *Table) SetHeaderHeight(h float64) {
 	this.Layout()
 }
 
+// ensureColWidths lazily seeds the per-column width overrides from the model
+// the first time a width is needed (or after the column count changes), so a
+// resize drag has somewhere to persist without mutating the model.
+func (this *Table) ensureColWidths() {
+	if this.model == nil {
+		this.colWidths = nil
+		return
+	}
+	n := this.model.ColumnCount()
+	if len(this.colWidths) == n {
+		return
+	}
+	this.colWidths = make([]float64, n)
+	for c := 0; c < n; c++ {
+		this.colWidths[c] = this.model.ColumnWidth(c)
+	}
+}
+
+// columnWidth returns the effective width of a column: the resized override if
+// one exists, otherwise the model's width. All drawing and hit-testing reads
+// widths through here so a resize reflows the table.
+func (this *Table) columnWidth(col int) float64 {
+	this.ensureColWidths()
+	if col < 0 || col >= len(this.colWidths) {
+		if this.model != nil {
+			return this.model.ColumnWidth(col)
+		}
+		return 0
+	}
+	return this.colWidths[col]
+}
+
+// setColumnWidth records a new width for a column, clamped to the minimum.
+func (this *Table) setColumnWidth(col int, w float64) {
+	this.ensureColWidths()
+	if col < 0 || col >= len(this.colWidths) {
+		return
+	}
+	if w < columnMinWidth {
+		w = columnMinWidth
+	}
+	this.colWidths[col] = w
+}
+
 func (this *Table) totalColumnWidth() float64 {
 	if this.model == nil {
 		return 0
 	}
 	total := 0.0
 	for c := 0; c < this.model.ColumnCount(); c++ {
-		total += this.model.ColumnWidth(c)
+		total += this.columnWidth(c)
 	}
 	return total
 }
@@ -512,7 +571,7 @@ func (this *Table) Draw(g paint.Painter) {
 	g.Translate(-sx, 0)
 	xPos := 0.0
 	for c := 0; c < colCount; c++ {
-		cw := this.model.ColumnWidth(c)
+		cw := this.columnWidth(c)
 		// Header background
 		t.ButtonPushedFace.Draw(g, cw, hh)
 		// Header text
@@ -564,7 +623,7 @@ func (this *Table) Draw(g paint.Painter) {
 		// Cell text
 		xPos := 0.0
 		for c := 0; c < colCount; c++ {
-			cw := this.model.ColumnWidth(c)
+			cw := this.columnWidth(c)
 			txt := this.model.CellText(r, c)
 			if txt != "" {
 				g.SetBrush1(t.TextColor)
@@ -637,11 +696,31 @@ func (this *Table) headerColumnAt(x float64) int {
 	mx := x + this.scrollArea.ScrollX()
 	xPos := 0.0
 	for c := 0; c < this.model.ColumnCount(); c++ {
-		cw := this.model.ColumnWidth(c)
+		cw := this.columnWidth(c)
 		if mx >= xPos && mx < xPos+cw {
 			return c
 		}
 		xPos += cw
+	}
+	return -1
+}
+
+// columnBoundaryAt returns the index of the column whose right boundary sits
+// within columnResizeGrab pixels of the given widget-space x, or -1 if x is in
+// a column body. Horizontal scroll is accounted for so the grab zone tracks the
+// visible boundary. This is the hit-test that distinguishes a resize from a
+// header-click sort.
+func (this *Table) columnBoundaryAt(x float64) int {
+	if this.model == nil {
+		return -1
+	}
+	mx := x + this.scrollArea.ScrollX()
+	xPos := 0.0
+	for c := 0; c < this.model.ColumnCount(); c++ {
+		xPos += this.columnWidth(c)
+		if mx >= xPos-columnResizeGrab && mx <= xPos+columnResizeGrab {
+			return c
+		}
 	}
 	return -1
 }
@@ -655,6 +734,16 @@ func (this *Table) OnLeftDown(x, y float64) {
 
 	hh := this.HeaderHeight()
 	if y < hh {
+		// A click on a column boundary starts a resize drag; anything else in
+		// the header body falls through to the sort handler.
+		if col := this.columnBoundaryAt(x); col >= 0 {
+			this.resizeCol = col
+			this.resizeStartX = x
+			this.resizeStartW = this.columnWidth(col)
+			this.PushCapture()
+			SetOverrideCursor(cursorSizeWE)
+			return
+		}
 		// Clicked on a header cell: sort by that column.
 		col := this.headerColumnAt(x)
 		if col >= 0 {
@@ -668,6 +757,48 @@ func (this *Table) OnLeftDown(x, y float64) {
 	row := int((y-hh)/rh + sy)
 	if row >= 0 && row < this.model.RowCount() {
 		this.SetSelectedRow(row)
+	}
+}
+
+// OnMouseMove drives an in-progress column resize and, when idle, shows a
+// horizontal-resize cursor while hovering a header boundary.
+func (this *Table) OnMouseMove(x, y float64) {
+	if this.resizeCol >= 0 {
+		this.setColumnWidth(this.resizeCol, this.resizeStartW+(x-this.resizeStartX))
+		this.Layout()
+		this.Update()
+		return
+	}
+
+	// Hover affordance: a resize cursor over a boundary inside the header.
+	onBoundary := -1
+	if this.model != nil && y < this.HeaderHeight() {
+		onBoundary = this.columnBoundaryAt(x)
+	}
+	if onBoundary != this.hoverBoundary {
+		this.hoverBoundary = onBoundary
+		if onBoundary >= 0 {
+			SetOverrideCursor(cursorSizeWE)
+		} else {
+			SetOverrideCursor(nil)
+		}
+	}
+}
+
+// OnLeftUp ends a column resize drag.
+func (this *Table) OnLeftUp(x, y float64) {
+	if this.resizeCol >= 0 {
+		this.resizeCol = -1
+		this.PopCapture()
+		SetOverrideCursor(nil)
+	}
+}
+
+// OnMouseLeave clears the resize cursor affordance when not actively dragging.
+func (this *Table) OnMouseLeave() {
+	if this.resizeCol < 0 && this.hoverBoundary != -1 {
+		this.hoverBoundary = -1
+		SetOverrideCursor(nil)
 	}
 }
 
