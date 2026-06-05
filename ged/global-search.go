@@ -44,6 +44,10 @@ type GlobalSearchPanel struct {
 	fileOrder []string                 // ordered file keys
 	collapsed map[string]bool          // collapsed file groups
 
+	replaceRunes  []rune // replace-with text
+	replaceCursor int
+	focusReplace  bool // true when the replace input holds keyboard focus
+
 	hoverIdx  int
 	scrollY   float64
 	rowHeight float64
@@ -195,6 +199,79 @@ func (this *GlobalSearchPanel) searchFile(path, query string) {
 	}
 }
 
+// replaceInContent replaces every occurrence of query with replacement in
+// content, mirroring the search matching semantics. caseInsensitive selects
+// between a case-folded match (what Search uses) and an exact match. It returns
+// the rewritten content and the number of replacements made. Matching is
+// non-overlapping and scanning resumes past the inserted replacement, so a
+// replacement that contains the query is never re-matched.
+func replaceInContent(content, query, replacement string, caseInsensitive bool) (string, int) {
+	if query == "" {
+		return content, 0
+	}
+	if !caseInsensitive {
+		count := strings.Count(content, query)
+		if count == 0 {
+			return content, 0
+		}
+		return strings.ReplaceAll(content, query, replacement), count
+	}
+
+	lowerContent := strings.ToLower(content)
+	lowerQuery := strings.ToLower(query)
+
+	var b strings.Builder
+	count := 0
+	offset := 0
+	for {
+		idx := strings.Index(lowerContent[offset:], lowerQuery)
+		if idx < 0 {
+			break
+		}
+		pos := offset + idx
+		b.WriteString(content[offset:pos]) // text before the match (original casing)
+		b.WriteString(replacement)
+		count++
+		offset = pos + len(query) // resume past the matched source text
+	}
+	if count == 0 {
+		return content, 0
+	}
+	b.WriteString(content[offset:]) // trailing remainder
+	return b.String(), count
+}
+
+// ReplaceAll rewrites every match of the current query with the replace text
+// across the files that the last search touched, then re-runs the search so the
+// results list reflects the new state. Only files that actually changed are
+// written back.
+func (this *GlobalSearchPanel) ReplaceAll() {
+	if this.query == "" || len(this.fileOrder) == 0 {
+		return
+	}
+	replacement := string(this.replaceRunes)
+
+	// Snapshot the file set; Search() rebuilds fileOrder underneath us.
+	files := make([]string, len(this.fileOrder))
+	copy(files, this.fileOrder)
+
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		// Search matches case-insensitively, so replace the same way.
+		out, n := replaceInContent(string(data), this.query, replacement, true)
+		if n == 0 {
+			continue
+		}
+		_ = os.WriteFile(path, []byte(out), 0644)
+	}
+
+	// Refresh results against the rewritten files.
+	this.Search(this.query)
+}
+
 // rebuildFlatRows flattens grouped results into a list of renderable rows.
 func (this *GlobalSearchPanel) rebuildFlatRows() {
 	this.flatRows = nil
@@ -264,7 +341,12 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 	g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
 	g.Rectangle(inputX, inputY, inputW, inputH)
 	g.Fill()
-	g.SetPen1(paint.Color{R: 180, G: 185, B: 200, A: 255}, 1)
+	// Highlight the border of the focused input.
+	if this.focusReplace {
+		g.SetPen1(paint.Color{R: 180, G: 185, B: 200, A: 255}, 1)
+	} else {
+		g.SetPen1(paint.Color{R: 100, G: 140, B: 200, A: 255}, 1)
+	}
 	g.Rectangle(inputX, inputY, inputW, inputH)
 	g.Stroke()
 
@@ -277,8 +359,45 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 		g.DrawText1(inputX+4, inputY+inputH-7, "Search... (Enter)")
 	}
 
+	// Replace input area (mirrors the search input, directly underneath).
+	replaceY := inputY + inputH + 4
+	replaceH := 24.0
+	btnW := 64.0
+	replaceW := inputW - btnW - 4
+
+	g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
+	g.Rectangle(inputX, replaceY, replaceW, replaceH)
+	g.Fill()
+	if this.focusReplace {
+		g.SetPen1(paint.Color{R: 100, G: 140, B: 200, A: 255}, 1)
+	} else {
+		g.SetPen1(paint.Color{R: 180, G: 185, B: 200, A: 255}, 1)
+	}
+	g.Rectangle(inputX, replaceY, replaceW, replaceH)
+	g.Stroke()
+
+	g.SetFont(normalFont)
+	if len(this.replaceRunes) > 0 {
+		g.SetBrush1(t.TextColor)
+		g.DrawText1(inputX+4, replaceY+replaceH-7, string(this.replaceRunes))
+	} else {
+		g.SetBrush1(paint.Color{R: 160, G: 160, B: 170, A: 180})
+		g.DrawText1(inputX+4, replaceY+replaceH-7, "Replace...")
+	}
+
+	// Replace All button.
+	btnX := inputX + replaceW + 4
+	g.SetBrush1(paint.Color{R: 100, G: 140, B: 200, A: 255})
+	g.Rectangle(btnX, replaceY, btnW, replaceH)
+	g.Fill()
+	g.SetFont(smallFont)
+	g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
+	btnLabel := "Replace All"
+	btnExt := smallFont.TextExtents(btnLabel)
+	g.DrawText1(btnX+(btnW-btnExt.XAdvance)/2, replaceY+replaceH-8, btnLabel)
+
 	// Summary line
-	summaryY := inputY + inputH + 4
+	summaryY := replaceY + replaceH + 4
 	summaryH := 16.0
 
 	if len(this.results) > 0 {
@@ -428,12 +547,19 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 	}
 }
 
-// hitTest returns the row index for a given y coordinate, or -1.
-func (this *GlobalSearchPanel) hitTest(y float64) int {
+// listTop returns the y coordinate where the results list begins. It accounts
+// for the header, the search input, the replace input, and the summary line.
+func (this *GlobalSearchPanel) listTop() float64 {
 	headerH := 22.0
 	inputH := 24.0
+	replaceH := 24.0
 	summaryH := 16.0
-	listY := headerH + 4 + inputH + 4 + summaryH + 2
+	return headerH + 4 + inputH + 4 + replaceH + 4 + summaryH + 2
+}
+
+// hitTest returns the row index for a given y coordinate, or -1.
+func (this *GlobalSearchPanel) hitTest(y float64) int {
+	listY := this.listTop()
 
 	if y < listY {
 		return -1
@@ -445,20 +571,53 @@ func (this *GlobalSearchPanel) hitTest(y float64) int {
 	return idx
 }
 
-// isInInputArea checks if a click is in the search input area.
-func (this *GlobalSearchPanel) isInInputArea(y float64) bool {
+// isInSearchInput checks if a click is in the search input area.
+func (this *GlobalSearchPanel) isInSearchInput(y float64) bool {
 	headerH := 22.0
 	inputY := headerH + 4
 	inputH := 24.0
 	return y >= inputY && y <= inputY+inputH
 }
 
+// isInReplaceInput checks if a click is in the replace input area (excluding
+// the Replace All button to its right).
+func (this *GlobalSearchPanel) isInReplaceInput(x, y float64) bool {
+	headerH := 22.0
+	inputH := 24.0
+	replaceY := headerH + 4 + inputH + 4
+	replaceH := 24.0
+	w := this.Width()
+	replaceW := (w - 16) - 64 - 4 // inputW - btnW - gap
+	return y >= replaceY && y <= replaceY+replaceH && x >= 8 && x <= 8+replaceW
+}
+
+// isInReplaceButton checks if a click hits the Replace All button.
+func (this *GlobalSearchPanel) isInReplaceButton(x, y float64) bool {
+	headerH := 22.0
+	inputH := 24.0
+	replaceY := headerH + 4 + inputH + 4
+	replaceH := 24.0
+	w := this.Width()
+	btnX := 8 + (w-16)-64-4 + 4 // inputX + replaceW + gap
+	return y >= replaceY && y <= replaceY+replaceH && x >= btnX && x <= btnX+64
+}
+
 // OnLeftDown handles clicks.
 func (this *GlobalSearchPanel) OnLeftDown(x, y float64) {
 	this.SetFocus()
 
-	if this.isInInputArea(y) {
-		// Focus on input
+	if this.isInSearchInput(y) {
+		this.focusReplace = false
+		this.Self().Update()
+		return
+	}
+	if this.isInReplaceInput(x, y) {
+		this.focusReplace = true
+		this.Self().Update()
+		return
+	}
+	if this.isInReplaceButton(x, y) {
+		this.ReplaceAll()
 		return
 	}
 
@@ -501,10 +660,7 @@ func (this *GlobalSearchPanel) OnMouseLeave() {
 // OnMouseWheel handles scrolling.
 func (this *GlobalSearchPanel) OnMouseWheel(x, y, z float64) {
 	this.scrollY -= z * 3
-	headerH := 22.0
-	inputH := 24.0
-	summaryH := 16.0
-	listY := headerH + 4 + inputH + 4 + summaryH + 2
+	listY := this.listTop()
 	totalRows := float64(len(this.flatRows))
 	maxScroll := totalRows*this.rowHeight - (this.Height() - listY)
 	if maxScroll < 0 {
@@ -519,24 +675,44 @@ func (this *GlobalSearchPanel) OnMouseWheel(x, y, z float64) {
 	this.Self().Update()
 }
 
-// OnTextInput handles typing in the search input.
+// OnTextInput handles typing into the focused (search or replace) input.
 func (this *GlobalSearchPanel) OnTextInput(s string) {
-	this.queryRunes = append(this.queryRunes, []rune(s)...)
-	this.queryCursor = len(this.queryRunes)
+	if this.focusReplace {
+		this.replaceRunes = append(this.replaceRunes, []rune(s)...)
+		this.replaceCursor = len(this.replaceRunes)
+	} else {
+		this.queryRunes = append(this.queryRunes, []rune(s)...)
+		this.queryCursor = len(this.queryRunes)
+	}
 	this.Self().Update()
 }
 
 // OnKeyDown handles keyboard input.
 func (this *GlobalSearchPanel) OnKeyDown(key int, repeat bool) {
 	switch key {
+	case gui.KeyTab:
+		// Toggle focus between the search and replace inputs.
+		this.focusReplace = !this.focusReplace
+		this.Self().Update()
 	case gui.KeyBackSpace:
-		if len(this.queryRunes) > 0 {
+		if this.focusReplace {
+			if len(this.replaceRunes) > 0 {
+				this.replaceRunes = this.replaceRunes[:len(this.replaceRunes)-1]
+				this.replaceCursor = len(this.replaceRunes)
+				this.Self().Update()
+			}
+		} else if len(this.queryRunes) > 0 {
 			this.queryRunes = this.queryRunes[:len(this.queryRunes)-1]
 			this.queryCursor = len(this.queryRunes)
 			this.Self().Update()
 		}
 	case gui.KeyEnter:
-		this.Search(string(this.queryRunes))
+		// Enter in the replace field runs Replace All; otherwise it searches.
+		if this.focusReplace {
+			this.ReplaceAll()
+		} else {
+			this.Search(string(this.queryRunes))
+		}
 	case gui.KeyEsc:
 		this.queryRunes = nil
 		this.queryCursor = 0
@@ -544,6 +720,7 @@ func (this *GlobalSearchPanel) OnKeyDown(key int, repeat bool) {
 		this.grouped = nil
 		this.fileOrder = nil
 		this.flatRows = nil
+		this.focusReplace = false
 		this.Self().Update()
 	}
 }
