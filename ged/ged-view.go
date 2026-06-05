@@ -512,6 +512,17 @@ func (this *GedView) OnRightUp(x, y float64) {
 
 		menu.AddSeparator()
 
+		// "Select All" — canvas-wide convenience, mirrors the Cmd/Ctrl+A
+		// shortcut. Placed after the per-item Z-order/Align groups (it acts on
+		// the page, not on the clicked widget) and routed through the same
+		// selectAll() the keyboard path uses.
+		btnSelectAll := menu.AddButton1("全选", nil)
+		btnSelectAll.Action().BindFunc0(func() {
+			this.selectAll()
+		})
+
+		menu.AddSeparator()
+
 		// "Set Name" menu item
 		btnName := menu.AddButton1("设置名称...", nil)
 		btnName.Action().BindFunc0(func() {
@@ -544,6 +555,13 @@ func (this *GedView) OnRightUp(x, y float64) {
 		btnFormProps := menu.AddButton1("表单属性...", nil)
 		btnFormProps.Action().BindFunc0(func() {
 			this.showPropertyDialog(this.Scene())
+		})
+
+		// "Select All" is reachable from empty canvas too, so a designer can
+		// grab every widget without first clicking one. Same selectAll() glue.
+		btnSelectAll := menu.AddButton1("全选", nil)
+		btnSelectAll.Action().BindFunc0(func() {
+			this.selectAll()
 		})
 	}
 
@@ -967,8 +985,13 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 			this.Self().Update()
 		}
 
+	// Cmd/Ctrl+A: select every selectable widget on the page. Ctrl is read
+	// from IsKeyDown(KeyCtrl) up top (same modifier probe the nudge/undo cases
+	// use), so this only fires with the modifier held and never collides with a
+	// bare 'A' typed into an inline editor. Consumed here, ahead of the Alt
+	// align block, so it can't fall through to anything else.
 	case ctrl && (key == 'A' || key == 'a'):
-		this.selectAllItems()
+		this.selectAll()
 
 	case ctrl && (key == 'S' || key == 's'):
 		this.GedScene().Save()
@@ -1175,11 +1198,28 @@ func (this *GedView) nudgeSelection(dx, dy float64) {
 	this.Self().Update()
 }
 
-// selectAllItems adds every scene child to the selection.
-func (this *GedView) selectAllItems() {
+// selectAll replaces the current selection with every selectable widget on the
+// page. It iterates the scene's direct children (the dropped widgets) — the
+// scene/page root is never in that list, so it is skipped for free — and adds
+// only the ones that are visible and selectable, mirroring graph's
+// TraversalCond_Selectable so a hidden or SetSelectable(false) item is left
+// out exactly as a marquee drag would leave it out. Locked widgets stay in:
+// IsLocked only pins position/size (IsLockPos/IsLockSize), it does not clear
+// IsSelectable, and a designer needs to be able to select a locked widget to
+// unlock it — so locked is NOT a skip reason here (unlike align/nudge, which
+// skip IsLockPos because they move things).
+//
+// Undo: selection changes carry no command, matching every other select path
+// in this file (single-click, Tab cycling, ESC clear) — none push onto the
+// UndoStack. Cmd+A is just a viewport selection state change, so Cmd+Z should
+// undo the last structural edit, not "the act of selecting".
+func (this *GedView) selectAll() {
 	sel := this.Selection()
+	sel.Clear()
 	for _, item := range this.Scene().Children() {
-		sel.Add(item)
+		if item.IsVisible() && item.IsSelectable() {
+			sel.Add(item)
+		}
 	}
 	this.Self().Update()
 }
