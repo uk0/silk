@@ -6,7 +6,27 @@ import (
 	"os"
 	"strings"
 	"unicode"
+
+	"silk/graph"
 )
+
+// simpleAddContainers are factory names whose Go type exposes a
+// single-argument AddWidget(iw) — so codegen can place a nested child
+// with `ui.parent.AddWidget(ui.child)` and let the container own its
+// arrangement. GridLayout (needs row/col) and FormLayout (needs a row
+// label) are intentionally excluded: the designer doesn't yet track
+// the extra placement args, so children of those fall back to
+// SetParent + absolute SetBounds.
+var simpleAddContainers = map[string]bool{
+	"gui.VBox":     true,
+	"gui.HBox":     true,
+	"gui.Card":     true,
+	"gui.GroupBox": true,
+}
+
+func isSimpleAddContainer(factoryName string) bool {
+	return simpleAddContainers[factoryName]
+}
 
 // CodeGenOptions controls code generation output.
 type CodeGenOptions struct {
@@ -102,68 +122,88 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		defaultText   string
 		eventHandlers map[string]string
 		code          string // user-written event handler code
+		parentField   string // owning container field; "" = top-level (ui.Form)
+		parentAdd     bool   // parent is a simple-AddWidget container
 	}
 
 	var fields []fieldInfo
 	nameCount := make(map[string]int)
 
-	for _, child := range scene.Children() {
-		fake, ok := child.(*FakeWidget)
-		if !ok {
-			continue
-		}
+	// collect walks the scene tree depth-first, appending a field for
+	// every FakeWidget and recursing into container children. parentField
+	// is the owning widget's field name ("" for scene-level widgets, which
+	// parent to ui.Form); parentAdd records whether that parent is a
+	// simple-AddWidget container so the emit loop can choose AddWidget vs
+	// SetParent+SetBounds. Parents are appended before their children, so
+	// the constructor emission order guarantees a container exists before
+	// AddWidget is called on it.
+	var collect func(items []graph.IItem, parentField string, parentAdd bool)
+	collect = func(items []graph.IItem, parentField string, parentAdd bool) {
+		for _, child := range items {
+			fake, ok := child.(*FakeWidget)
+			if !ok {
+				continue
+			}
 
-		factoryName := fake.WidgetFactoryName()
-		mapping, known := factoryMap[factoryName]
+			factoryName := fake.WidgetFactoryName()
+			mapping, known := factoryMap[factoryName]
 
-		fieldName := fake.WidgetName()
-		if fieldName == "" {
-			// derive from factory name, e.g. "gui.Button" -> "Button"
-			parts := strings.Split(factoryName, ".")
-			base := parts[len(parts)-1]
-			nameCount[base]++
-			fieldName = fmt.Sprintf("%s_%d", base, nameCount[base])
-		}
-		fieldName = sanitizeIdentifier(fieldName)
+			fieldName := fake.WidgetName()
+			if fieldName == "" {
+				// derive from factory name, e.g. "gui.Button" -> "Button"
+				parts := strings.Split(factoryName, ".")
+				base := parts[len(parts)-1]
+				nameCount[base]++
+				fieldName = fmt.Sprintf("%s_%d", base, nameCount[base])
+			}
+			fieldName = sanitizeIdentifier(fieldName)
 
-		var goType, constructor string
-		if known {
-			goType = mapping.goType
-			constructor = mapping.constructor
-			imports[mapping.importPath] = true
-		} else {
-			goType = "gui.IWidget"
-			constructor = fmt.Sprintf(`core.New("%s").(gui.IWidget)`, factoryName)
-			imports["silk/gui"] = true
-			imports["silk/core"] = true
-		}
+			var goType, constructor string
+			if known {
+				goType = mapping.goType
+				constructor = mapping.constructor
+				imports[mapping.importPath] = true
+			} else {
+				goType = "gui.IWidget"
+				constructor = fmt.Sprintf(`core.New("%s").(gui.IWidget)`, factoryName)
+				imports["silk/gui"] = true
+				imports["silk/core"] = true
+			}
 
-		x := roundPx(fake.X())
-		y := roundPx(fake.Y())
-		w := roundPx(fake.Width())
-		h := roundPx(fake.Height())
+			x := roundPx(fake.X())
+			y := roundPx(fake.Y())
+			w := roundPx(fake.Width())
+			h := roundPx(fake.Height())
 
-		// Get default text from the widget if it has one
-		var defaultText string
-		if fake.Widget() != nil {
-			if t, ok := fake.Widget().(interface{ Text() string }); ok {
-				defaultText = t.Text()
-			} else if t, ok := fake.Widget().(interface{ Title() string }); ok {
-				defaultText = t.Title()
+			// Get default text from the widget if it has one
+			var defaultText string
+			if fake.Widget() != nil {
+				if t, ok := fake.Widget().(interface{ Text() string }); ok {
+					defaultText = t.Text()
+				} else if t, ok := fake.Widget().(interface{ Title() string }); ok {
+					defaultText = t.Title()
+				}
+			}
+
+			fields = append(fields, fieldInfo{
+				name:        fieldName,
+				goType:      goType,
+				constructor: constructor,
+				factoryName: factoryName,
+				x:           x, y: y, w: w, h: h,
+				defaultText:   defaultText,
+				eventHandlers: fake.EventHandlers(),
+				code:          fake.GetCode(),
+				parentField:   parentField,
+				parentAdd:     parentAdd,
+			})
+
+			if fake.HasChildren() {
+				collect(fake.Children(), fieldName, isSimpleAddContainer(factoryName))
 			}
 		}
-
-		fields = append(fields, fieldInfo{
-			name:        fieldName,
-			goType:      goType,
-			constructor: constructor,
-			factoryName: factoryName,
-			x:           x, y: y, w: w, h: h,
-			defaultText:   defaultText,
-			eventHandlers: fake.EventHandlers(),
-			code:          fake.GetCode(),
-		})
 	}
+	collect(scene.Children(), "", false)
 
 	var buf strings.Builder
 
@@ -203,9 +243,24 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// Children
 	for _, f := range fields {
 		buf.WriteString(fmt.Sprintf("\tui.%s = %s\n", f.name, f.constructor))
-		buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.Form)\n", f.name))
-		buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
-			f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
+		switch {
+		case f.parentField == "":
+			// Top-level widget: parent to the form at absolute bounds.
+			buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.Form)\n", f.name))
+			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
+				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
+		case f.parentAdd:
+			// Nested in a simple-AddWidget container (VBox/HBox/Card/
+			// GroupBox): AddWidget reparents AND lets the container
+			// arrange it, so no explicit SetBounds is emitted.
+			buf.WriteString(fmt.Sprintf("\tui.%s.AddWidget(ui.%s)\n", f.parentField, f.name))
+		default:
+			// Nested in a non-AddWidget container: reparent + absolute
+			// bounds (relative to the parent's coordinate space).
+			buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.%s)\n", f.name, f.parentField))
+			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
+				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
+		}
 		// Wire event handlers based on widget type and user code.
 		// When the user wrote a func body, pick the "natural" event
 		// for the widget (Button → OnClick, Slider → OnValueChanged,
