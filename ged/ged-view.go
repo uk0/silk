@@ -69,6 +69,7 @@ type GedView struct {
 	selCallbacks []SelectionCallback
 	snapEnabled  bool
 	gridSize     float64
+	showGrid     bool // paint the faint background grid overlay
 
 	// Alignment guide state for drag operations
 	alignGuides  []alignGuide
@@ -149,13 +150,23 @@ func (this *GedView) GedScene() *GedScene {
 	return p
 }
 
-// snapToGrid rounds coordinates to the nearest grid point when snap is enabled.
+// snapToGrid rounds v to the nearest multiple of step. A non-positive step
+// disables snapping and returns v unchanged, so callers never divide by zero.
+// Pure so the rounding rule is unit-testable without a live view.
+func snapToGrid(v, step float64) float64 {
+	if step <= 0 {
+		return v
+	}
+	return math.Round(v/step) * step
+}
+
+// snapToGrid rounds a scene point to the nearest grid intersection when snap
+// is enabled, routing each axis through the pure snapToGrid helper above.
 func (this *GedView) snapToGrid(x, y float64) (float64, float64) {
 	if !this.snapEnabled {
 		return x, y
 	}
-	gs := this.gridSize
-	return math.Round(x/gs) * gs, math.Round(y/gs) * gs
+	return snapToGrid(x, this.gridSize), snapToGrid(y, this.gridSize)
 }
 
 // SetSnapEnabled toggles snap-to-grid behavior.
@@ -168,10 +179,39 @@ func (this *GedView) SnapEnabled() bool {
 	return this.snapEnabled
 }
 
+// SetSnapToGrid toggles snap-to-grid (alias of SetSnapEnabled, matching the
+// Qt Designer "Grid → Snap to grid" wording the toolbar/menu uses).
+func (this *GedView) SetSnapToGrid(enabled bool) {
+	this.snapEnabled = enabled
+}
+
+// IsSnapToGrid reports whether dragged/dropped widgets snap to the grid.
+func (this *GedView) IsSnapToGrid() bool {
+	return this.snapEnabled
+}
+
+// SetShowGrid toggles the faint background grid overlay drawn on the page.
+func (this *GedView) SetShowGrid(show bool) {
+	this.showGrid = show
+}
+
+// IsShowGrid reports whether the background grid overlay is drawn.
+func (this *GedView) IsShowGrid() bool {
+	return this.showGrid
+}
+
 // SetGridSize sets the snap grid spacing in mm.
 func (this *GedView) SetGridSize(size float64) {
 	if size > 0 {
 		this.gridSize = size
+	}
+}
+
+// SetGridStep sets the grid spacing in mm (alias of SetGridSize; the grid
+// overlay and the snap rounding share this single step).
+func (this *GedView) SetGridStep(step float64) {
+	if step > 0 {
+		this.gridSize = step
 	}
 }
 
@@ -1332,6 +1372,35 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 	}
 }
 
+// drawGrid paints a faint dot at every grid intersection across the page area.
+// Called in scene-mm coordinate space (same transform as drawAlignGuides), so
+// the dot spacing tracks the pan/zoom the canvas already applied. Dots are
+// drawn with a tiny zero-width-pen cross per intersection rather than filled
+// circles to stay cheap and crisp at any zoom; only the visible page rect is
+// walked so the loop count scales with page size / gridSize, not the canvas.
+func (this *GedView) drawGrid(g paint.Painter) {
+	step := this.gridSize
+	if step <= 0 {
+		return
+	}
+	w, h := this.SceneSizeMm()
+
+	// Very light grey so the grid is a hint, not a feature competing with the
+	// widgets. Zero pen width = 1px hairline regardless of zoom.
+	g.SetPen1(paint.Color{0, 0, 0, 28}, 0)
+
+	const tick = 0.3 // mm — half-length of each dot's cross arms
+	for x := step; x < w; x += step {
+		for y := step; y < h; y += step {
+			g.MoveTo(x-tick, y)
+			g.LineTo(x+tick, y)
+			g.MoveTo(x, y-tick)
+			g.LineTo(x, y+tick)
+		}
+	}
+	g.Stroke()
+}
+
 // drawAlignGuides renders the active alignment guide lines.
 // Called in scene-mm coordinate space.
 func (this *GedView) drawAlignGuides(g paint.Painter) {
@@ -1349,26 +1418,35 @@ func (this *GedView) drawAlignGuides(g paint.Painter) {
 	}
 }
 
-// Draw overrides GraphView.Draw to add alignment guide overlay.
+// Draw overrides GraphView.Draw to add the background grid and the alignment
+// guide overlay. The grid (when enabled) is painted first as a faint backdrop
+// hint; the active drag guides are painted over it.
 func (this *GedView) Draw(g paint.Painter) {
 	this.GraphView.Draw(g)
 
-	if len(this.alignGuides) == 0 {
+	wantGrid := this.showGrid && this.gridSize > 0
+	if !wantGrid && len(this.alignGuides) == 0 {
 		return
 	}
 
-	// Clip to the page area so guides don't bleed into the padding region
+	// Clip to the page area so neither the grid nor the guides bleed into the
+	// padding region, then re-enter scene-mm coordinate space (the same
+	// transform GraphView.Draw uses for the scene) so both overlays honour the
+	// current pan/zoom.
 	g.Save()
 	pw, ph := this.PageSizePx(true, this.ZoomFactor())
 	pLeft, pTop := this.PageOriginPx()
 	g.Rectangle(pLeft-this.ScrollX(), pTop-this.ScrollY(), pw, ph)
 	g.Clip()
 
-	// Re-enter scene coordinate space to draw the guides
 	x0, y0 := this.SceneOriginPx()
 	g.Translate(x0-this.ScrollX(), y0-this.ScrollY())
 	pageScale := gui.ScreenDpmm() * this.ZoomFactor()
 	g.Scale(pageScale, pageScale)
+
+	if wantGrid {
+		this.drawGrid(g)
+	}
 	this.drawAlignGuides(g)
 	g.Restore()
 }
@@ -1427,8 +1505,42 @@ func (this *GedView) OnLeftUp(x, y float64) {
 		return
 	}
 
+	wasDragging := this.isDragging
 	this.GraphView.OnLeftUp(x, y)
 	this.isDragging = false
 	this.alignGuides = nil
+
+	// Snap the dragged widget(s) onto grid intersections once the base
+	// MovePart has committed the move command. We snap after the commit
+	// (rather than rewriting the delta mid-drag, which lives in the graph
+	// MovePart we don't own) so the final resting position lands on the
+	// grid. The align guides drawn during the drag are purely visual and
+	// don't move the widget, so grid snap and the guides compose cleanly.
+	if wasDragging {
+		this.snapSelectionToGrid()
+	}
+
 	this.Self().Update()
+}
+
+// snapSelectionToGrid rounds every position-unlocked selected item's top-left
+// corner onto the nearest grid intersection. No-op when snap is disabled or
+// the step is non-positive. Applied directly (mutate + Update) like
+// alignSelection / reorderSelection — it tidies the post-drag resting place
+// rather than introducing its own move command.
+func (this *GedView) snapSelectionToGrid() {
+	if !this.snapEnabled || this.gridSize <= 0 {
+		return
+	}
+	for _, item := range this.Selection().ItemList() {
+		if item.IsLockPos() {
+			continue
+		}
+		x, y := item.Pos()
+		nx := snapToGrid(x, this.gridSize)
+		ny := snapToGrid(y, this.gridSize)
+		if nx != x || ny != y {
+			item.SetPos(nx, ny)
+		}
+	}
 }
