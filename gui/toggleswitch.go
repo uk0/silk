@@ -106,6 +106,32 @@ func (this *ToggleSwitch) OnLeftUp(x, y float64) {
 	this.Self().Update()
 }
 
+// OnKeyDown implements IEventKeyDown, giving the switch Qt-style keyboard
+// control while it holds focus. Space (and Enter, for convenience) flips the
+// state like a click; Left forces it OFF and Right forces it ON (the Qt switch
+// direction convention). All paths route through Toggle so the change callback
+// fires exactly as a click does, and the explicit Left/Right cases only toggle
+// when the state actually changes, so re-asserting the current state is a no-op
+// with no spurious callback. Guarded on IsEnabled so a disabled switch ignores
+// keys.
+func (this *ToggleSwitch) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
+	switch key {
+	case KeySpace, KeyEnter:
+		this.Toggle()
+	case KeyLeft:
+		if this.checked {
+			this.Toggle()
+		}
+	case KeyRight:
+		if !this.checked {
+			this.Toggle()
+		}
+	}
+}
+
 // --- Drawing ---
 
 func (this *ToggleSwitch) Draw(g paint.Painter) {
@@ -173,6 +199,11 @@ func (this *ToggleSwitch) Draw(g paint.Painter) {
 
 	g.Restore()
 
+	// focus ring around the track while the switch holds keyboard focus
+	if this.HasFocus() {
+		this.drawFocusRing(g, trackW, trackH, ty)
+	}
+
 	// text label
 	if this.text != "" {
 		g.SetFont(t.Font)
@@ -186,6 +217,19 @@ func (this *ToggleSwitch) Draw(g paint.Painter) {
 		g.DrawText(this.text)
 		g.Translate(-(tx - ext.XBearing), -tty)
 	}
+}
+
+// drawFocusRing paints a subtle accent outline around the track while the
+// switch holds keyboard focus, so keyboard users can see where they are. It
+// uses the theme highlight color at low alpha (the same accent the edit frame
+// uses when focused) and follows the stadium track shape with a small inset.
+func (this *ToggleSwitch) drawFocusRing(g paint.Painter, trackW, trackH, ty float64) {
+	pad := 2.0
+	c := Theme().HighLightColor
+	c.A = 90 // low alpha keeps it subtle
+	roundedRect(g, -pad, ty-pad, trackW+pad*2, trackH+pad*2, trackH/2+pad)
+	g.SetPen1(c, 1.5)
+	g.Stroke()
 }
 
 func (this *ToggleSwitch) SizeHints() SizeHints {
