@@ -152,6 +152,13 @@ type IItem interface {
 	SizeHints() gui.SizeHints
 
 	Detach()
+
+	// 调整此图元在兄弟图元中的堆叠顺序. 队首图元最先绘制(在最底层),
+	// 队尾图元最后绘制(在最上层).
+	Raise()
+	Lower()
+	BringToFront()
+	SendToBack()
 }
 
 type Item struct {
@@ -395,6 +402,142 @@ func (this *Item) SetParent(newParent IItem) {
 		}
 	}
 	//	this.syncWindow(this.IsVisible())
+}
+
+// Stacking order is the child iteration order: the parent's child pointer
+// is the head (drawn first, at the back) and head.prev is the tail (drawn
+// last, in front). The four methods below reorder a child among its
+// siblings by relinking the circular list; the actual pointer work lives
+// in the unexported zorder* helpers so it can be unit-tested directly.
+
+// Raise moves this item one step toward the front (drawn later).
+func (this *Item) Raise() {
+	this.zorderRaise()
+	this.Update()
+}
+
+// Lower moves this item one step toward the back (drawn earlier).
+func (this *Item) Lower() {
+	this.zorderLower()
+	this.Update()
+}
+
+// BringToFront moves this item in front of all its siblings.
+func (this *Item) BringToFront() {
+	this.zorderToFront()
+	this.Update()
+}
+
+// SendToBack moves this item behind all its siblings.
+func (this *Item) SendToBack() {
+	this.zorderToBack()
+	this.Update()
+}
+
+// zorderUnlink detaches this from the sibling ring without touching the
+// parent pointer. Returns the parent's naked item, or nil when there is
+// nothing to reorder (no parent, or a lone child).
+func (this *Item) zorderUnlink() *Item {
+	if this.parent == nil {
+		return nil
+	}
+	p := this.parent.NakedItem()
+	if this.next == this { // single child — nothing to reorder
+		return nil
+	}
+	if p.child == this {
+		p.child = this.next
+	}
+	this.prev.next = this.next
+	this.next.prev = this.prev
+	return p
+}
+
+// zorderInsertBefore relinks this into the ring immediately before at.
+func (this *Item) zorderInsertBefore(at *Item) {
+	this.next = at
+	this.prev = at.prev
+	this.prev.next = this
+	this.next.prev = this
+}
+
+// zorderSwapAdjacent exchanges the ring positions of a and b, which MUST be
+// neighbours with b == a.next. Re-links by detaching a and re-inserting it
+// after b, and fixes the parent's head pointer when either node was the head.
+func zorderSwapAdjacent(p *Item, a, b *Item) {
+	before := a.prev // node before a (== b for a 2-element ring)
+	// Detach a from between `before` and b.
+	before.next = b
+	b.prev = before
+	// Insert a immediately after b.
+	a.prev = b
+	a.next = b.next
+	b.next.prev = a
+	b.next = a
+	// a moved one slot toward the tail; b moved one slot toward the head.
+	if p.child == a {
+		p.child = b
+	}
+}
+
+// zorderRaise swaps this with the sibling drawn just after it. No-op when
+// this is already the tail (frontmost) or has no movable siblings.
+func (this *Item) zorderRaise() {
+	if this.parent == nil {
+		return
+	}
+	p := this.parent.NakedItem()
+	if this.next == this || this.next == p.child { // single child or already tail
+		return
+	}
+	zorderSwapAdjacent(p, this, this.next)
+}
+
+// zorderLower swaps this with the sibling drawn just before it. No-op when
+// this is already the head (backmost) or has no movable siblings.
+func (this *Item) zorderLower() {
+	if this.parent == nil {
+		return
+	}
+	p := this.parent.NakedItem()
+	if this.prev == this || this == p.child { // single child or already head
+		return
+	}
+	zorderSwapAdjacent(p, this.prev, this)
+}
+
+// zorderToFront moves this to the tail (drawn last). No-op when already there.
+func (this *Item) zorderToFront() {
+	p := this.parent
+	if p == nil {
+		return
+	}
+	pn := p.NakedItem()
+	if this.next == pn.child { // already the tail / frontmost
+		return
+	}
+	if this.zorderUnlink() == nil {
+		return
+	}
+	// tail == just before the (possibly new) head in the ring
+	this.zorderInsertBefore(pn.child)
+}
+
+// zorderToBack moves this to the head (drawn first). No-op when already there.
+func (this *Item) zorderToBack() {
+	p := this.parent
+	if p == nil {
+		return
+	}
+	pn := p.NakedItem()
+	if this == pn.child { // already the head / backmost
+		return
+	}
+	if this.zorderUnlink() == nil {
+		return
+	}
+	this.zorderInsertBefore(pn.child)
+	pn.child = this // the new head
 }
 
 func (this *Item) HasLocalCoord() bool {

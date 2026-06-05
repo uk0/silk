@@ -420,6 +420,25 @@ func (this *GedView) OnRightUp(x, y float64) {
 
 		menu.AddSeparator()
 
+		// Z-order submenu (Qt Designer's Raise / Lower / Bring-to-Front /
+		// Send-to-Back) so overlapping widgets can be restacked. Each entry
+		// applies the graph reorder to the whole selection then redraws.
+		zMenu, _ := menu.AddSubMenu("层叠顺序", nil, nil)
+		zMenu.AddButton1("上移一层", nil).Action().BindFunc0(func() {
+			this.reorderSelection(graph.IItem.Raise)
+		})
+		zMenu.AddButton1("下移一层", nil).Action().BindFunc0(func() {
+			this.reorderSelection(graph.IItem.Lower)
+		})
+		zMenu.AddButton1("置于顶层", nil).Action().BindFunc0(func() {
+			this.reorderSelection(graph.IItem.BringToFront)
+		})
+		zMenu.AddButton1("置于底层", nil).Action().BindFunc0(func() {
+			this.reorderSelection(graph.IItem.SendToBack)
+		})
+
+		menu.AddSeparator()
+
 		// "Set Name" menu item
 		btnName := menu.AddButton1("设置名称...", nil)
 		btnName.Action().BindFunc0(func() {
@@ -492,6 +511,19 @@ func (this *GedView) DeleteSelectedItems() {
 		item.Detach()
 	}
 	sel.Clear()
+	this.Self().Update()
+}
+
+// reorderSelection applies a Z-order operation (Raise/Lower/BringToFront/
+// SendToBack) to every selected item, then redraws the canvas. Like the
+// Delete and Lock entries in the context menu, the reorder is applied
+// directly rather than pushed onto the UndoStack — structural restacking
+// has no command type yet.
+func (this *GedView) reorderSelection(op func(graph.IItem)) {
+	sel := this.Selection()
+	for _, item := range sel.ItemList() {
+		op(item)
+	}
 	this.Self().Update()
 }
 
