@@ -1,6 +1,10 @@
 package gui
 
 import (
+	"sort"
+	"strconv"
+	"strings"
+
 	"silk/core"
 	"silk/paint"
 )
@@ -18,11 +22,105 @@ type TableModel interface {
 	ColumnWidth(col int) float64
 }
 
+// SortableTableModel is an optional capability for models that support
+// click-to-sort on column headers. SortByColumn reorders the rows by the
+// given column; RestoreOrder reverts to the original insertion order.
+type SortableTableModel interface {
+	SortByColumn(col int, ascending bool)
+	RestoreOrder()
+}
+
+// columnIsNumeric reports whether every non-empty cell in the given column
+// parses as a float64. Empty cells are skipped; a column with no parseable
+// non-empty cells is treated as non-numeric.
+func columnIsNumeric(rows [][]string, col int) bool {
+	seen := false
+	for _, r := range rows {
+		if col < 0 || col >= len(r) {
+			continue
+		}
+		s := strings.TrimSpace(r[col])
+		if s == "" {
+			continue
+		}
+		if _, err := strconv.ParseFloat(s, 64); err != nil {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+// compareTableCells compares two cell strings case-insensitively, returning
+// -1, 0, or 1. Used as the string fallback when a column is not numeric.
+func compareTableCells(a, b string) int {
+	la := strings.ToLower(a)
+	lb := strings.ToLower(b)
+	if la < lb {
+		return -1
+	}
+	if la > lb {
+		return 1
+	}
+	return 0
+}
+
+// compareTableCellsNumeric compares two cell strings as float64, returning
+// -1, 0, or 1. An unparseable or empty cell sorts before any number.
+func compareTableCellsNumeric(a, b string) int {
+	fa, ea := strconv.ParseFloat(strings.TrimSpace(a), 64)
+	fb, eb := strconv.ParseFloat(strings.TrimSpace(b), 64)
+	if ea != nil || eb != nil {
+		switch {
+		case ea != nil && eb != nil:
+			return 0
+		case ea != nil:
+			return -1
+		default:
+			return 1
+		}
+	}
+	if fa < fb {
+		return -1
+	}
+	if fa > fb {
+		return 1
+	}
+	return 0
+}
+
+// sortRowsByColumn stably sorts rows in place by the given column. If every
+// non-empty cell in the column parses as a number the comparison is numeric,
+// otherwise it is a case-insensitive string compare. The sort is stable so
+// rows that compare equal keep their relative order.
+func sortRowsByColumn(rows [][]string, col int, ascending bool) {
+	numeric := columnIsNumeric(rows, col)
+	cell := func(r []string) string {
+		if col < 0 || col >= len(r) {
+			return ""
+		}
+		return r[col]
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		var c int
+		if numeric {
+			c = compareTableCellsNumeric(cell(rows[i]), cell(rows[j]))
+		} else {
+			c = compareTableCells(cell(rows[i]), cell(rows[j]))
+		}
+		if !ascending {
+			c = -c
+		}
+		return c < 0
+	})
+}
+
 // SimpleTableModel is a basic in-memory TableModel implementation.
 type SimpleTableModel struct {
-	headers []string
-	widths  []float64
-	rows    [][]string
+	headers  []string
+	widths   []float64
+	rows     [][]string
+	original [][]string // insertion-order snapshot captured on first sort
 }
 
 // NewSimpleTableModel creates a new SimpleTableModel with the given column headers.
@@ -85,6 +183,7 @@ func (m *SimpleTableModel) AddRow(cells ...string) {
 		row[i] = cells[i]
 	}
 	m.rows = append(m.rows, row)
+	m.invalidateOrder()
 }
 
 // SetRow replaces the cell values at the given row index.
@@ -105,6 +204,7 @@ func (m *SimpleTableModel) RemoveRow(row int) {
 	}
 	m.rows[row] = nil
 	m.rows = append(m.rows[:row], m.rows[row+1:]...)
+	m.invalidateOrder()
 }
 
 // RowData returns a copy of the cells at the given row.
@@ -117,6 +217,43 @@ func (m *SimpleTableModel) RowData(row int) []string {
 	return ret
 }
 
+// snapshotOrder captures the current row order so RestoreOrder can revert to
+// it. It is taken only once, on the first sort after the rows last changed.
+func (m *SimpleTableModel) snapshotOrder() {
+	if m.original != nil {
+		return
+	}
+	m.original = make([][]string, len(m.rows))
+	copy(m.original, m.rows)
+}
+
+// invalidateOrder drops the insertion-order snapshot; called whenever the row
+// set changes so the next sort re-snapshots from the new contents.
+func (m *SimpleTableModel) invalidateOrder() {
+	m.original = nil
+}
+
+// SortByColumn reorders the rows by the given column. Numeric columns are
+// compared as numbers, others case-insensitively as strings. The first sort
+// captures the insertion order so RestoreOrder can revert to it.
+func (m *SimpleTableModel) SortByColumn(col int, ascending bool) {
+	if col < 0 || col >= len(m.headers) {
+		return
+	}
+	m.snapshotOrder()
+	sortRowsByColumn(m.rows, col, ascending)
+}
+
+// RestoreOrder reverts the rows to the original insertion order captured
+// before the first sort.
+func (m *SimpleTableModel) RestoreOrder() {
+	if m.original == nil {
+		return
+	}
+	m.rows = m.original
+	m.original = nil
+}
+
 // Table is a tabular data display widget with a fixed header row,
 // scrollable body, row selection, and alternating row backgrounds.
 type Table struct {
@@ -126,7 +263,10 @@ type Table struct {
 	selectedRow        int
 	rowHeight          float64
 	headerHeight       float64
+	sortColumn         int  // currently sorted column, -1 when unsorted
+	sortAscending      bool // direction of the current sort
 	cbSelectionChanged func(interface{}, int)
+	cbSortChanged      func(col int, ascending bool)
 }
 
 // NewTable creates a new Table widget.
@@ -134,6 +274,7 @@ func NewTable() *Table {
 	p := new(Table)
 	p.Init(p)
 	p.selectedRow = -1
+	p.sortColumn = -1
 	p.scrollArea = NewScrollArea()
 	p.scrollArea.SetParent(p)
 	return p
@@ -142,6 +283,7 @@ func NewTable() *Table {
 // SetModel sets the TableModel that provides data for this table.
 func (this *Table) SetModel(m TableModel) {
 	this.model = m
+	this.sortColumn = -1
 	this.updateScroll()
 	this.Layout()
 }
@@ -179,6 +321,61 @@ func (this *Table) SetSelectedRow(row int) {
 // SetSelectionChangedCallback sets a callback invoked when the selected row changes.
 func (this *Table) SetSelectionChangedCallback(cb func(interface{}, int)) {
 	this.cbSelectionChanged = cb
+}
+
+// SigSortChanged sets the callback invoked when the sort column or direction
+// changes. col is the sorted column, or -1 when the table returns to its
+// original unsorted order.
+func (this *Table) SigSortChanged(fn func(col int, ascending bool)) {
+	this.cbSortChanged = fn
+}
+
+// SortColumn returns the currently sorted column index, or -1 when unsorted.
+func (this *Table) SortColumn() int {
+	return this.sortColumn
+}
+
+// SortAscending reports the direction of the current sort.
+func (this *Table) SortAscending() bool {
+	return this.sortAscending
+}
+
+// sortByColumn cycles the sort state for the given column: an unsorted column
+// sorts ascending, the active column toggles to descending, and a descending
+// column clears back to the original insertion order. It requires the model to
+// implement SortableTableModel; otherwise it is a no-op. This is the entry
+// point used by the header-click handler.
+func (this *Table) sortByColumn(col int) {
+	if this.model == nil {
+		return
+	}
+	sm, ok := this.model.(SortableTableModel)
+	if !ok {
+		return
+	}
+	if col < 0 || col >= this.model.ColumnCount() {
+		return
+	}
+
+	switch {
+	case this.sortColumn != col:
+		this.sortColumn = col
+		this.sortAscending = true
+		sm.SortByColumn(col, true)
+	case this.sortAscending:
+		this.sortAscending = false
+		sm.SortByColumn(col, false)
+	default:
+		// third click on the same column: restore original order
+		this.sortColumn = -1
+		this.sortAscending = false
+		sm.RestoreOrder()
+	}
+
+	if this.cbSortChanged != nil {
+		this.cbSortChanged(this.sortColumn, this.sortAscending)
+	}
+	this.Update()
 }
 
 // RowHeight returns the height of each data row.
@@ -323,6 +520,10 @@ func (this *Table) Draw(g paint.Painter) {
 		txt := this.model.HeaderText(c)
 		yt := fe.Ascent + (hh-fe.Height)*0.5
 		g.DrawText1(xPos+4, yt, txt)
+		// Sort indicator arrow on the active column
+		if c == this.sortColumn {
+			this.drawSortArrow(g, xPos+cw-12, hh*0.5, this.sortAscending)
+		}
 		xPos += cw
 	}
 	g.Restore()
@@ -404,6 +605,47 @@ func (this *Table) Draw(g paint.Painter) {
 	t.DrawViewFrame(g, 0, 0, this.w, this.h)
 }
 
+// drawSortArrow draws a small triangle indicator centered at (cx, cy):
+// pointing up for ascending order, down for descending.
+func (this *Table) drawSortArrow(g paint.Painter, cx, cy float64, ascending bool) {
+	t := Theme()
+	s := 4.0
+	g.Save()
+	if ascending {
+		// up arrow
+		g.MoveTo(cx-s, cy+s/2)
+		g.LineTo(cx, cy-s/2)
+		g.LineTo(cx+s, cy+s/2)
+	} else {
+		// down arrow
+		g.MoveTo(cx-s, cy-s/2)
+		g.LineTo(cx, cy+s/2)
+		g.LineTo(cx+s, cy-s/2)
+	}
+	g.SetPen1(t.FormDarkColor, 1.5)
+	g.Stroke()
+	g.Restore()
+}
+
+// headerColumnAt returns the column index under the given widget-space x
+// coordinate, accounting for horizontal scroll, or -1 if past the last column.
+// It mirrors the column layout used when drawing the header.
+func (this *Table) headerColumnAt(x float64) int {
+	if this.model == nil {
+		return -1
+	}
+	mx := x + this.scrollArea.ScrollX()
+	xPos := 0.0
+	for c := 0; c < this.model.ColumnCount(); c++ {
+		cw := this.model.ColumnWidth(c)
+		if mx >= xPos && mx < xPos+cw {
+			return c
+		}
+		xPos += cw
+	}
+	return -1
+}
+
 // OnLeftDown handles mouse clicks for row selection.
 func (this *Table) OnLeftDown(x, y float64) {
 	this.SetFocus()
@@ -413,7 +655,11 @@ func (this *Table) OnLeftDown(x, y float64) {
 
 	hh := this.HeaderHeight()
 	if y < hh {
-		// Clicked on header, ignore for now
+		// Clicked on a header cell: sort by that column.
+		col := this.headerColumnAt(x)
+		if col >= 0 {
+			this.sortByColumn(col)
+		}
 		return
 	}
 
