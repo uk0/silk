@@ -49,7 +49,7 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "显示控件 (Display)",
-		names: []string{"gui.Label", "gui.ProgressBar", "gui.Spinner", "gui.GroupBox", "gui.ImageView", "gui.Tag", "gui.Badge", "gui.Avatar", "gui.Breadcrumb", "gui.Link", "gui.LabelSeparator", "gui.Placeholder", "gui.Timeline"},
+		names: []string{"gui.Label", "gui.ProgressBar", "gui.Spinner", "gui.GroupBox", "gui.ImageView", "gui.Tag", "gui.Badge", "gui.Avatar", "gui.Breadcrumb", "gui.Link", "gui.LabelSeparator", "gui.Placeholder", "gui.Timeline", "gui.Alert"},
 	},
 	{
 		name:  "容器/布局 (Layout)",
