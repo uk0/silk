@@ -4,6 +4,7 @@ import (
 	"silk/core"
 	"silk/geom"
 	"silk/paint"
+	"strings"
 	//"math"
 	//"time"
 )
@@ -320,6 +321,119 @@ func (this *ComboBox) onListSubmit() {
 	this.HideSubPopup()
 }
 
+// setActiveIndex commits idx as the current selection (the "closed dropdown"
+// path). It clamps to a valid row, syncs the list's highlight, updates the
+// edit text and fires sigSelectionChanged only when the index actually moves.
+func (this *ComboBox) setActiveIndex(idx int) {
+	n := this.Count()
+	if n == 0 {
+		return
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	this.sub.activeIndex = idx
+	if idx == this.activeIndex {
+		return
+	}
+	this.activeIndex = idx
+	if this.edit != nil {
+		this.edit.SetText(this.sub.Item(idx).Text)
+	}
+	if this.sigSelectionChanged != nil {
+		this.sigSelectionChanged(this.Self(), this.activeIndex)
+	}
+	this.Self().Update()
+}
+
+// OnKeyDown implements Qt QComboBox keyboard navigation. When the dropdown is
+// open Up/Down move the highlighted row and Enter commits it; when closed they
+// change the current selection directly. Esc closes without changing selection,
+// Home/End jump to the first/last item, and a printable character performs a
+// single-character type-ahead jump to the next matching item.
+func (this *ComboBox) OnKeyDown(key int, repeat bool) {
+	n := this.Count()
+	open := this.IsSubPopupVisible()
+
+	switch key {
+	case KeyDown:
+		if open {
+			this.sub.activeIndex = clampIndex(this.sub.activeIndex+1, n)
+			this.sub.Update()
+		} else {
+			this.setActiveIndex(this.activeIndex + 1)
+		}
+		return
+	case KeyUp:
+		if open {
+			this.sub.activeIndex = clampIndex(this.sub.activeIndex-1, n)
+			this.sub.Update()
+		} else {
+			this.setActiveIndex(this.activeIndex - 1)
+		}
+		return
+	case KeyHome:
+		if open {
+			this.sub.activeIndex = clampIndex(0, n)
+			this.sub.Update()
+		} else {
+			this.setActiveIndex(0)
+		}
+		return
+	case KeyEnd:
+		if open {
+			this.sub.activeIndex = clampIndex(n-1, n)
+			this.sub.Update()
+		} else {
+			this.setActiveIndex(n - 1)
+		}
+		return
+	case KeyEnter:
+		if open {
+			// Commit the highlighted row through the normal submit path,
+			// which updates the edit text, fires the callbacks and hides.
+			this.onListSubmit()
+		}
+		return
+	case KeyEsc:
+		if open {
+			this.HideSubPopup()
+		}
+		return
+	}
+
+	// Type-ahead: printable A-Z / 0-9 arrive as their ASCII code (see
+	// keyboard_glfw.go). Jump to the next item whose text starts with it.
+	if key >= 0x20 && key <= 0x7E {
+		start := this.activeIndex
+		if open {
+			start = this.sub.activeIndex
+		}
+		idx := nextMatchIndex(this.itemTexts(), start, rune(key))
+		if idx >= 0 {
+			if open {
+				this.sub.activeIndex = idx
+				this.sub.Update()
+			} else {
+				this.setActiveIndex(idx)
+			}
+		}
+	}
+}
+
+// itemTexts returns the display text of every item, for type-ahead matching.
+func (this *ComboBox) itemTexts() []string {
+	n := this.Count()
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = this.sub.Item(i).Text
+	}
+	return out
+}
+
 func (this *ComboBox) SigSelectionChanged(fn func(o interface{}, idx int)) {
 	this.sigSelectionChanged = fn
 }
@@ -331,4 +445,40 @@ func (this *ComboBox) EnumProperties(list core.IPropertyList) {
 
 func (this *ComboBox) SigSubmit(fn func(o interface{})) {
 	this.sigSubmit = fn
+}
+
+// clampIndex clamps i to [0, n-1]; returns -1 for an empty list.
+func clampIndex(i, n int) int {
+	if n <= 0 {
+		return -1
+	}
+	if i < 0 {
+		return 0
+	}
+	if i >= n {
+		return n - 1
+	}
+	return i
+}
+
+// nextMatchIndex returns the index of the next item (after start, cycling) whose
+// text begins with ch, matched case-insensitively. The search starts at start+1
+// and wraps around through start itself, so a repeated keystroke steps through
+// successive matches. Returns -1 when no item matches.
+func nextMatchIndex(items []string, start int, ch rune) int {
+	n := len(items)
+	if n == 0 {
+		return -1
+	}
+	prefix := strings.ToLower(string(ch))
+	for off := 1; off <= n; off++ {
+		i := (start + off) % n
+		if i < 0 {
+			i += n
+		}
+		if strings.HasPrefix(strings.ToLower(items[i]), prefix) {
+			return i
+		}
+	}
+	return -1
 }
