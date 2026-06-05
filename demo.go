@@ -266,6 +266,23 @@ func main() {
 	bdgLabel := gui.NewLabel("未读通知")
 	bdgLabel.SetParent(form)
 	bdgLabel.SetBounds(rx+60, ry+4, 100, 24)
+	ry += 44
+
+	// Spinner (busy indicator)
+	spinner := gui.NewSpinner()
+	spinner.SetParent(form)
+	spinner.SetBounds(rx, ry, 28, 28)
+	spinLabel := gui.NewLabel("加载中...")
+	spinLabel.SetParent(form)
+	spinLabel.SetBounds(rx+36, ry+4, 120, 24)
+	ry += 38
+
+	// Pagination
+	pager := gui.NewPagination()
+	pager.SetTotalPages(20)
+	pager.SetCurrentPage(6)
+	pager.SetParent(form)
+	pager.SetBounds(rx, ry, rw, 32)
 
 	// Status bar
 	status := gui.NewStatusBar()

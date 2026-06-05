@@ -49,7 +49,7 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "显示控件 (Display)",
-		names: []string{"gui.Label", "gui.ProgressBar", "gui.GroupBox", "gui.ImageView", "gui.Tag", "gui.Badge", "gui.Avatar", "gui.Breadcrumb", "gui.Link", "gui.LabelSeparator", "gui.Placeholder", "gui.Timeline"},
+		names: []string{"gui.Label", "gui.ProgressBar", "gui.Spinner", "gui.GroupBox", "gui.ImageView", "gui.Tag", "gui.Badge", "gui.Avatar", "gui.Breadcrumb", "gui.Link", "gui.LabelSeparator", "gui.Placeholder", "gui.Timeline"},
 	},
 	{
 		name:  "容器/布局 (Layout)",
@@ -57,7 +57,7 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "数据视图 (Data)",
-		names: []string{"gui.ListWidget", "gui.TreeView", "gui.Table", "gui.NotificationPanel"},
+		names: []string{"gui.ListWidget", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination"},
 	},
 	{
 		name:  "图表 (Charts)",
