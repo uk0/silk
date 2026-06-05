@@ -3,6 +3,7 @@ package ged
 import (
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -52,6 +53,10 @@ type FileExplorer struct {
 	lastClickTime time.Time
 	lastClickIdx  int
 
+	// git status badges, keyed by absolute file path; refreshed once per
+	// scan. Empty when rootDir is not inside a git repository.
+	gitStatus map[string]rune
+
 	cbFileOpen func(path string)
 }
 
@@ -94,6 +99,13 @@ func (this *FileExplorer) SigFileOpen(fn func(path string)) {
 
 // scanDir recursively reads a directory, skipping hidden and noisy entries.
 func (this *FileExplorer) scanDir(dir string, depth int) *fileEntry {
+	// Collect git status once at the top of a fresh scan/refresh — both
+	// SetRootDir and refreshKeepingExpansion enter here with depth 0 — so
+	// the badges are computed a single time per tree rebuild, not per row.
+	if depth == 0 {
+		this.collectGitStatus()
+	}
+
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil
@@ -296,6 +308,23 @@ func (this *FileExplorer) Draw(g paint.Painter) {
 		}
 		g.DrawText1(textX, rowY+rh-6, entry.name)
 
+		// Git status badge: a small status letter after the filename. On
+		// the selected (blue) row it's drawn white so it stays legible;
+		// otherwise it uses the conventional M/A/?/D colors.
+		if !entry.isDir {
+			if badge := this.gitStatusFor(entry.path); badge != 0 {
+				ext := g.Font().TextExtents(entry.name)
+				badgeFont := paint.NewFont(t.Font.Family(), 10, true, false)
+				g.SetFont(badgeFont)
+				if i == this.selectedIdx {
+					g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
+				} else {
+					g.SetBrush1(gitBadgeColor(badge))
+				}
+				g.DrawText1(textX+ext.XAdvance+6, rowY+rh-6, string(badge))
+			}
+		}
+
 		// Bottom separator
 		if i != this.selectedIdx {
 			g.SetPen1(paint.Color{R: 235, G: 235, B: 240, A: 60}, 0.5)
@@ -321,6 +350,108 @@ func (this *FileExplorer) fileTypeColor(entry *fileEntry) paint.Color {
 		return paint.Color{R: 80, G: 140, B: 220, A: 255} // blue
 	default:
 		return paint.Color{R: 160, G: 160, B: 170, A: 255} // gray
+	}
+}
+
+// collectGitStatus runs `git status --porcelain` in rootDir and rebuilds
+// the path->badge map. When rootDir is not inside a git repository (git
+// exits non-zero) the map is left empty so no badges are drawn and no
+// error is surfaced — the file tree works the same outside a repo.
+func (this *FileExplorer) collectGitStatus() {
+	this.gitStatus = nil
+	if this.rootDir == "" {
+		return
+	}
+
+	top, err := exec.Command("git", "-C", this.rootDir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return // not a git repo (or git unavailable)
+	}
+	gitRoot := strings.TrimSpace(string(top))
+	if gitRoot == "" {
+		return
+	}
+
+	out, err := exec.Command("git", "-C", this.rootDir, "status", "--porcelain").Output()
+	if err != nil {
+		return
+	}
+	this.gitStatus = parseGitPorcelain(string(out), gitRoot)
+}
+
+// parseGitPorcelain turns `git status --porcelain` output into a map from
+// absolute file path to a single status badge rune. Porcelain lines are
+// "XY <path>" where X is the staged (index) state and Y the worktree
+// state; untracked entries are "?? <path>" and renames are
+// "R  <old> -> <new>". Paths are repo-relative, so each is joined onto
+// gitRoot to produce the absolute key the tree is indexed by. For a
+// rename the new path is keyed. The badge prefers, in order: untracked
+// (?), then the staged column, then the worktree column, collapsed to the
+// documented set M / A / D / ? (a staged rename maps to A on the new
+// path). It is a pure function so it can be tested without a real repo.
+func parseGitPorcelain(output string, gitRoot string) map[string]rune {
+	result := map[string]rune{}
+	for _, line := range strings.Split(output, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		x, y := line[0], line[1]
+		rest := line[3:]
+
+		// Renames/copies report "old -> new"; key the new path.
+		path := rest
+		if i := strings.Index(rest, " -> "); i >= 0 {
+			path = rest[i+4:]
+		}
+		path = strings.TrimSpace(path)
+		// Porcelain quotes paths with unusual characters; strip the quotes.
+		path = strings.Trim(path, `"`)
+		if path == "" {
+			continue
+		}
+
+		var badge rune
+		switch {
+		case x == '?' && y == '?':
+			badge = '?'
+		case x == 'D' || y == 'D':
+			badge = 'D'
+		case x == 'A' || x == 'R' || x == 'C':
+			badge = 'A' // staged add / rename-new / copy
+		case x == 'M' || y == 'M':
+			badge = 'M'
+		case y == 'A':
+			badge = 'A'
+		default:
+			continue
+		}
+		result[filepath.Join(gitRoot, path)] = badge
+	}
+	return result
+}
+
+// gitStatusFor returns the git badge rune for the given absolute path, or
+// 0 when the path has no tracked change (or there is no repo).
+func (this *FileExplorer) gitStatusFor(path string) rune {
+	if this.gitStatus == nil {
+		return 0
+	}
+	return this.gitStatus[path]
+}
+
+// gitBadgeColor maps a status badge rune to its display color, matching
+// the convention used by Qt Creator / VS Code: amber modified, green
+// added/staged, gray untracked, red deleted.
+func gitBadgeColor(badge rune) paint.Color {
+	switch badge {
+	case 'M':
+		return paint.Color{R: 220, G: 160, B: 40, A: 255} // amber
+	case 'A':
+		return paint.Color{R: 60, G: 170, B: 90, A: 255} // green
+	case 'D':
+		return paint.Color{R: 210, G: 70, B: 70, A: 255} // red
+	default:
+		return paint.Color{R: 150, G: 150, B: 160, A: 255} // gray (untracked)
 	}
 }
 
