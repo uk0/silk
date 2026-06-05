@@ -70,6 +70,13 @@ type TreeView struct {
 	// 注: 不一定是模型的根结点, 可能是子树
 	rootSet map[*TreeViewRow]int
 
+	// 当前行在this.rows里的下标, -1表示无当前行
+	// 键盘导航和点击都通过它移动"当前/选中"行
+	currentRow int
+
+	// 当前行被激活(回车/空格/点击内容区)时的回调
+	cbActivated func(o interface{}, mi ModelIndex)
+
 	// 缩进根节点, 把第一层子节点顶格
 	indentRoot bool
 
@@ -88,6 +95,7 @@ type TreeView struct {
 
 func (this *TreeView) Init(iw IWidget) {
 	this.GuiView.Init(iw)
+	this.currentRow = -1
 	this.defRowHeight = Theme().ItemHeight
 	this.uniformRowHeight = false
 	this.header = NewHeaderView()
@@ -140,6 +148,7 @@ func (this *TreeView) OnBeginReset() {
 	this.rmap = make(map[ModelIndex]*TreeViewRow)
 	this.rootSet = nil
 	this.rows = nil
+	this.currentRow = -1
 }
 
 func (this *TreeView) OnEndReset() {
@@ -577,6 +586,9 @@ func (this *TreeView) MapFromScrolled(x, y float64) (x1, y1 float64) {
 }
 
 func (this *TreeView) OnLeftDown(x, y float64) {
+	// 取得焦点, 这样后续才能收到键盘事件
+	this.SetFocus()
+
 	x1, y1 := this.MapToScrolled(x, y)
 
 	row, detail := this.hitTestScrolled(x1, y1)
@@ -587,7 +599,213 @@ func (this *TreeView) OnLeftDown(x, y float64) {
 		} else {
 			this.expand(row)
 		}
+		return
 	}
+
+	// 点击内容区: 选中该行并激活
+	if r := this.rowIndexAtScrolled(y1); r >= 0 && r < len(this.rows) {
+		this.setCurrentRow(r)
+		this.activateCurrent()
+	}
+}
+
+// 键盘导航 (仿Qt QTreeView):
+//   上/下   : 在可见行间上移/下移当前行, 到头/到尾时夹住
+//   右       : 折叠且有子节点 -> 展开; 已展开 -> 移到第一个子节点; 无子节点 -> 无操作
+//   左       : 已展开 -> 折叠; 否则 -> 移到父节点(若有)
+//   回车/空格: 激活当前行
+//   Home/End : 跳到第一/最后一个可见行
+func (this *TreeView) OnKeyDown(key int, repeat bool) {
+	if len(this.rows) == 0 {
+		return
+	}
+
+	switch key {
+	case KeyDown:
+		this.setCurrentRow(nextVisibleRow(this.currentRow, len(this.rows)))
+	case KeyUp:
+		this.setCurrentRow(prevVisibleRow(this.currentRow, len(this.rows)))
+	case KeyHome:
+		this.setCurrentRow(0)
+	case KeyEnd:
+		this.setCurrentRow(len(this.rows) - 1)
+	case KeyRight:
+		this.moveRight()
+	case KeyLeft:
+		this.moveLeft()
+	case KeyEnter, KeySpace:
+		this.activateCurrent()
+	}
+}
+
+// 右方向键: 展开当前折叠节点, 或下钻到第一个子节点
+func (this *TreeView) moveRight() {
+	row := this.getRow1(this.currentRow)
+	if row == nil {
+		return
+	}
+	if !this.rowHasChildren(row) {
+		return
+	}
+	if !row.expanded {
+		this.expand(row)
+		this.scrollRowIntoView(this.currentRow)
+		this.Update()
+		return
+	}
+	// 已展开: 第一个子节点紧跟在当前行之后
+	if this.currentRow+1 < len(this.rows) {
+		this.setCurrentRow(this.currentRow + 1)
+	}
+}
+
+// 左方向键: 折叠当前展开节点, 或上移到父节点
+func (this *TreeView) moveLeft() {
+	row := this.getRow1(this.currentRow)
+	if row == nil {
+		return
+	}
+	if row.expanded {
+		this.collapse(row)
+		this.scrollRowIntoView(this.currentRow)
+		this.Update()
+		return
+	}
+	if p := this.parentRowIndex(this.currentRow); p >= 0 {
+		this.setCurrentRow(p)
+	}
+}
+
+// parentRowIndex 在可见行列表里找到第r行的父行下标: 向上扫描到第一个缩进更小的行.
+// 找不到(已是顶层)时返回-1. 这是纯函数式判定, 便于单元测试.
+func (this *TreeView) parentRowIndex(r int) int {
+	if r < 0 || r >= len(this.rows) {
+		return -1
+	}
+	indent := this.rows[r].indent
+	for i := r - 1; i >= 0; i-- {
+		if this.rows[i].indent < indent {
+			return i
+		}
+	}
+	return -1
+}
+
+// setCurrentRow 把当前行切换到r(夹在有效范围内), 更新选中标记, 并把该行滚入可见区.
+func (this *TreeView) setCurrentRow(r int) {
+	r = clampRow(r, len(this.rows))
+	if r == this.currentRow {
+		return
+	}
+	if old := this.getRow1(this.currentRow); old != nil {
+		old.selected = false
+	}
+	this.currentRow = r
+	if cur := this.getRow1(r); cur != nil {
+		cur.selected = true
+	}
+	this.scrollRowIntoView(r)
+	this.Update()
+}
+
+// activateCurrent 对当前行触发激活回调, 与点击内容区走同一路径.
+func (this *TreeView) activateCurrent() {
+	row := this.getRow1(this.currentRow)
+	if row == nil || this.cbActivated == nil {
+		return
+	}
+	this.cbActivated(this.Self(), row.mi)
+}
+
+// SetActivatedCallback 设置当前行被激活(回车/空格/点击内容区)时的回调.
+func (this *TreeView) SetActivatedCallback(cb func(o interface{}, mi ModelIndex)) {
+	this.cbActivated = cb
+}
+
+// CurrentRow 返回当前行在可见行列表里的下标, -1表示无当前行.
+func (this *TreeView) CurrentRow() int {
+	return this.currentRow
+}
+
+// SetCurrentRow 以可见行下标设置当前行.
+func (this *TreeView) SetCurrentRow(r int) {
+	this.setCurrentRow(r)
+}
+
+// CurrentIndex 返回当前行第0列的模型索引, 无当前行时返回空索引.
+func (this *TreeView) CurrentIndex() ModelIndex {
+	if row := this.getRow1(this.currentRow); row != nil {
+		return row.mi
+	}
+	return ModelIndex{}
+}
+
+// scrollRowIntoView 调整垂直滚动位置(以行为单位), 让第r行落在可见窗口内.
+// 复用updateVertScrollBar的"从底部往上数可见行数"思路计算窗口高度.
+func (this *TreeView) scrollRowIntoView(r int) {
+	if r < 0 || r >= len(this.rows) {
+		return
+	}
+	top := int(this.ScrollY())
+	if r < top {
+		this.SetScrollY(float64(r))
+		return
+	}
+	// 计算从第r行往上能完整显示多少行, 得到可容纳该行的最靠上的top
+	ch := this.h - this.headerHeight()
+	ch -= Theme().ItemHeight + Theme().ScrollWidth
+	first := r
+	lh := 0.0
+	for first > 0 {
+		a := this.rowHeight(first)
+		if lh+a >= ch {
+			break
+		}
+		lh += a
+		first--
+	}
+	if top < first {
+		this.SetScrollY(float64(first))
+	}
+}
+
+// clampRow 把行下标夹到[0, n)内; n==0时返回-1.
+func clampRow(r, n int) int {
+	if n <= 0 {
+		return -1
+	}
+	if r < 0 {
+		return 0
+	}
+	if r >= n {
+		return n - 1
+	}
+	return r
+}
+
+// nextVisibleRow / prevVisibleRow 在长度为n的可见行列表里上移/下移, 到头/到尾夹住.
+// 拆成纯函数便于在没有GL渲染的情况下单测导航逻辑.
+func nextVisibleRow(cur, n int) int {
+	if n <= 0 {
+		return -1
+	}
+	if cur < 0 {
+		return 0
+	}
+	if cur+1 < n {
+		return cur + 1
+	}
+	return cur
+}
+
+func prevVisibleRow(cur, n int) int {
+	if n <= 0 {
+		return -1
+	}
+	if cur <= 0 {
+		return 0
+	}
+	return cur - 1
 }
 
 func (this *TreeView) rowHeight(i int) float64 {
@@ -645,6 +863,12 @@ func (this *TreeView) Draw(g paint.Painter) {
 		}
 		y := row.ypos
 		h := this.calcRowHeight(row)
+		// 选中行高亮
+		if row.selected {
+			g.SetBrush1(Theme().HighLightColor)
+			g.Rectangle1(geom.Rect{lrect.X, y, lrect.Width, h})
+			g.Fill()
+		}
 		for vc := 0; vc < this.header.SectionCount(); vc++ {
 			colInfo := this.header.VisualSection(vc)
 			if colInfo.Hidden {
