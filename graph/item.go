@@ -1239,17 +1239,22 @@ func (this *Item) IndexInParent() int {
 	if head == nil {
 		return -1
 	}
-	//ret := make([]IItem, 0, 10)
+	// Walk the sibling ring head-first (same order as Children()) and count
+	// the siblings that precede this item. The body runs before the wrap-around
+	// terminator check so the tail (head.prev) is counted too: the last child
+	// returns len(children)-1.
 	idx := 0
 	end := head.prev
 	for p := head; ; p = p.next {
-		//ret = append(ret, p.Self())
+		if p == this {
+			return idx
+		}
 		if p == end {
 			break
 		}
 		idx++
 	}
-	return idx
+	return -1
 }
 
 func (this *Item) Icon() paint.Icon {
