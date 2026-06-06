@@ -3572,6 +3572,16 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.ToggleBreakpoint(this.cursorLine)
 		}
 
+	case KeyF12:
+		// F12 / Shift+F12: AST-driven navigation for the identifier at the cursor.
+		// F12 jumps to its definition; Shift+F12 highlights every reference in the
+		// current file by reusing the find-bar's findMatches overlay.
+		if shift {
+			this.HighlightReferencesAtCursor()
+		} else {
+			this.GoToDefinitionAtCursor()
+		}
+
 	case '/':
 		if ctrl || isActionModifier() {
 			// Cmd+/ (macOS) / Ctrl+/: toggle line comment
@@ -3590,6 +3600,9 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			if reg, ok := this.foldRegionEnclosing(this.cursorLine); ok && !this.IsFolded(reg.startLine) {
 				this.ToggleFold(reg.startLine)
 			}
+		} else if (ctrl || isActionModifier()) && shift {
+			// Cmd+Shift+[ (macOS) / Ctrl+Shift+[: fold every region.
+			this.FoldAll()
 		} else if ctrl || isActionModifier() {
 			// Cmd+[ (macOS) / Ctrl+[: navigate back
 			this.NavGoBack()
@@ -3601,6 +3614,9 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			if reg, ok := this.foldRegionEnclosing(this.cursorLine); ok && this.IsFolded(reg.startLine) {
 				this.ToggleFold(reg.startLine)
 			}
+		} else if (ctrl || isActionModifier()) && shift {
+			// Cmd+Shift+] (macOS) / Ctrl+Shift+]: unfold every region.
+			this.UnfoldAll()
 		} else if ctrl || isActionModifier() {
 			// Cmd+] (macOS) / Ctrl+]: navigate forward
 			this.NavGoForward()
@@ -4158,6 +4174,61 @@ func (this *CodeEditor) FoldAll() {
 // UnfoldAll expands every collapsed region.
 func (this *CodeEditor) UnfoldAll() {
 	this.foldedLines = make(map[int]bool)
+	this.Self().Update()
+}
+
+// GoToDefinitionAtCursor jumps to the definition of the identifier at the
+// caret using the AST-based FindDefinition resolver. When the target lives in
+// the current file (or no file path is set) the editor scrolls to it directly;
+// when it lives in a sibling .go file it is delegated to the cross-file
+// navigation callback the host editor wires up. No-op when no identifier is
+// under the cursor or no definition can be resolved.
+func (this *CodeEditor) GoToDefinitionAtCursor() {
+	this.clampCursor()
+	word := this.wordAtCursor()
+	if word == "" {
+		return
+	}
+	target := FindDefinition(word, this.filePath, this.Text())
+	if target == nil {
+		return
+	}
+	this.pushNavPosition()
+	if target.FilePath == this.filePath || this.filePath == "" {
+		this.goToLine(target.Line)
+		this.ScrollToLine(target.Line)
+		return
+	}
+	if this.cbNavigate != nil {
+		this.cbNavigate(target.FilePath, target.Line)
+	}
+}
+
+// HighlightReferencesAtCursor finds every occurrence of the identifier at the
+// caret in the current buffer (AST-based FindReferences) and routes them
+// through the find bar's findMatches overlay so they are highlighted in place.
+// The user dismisses the highlight with Esc the same way they dismiss a normal
+// find (the find bar's Esc handler already clears findMatches).
+func (this *CodeEditor) HighlightReferencesAtCursor() {
+	this.clampCursor()
+	word := this.wordAtCursor()
+	if word == "" {
+		return
+	}
+	refs := FindReferences(word, this.Text())
+	this.findText = word
+	this.findCursor = len([]rune(word))
+	this.findMatches = nil
+	wordLen := len([]rune(word))
+	for _, r := range refs {
+		this.findMatches = append(this.findMatches, findMatch{
+			line: r.Line,
+			col:  r.Column,
+			end:  r.Column + wordLen,
+		})
+	}
+	this.findCurrentIdx = 0
+	this.findActive = true
 	this.Self().Update()
 }
 
