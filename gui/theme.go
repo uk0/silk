@@ -116,6 +116,11 @@ type defaultTheme struct {
 
 var defaultThemeSingleton *defaultTheme = nil
 
+// themeDefaultsSnapshot holds the colour fields captured the first time a
+// stylesheet is applied, so ResetStyleSheet can restore them without re-running
+// the full theme constructor (which would also reload pixmap faces / icons).
+var themeDefaultsSnapshot *defaultTheme
+
 // GUI风格(待改进)
 func Theme() *defaultTheme {
 	if defaultThemeSingleton == nil {
@@ -203,6 +208,109 @@ func Theme() *defaultTheme {
 		}
 	}
 	return defaultThemeSingleton
+}
+
+// ─── QSS-lite stylesheet wiring ───
+//
+// LoadStyleSheet parses a QSS-lite source string (see stylesheet.go) and
+// overrides the theme's existing colour fields from any matching rules. The
+// theme itself stays the same struct; widgets that already read from
+// Theme().XxxColor automatically pick up overrides. Widget-side Draw wiring
+// (per-widget selector resolution, non-colour properties, state-based lookups)
+// is a deliberate follow-up and not part of this entry point.
+//
+// Mapping table (selector, property) → defaultTheme field. Anything not listed
+// is silently ignored — the parser is forgiving on purpose, so a sheet may
+// carry properties this wiring does not yet understand.
+//
+//	Frame  { background }         → FormColor
+//	Frame  { color }              → TextColor
+//	Frame  { border }             → BorderColor       (also rebuilds BorderPen)
+//	Frame  { highlight }          → HighLightColor
+//	*:focus { color }             → HighLightColor    (alternate spelling)
+//	Frame  { view-background }    → ViewBGColor
+//	Frame  { separator }          → SeperatorColor
+//	Menu   { background }         → MenuBGColor
+//	Menu   { color }              → MenuTextColor
+//	Menu   { border }             → MenuBorderColor
+//	Menu:active   { background }  → MenuActiveBGColor
+//	Menu:active   { color }       → MenuActiveTextColor
+//	Menu:disabled { color }       → MenuGrayTextColor
+//
+// Parse errors are returned but do NOT prevent application of the rules that
+// did parse — ParseStyleSheet returns a non-nil sheet alongside its *ParseError.
+func (t *defaultTheme) LoadStyleSheet(src string) error {
+	sheet, perr := ParseStyleSheet(src)
+
+	// Snapshot the original colour fields the first time we apply a sheet so
+	// ResetStyleSheet can restore them. We snapshot the *current* theme rather
+	// than re-running the constructor to avoid touching pixmap / icon fields.
+	if themeDefaultsSnapshot == nil {
+		snap := *t
+		themeDefaultsSnapshot = &snap
+	}
+
+	if sheet != nil {
+		t.applyStyleSheet(sheet)
+		themeRev++
+	}
+	return perr
+}
+
+// ResetStyleSheet restores the colour fields captured at the first
+// LoadStyleSheet call. It is a no-op if no sheet has been loaded yet.
+func (t *defaultTheme) ResetStyleSheet() {
+	if themeDefaultsSnapshot == nil {
+		return
+	}
+	snap := themeDefaultsSnapshot
+	t.FormColor = snap.FormColor
+	t.TextColor = snap.TextColor
+	t.BorderColor = snap.BorderColor
+	t.BorderPen = paint.NewPen(t.BorderColor, 1)
+	t.HighLightColor = snap.HighLightColor
+	t.ViewBGColor = snap.ViewBGColor
+	t.SeperatorColor = snap.SeperatorColor
+	t.MenuBGColor = snap.MenuBGColor
+	t.MenuTextColor = snap.MenuTextColor
+	t.MenuBorderColor = snap.MenuBorderColor
+	t.MenuActiveBGColor = snap.MenuActiveBGColor
+	t.MenuActiveTextColor = snap.MenuActiveTextColor
+	t.MenuGrayTextColor = snap.MenuGrayTextColor
+	themeRev++
+}
+
+// applyStyleSheet walks the mapping table and overrides matching colour fields.
+// Each entry is independent: a missing or malformed value leaves the field as
+// it is. BorderPen is rebuilt whenever BorderColor changes so cached strokes
+// keep matching the active border colour.
+func (t *defaultTheme) applyStyleSheet(ss *StyleSheet) {
+	apply := func(widgetType, id, state, prop string, dst *paint.Color) bool {
+		decls := ss.Lookup(widgetType, id, state)
+		if c, ok := Color(decls, prop); ok {
+			*dst = c
+			return true
+		}
+		return false
+	}
+
+	apply("Frame", "", "", "background", &t.FormColor)
+	apply("Frame", "", "", "color", &t.TextColor)
+	if apply("Frame", "", "", "border", &t.BorderColor) {
+		t.BorderPen = paint.NewPen(t.BorderColor, 1)
+	}
+	if !apply("Frame", "", "", "highlight", &t.HighLightColor) {
+		apply("*", "", "focus", "color", &t.HighLightColor)
+	}
+	apply("Frame", "", "", "view-background", &t.ViewBGColor)
+	apply("Frame", "", "", "separator", &t.SeperatorColor)
+
+	apply("Menu", "", "", "background", &t.MenuBGColor)
+	apply("Menu", "", "", "color", &t.MenuTextColor)
+	apply("Menu", "", "", "border", &t.MenuBorderColor)
+	apply("Menu", "", "active", "background", &t.MenuActiveBGColor)
+	apply("Menu", "", "active", "color", &t.MenuActiveTextColor)
+	apply("Menu", "", "disabled", "color", &t.MenuGrayTextColor)
 }
 
 // roundedRect builds a rounded rectangle path on the painter.
