@@ -790,7 +790,16 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	if project == "" {
 		project = "silkide"
 	}
-	sb.AddPermanentWidget(gui.NewLabel(project))
+	// Module path lives next to the project basename so the user can
+	// tell "silkide rooted at ./examples/foo" apart from "rooted at
+	// the real silk module" at a glance. Empty when no go.mod is
+	// reachable from the cwd; we leave the cell off entirely in that
+	// case so designer-only projects stay uncluttered.
+	if modulePath := loadModulePath(cwd); modulePath != "" {
+		sb.AddPermanentWidget(gui.NewLabel(project + " · " + modulePath))
+	} else {
+		sb.AddPermanentWidget(gui.NewLabel(project))
+	}
 	sb.AddPermanentWidget(gui.NewLabel("main"))
 	sb.AddPermanentWidget(gui.NewLabel("Ln 1, Col 1"))
 	sb.AddPermanentWidget(gui.NewLabel("UTF-8"))
@@ -1298,6 +1307,143 @@ func buildProject(canvas *ged.GedView) {
 			silkideToast(i18n.T("Build failed"), gui.ToastError)
 		}
 	}()
+}
+
+// runProjectTests runs "go test -v ./..." in the project directory
+// and pipes combined stdout+stderr into the BuildOutput pane. Mirrors
+// buildProject — same goroutine + reportBuildOutput dispatch — so the
+// "where does my toolchain output land?" answer is identical for build
+// and test. Future passes will fan out the same text into a dedicated
+// TestResultsPanel and a Go coverage parser; for now the raw log gives
+// the user a usable F7 flow without depending on those concurrent
+// changes.
+//
+// Wired to F7 + Cmd+Shift+T + the "Run Tests" palette command.
+func runProjectTests(canvas *ged.GedView) {
+	if globalBuildOutput == nil {
+		buildOutputPane()
+	}
+	dir := projectDir(canvas)
+	reportBuildOutput(fmt.Sprintf("$ go test -v ./...   (cwd: %s)", dir))
+	silkideToast(i18n.T("Running tests..."), gui.ToastInfo)
+	go func() {
+		cmd := exec.Command("go", "test", "-v", "./...")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.CombinedOutput()
+		text := string(out)
+		if err != nil && text == "" {
+			text = err.Error()
+		}
+		reportBuildOutput(text)
+		if err == nil {
+			silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
+		} else {
+			silkideToast(i18n.T("Tests failed"), gui.ToastError)
+		}
+	}()
+}
+
+// gofmtSource pipes `src` through the system `gofmt` and returns the
+// formatted output on success. Errors propagate verbatim — the caller
+// decides whether a malformed buffer (syntax error from a WIP edit) is
+// fatal or "leave the buffer alone". Pure helper so a unit test can
+// round-trip a known-bad and known-good input without touching the
+// editor.
+//
+// We use exec.Command("gofmt") on stdin/stdout rather than calling
+// go/format.Source directly so the result matches whatever the user's
+// installed toolchain ships — same gofmt the project's CI/precommit
+// runs, no version drift.
+func gofmtSource(src string) (string, error) {
+	cmd := exec.Command("gofmt")
+	cmd.Stdin = strings.NewReader(src)
+	var out, errBuf strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(errBuf.String()); msg != "" {
+			return "", fmt.Errorf("gofmt: %s", msg)
+		}
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// loadModulePath walks upward from `cwd` looking for the first go.mod,
+// then scans its lines for "module <path>". Returns the bare module
+// path (no quotes, no inline-comment tail) or "" when no go.mod is
+// found in any ancestor. Inline scan — a richer parser will replace
+// this once the concurrent core/gomod package lands.
+//
+// Walks until filepath.Dir returns the same directory (filesystem
+// root) so the loop terminates on every platform.
+func loadModulePath(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	dir := cwd
+	for {
+		modPath := filepath.Join(dir, "go.mod")
+		if data, err := os.ReadFile(modPath); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				trim := strings.TrimSpace(line)
+				if strings.HasPrefix(trim, "module ") {
+					name := strings.TrimSpace(strings.TrimPrefix(trim, "module"))
+					name = strings.TrimSpace(strings.SplitN(name, "//", 2)[0])
+					name = strings.Trim(name, `"`)
+					return name
+				}
+			}
+			return ""
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// saveActiveEditorToDisk writes the active code editor's buffer back
+// to the file it was opened from. .go files get a `gofmt` pass on the
+// way out so the saved buffer matches the toolchain's formatting
+// (same convention every Go IDE uses on Cmd+S). A gofmt failure (WIP
+// code with a syntax error) leaves the buffer untouched and surfaces a
+// quiet warning toast — the user still gets their save, just not the
+// reformat.
+//
+// Returns false when there is no active editor or no tracked path —
+// performSave's design-canvas branch already covered the no-canvas
+// case, so the Cmd+S handler can call both and the right side fires.
+func saveActiveEditorToDisk(tabs *gui.TabWidget) bool {
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return false
+	}
+	path := activeEditorPath(tabs)
+	if path == "" {
+		return false
+	}
+	text := ed.Text()
+	out := text
+	if strings.EqualFold(filepath.Ext(path), ".go") {
+		if formatted, err := gofmtSource(text); err == nil {
+			out = formatted
+			if formatted != text {
+				ed.SetText(formatted)
+			}
+		} else {
+			silkideToast(i18n.T("gofmt failed; saved unformatted"), gui.ToastWarning)
+		}
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		silkideToast(i18n.Tf("Save failed: %v", err), gui.ToastError)
+		return false
+	}
+	silkideToast(i18n.Tf("Saved %s", filepath.Base(path)), gui.ToastSuccess)
+	return true
 }
 
 // projectDir resolves the directory the toolchain should run in:

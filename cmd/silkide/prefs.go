@@ -250,6 +250,12 @@ func registerSilkideTranslations() {
 		"Build successful":       "构建成功",
 		"Build failed":           "构建失败",
 		"Running...":             "运行中...",
+		"Running tests...":       "运行测试中...",
+		"Tests passed":           "测试通过",
+		"Tests failed":           "测试失败",
+		"Run Tests":              "运行测试",
+		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
+		"Save failed: %v":        "保存失败: %v",
 		"Run skipped: no main package": "未找到 main 包，已跳过运行",
 		"Opened %s":              "已打开 %s",
 		"Recovered from autosave": "已从自动保存恢复",
@@ -302,7 +308,16 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
 	gui.RegisterShortcut(gui.ModAction, 'S', func() {
-		performSave(designCanvas)
+		// Cmd+S routes to two save targets: the active code-editor tab
+		// (with gofmt-on-save for .go files) when one is focused, and
+		// the design canvas (.silkui + .silk.go regen) otherwise.
+		// saveActiveEditorToDisk is a no-op when no editor tab has a
+		// tracked path; falling through to performSave then covers the
+		// design-canvas case without us having to track "which dock
+		// tab is active" here.
+		if !saveActiveEditorToDisk(editorTabs) {
+			performSave(designCanvas)
+		}
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Z', func() {
 		if designCanvas == nil {
@@ -375,12 +390,16 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// also clicks back into PL_FREE_ZOOM cleanly.
 	gui.RegisterShortcut(0, 'F', func() { fitCanvasToView(designCanvas) })
 
-	// F5 → Run, F6 → Build. Visual Studio / JetBrains muscle memory.
-	// No modifier so they don't clash with Cmd+R (canvas refresh)
-	// and Cmd+B (which we may bind to "build" with a modifier later
-	// if the function-keyless laptop crowd asks for it).
+	// F5 → Run, F6 → Build, F7 → Test. Visual Studio / JetBrains
+	// muscle memory. No modifier so they don't clash with Cmd+R
+	// (canvas refresh) and Cmd+B (which we may bind to "build" with
+	// a modifier later if the function-keyless laptop crowd asks for
+	// it). Cmd+Shift+T is the second F7 binding for laptops without
+	// function rows.
 	gui.RegisterShortcut(0, gui.KeyF5, func() { runProjectInTerminal(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
+	gui.RegisterShortcut(0, gui.KeyF7, func() { runProjectTests(designCanvas) })
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
 
 	// Cmd+Shift+P — open the Command Palette. JetBrains "Find Action"
 	// / VSCode command palette muscle memory: every action in the IDE

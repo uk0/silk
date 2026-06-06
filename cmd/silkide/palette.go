@@ -79,9 +79,13 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
 	})
 
-	// Run / Build / Export.
+	// Run / Build / Test / Export. Run Tests carries two
+	// accelerators (F7 + Cmd+Shift+T); the hint surfaces F7 to match
+	// the canonical JetBrains label and Cmd+Shift+T stays
+	// discoverable through the shortcut wiring in prefs.go.
 	add("Run", "F5", func() { runProjectInTerminal(designCanvas) })
 	add("Build", "F6", func() { buildProject(designCanvas) })
+	add("Run Tests", "F7", func() { runProjectTests(designCanvas) })
 	add("Export...", "", func() {
 		if designCanvas == nil {
 			return
