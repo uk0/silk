@@ -4,40 +4,51 @@ import (
 	"fmt"
 	"silk/core"
 	"silk/paint"
-	"math"
 )
 
 func init() {
 	core.RegisterFactory("gui.ColorPicker", core.TypeOf((*ColorPicker)(nil)))
 }
 
-// ColorPicker is a color selection widget that displays the current color
-// as a small swatch with its hex value. Clicking opens a popup palette.
+// ColorPicker is a color selection widget that displays the current color as
+// a swatch with its hex value, followed by an inline palette of common colors
+// the user can click (or arrow-key onto) to pick. The palette can be replaced
+// with SetPalette to override the defaults; the active swatch (matching the
+// current Color()) gets a ring highlight.
 type ColorPicker struct {
 	Widget
-	color           paint.Color
-	pushed          bool
-	cbColorChanged  func(paint.Color)
-	popup           *colorPalettePopup
+	color          paint.Color
+	palette        []paint.Color
+	activeIdx      int // index in palette currently focused for keyboard nav (-1 = none)
+	cbColorChanged func(paint.Color)
 }
 
-// NewColorPicker creates a new ColorPicker with a default blue color.
+// NewColorPicker creates a new ColorPicker with a default blue color and the
+// built-in palette returned by defaultColorPalette().
 func NewColorPicker() *ColorPicker {
 	p := new(ColorPicker)
 	p.Init(p)
 	p.color = paint.Color{66, 133, 244, 255}
+	p.palette = defaultColorPalette()
+	p.activeIdx = paletteIndexOf(p.palette, p.color)
 	return p
 }
 
 // Color returns the currently selected color.
 func (this *ColorPicker) Color() paint.Color { return this.color }
 
-// SetColor sets the selected color.
+// SetColor sets the selected color. The change callback (if any) fires only
+// when the new color differs from the existing one.
 func (this *ColorPicker) SetColor(c paint.Color) {
 	changed := this.color != c
 	this.color = c
-	if changed && this.cbColorChanged != nil {
-		this.cbColorChanged(c)
+	if changed {
+		if idx := paletteIndexOf(this.palette, c); idx >= 0 {
+			this.activeIdx = idx
+		}
+		if this.cbColorChanged != nil {
+			this.cbColorChanged(c)
+		}
 	}
 	this.Self().Update()
 }
@@ -47,8 +58,125 @@ func (this *ColorPicker) SigColorChanged(fn func(paint.Color)) {
 	this.cbColorChanged = fn
 }
 
+// Palette returns the current inline palette.
+func (this *ColorPicker) Palette() []paint.Color { return this.palette }
+
+// SetPalette replaces the inline palette. A nil or empty slice restores the
+// built-in default palette. The keyboard-active index is re-anchored to the
+// currently selected color, or to 0 if no match exists.
+func (this *ColorPicker) SetPalette(p []paint.Color) {
+	if len(p) == 0 {
+		this.palette = defaultColorPalette()
+	} else {
+		this.palette = append([]paint.Color(nil), p...)
+	}
+	if idx := paletteIndexOf(this.palette, this.color); idx >= 0 {
+		this.activeIdx = idx
+	} else if len(this.palette) > 0 {
+		this.activeIdx = 0
+	} else {
+		this.activeIdx = -1
+	}
+	this.Self().Update()
+}
+
 func (this *ColorPicker) hexText() string {
 	return fmt.Sprintf("#%02X%02X%02X", this.color.R, this.color.G, this.color.B)
+}
+
+// --- Palette model (pure helpers — easy to unit-test) ---
+
+// defaultColorPalette returns a small balanced default palette: black, white,
+// the primary RGB triple, the secondary CMY triple, plus a few mid-greys —
+// 16 colors total. It is a function (not a package var) so tests can compare
+// against a fresh copy without worrying about callers mutating shared state.
+func defaultColorPalette() []paint.Color {
+	return []paint.Color{
+		{0, 0, 0, 255},       // black
+		{255, 255, 255, 255}, // white
+		{255, 0, 0, 255},     // red
+		{0, 255, 0, 255},     // green
+		{0, 0, 255, 255},     // blue
+		{0, 255, 255, 255},   // cyan
+		{255, 0, 255, 255},   // magenta
+		{255, 255, 0, 255},   // yellow
+		{255, 128, 0, 255},   // orange
+		{128, 0, 128, 255},   // purple
+		{66, 133, 244, 255},  // brand blue (default selection)
+		{52, 168, 83, 255},   // brand green
+		{64, 64, 64, 255},    // dark grey
+		{128, 128, 128, 255}, // mid grey
+		{192, 192, 192, 255}, // light grey
+		{224, 224, 224, 255}, // near-white grey
+	}
+}
+
+// paletteIndexOf returns the index of c in palette, or -1 if not present.
+func paletteIndexOf(palette []paint.Color, c paint.Color) int {
+	for i, p := range palette {
+		if p == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// paletteAtIndex returns palette[idx] safely; out-of-range returns the zero
+// value (transparent black).
+func paletteAtIndex(palette []paint.Color, idx int) paint.Color {
+	if idx < 0 || idx >= len(palette) {
+		return paint.Color{}
+	}
+	return palette[idx]
+}
+
+// paletteHitTestIndex maps a widget-local (x,y) point to a palette index
+// inside the inline strip that starts at paletteX0,paletteY0 and uses
+// cell-size cell for n colors. Returns -1 when the point lies outside.
+func paletteHitTestIndex(x, y, paletteX0, paletteY0, cell float64, n int) int {
+	if cell <= 0 || n <= 0 {
+		return -1
+	}
+	dx := x - paletteX0
+	dy := y - paletteY0
+	if dx < 0 || dy < 0 || dy >= cell {
+		return -1
+	}
+	idx := int(dx / cell)
+	if idx < 0 || idx >= n {
+		return -1
+	}
+	return idx
+}
+
+// --- Layout constants ---
+
+const (
+	colorPickerSwatchPad = 4.0
+	colorPickerCellSize  = 18.0
+	colorPickerCellGap   = 2.0 // visual inset around each palette cell
+	colorPickerHexGap    = 6.0
+)
+
+// paletteOrigin returns the (x0, y0) of the inline palette strip and the cell
+// stride (cell size on screen including its row position). The swatch on the
+// left has square side = h - 2*pad and the strip starts after the hex label.
+func (this *ColorPicker) paletteOrigin() (x0, y0, cell float64) {
+	_, h := this.Size()
+	cell = colorPickerCellSize
+	if cell > h-2*colorPickerSwatchPad {
+		cell = h - 2*colorPickerSwatchPad
+	}
+	t := Theme()
+	swatchSize := h - 2*colorPickerSwatchPad
+	textW := 0.0
+	if t.Font != nil {
+		ext := t.Font.TextExtents(this.hexText())
+		textW = ext.XAdvance
+	}
+	x0 = colorPickerSwatchPad + swatchSize + colorPickerHexGap + textW + colorPickerHexGap
+	y0 = (h - cell) * 0.5
+	return
 }
 
 // --- Drawing ---
@@ -59,9 +187,7 @@ func (this *ColorPicker) Draw(g paint.Painter) {
 
 	// Background
 	g.Rectangle(0, 0, w, h)
-	if this.pushed {
-		g.SetBrush1(paint.Color{220, 220, 220, 255})
-	} else if this.IsHover() {
+	if this.IsHover() {
 		g.SetBrush1(paint.Color{235, 235, 235, 255})
 	} else {
 		g.SetBrush1(paint.Color{245, 245, 245, 255})
@@ -73,10 +199,10 @@ func (this *ColorPicker) Draw(g paint.Painter) {
 	g.SetPen1(t.BorderColor, 1)
 	g.Stroke()
 
-	// Color swatch
-	swatchSize := h - 8
-	swatchX := 4.0
-	swatchY := 4.0
+	// Color swatch (current selection)
+	swatchSize := h - 2*colorPickerSwatchPad
+	swatchX := colorPickerSwatchPad
+	swatchY := colorPickerSwatchPad
 	g.Rectangle(swatchX, swatchY, swatchSize, swatchSize)
 	g.SetBrush1(this.color)
 	g.FillPreserve()
@@ -88,11 +214,39 @@ func (this *ColorPicker) Draw(g paint.Painter) {
 	g.SetFont(t.Font)
 	g.SetBrush1(t.TextColor)
 	ext := t.Font.TextExtents(text)
-	tx := swatchX + swatchSize + 6 - ext.XBearing
+	tx := swatchX + swatchSize + colorPickerHexGap - ext.XBearing
 	ty := 0.5*(h+ext.YBearing) - ext.YBearing
 	g.Translate(tx, ty)
 	g.DrawText(text)
 	g.Translate(-tx, -ty)
+
+	// Inline palette strip
+	x0, y0, cell := this.paletteOrigin()
+	for i, c := range this.palette {
+		cx := x0 + float64(i)*cell
+		if cx+cell > w {
+			break // clip rather than overflow into right edge
+		}
+		inset := colorPickerCellGap
+		g.Rectangle(cx+inset, y0+inset, cell-2*inset, cell-2*inset)
+		g.SetBrush1(c)
+		g.FillPreserve()
+		// Active palette swatch (matches current color) and keyboard-focused
+		// swatch both get a ring; the focused one is drawn on top with the
+		// highlight pen so it stands out when the widget owns focus.
+		if c == this.color {
+			g.SetPen1(t.HighLightColor, 2)
+		} else {
+			g.SetPen1(paint.Color{180, 180, 180, 255}, 0.5)
+		}
+		g.Stroke()
+
+		if this.HasFocus() && i == this.activeIdx && c != this.color {
+			g.Rectangle(cx+inset, y0+inset, cell-2*inset, cell-2*inset)
+			g.SetPen1(t.HighLightColor, 1)
+			g.Stroke()
+		}
+	}
 }
 
 // --- Events ---
@@ -102,29 +256,61 @@ func (this *ColorPicker) OnMouseLeave() { this.Self().Update() }
 
 func (this *ColorPicker) OnLeftDown(x, y float64) {
 	this.SetFocus()
-	this.pushed = true
+	x0, y0, cell := this.paletteOrigin()
+	if idx := paletteHitTestIndex(x, y, x0, y0, cell, len(this.palette)); idx >= 0 {
+		this.activeIdx = idx
+		this.SetColor(this.palette[idx])
+		return
+	}
 	this.Self().Update()
-	this.showPopup()
 }
 
 func (this *ColorPicker) OnLeftUp(x, y float64) {
-	this.pushed = false
 	this.Self().Update()
 }
 
-func (this *ColorPicker) showPopup() {
-	if this.popup != nil && this.popup.IsVisible() {
-		this.popup.Hide()
+// OnKeyDown navigates the inline palette by arrow keys. Left/Right step by
+// one swatch (single-row layout — Up/Down behave the same as Left/Right so
+// keyboards without horizontal arrow muscle memory still work). Home/End
+// jump to the first/last swatch. Enter/Space commit the focused swatch.
+func (this *ColorPicker) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() || len(this.palette) == 0 {
 		return
 	}
-	popup := newColorPalettePopup(this)
-	this.popup = popup
-	gx, gy := this.MapToGlobal(0, this.h)
-	popup.ShowAsPopup(gx, gy)
+	if this.activeIdx < 0 {
+		this.activeIdx = 0
+	}
+	n := len(this.palette)
+	switch key {
+	case KeyLeft, KeyUp:
+		if this.activeIdx > 0 {
+			this.activeIdx--
+		}
+		this.Self().Update()
+	case KeyRight, KeyDown:
+		if this.activeIdx < n-1 {
+			this.activeIdx++
+		}
+		this.Self().Update()
+	case KeyHome:
+		this.activeIdx = 0
+		this.Self().Update()
+	case KeyEnd:
+		this.activeIdx = n - 1
+		this.Self().Update()
+	case KeyEnter, KeySpace:
+		this.SetColor(this.palette[this.activeIdx])
+	}
 }
 
 func (this *ColorPicker) SizeHints() SizeHints {
-	return SizeHints{Width: 120, Height: 26, Policy: GrowHorizontal | GrowVertical}
+	// Width = swatch + hex (~60px) + palette strip; keep a sensible default
+	// when no font is loaded yet (tests run without a window).
+	w := colorPickerSwatchPad*2 + 18 + colorPickerHexGap + 60 + colorPickerCellSize*float64(len(this.palette))
+	if w < 200 {
+		w = 200
+	}
+	return SizeHints{Width: w, Height: 26, Policy: GrowHorizontal | GrowVertical}
 }
 
 func (this *ColorPicker) EnumProperties(list core.IPropertyList) {
@@ -138,139 +324,3 @@ func (this *ColorPicker) EnumProperties(list core.IPropertyList) {
 		this.SetColor(paint.Color{this.color.R, this.color.G, uint8(v), this.color.A})
 	})
 }
-
-// --- Color Palette Popup ---
-
-// paletteColors is an 8x6 grid of common colors.
-var paletteColors = []paint.Color{
-	// Row 1 - reds/pinks
-	{244, 67, 54, 255}, {233, 30, 99, 255}, {156, 39, 176, 255}, {103, 58, 183, 255},
-	{63, 81, 181, 255}, {33, 150, 243, 255}, {3, 169, 244, 255}, {0, 188, 212, 255},
-	// Row 2 - greens/teals
-	{0, 150, 136, 255}, {76, 175, 80, 255}, {139, 195, 74, 255}, {205, 220, 57, 255},
-	{255, 235, 59, 255}, {255, 193, 7, 255}, {255, 152, 0, 255}, {255, 87, 34, 255},
-	// Row 3 - light variants
-	{239, 154, 154, 255}, {244, 143, 177, 255}, {206, 147, 216, 255}, {179, 157, 219, 255},
-	{159, 168, 218, 255}, {144, 202, 249, 255}, {129, 212, 250, 255}, {128, 222, 234, 255},
-	// Row 4 - more light variants
-	{128, 203, 196, 255}, {165, 214, 167, 255}, {197, 225, 165, 255}, {230, 238, 156, 255},
-	{255, 245, 157, 255}, {255, 224, 130, 255}, {255, 204, 128, 255}, {255, 171, 145, 255},
-	// Row 5 - dark variants
-	{183, 28, 28, 255}, {136, 14, 79, 255}, {74, 20, 140, 255}, {49, 27, 146, 255},
-	{26, 35, 126, 255}, {13, 71, 161, 255}, {1, 87, 155, 255}, {0, 96, 100, 255},
-	// Row 6 - grays + black/white
-	{0, 0, 0, 255}, {66, 66, 66, 255}, {117, 117, 117, 255}, {158, 158, 158, 255},
-	{189, 189, 189, 255}, {224, 224, 224, 255}, {245, 245, 245, 255}, {255, 255, 255, 255},
-}
-
-const (
-	paletteCellSize = 28.0
-	palettePadding  = 4.0
-	paletteCols     = 8
-	paletteRows     = 6
-)
-
-type colorPalettePopup struct {
-	Widget
-	owner    *ColorPicker
-	hoverIdx int
-}
-
-func newColorPalettePopup(owner *ColorPicker) *colorPalettePopup {
-	p := new(colorPalettePopup)
-	p.Init(p)
-	p.owner = owner
-	p.hoverIdx = -1
-	p.SetParent(owner)
-	return p
-}
-
-func (this *colorPalettePopup) ShowAsPopup(xg, yg float64) {
-	this.AttachWindow(WtPopup)
-	if w := this.Window(); w != nil {
-		w.SetCloseOnHide(true)
-	}
-	w := palettePadding*2 + paletteCellSize*paletteCols
-	h := palettePadding*2 + paletteCellSize*paletteRows
-	this.SetSize(0, 0)
-	this.SetSize(w, h)
-	LayoutPopup1(this.Self(), xg, yg)
-	this.SetVisible(true)
-	this.PushCapture()
-}
-
-func (this *colorPalettePopup) Draw(g paint.Painter) {
-	t := Theme()
-	w, h := this.Size()
-
-	// Background
-	g.Rectangle(0, 0, w, h)
-	g.SetBrush1(paint.Color{255, 255, 255, 255})
-	g.FillPreserve()
-	g.SetPen1(t.BorderColor, 1)
-	g.Stroke()
-
-	// Draw color cells
-	for i, c := range paletteColors {
-		if i >= paletteCols*paletteRows {
-			break
-		}
-		col := i % paletteCols
-		row := i / paletteCols
-		cx := palettePadding + float64(col)*paletteCellSize
-		cy := palettePadding + float64(row)*paletteCellSize
-
-		inset := 2.0
-		g.Rectangle(cx+inset, cy+inset, paletteCellSize-inset*2, paletteCellSize-inset*2)
-		g.SetBrush1(c)
-		g.FillPreserve()
-
-		if i == this.hoverIdx {
-			g.SetPen1(t.HighLightColor, 2)
-		} else {
-			g.SetPen1(paint.Color{200, 200, 200, 255}, 0.5)
-		}
-		g.Stroke()
-	}
-}
-
-func (this *colorPalettePopup) hitTest(x, y float64) int {
-	col := int((x - palettePadding) / paletteCellSize)
-	row := int((y - palettePadding) / paletteCellSize)
-	if col < 0 || col >= paletteCols || row < 0 || row >= paletteRows {
-		return -1
-	}
-	idx := row*paletteCols + col
-	if idx >= len(paletteColors) {
-		return -1
-	}
-	return idx
-}
-
-func (this *colorPalettePopup) OnLeftDown(x, y float64) {
-	w, h := this.Size()
-	if x < 0 || y < 0 || x >= w || y >= h {
-		this.PopCapture()
-		this.Hide()
-		emulateMouseDown(true)
-		return
-	}
-
-	idx := this.hitTest(x, y)
-	if idx >= 0 && idx < len(paletteColors) {
-		this.owner.SetColor(paletteColors[idx])
-		this.PopCapture()
-		this.Hide()
-	}
-}
-
-func (this *colorPalettePopup) OnMouseMove(x, y float64) {
-	idx := this.hitTest(x, y)
-	if idx != this.hoverIdx {
-		this.hoverIdx = idx
-		this.Self().Update()
-	}
-}
-
-// Ensure math is used
-var _ = math.Pi
