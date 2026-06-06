@@ -205,6 +205,14 @@ type CodeEditor struct {
 	// --- Git Gutter ---
 	gitStatus map[int]GitLineStatus
 
+	// --- Coverage Gutter ---
+	// coverage maps line (0-based, matching breakpoints/bookmarks) -> covered.
+	// Nil means "no coverage data" and the stripe is invisible. A line missing
+	// from a non-nil map draws no stripe either, so neutral / no-data lines stay
+	// clean. The host pushes this map via SetCoverage; the editor only renders
+	// it (the gocoverage parser lives outside the editor).
+	coverage map[int]bool
+
 	// --- Multi-Cursor Editing ---
 	// Primary cursor is (cursorLine, cursorCol). additionalCursors stores
 	// extra caret positions that receive the same text input / edits.
@@ -1754,6 +1762,22 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			g.Fill()
 		}
 
+		// Coverage stripe: a thin vertical bar in the gutter between the git
+		// stripe (x=1..4) and the breakpoint dot (centred at x=10). Green for
+		// covered, red for uncovered; absent entries skip the stripe so neutral
+		// lines stay clean. Alpha kept low so it doesn't fight the line number.
+		if this.coverage != nil {
+			if covered, has := this.coverage[i]; has {
+				if covered {
+					g.SetBrush1(paint.Color{R: 80, G: 200, B: 120, A: 120})
+				} else {
+					g.SetBrush1(paint.Color{R: 220, G: 60, B: 60, A: 120})
+				}
+				g.Rectangle(5, y, 2, lh)
+				g.Fill()
+			}
+		}
+
 		// Git gutter indicator (colored bar on left edge of gutter)
 		if gs, ok := this.gitStatus[i+1]; ok { // gitStatus uses 1-based line numbers
 			switch gs {
@@ -3213,22 +3237,14 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		before := string(runes[:this.cursorCol])
 		after := string(runes[this.cursorCol:])
 
-		// Auto-indent: copy leading whitespace from current line.
-		indent := ""
-		for _, r := range []rune(line) {
-			if r == ' ' || r == '\t' {
-				indent += string(r)
-			} else {
-				break
-			}
-		}
+		// Go-aware indent: copy current-line leading whitespace and add one
+		// indent step when the cursor sits at the end of a line ending in '{'.
+		// The editor's indent unit is a literal tab (KeyTab inserts "\t").
+		indent := nextLineIndent(line, this.cursorCol, "\t")
 
-		// Smart indent: extra tab after '{'
-		trimmedBefore := strings.TrimRight(before, " \t")
-		if len(trimmedBefore) > 0 && trimmedBefore[len(trimmedBefore)-1] == '{' {
-			indent += "\t"
-		}
-		// Smart indent: reduce indent after '}'
+		// Smart indent: reduce indent after '}'. Only fires when the cursor
+		// sits immediately before a '}' (e.g. "if true {|}" pressing Enter
+		// drops the closing brace back to the outer level).
 		trimmedAfter := strings.TrimLeft(after, " \t")
 		if len(trimmedAfter) > 0 && trimmedAfter[0] == '}' && len(indent) > 0 {
 			// Remove one level
@@ -3993,6 +4009,54 @@ func (this *CodeEditor) Breakpoints() []int {
 	return lines
 }
 
+// --- Coverage Gutter ---
+//
+// Coverage is part of the editor's UI/state layer only; the host parses
+// `go tool cover` output (or any other source) and pushes the resulting
+// line -> covered map in via SetCoverage. The editor renders a thin
+// green/red stripe in the gutter per entry. Lines absent from the map (or
+// the whole map being nil) get no stripe, so neutral lines stay clean and
+// don't fight the text.
+
+// SetCoverage installs a coverage map. The argument is copied so the host is
+// free to mutate its own copy afterwards. Passing nil clears coverage (same
+// effect as ClearCoverage).
+func (this *CodeEditor) SetCoverage(cov map[int]bool) {
+	if cov == nil {
+		this.coverage = nil
+		this.Self().Update()
+		return
+	}
+	c := make(map[int]bool, len(cov))
+	for ln, covered := range cov {
+		c[ln] = covered
+	}
+	this.coverage = c
+	this.Self().Update()
+}
+
+// ClearCoverage drops any coverage data. The stripe becomes invisible.
+func (this *CodeEditor) ClearCoverage() {
+	this.coverage = nil
+	this.Self().Update()
+}
+
+// HasCoverage reports whether a coverage map is currently installed.
+func (this *CodeEditor) HasCoverage() bool {
+	return this.coverage != nil
+}
+
+// LineCovered queries a single line. The second return value indicates whether
+// the line has any coverage entry at all (so callers can distinguish "covered
+// = false" from "no data").
+func (this *CodeEditor) LineCovered(line int) (covered bool, has bool) {
+	if this.coverage == nil {
+		return false, false
+	}
+	covered, has = this.coverage[line]
+	return covered, has
+}
+
 // --- Code Folding ---
 //
 // Folding collapses a brace block so its body lines are hidden from the view.
@@ -4013,6 +4077,52 @@ func (this *CodeEditor) Breakpoints() []int {
 type foldRegion struct {
 	startLine int
 	endLine   int
+}
+
+// nextLineIndent returns the leading-whitespace prefix to insert at the start
+// of a new line produced by pressing Enter inside currentLine at cursorCol.
+//
+// Rules (Go-aware, kept intentionally simple):
+//  1. Copy the leading whitespace of currentLine ("indent preservation").
+//  2. If the cursor sits at the END of the line AND the last non-space rune of
+//     the portion before the cursor is '{', add one indentUnit on top.
+//
+// The function is pure (no editor state, no side effects) so it can be unit
+// tested in isolation. cursorCol is a rune-count, matching CodeEditor.cursorCol.
+// indentUnit is whatever the caller's editor uses for a single indent step
+// (the CodeEditor uses a literal "\t").
+func nextLineIndent(currentLine string, cursorCol int, indentUnit string) string {
+	// Leading whitespace of the current line.
+	indent := ""
+	for _, r := range currentLine {
+		if r == ' ' || r == '\t' {
+			indent += string(r)
+		} else {
+			break
+		}
+	}
+
+	runes := []rune(currentLine)
+	if cursorCol < 0 {
+		cursorCol = 0
+	}
+	if cursorCol > len(runes) {
+		cursorCol = len(runes)
+	}
+	// "End of line" means: nothing but whitespace remains after the cursor.
+	atEnd := strings.TrimSpace(string(runes[cursorCol:])) == ""
+	if !atEnd {
+		return indent
+	}
+
+	before := strings.TrimRight(string(runes[:cursorCol]), " \t")
+	if before == "" {
+		return indent
+	}
+	if before[len(before)-1] == '{' {
+		indent += indentUnit
+	}
+	return indent
 }
 
 // lastNonSpaceRune returns the final non-whitespace rune of s and true, or
