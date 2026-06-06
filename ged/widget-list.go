@@ -57,7 +57,7 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "数据视图 (Data)",
-		names: []string{"gui.ListWidget", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination"},
+		names: []string{"gui.ListWidget", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination", "gui.DiffView"},
 	},
 	{
 		name:  "图表 (Charts)",
