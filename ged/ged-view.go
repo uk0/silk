@@ -626,16 +626,144 @@ func (this *GedView) DeleteSelectedItems() {
 	this.Self().Update()
 }
 
-// reorderSelection applies a Z-order operation (Raise/Lower/BringToFront/
-// SendToBack) to every selected item, then redraws the canvas. Like the
-// Delete and Lock entries in the context menu, the reorder is applied
-// directly rather than pushed onto the UndoStack — structural restacking
-// has no command type yet.
-func (this *GedView) reorderSelection(op func(graph.IItem)) {
-	sel := this.Selection()
-	for _, item := range sel.ItemList() {
-		op(item)
+// zorderRec captures one Z-order step. On Redo we apply op(item) and
+// snapshot the item's old sibling index; on Undo we walk the item back
+// to that index via Raise/Lower (the only by-one primitives) so the
+// round-trip is exact regardless of which op was used. Raise/Lower
+// inverses ARE exact under op-pairing alone, but BringToFront/
+// SendToBack are not (a middle-child raised to the front can't be
+// restored by a single SendToBack), so we use the index snapshot as
+// the single ground-truth inverse for every op.
+type zorderRec struct {
+	item    graph.IItem
+	op      func(graph.IItem)
+	inverse func(graph.IItem) // declared inverse op, kept for Text() reporting
+	oldIdx  int               // sibling index before Redo, -1 until first apply
+}
+
+// zorderCommand is an undoable batch of Z-order steps. Records are
+// applied in insertion order on Redo and reverse order on Undo, matching
+// graph.ReparentCommand's contract; the isUndo guard panics on out-of-
+// order calls the same way. Built in the pre-applied state — Scene().
+// PushCommand calls Redo() to apply it.
+type zorderCommand struct {
+	records []zorderRec
+	label   string
+	isUndo  bool
+}
+
+func newZorderCommand(label string) *zorderCommand {
+	return &zorderCommand{label: label}
+}
+
+func (cmd *zorderCommand) Add(item graph.IItem, op, inverse func(graph.IItem)) {
+	cmd.records = append(cmd.records, zorderRec{item: item, op: op, inverse: inverse, oldIdx: -1})
+}
+
+func (cmd *zorderCommand) Count() int { return len(cmd.records) }
+
+func (cmd *zorderCommand) Redo() {
+	if cmd.isUndo {
+		panic("illegal Redo()")
 	}
+	for i := 0; i < len(cmd.records); i++ {
+		rec := &cmd.records[i]
+		rec.oldIdx = rec.item.IndexInParent()
+		rec.op(rec.item)
+	}
+	cmd.isUndo = true
+}
+
+func (cmd *zorderCommand) Undo() {
+	if !cmd.isUndo {
+		panic("illegal Undo()")
+	}
+	for i := len(cmd.records) - 1; i >= 0; i-- {
+		rec := cmd.records[i]
+		zorderMoveToIndex(rec.item, rec.oldIdx)
+	}
+	cmd.isUndo = false
+}
+
+func (cmd *zorderCommand) Text() string {
+	if cmd.label != "" {
+		return cmd.label
+	}
+	return fmt.Sprintf("Z-order %d item(s)", len(cmd.records))
+}
+
+// zorderMoveToIndex walks item back to the requested sibling index via
+// Raise/Lower (the by-one primitives), so the resulting child order
+// matches the pre-Redo state exactly. Targets outside the current
+// sibling range are clamped; a no-parent item is a no-op.
+func zorderMoveToIndex(item graph.IItem, target int) {
+	parent := item.Parent()
+	if parent == nil {
+		return
+	}
+	if target < 0 {
+		return
+	}
+	n := len(parent.Children())
+	if target >= n {
+		target = n - 1
+	}
+	for {
+		cur := item.IndexInParent()
+		if cur == target {
+			return
+		}
+		if cur < target {
+			item.Raise()
+		} else {
+			item.Lower()
+		}
+	}
+}
+
+// zorderInverse returns the inverse of a Z-order op together with a
+// label for the UndoStack. Returns (nil, "") for an unrecognised op,
+// which reorderSelection treats as a no-op so unknown ops never land on
+// the stack. Go forbids `==` on func values, so we compare code-pointer
+// strings via fmt.Sprintf("%p", ...) — every method expression has a
+// distinct package-level symbol, so the printed pointer disambiguates.
+func zorderInverse(op func(graph.IItem)) (func(graph.IItem), string) {
+	key := fmt.Sprintf("%p", op)
+	switch key {
+	case fmt.Sprintf("%p", graph.IItem.Raise):
+		return graph.IItem.Lower, "Raise"
+	case fmt.Sprintf("%p", graph.IItem.Lower):
+		return graph.IItem.Raise, "Lower"
+	case fmt.Sprintf("%p", graph.IItem.BringToFront):
+		return graph.IItem.SendToBack, "Bring to Front"
+	case fmt.Sprintf("%p", graph.IItem.SendToBack):
+		return graph.IItem.BringToFront, "Send to Back"
+	}
+	return nil, ""
+}
+
+// reorderSelection applies a Z-order operation (Raise/Lower/BringToFront/
+// SendToBack) to every selected item via an undoable zorderCommand.
+// Each record stores op plus its declared inverse for reporting; Undo
+// walks the item back to its captured pre-Redo sibling index via the
+// Raise/Lower primitives, so any op round-trips exactly (matching the
+// ReparentCommand idiom from Lay Out / Break Layout in spirit, with a
+// cheaper per-item snapshot — just one int — since Z-order never
+// changes parent or coordinates).
+func (this *GedView) reorderSelection(op func(graph.IItem)) {
+	inverse, label := zorderInverse(op)
+	if inverse == nil {
+		return
+	}
+	items := this.Selection().ItemList()
+	if len(items) == 0 {
+		return
+	}
+	cmd := newZorderCommand(label)
+	for _, item := range items {
+		cmd.Add(item, op, inverse)
+	}
+	this.Scene().PushCommand(cmd)
 	this.Self().Update()
 }
 
@@ -811,14 +939,18 @@ func distributeAxis(out []geom.Rect, horizontal bool) {
 	}
 }
 
-// alignSelection reads the selected items' bounds, runs them through the pure
-// alignRects helper, and writes the new positions back. Like the Z-order
-// reorder and the Lock/Delete entries, the move is applied directly with
-// SetPos + Update rather than pushed onto the UndoStack — align is a
-// structural layout op and has no command type yet (matches reorderSelection).
+// alignSelection reads the selected items' bounds, runs them through the
+// pure alignRects helper, and pushes the per-item moves onto the
+// UndoStack as a single MoveCommand. MoveCommand.AddItem takes absolute
+// (toX, toY) so per-item deltas need no composite — one command carries
+// every move and Ctrl+Z snaps everyone back to their original positions
+// (the nudgeSelection idiom, but with N distinct targets instead of one
+// shared delta).
 //
-// Below the mode's threshold (2 items for align, 3 for distribute) alignRects
-// returns the bounds unchanged, so this quietly no-ops without a redraw.
+// Below the mode's threshold (2 items for align, 3 for distribute)
+// alignRects returns the bounds unchanged. We still build the command
+// only when at least one item is actually moving, so a no-op mode never
+// lands an empty MoveCommand on the stack.
 func (this *GedView) alignSelection(mode alignMode) {
 	items := this.Selection().ItemList()
 	if len(items) < 2 {
@@ -829,9 +961,18 @@ func (this *GedView) alignSelection(mode alignMode) {
 		rects[i] = it.Bounds1()
 	}
 	aligned := alignRects(rects, mode)
+	cmd := graph.NewMoveCommand()
 	for i, it := range items {
-		it.SetPos(aligned[i].X, aligned[i].Y)
+		oldX, oldY := it.Pos()
+		if oldX == aligned[i].X && oldY == aligned[i].Y {
+			continue
+		}
+		cmd.AddItem(it, aligned[i].X, aligned[i].Y)
 	}
+	if cmd.Count() == 0 {
+		return
+	}
+	this.Scene().PushCommand(cmd)
 	this.Self().Update()
 }
 
