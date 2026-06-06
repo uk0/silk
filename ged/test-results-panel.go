@@ -238,11 +238,16 @@ func parseTestFailLocator(trimmed string) (string, int, bool) {
 // IDE to jump to the failing line.
 type TestResultsPanel struct {
 	gui.Widget
-	results    []TestResult
-	scrollY    float64
-	hoverIdx   int
-	rowHeight  float64
-	cbActivate func(r TestResult)
+	results          []TestResult
+	scrollY          float64
+	hoverIdx         int
+	rowHeight        float64
+	cbActivate       func(r TestResult)
+	cbRunTestRequest func(name string)
+	// clipboardFn is an indirection over gui.Clipboard so the right-click
+	// "复制名称 / 复制输出" entries can be unit-tested headlessly. When nil,
+	// the panel falls back to gui.Clipboard.SetData.
+	clipboardFn func(s string)
 }
 
 // NewTestResultsPanel creates an empty test-results panel.
@@ -485,4 +490,118 @@ func (this *TestResultsPanel) rowAt(y float64) int {
 
 func (this *TestResultsPanel) SizeHints() gui.SizeHints {
 	return gui.SizeHints{MinWidth: 200, MinHeight: 80}
+}
+
+// SigRunTestRequested registers the callback fired when the user picks
+// "运行此测试" from a row's context menu. The host (silkide) is expected
+// to translate the test name into `go test -run ^<name>$ ./...` and
+// stream the new output back through SetOutput.
+func (this *TestResultsPanel) SigRunTestRequested(fn func(name string)) {
+	this.cbRunTestRequest = fn
+}
+
+// testResultsMenuItem is one row of the context menu produced by
+// buildContextMenu. Splitting the menu out of OnRightDown keeps the
+// per-entry wiring (label, enablement, action) directly testable:
+// tests can call buildContextMenu and invoke Action without standing
+// up a Popup, a Window, or a GLFW context.
+type testResultsMenuItem struct {
+	Label     string
+	Enabled   bool
+	Separator bool   // true when this entry is just a visual separator
+	Action    func() // nil when Separator or Enabled is false
+}
+
+// buildContextMenu produces the right-click menu entries for the row
+// at index `row`. Out-of-range rows yield nil (no menu). The three
+// canonical entries are always present: "运行此测试", "复制名称",
+// "复制输出"; the Output entry is disabled when the row carries no
+// captured output (PASS / SKIP, or a FAIL with empty Output). A fourth
+// "跳转" entry appears for FAIL rows that have a recoverable File.
+func (this *TestResultsPanel) buildContextMenu(row int) []testResultsMenuItem {
+	if row < 0 || row >= len(this.results) {
+		return nil
+	}
+	r := this.results[row]
+
+	items := []testResultsMenuItem{
+		{
+			Label:   "运行此测试",
+			Enabled: r.Name != "",
+			Action: func() {
+				if this.cbRunTestRequest != nil {
+					this.cbRunTestRequest(r.Name)
+				}
+			},
+		},
+		{
+			Label:   "复制名称",
+			Enabled: r.Name != "",
+			Action:  func() { this.clipboardWrite(r.Name) },
+		},
+		{
+			Label:   "复制输出",
+			Enabled: r.Output != "",
+			Action:  func() { this.clipboardWrite(r.Output) },
+		},
+	}
+
+	// Jump-to-file:line mirrors the OnLeftDown behaviour, reused via the
+	// SigResultActivated callback. Only meaningful for FAIL rows that
+	// captured a locator.
+	if r.Status == TestFailed && r.File != "" {
+		items = append(items,
+			testResultsMenuItem{Separator: true},
+			testResultsMenuItem{
+				Label:   "跳转",
+				Enabled: this.cbActivate != nil,
+				Action:  func() { this.cbActivate(r) },
+			},
+		)
+	}
+	return items
+}
+
+// clipboardWrite copies s to the framework clipboard. The default path
+// is gui.Clipboard.SetData; tests can swap this.clipboardFn for an
+// in-memory recorder to assert what would have been copied without a
+// live GLFW window. A clipboard error is downgraded to a core.Warn so a
+// transient copy failure never crashes the IDE.
+func (this *TestResultsPanel) clipboardWrite(s string) {
+	if this.clipboardFn != nil {
+		this.clipboardFn(s)
+		return
+	}
+	if _, err := gui.Clipboard.SetData(s); err != nil {
+		core.Warn("TestResultsPanel: clipboard write failed: ", err)
+	}
+}
+
+// OnRightDown opens the row's context menu. A click outside any row
+// (header band or empty space) is inert — there is nothing to act on.
+func (this *TestResultsPanel) OnRightDown(x, y float64) {
+	this.SetFocus()
+	idx := this.rowAt(y)
+	if idx < 0 || idx >= len(this.results) {
+		return
+	}
+	items := this.buildContextMenu(idx)
+	if len(items) == 0 {
+		return
+	}
+	gui.ShowContextMenu(this.Self(), x, y, func(m *gui.Menu) {
+		for _, it := range items {
+			if it.Separator {
+				m.AddSeparator()
+				continue
+			}
+			btn := m.AddButton1(it.Label, nil)
+			if !it.Enabled {
+				btn.SetEnabled(false)
+				continue
+			}
+			action := it.Action
+			btn.Action().BindFunc0(func() { action() })
+		}
+	})
 }
