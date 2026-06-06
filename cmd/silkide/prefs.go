@@ -241,6 +241,9 @@ func registerSilkideTranslations() {
 		"Fit to View":      "适应视口",
 		"Find in Files":    "在文件中查找",
 		"Show Outline":     "显示大纲",
+		"Show Problems":    "显示问题",
+		"Show Bookmarks":   "显示书签",
+		"Add Bookmark":     "添加书签",
 		"Open File":        "打开文件",
 		"Quick Open File":  "快速打开文件",
 		"Saved %s":               "已保存 %s",
@@ -417,6 +420,17 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 			dockSetActiveView(globalRightDock, globalOutline)
 			globalOutline.SetFocus()
 		}
+	})
+
+	// F2 — add a bookmark on the active editor's cursor line. Qt
+	// Creator convention (F2 = "set/clear bookmark"); silkide picks the
+	// same key with no modifier since the slot wasn't bound at the IDE
+	// level. RegisterShortcut runs BEFORE focus routing per dispatchShortcut,
+	// so this pre-empts CodeEditor's per-file F2 (NextBookmark) — the
+	// IDE-level cross-file pane is the right surface for navigation
+	// here. The "Add Bookmark" palette command shares this handler.
+	gui.RegisterShortcut(0, gui.KeyF2, func() {
+		addBookmarkAtCursor(editorTabs)
 	})
 }
 

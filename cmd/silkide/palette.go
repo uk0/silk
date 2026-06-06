@@ -146,6 +146,29 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			globalOutline.SetFocus()
 		}
 	})
+	// Show Problems — flip the bottom dock to the structured
+	// compiler-issues pane. Mirrors "Show Outline" — same dock-flip +
+	// SetFocus idiom, just targets globalProblems in the bottom dock.
+	add("Show Problems", "", func() {
+		if globalProblems != nil {
+			dockSetActiveView(globalBottomDock, globalProblems)
+			globalProblems.SetFocus()
+		}
+	})
+	// Show Bookmarks — flip the right dock to the cross-file
+	// bookmarks pane (sibling of Inspector + Outline).
+	add("Show Bookmarks", "", func() {
+		if globalBookmarks != nil {
+			dockSetActiveView(globalRightDock, globalBookmarks)
+			globalBookmarks.SetFocus()
+		}
+	})
+	// Add Bookmark — bookmark the active editor's cursor line. Same
+	// helper the F2 shortcut calls; here so palette users without the
+	// shortcut handy can still drop a bookmark.
+	add("Add Bookmark", "F2", func() {
+		addBookmarkAtCursor(editorTabs)
+	})
 
 	// Surfaces.
 	add("Project Settings", "", func() { showProjectSettingsDialog(designCanvas) })

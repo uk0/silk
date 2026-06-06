@@ -575,6 +575,20 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// through the shortcut wiring (mirrors globalLeftDock).
 		globalRightDock = rightDock
 
+		// Cross-file bookmarks — sibling tab of Inspector + Outline in
+		// the right dock. The right dock is the natural home for nav
+		// surfaces (the outline already lives here), and putting the
+		// bookmarks pane next door means "find a symbol" and "jump to a
+		// bookmark" sit side by side. SigActivated routes to the same
+		// openFileInEditorAt path BuildOutput uses, so a bookmark click
+		// behaves identically to a build-error click.
+		bookmarks := ged.NewBookmarksPanel()
+		bookmarks.SigActivated(func(file string, line int) {
+			openFileInEditorAt(editorTabs, file, line, 0)
+		})
+		globalBookmarks = bookmarks
+		rightDock.AddView(bookmarks)
+
 		// Seed the outline from whichever editor tab is active now, then
 		// re-bind it every time the user switches tabs. The panel
 		// self-refreshes on content change via its own Draw-time hash
@@ -586,8 +600,8 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		})
 	}
 
-	// Bottom dock: terminal + build output. Toolchain stuff a
-	// developer glances at without leaving their main work. Stash
+	// Bottom dock: terminal + build output + problems. Toolchain stuff
+	// a developer glances at without leaving their main work. Stash
 	// the dock at package level so Run / Build can flip the active
 	// tab when their respective panes start receiving output —
 	// users shouldn't have to manually click the right tab to see
@@ -596,6 +610,24 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	if bottomDock, ok := bottomDockI.(*gui.Dock); ok {
 		bottomDock.AddView(buildTerminalPane())
 		bottomDock.AddView(buildOutputPane())
+
+		// Structured Problems pane — sibling of BuildOutput. Where
+		// BuildOutput is the raw log, this is the parsed list (sortable,
+		// per-row severity glyph, file:line locator). Same compile feeds
+		// both via reportBuildOutput. Click a row to jump to the error,
+		// mirroring BuildOutput's SigErrorClick wiring.
+		problems := ged.NewProblemsPanel()
+		problems.SigProblemActivated(func(file string, line, col int) {
+			if !filepath.IsAbs(file) {
+				if dir := projectDir(designCanvas); dir != "" {
+					file = filepath.Join(dir, file)
+				}
+			}
+			openFileInEditorAt(editorTabs, file, line, col)
+		})
+		globalProblems = problems
+		bottomDock.AddView(problems)
+
 		globalBottomDock = bottomDock
 	}
 
@@ -930,6 +962,18 @@ var globalOutline *ged.CodeOutlinePanel
 // outline tab to the front (mirrors globalLeftDock for global search).
 var globalRightDock *gui.Dock
 
+// globalProblems is the bottom-dock structured compiler-issues pane.
+// Sibling tab of Terminal + BuildOutput. reportBuildOutput feeds it
+// the same text that lands in BuildOutput so a single compile populates
+// both panes. The "Show Problems" palette command focuses this tab.
+var globalProblems *ged.ProblemsPanel
+
+// globalBookmarks is the right-dock cross-file bookmark list. Sibling
+// tab of the Object Inspector + Outline. addBookmarkAtCursor pushes
+// entries in; clicking a row jumps the editor to (file, line) via the
+// same openFileInEditorAt path BuildOutput uses for clickable errors.
+var globalBookmarks *ged.BookmarksPanel
+
 // showHamburgerMenu pops the silkide application menu next to the
 // hamburger toolbar button. Hosts the four standard file actions
 // (New / Open / Save / Save As-via-Open) plus a separator and the
@@ -1115,6 +1159,16 @@ func reportBuildOutput(line string) {
 		return
 	}
 	globalBuildOutput.SetOutput(line)
+	// Also feed the structured Problems pane the same text. SetOutput
+	// re-parses, so a clean "build ok" line resets the row list to
+	// empty — the Problems tally stays consistent with what BuildOutput
+	// is showing. Mirroring the BuildOutput auto-focus on the Problems
+	// tab would fight BuildOutput for the active slot on every compile;
+	// BuildOutput already lands in front, so leave the Problems tab as
+	// a manual click / palette command.
+	if globalProblems != nil {
+		globalProblems.SetOutput(line)
+	}
 	dockSetActiveView(globalBottomDock, globalBuildOutput)
 	setBuildStatus()
 }
@@ -1575,6 +1629,76 @@ func activeEditor(tabs *gui.TabWidget) *gui.CodeEditor {
 	}
 	ed, _ := stack.Page(idx).(*gui.CodeEditor)
 	return ed
+}
+
+// activeEditorPath returns the file path of the active editor tab by
+// reverse-looking-up the editor in the openEditors map. Empty string
+// when there is no active editor or it isn't a tracked open file (a
+// fresh sample-seed tab from buildEditorTabs has no path). Pure read of
+// the package map; no I/O.
+func activeEditorPath(tabs *gui.TabWidget) string {
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return ""
+	}
+	for path, e := range openEditors {
+		if e == ed {
+			return path
+		}
+	}
+	return ""
+}
+
+// bookmarkLabelForLine builds the human-readable label for a bookmark
+// from the line's text content. Trims leading/trailing whitespace and
+// caps at ~50 characters with a one-character "…" ellipsis so the
+// BookmarksPanel rows stay readable. Returns an empty string for an
+// empty / whitespace-only source line — the panel renders the
+// "file:line" locator without a trailing label in that case.
+func bookmarkLabelForLine(text string) string {
+	const max = 50
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return ""
+	}
+	if len([]rune(t)) <= max {
+		return t
+	}
+	r := []rune(t)
+	return string(r[:max-1]) + "…"
+}
+
+// addBookmarkAtCursor pushes a bookmark for the active editor's cursor
+// line into the BookmarksPanel. No-op when there's no active editor,
+// no tracked file path, or no panel — the F2 shortcut and the "Add
+// Bookmark" palette command both route here so the same guard covers
+// every entry point. Uses Add (idempotent on (file, line)) rather than
+// Toggle so repeated invocations refresh the label rather than
+// silently removing the bookmark.
+func addBookmarkAtCursor(tabs *gui.TabWidget) {
+	if globalBookmarks == nil {
+		return
+	}
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return
+	}
+	path := activeEditorPath(tabs)
+	if path == "" {
+		return
+	}
+	// CursorLine is 0-based; the bookmarks panel renders 1-based
+	// "basename:line" locators (Qt Creator convention), so shift by +1
+	// here. openFileInEditorAt also takes 1-based lines, so a click on
+	// the row navigates back to the same line.
+	cursor0 := ed.CursorLine()
+	line1 := cursor0 + 1
+	lines := ed.Lines()
+	src := ""
+	if cursor0 >= 0 && cursor0 < len(lines) {
+		src = lines[cursor0]
+	}
+	globalBookmarks.Add(path, line1, bookmarkLabelForLine(src))
 }
 
 // syncOutlineToActiveEditor re-points the right-dock outline panel at
