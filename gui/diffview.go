@@ -61,6 +61,13 @@ type DiffView struct {
 	diffRows []DiffRow
 
 	scrollY float64
+
+	// activeChangeRow is the index of the row currently highlighted by
+	// the n/p navigation keys (and SetActiveChangeRow). -1 means "no
+	// active row" — the initial state and what recompute resets to. The
+	// row need not be a change row in practice (a click on a Same row
+	// will set it), but JumpToNext/Prev only land on non-Same rows.
+	activeChangeRow int
 }
 
 // NewDiffView creates an empty diff viewer. Callers populate it with
@@ -68,6 +75,7 @@ type DiffView struct {
 func NewDiffView() *DiffView {
 	p := new(DiffView)
 	p.Init(p)
+	p.activeChangeRow = -1
 	return p
 }
 
@@ -103,6 +111,121 @@ func (this *DiffView) SetNewText(s string) {
 // that wants to render its own summary on top of the same diff data.
 func (this *DiffView) DiffRows() []DiffRow { return this.diffRows }
 
+// ActiveChangeRow returns the index of the row the n/p navigation last
+// landed on (or -1 if none / never used). Hosts that want to drive the
+// view themselves can read this back after SetActiveChangeRow.
+func (this *DiffView) ActiveChangeRow() int { return this.activeChangeRow }
+
+// NextChangeRow returns the index of the next non-Same row strictly
+// after `from`, or -1 if no such row exists. `from < 0` searches from
+// row 0 inclusive (i.e. "find the first change from the top"). The
+// search does NOT wrap around — past-the-last-change yields -1 so
+// JumpToNextChange stops at the bottom rather than cycling.
+func (this *DiffView) NextChangeRow(from int) int {
+	start := from + 1
+	if from < 0 {
+		start = 0
+	}
+	for i := start; i < len(this.diffRows); i++ {
+		if this.diffRows[i].Status != DiffSame {
+			return i
+		}
+	}
+	return -1
+}
+
+// PrevChangeRow returns the index of the previous non-Same row strictly
+// before `from`, or -1 if none. `from > len(rows)` searches from the
+// end (i.e. "find the last change from the bottom"). Like
+// NextChangeRow, the search does NOT wrap around — past-the-first
+// yields -1.
+func (this *DiffView) PrevChangeRow(from int) int {
+	start := from - 1
+	if from > len(this.diffRows) {
+		start = len(this.diffRows) - 1
+	}
+	if start >= len(this.diffRows) {
+		start = len(this.diffRows) - 1
+	}
+	for i := start; i >= 0; i-- {
+		if this.diffRows[i].Status != DiffSame {
+			return i
+		}
+	}
+	return -1
+}
+
+// SetActiveChangeRow marks `row` as the active change row and scrolls
+// it into view. Passing -1 (or any out-of-range index) clears the
+// active row without scrolling. The scroll machinery is the same
+// scrollY/lh model OnMouseWheel uses, so the marker stays aligned
+// with the per-row tints.
+func (this *DiffView) SetActiveChangeRow(row int) {
+	if row < 0 || row >= len(this.diffRows) {
+		this.activeChangeRow = -1
+		this.Self().Update()
+		return
+	}
+	this.activeChangeRow = row
+	this.scrollRowIntoView(row)
+	this.Self().Update()
+}
+
+// scrollRowIntoView nudges scrollY so `row` sits inside the visible
+// band. If the row is above the current viewport we top-align it; if
+// below we bottom-align it; if already inside we leave scrollY alone.
+// We clamp to the same [0, maxScroll] range OnMouseWheel uses so the
+// two scroll paths stay consistent.
+func (this *DiffView) scrollRowIntoView(row int) {
+	fe := Theme().Font.FontExtents()
+	lh := fe.Height + 2
+	_, h := this.Size()
+
+	rowTop := float64(row) * lh
+	rowBot := rowTop + lh
+
+	if rowTop < this.scrollY {
+		this.scrollY = rowTop
+	} else if rowBot > this.scrollY+h {
+		this.scrollY = rowBot - h
+	}
+
+	if this.scrollY < 0 {
+		this.scrollY = 0
+	}
+	maxScroll := float64(len(this.diffRows))*lh - h
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if this.scrollY > maxScroll {
+		this.scrollY = maxScroll
+	}
+}
+
+// JumpToNextChange advances activeChangeRow to the next non-Same row,
+// or no-ops if there isn't one. Wraps NextChangeRow(activeChangeRow)
+// so a fresh view (activeChangeRow == -1) lands on the first change.
+func (this *DiffView) JumpToNextChange() {
+	idx := this.NextChangeRow(this.activeChangeRow)
+	if idx >= 0 {
+		this.SetActiveChangeRow(idx)
+	}
+}
+
+// JumpToPrevChange is the symmetric helper for the previous change.
+// From activeChangeRow == -1 the search starts past the end of the
+// row list, so a fresh "press p" lands on the last change.
+func (this *DiffView) JumpToPrevChange() {
+	from := this.activeChangeRow
+	if from < 0 {
+		from = len(this.diffRows) + 1
+	}
+	idx := this.PrevChangeRow(from)
+	if idx >= 0 {
+		this.SetActiveChangeRow(idx)
+	}
+}
+
 // recompute splits the two texts into lines and rebuilds the row list. We
 // re-derive both line slices from the raw text on every change so the
 // public setters can call us cheaply without juggling intermediate state.
@@ -113,6 +236,7 @@ func (this *DiffView) recompute() {
 	this.newLines = splitDiffLines(this.newText)
 	this.diffRows = lineDiff(this.oldLines, this.newLines)
 	this.scrollY = 0
+	this.activeChangeRow = -1
 	this.Self().Update()
 }
 
@@ -342,6 +466,28 @@ func (this *DiffView) Draw(g paint.Painter) {
 	}
 
 	this.drawDivider(g, w, h, t)
+	this.drawActiveMarker(g, w, h, lh)
+}
+
+// drawActiveMarker paints a thin accent stripe on the left edge of the
+// active change row so the user can see where the n/p cursor is. Only
+// drawn when activeChangeRow is in range and the row is on-screen.
+// Width is 3px — wide enough to read at a glance, narrow enough not to
+// eat into the left column's text.
+func (this *DiffView) drawActiveMarker(g paint.Painter, w, h, lh float64) {
+	if this.activeChangeRow < 0 || this.activeChangeRow >= len(this.diffRows) {
+		return
+	}
+	y := float64(this.activeChangeRow)*lh - this.scrollY
+	if y+lh <= 0 || y >= h {
+		return
+	}
+	const markerW = 3.0
+	// Accent blue — distinct from the red/green row tints so the marker
+	// stays legible against any row status.
+	g.SetBrush1(paint.Color{R: 30, G: 110, B: 220, A: 255})
+	g.Rectangle(0, y, markerW, lh)
+	g.Fill()
 }
 
 // drawDivider paints the vertical separator between the two columns.
@@ -385,10 +531,38 @@ func (this *DiffView) OnMouseWheel(x, y, z float64) {
 	this.Self().Update()
 }
 
-// OnLeftDown grabs focus so subsequent wheel events route here. The diff
-// view is read-only beyond that — there's no caret to place.
+// OnLeftDown grabs focus so subsequent wheel and key events route here,
+// and sets the active change row to whatever row the click landed on
+// when that row is a change. Clicks on Same rows just take focus
+// without disturbing the navigation cursor — landing the cursor on a
+// non-change row would be surprising relative to the n/p behaviour.
 func (this *DiffView) OnLeftDown(x, y float64) {
 	this.SetFocus()
+	if len(this.diffRows) == 0 {
+		return
+	}
+	fe := Theme().Font.FontExtents()
+	lh := fe.Height + 2
+	row := int((y + this.scrollY) / lh)
+	if row < 0 || row >= len(this.diffRows) {
+		return
+	}
+	if this.diffRows[row].Status == DiffSame {
+		return
+	}
+	this.SetActiveChangeRow(row)
+}
+
+// OnKeyDown wires n/p to JumpToNextChange / JumpToPrevChange. Letter
+// keys arrive as uppercase ASCII (see keyboard_glfw.go's A-Z mapping),
+// which is the same convention ComboBox's type-ahead relies on.
+func (this *DiffView) OnKeyDown(key int, repeat bool) {
+	switch key {
+	case 'N':
+		this.JumpToNextChange()
+	case 'P':
+		this.JumpToPrevChange()
+	}
 }
 
 // EnumProperties exposes the two texts to the property sheet so the
