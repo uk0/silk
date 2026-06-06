@@ -1,9 +1,9 @@
 package ged
 
 import (
+	"fmt"
 	"math"
 	"os"
-	"strings"
 
 	"silk/core"
 	"silk/gui"
@@ -37,6 +37,11 @@ type ProjectSettingsPanel struct {
 	buildTags  string
 	outputDir  string
 
+	// Latest parsed go.mod summary. Populated by RefreshGoMod.
+	goMod        *core.GoMod
+	goModPath    string // absolute path to the go.mod found, "" if none
+	goModSummary string // one-line summary, e.g. "Module: silk • Go 1.22 • 12 requires"
+
 	rows       []settingsRow
 	hoverIdx   int
 	editingIdx int
@@ -59,37 +64,65 @@ func (this *ProjectSettingsPanel) Init(self gui.IWidget) {
 	this.buildRows()
 }
 
-// loadProjectInfo reads go.mod to extract module name and Go version.
+// loadProjectInfo determines the project directory and pulls go.mod info
+// through RefreshGoMod, which uses core.LoadGoMod as the single source of truth.
 func (this *ProjectSettingsPanel) loadProjectInfo() {
-	// Determine project directory
 	dir, err := os.Getwd()
 	if err != nil {
 		dir = "."
 	}
 	this.projectDir = dir
+	this.RefreshGoMod(dir)
+}
 
-	// Read go.mod
-	data, err := os.ReadFile("go.mod")
-	if err != nil {
+// goModSummaryString builds the one-line summary for the parsed go.mod.
+// Pure helper so it can be unit-tested without instantiating a widget.
+// Returns "(no go.mod found)" when m is nil.
+func goModSummaryString(m *core.GoMod) string {
+	if m == nil {
+		return "(no go.mod found)"
+	}
+	mod := m.Module
+	if mod == "" {
+		mod = "(unknown)"
+	}
+	ver := m.GoVersion
+	if ver == "" {
+		ver = "(unknown)"
+	}
+	n := len(m.Requires)
+	noun := "requires"
+	if n == 1 {
+		noun = "require"
+	}
+	return fmt.Sprintf("Module: %s • Go %s • %d %s", mod, ver, n, noun)
+}
+
+// RefreshGoMod re-parses the project's go.mod via core.LoadGoMod and updates
+// the panel's cached module path, Go version, requires count, and summary.
+// When no go.mod can be found, fields fall back to the no-go.mod sentinel.
+func (this *ProjectSettingsPanel) RefreshGoMod(projectDir string) {
+	m, err := core.LoadGoMod(projectDir)
+	if err != nil || m == nil {
+		this.goMod = nil
+		this.goModPath = ""
+		this.goModSummary = goModSummaryString(nil)
 		this.goModule = "(未找到 go.mod)"
 		this.goVersion = "(未知)"
 		return
 	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			this.goModule = strings.TrimPrefix(line, "module ")
-			this.goModule = strings.TrimSpace(this.goModule)
-		}
-		if strings.HasPrefix(line, "go ") {
-			this.goVersion = strings.TrimPrefix(line, "go ")
-			this.goVersion = strings.TrimSpace(this.goVersion)
-		}
+	this.goMod = m
+	if path, ok := core.FindGoMod(projectDir); ok {
+		this.goModPath = path
+	} else {
+		this.goModPath = ""
 	}
+	this.goModSummary = goModSummaryString(m)
+	this.goModule = m.Module
 	if this.goModule == "" {
 		this.goModule = "(未识别)"
 	}
+	this.goVersion = m.GoVersion
 	if this.goVersion == "" {
 		this.goVersion = "(未识别)"
 	}
@@ -97,10 +130,15 @@ func (this *ProjectSettingsPanel) loadProjectInfo() {
 
 // buildRows constructs the display rows from current settings.
 func (this *ProjectSettingsPanel) buildRows() {
+	requires := "0"
+	if this.goMod != nil {
+		requires = fmt.Sprintf("%d", len(this.goMod.Requires))
+	}
 	this.rows = []settingsRow{
 		{Label: "项目目录", Value: this.projectDir, Editable: false},
 		{Label: "模块名称", Value: this.goModule, Editable: false},
 		{Label: "Go 版本", Value: this.goVersion, Editable: false},
+		{Label: "依赖数量", Value: requires, Editable: false},
 		{Label: "构建标签", Value: this.buildTags, Editable: true},
 		{Label: "输出目录", Value: this.outputDir, Editable: true},
 	}
@@ -152,6 +190,23 @@ func (this *ProjectSettingsPanel) Draw(g paint.Painter) {
 	g.SetFont(titleFont)
 	g.SetBrush1(t.TextColor)
 	g.DrawText1(8, psHeaderH-7, "Project Settings")
+
+	// Module summary: one-line "Module: <path> • Go <ver> • <N> requires"
+	// rendered right-aligned in the header so the parsed go.mod is visible
+	// even before the user scrolls through individual rows.
+	summary := this.goModSummary
+	if summary == "" {
+		summary = goModSummaryString(this.goMod)
+	}
+	summaryFont := paint.NewFont(t.Font.Family(), 11, false, false)
+	g.SetFont(summaryFont)
+	g.SetBrush1(paint.Color{90, 95, 110, 255})
+	sext := summaryFont.TextExtents(summary)
+	sx := w - sext.Width - 8
+	if sx < 120 {
+		sx = 120
+	}
+	g.DrawText1(sx, psHeaderH-7, summary)
 
 	// Rows
 	labelFont := paint.NewFont(t.Font.Family(), 11, true, false)
@@ -310,9 +365,9 @@ func (this *ProjectSettingsPanel) applyEdit(idx int, val string) {
 	}
 	this.rows[idx].Value = val
 	switch idx {
-	case 3: // Build Tags
+	case 4: // Build Tags
 		this.buildTags = val
-	case 4: // Output Dir
+	case 5: // Output Dir
 		this.outputDir = val
 	}
 	this.Self().Update()
