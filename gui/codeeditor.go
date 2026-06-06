@@ -217,6 +217,13 @@ type CodeEditor struct {
 	// Primary cursor is (cursorLine, cursorCol). additionalCursors stores
 	// extra caret positions that receive the same text input / edits.
 	additionalCursors []cursorPos
+
+	// --- Snippet Expansion (Qt Creator / VS Code "tab triggers") ---
+	// snippets is the active SnippetSet consulted on Tab. NewGoSnippetSet()
+	// is installed by Init; the host may override via SetSnippets. The legacy
+	// goSnippets table (used by tryExpandSnippet, ${N:text} placeholders) is
+	// independent and still consulted afterwards.
+	snippets *SnippetSet
 }
 
 // NewCodeEditor creates a new code editor widget.
@@ -244,6 +251,95 @@ func (this *CodeEditor) Init(iw IWidget) {
 	this.hoverLinkLine = -1
 	this.breakpoints = make(map[int]bool)
 	this.foldedLines = make(map[int]bool)
+	this.snippets = NewGoSnippetSet()
+}
+
+// SetSnippets installs a SnippetSet used by Tab to expand triggers. Passing nil
+// disables the new-style expansion path; the legacy goSnippets table still
+// fires from tryExpandSnippet.
+func (this *CodeEditor) SetSnippets(s *SnippetSet) {
+	this.snippets = s
+}
+
+// Snippets returns the active SnippetSet (may be nil if cleared via SetSnippets).
+func (this *CodeEditor) Snippets() *SnippetSet {
+	return this.snippets
+}
+
+// tryExpandSnippetAtCursor expands a SnippetSet trigger when the identifier
+// ending flush at the cursor matches one. Returns true when expansion happened
+// (buffer + cursor updated, onChanged fired, redraw scheduled).
+//
+// The check is conservative: the cursor must sit immediately after an
+// identifier rune AND not in the middle of an identifier (no identifier rune
+// to the right). When the snippets field is nil or no trigger matches, returns
+// false so the caller can fall through to the legacy ${N:} path / Tab insert.
+func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
+	if this.snippets == nil {
+		return false
+	}
+	this.clampCursor()
+	if this.cursorLine >= len(this.lines) {
+		return false
+	}
+	runes := []rune(this.lines[this.cursorLine])
+	end := this.cursorCol
+	if end > len(runes) {
+		end = len(runes)
+	}
+	// Must be at end of an identifier: nothing identifier-ish to the right.
+	if end < len(runes) && isIdentPart(runes[end]) {
+		return false
+	}
+	// Walk back to find the identifier start.
+	start := end
+	for start > 0 && isIdentPart(runes[start-1]) {
+		start--
+	}
+	if start == end {
+		return false
+	}
+	word := string(runes[start:end])
+
+	// Compute the global rune offset of the cursor in Text(): sum of rune
+	// lengths of all preceding lines (each plus a newline) plus cursorCol.
+	cursorOffset := 0
+	for i := 0; i < this.cursorLine; i++ {
+		cursorOffset += len([]rune(this.lines[i])) + 1 // +1 for '\n'
+	}
+	cursorOffset += end
+
+	newBuf, newCur, ok := this.snippets.Expand(this.Text(), cursorOffset, word)
+	if !ok {
+		return false
+	}
+
+	// Record undo before mutating: store the abbreviation we're replacing.
+	this.pushUndo(editAction{kind: 2, line: this.cursorLine, col: start, text: "", oldText: word})
+
+	// Replace buffer and re-derive line/col from the returned rune offset.
+	this.lines = strings.Split(newBuf, "\n")
+	if len(this.lines) == 0 {
+		this.lines = []string{""}
+	}
+	// Map newCur (rune offset) back to (line, col).
+	remaining := newCur
+	newLine, newCol := 0, 0
+	for i, ln := range this.lines {
+		ll := len([]rune(ln))
+		if remaining <= ll {
+			newLine, newCol = i, remaining
+			break
+		}
+		remaining -= ll + 1 // consume the line and its newline
+	}
+	this.cursorLine = newLine
+	this.cursorCol = newCol
+	this.clearSelection()
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+	return true
 }
 
 // SetText replaces the entire editor content.
@@ -3292,6 +3388,11 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 	case KeyTab:
 		// Try snippet expansion before inserting tab
 		if !shift && !ctrl && !this.hasSelection {
+			// New-style SnippetSet path first: Qt Creator / VS Code tab
+			// triggers (iferr, forrange, Test, ...). If it matches, it wins.
+			if this.tryExpandSnippetAtCursor() {
+				return
+			}
 			if this.tryExpandSnippet() {
 				return
 			}
