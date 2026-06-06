@@ -2,6 +2,7 @@ package gui
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1575,6 +1576,218 @@ func (this *CodeEditor) ToggleLineComment() {
 	this.rebuildText()
 	this.ensureCursorVisible()
 	this.Self().Update()
+}
+
+// --- AST Rename at Cursor (host-driven, F2) ---
+//
+// RenameSymbolAtCursor renames the Go identifier under the cursor across the
+// current buffer using code_refactor.go::RenameSymbolCount. The host (silkide)
+// wires F2 to this method via an input dialog — the editor itself does NOT
+// bind a key; this matches the existing host-driven design of go-to-definition
+// and find-references.
+//
+// On success, the buffer is replaced, the changed callback fires, the cursor
+// snaps to the same byte offset (clamped), and (oldName, count, nil) is
+// returned. On any failure (empty word at cursor, parse error, invalid
+// newName, name collision) the buffer is left untouched and an error is
+// returned alongside (oldName, 0).
+func (this *CodeEditor) RenameSymbolAtCursor(newName string) (string, int, error) {
+	oldName := this.wordAtCursor()
+	if oldName == "" {
+		return "", 0, errors.New("rename: no identifier at cursor")
+	}
+	oldSrc := this.Text()
+	// Byte offset of the cursor in the OLD source. We restore the cursor to
+	// the same byte position after the rename; if the name length changed,
+	// this keeps the caret on roughly the same character.
+	oldOffset := byteOffsetForCursor(this.lines, this.cursorLine, this.cursorCol)
+
+	count, newSrc, err := RenameSymbolCount(oldSrc, oldName, newName)
+	if err != nil {
+		return oldName, 0, err
+	}
+	if count == 0 || newSrc == oldSrc {
+		// No-op (e.g. oldName == newName): treat as success with count 0.
+		return oldName, 0, nil
+	}
+
+	this.lines = strings.Split(newSrc, "\n")
+	if len(this.lines) == 0 {
+		this.lines = []string{""}
+	}
+	// Map the old byte offset back to (line, col) in the new source. If the
+	// offset overshoots the new buffer, clamp to end of file.
+	newLine, newCol := cursorForByteOffset(this.lines, oldOffset)
+	this.cursorLine = newLine
+	this.cursorCol = newCol
+	this.clampCursor()
+	this.clearSelection()
+
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+	return oldName, count, nil
+}
+
+// byteOffsetForCursor returns the byte offset of (line, col) in the joined
+// "\n"-separated text formed by lines. col is in rune units, matching the
+// rest of the editor.
+func byteOffsetForCursor(lines []string, line, col int) int {
+	if line < 0 {
+		return 0
+	}
+	off := 0
+	for i := 0; i < line && i < len(lines); i++ {
+		off += len(lines[i]) + 1 // +1 for the newline separator
+	}
+	if line < len(lines) {
+		runes := []rune(lines[line])
+		if col > len(runes) {
+			col = len(runes)
+		}
+		if col < 0 {
+			col = 0
+		}
+		off += len(string(runes[:col]))
+	}
+	return off
+}
+
+// cursorForByteOffset is the inverse of byteOffsetForCursor: given a byte
+// offset into the joined text, return the (line, col) it lands on, with col
+// expressed in runes. Offsets past the end clamp to the last position.
+func cursorForByteOffset(lines []string, offset int) (int, int) {
+	if offset <= 0 || len(lines) == 0 {
+		return 0, 0
+	}
+	for i, ln := range lines {
+		if offset <= len(ln) {
+			return i, len([]rune(ln[:offset]))
+		}
+		offset -= len(ln) + 1 // consume line + newline
+		if offset < 0 {
+			// Offset landed exactly on the newline; place at end of this line.
+			return i, len([]rune(ln))
+		}
+	}
+	last := len(lines) - 1
+	return last, len([]rune(lines[last]))
+}
+
+// --- Multi-line Tab / Shift+Tab indent ---
+//
+// applyLineIndent is a pure helper that inserts (remove==false) or removes
+// (remove==true) one indent unit at the start of each line in
+// [startLine, endLine]. It returns the modified slice (input untouched) and
+// a per-line byte delta (positive on insert, negative or zero on remove) so
+// callers can adjust cursor and selection columns when the line they sit on
+// got narrower or wider.
+//
+// Remove semantics follow Go's tab-or-4-space convention: a leading tab is
+// stripped if present, otherwise up to 4 leading spaces. Lines with no
+// leading whitespace are left unchanged (delta 0). Lines OUTSIDE the
+// [startLine, endLine] range are copied verbatim with delta 0 — keeping the
+// returned slice the same length as the input makes the caller's bookkeeping
+// trivial.
+func applyLineIndent(lines []string, startLine, endLine int, indent string, remove bool) ([]string, []int) {
+	out := make([]string, len(lines))
+	copy(out, lines)
+	deltas := make([]int, len(lines))
+	if startLine < 0 {
+		startLine = 0
+	}
+	if endLine >= len(lines) {
+		endLine = len(lines) - 1
+	}
+	if startLine > endLine {
+		return out, deltas
+	}
+	for i := startLine; i <= endLine; i++ {
+		ln := out[i]
+		if remove {
+			// Strip one tab, or up to 4 leading spaces.
+			if strings.HasPrefix(ln, "\t") {
+				out[i] = ln[1:]
+				deltas[i] = -1
+				continue
+			}
+			n := 0
+			for n < 4 && n < len(ln) && ln[n] == ' ' {
+				n++
+			}
+			if n > 0 {
+				out[i] = ln[n:]
+				deltas[i] = -n
+			}
+			// else: no leading whitespace — leave untouched, delta 0
+		} else {
+			out[i] = indent + ln
+			deltas[i] = len(indent)
+		}
+	}
+	return out, deltas
+}
+
+// IndentSelection inserts one indent unit at the start of every line spanned
+// by the active selection. With no selection it is a no-op (single-caret Tab
+// goes through OnTextInput("\t") in OnKeyDown).
+func (this *CodeEditor) IndentSelection() {
+	if !this.hasSelection {
+		return
+	}
+	sl, _, el, _ := this.selectionRange()
+	newLines, deltas := applyLineIndent(this.lines, sl, el, "\t", false)
+	this.lines = newLines
+	this.shiftSelectionAfterIndent(sl, el, deltas)
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+}
+
+// DedentSelection removes one indent unit (one tab or up to 4 spaces) from
+// the start of every line spanned by the active selection. Lines with no
+// leading whitespace are skipped.
+func (this *CodeEditor) DedentSelection() {
+	if !this.hasSelection {
+		return
+	}
+	sl, _, el, _ := this.selectionRange()
+	newLines, deltas := applyLineIndent(this.lines, sl, el, "\t", true)
+	this.lines = newLines
+	this.shiftSelectionAfterIndent(sl, el, deltas)
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+}
+
+// shiftSelectionAfterIndent re-anchors the selection + cursor after an
+// indent/dedent so the selection still spans the SAME logical lines, with
+// column offsets adjusted by the per-line delta. Columns that would go
+// negative (over-aggressive dedent of a leading-whitespace cursor) are
+// clamped to 0; columns past the new line length are clamped to it.
+func (this *CodeEditor) shiftSelectionAfterIndent(sl, el int, deltas []int) {
+	shift := func(line, col int) int {
+		if line < 0 || line >= len(deltas) {
+			return col
+		}
+		col += deltas[line]
+		if col < 0 {
+			col = 0
+		}
+		if line < len(this.lines) {
+			runes := len([]rune(this.lines[line]))
+			if col > runes {
+				col = runes
+			}
+		}
+		return col
+	}
+	this.selStartCol = shift(this.selStartLine, this.selStartCol)
+	this.selEndCol = shift(this.selEndLine, this.selEndCol)
+	this.cursorCol = shift(this.cursorLine, this.cursorCol)
+	// Keep selection range coverage in [sl, el] even if both ends collapsed
+	// to the same column — users expect the selection to persist.
+	this.hasSelection = !(this.selStartLine == this.selEndLine && this.selStartCol == this.selEndCol) || sl != el
 }
 
 // --- Word detection for double-click ---
@@ -3386,6 +3599,20 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyTab:
+		// Multi-line selection: Tab indents every spanned line, Shift+Tab
+		// dedents. Snippet expansion only makes sense when there is a single
+		// caret on one line, so it runs only in the no-selection branch below.
+		if this.hasSelection && !ctrl {
+			sl, _, el, _ := this.selectionRange()
+			if sl != el {
+				if shift {
+					this.DedentSelection()
+				} else {
+					this.IndentSelection()
+				}
+				return
+			}
+		}
 		// Try snippet expansion before inserting tab
 		if !shift && !ctrl && !this.hasSelection {
 			// New-style SnippetSet path first: Qt Creator / VS Code tab
