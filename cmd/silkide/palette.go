@@ -182,12 +182,23 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			globalBookmarks.SetFocus()
 		}
 	})
-	// Add Bookmark — bookmark the active editor's cursor line. Same
-	// helper the F2 shortcut calls; here so palette users without the
-	// shortcut handy can still drop a bookmark.
-	add("Add Bookmark", "F2", func() {
+	// Add Bookmark — bookmark the active editor's cursor line. Cmd+F2
+	// because plain F2 is now Rename Symbol (JetBrains muscle memory).
+	// Same helper the shortcut calls so the entry point doesn't matter.
+	add("Add Bookmark", "Cmd+F2", func() {
 		addBookmarkAtCursor(editorTabs)
 	})
+	// Rename Symbol — pop the rename input box for the identifier under
+	// the active editor's cursor. The handler is shared with the F2
+	// shortcut so this entry doubles as keyboard documentation.
+	add("Rename Symbol", "F2", func() {
+		renameSymbolAtActiveEditor(editorTabs)
+	})
+
+	// Run configuration. No accelerator: rarely-edited, so we don't
+	// pollute the keyboard map. Pops an input box, persists the args
+	// string into prefs; the next Run picks it up.
+	add("Configure Run...", "", configureRunArgs)
 
 	// Surfaces.
 	add("Project Settings", "", func() { showProjectSettingsDialog(designCanvas) })

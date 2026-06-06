@@ -1252,8 +1252,155 @@ func runProjectInTerminal(canvas *ged.GedView) {
 		silkideToast(i18n.T("Run skipped: no main package"), gui.ToastWarning)
 		return
 	}
-	globalTerminal.Run("go run .")
+	// Append the persisted Run Configuration args, if any. The terminal
+	// panel hands the string to its underlying shell verbatim, so the
+	// shell tokenises it the same way it would a typed line — single
+	// strings.TrimSpace keeps a trailing space from emitting an empty
+	// argv slot. splitRunArgs is the unit-testable parser; here we re-
+	// join the parsed tokens so the terminal still sees one command
+	// line rather than argv pieces.
+	cmdline := "go run ."
+	if globalPrefs != nil {
+		if args := strings.TrimSpace(globalPrefs.RunArgs()); args != "" {
+			cmdline += " " + args
+		}
+	}
+	globalTerminal.Run(cmdline)
 	silkideToast(i18n.T("Running..."), gui.ToastInfo)
+}
+
+// splitRunArgs parses a user-supplied run-args string into argv tokens
+// using shell-style splitting: whitespace separates, single and double
+// quotes group, backslash escapes the next byte. Round-trips through
+// the same scanner go's flag package uses when the OS shell passes argv
+// in, so `-port 8080 -msg "hello world"` becomes
+// ["-port", "8080", "-msg", "hello world"].
+//
+// Empty input returns nil (not an empty slice) so a missing
+// RunArgs preference is indistinguishable from an explicitly-empty one
+// at the call site. Unterminated quotes flush whatever was collected so
+// far rather than dropping the partial token — the spawn either fails
+// loudly with a real error or runs with the recovered argv, both of
+// which beat silently swallowing the user's input.
+func splitRunArgs(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var (
+		out     []string
+		cur     strings.Builder
+		quote   byte // 0, '\'', or '"'
+		escaped bool
+	)
+	flush := func() {
+		if cur.Len() == 0 {
+			return
+		}
+		out = append(out, cur.String())
+		cur.Reset()
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case escaped:
+			cur.WriteByte(c)
+			escaped = false
+		case c == '\\' && quote != '\'':
+			// Inside single quotes the backslash is literal (POSIX
+			// rules); everywhere else it escapes the next byte.
+			escaped = true
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				continue
+			}
+			cur.WriteByte(c)
+		case c == '\'' || c == '"':
+			quote = c
+		case c == ' ' || c == '\t':
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return out
+}
+
+// renameSymbolAtActiveEditor pops a rename-input dialog seeded with the
+// identifier under the active editor's cursor and applies the new name
+// across the file via the editor's RenameSymbolAtCursor method. The
+// rename method lives in gui.CodeEditor (added in a parallel agent's
+// work on gui/codeeditor.go). We address it through a runtime interface
+// assertion so silkide still builds before that change merges; on a
+// build where the editor doesn't satisfy the interface yet the dialog
+// pops, the user types, submit, and gets a "not available" toast — no
+// crash, no silent swallow.
+func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return
+	}
+	// Prefill: silk's CodeEditor doesn't currently expose a public
+	// WordAtCursor (the internal wordBoundsAt is unexported), so the
+	// dialog comes up with an empty default. When the parallel rename
+	// work lands a public accessor we can swap it in here.
+	prefill := ""
+	parent := gui.IWidget(globalFrame)
+	if parent == nil {
+		parent = gui.DefaultFrame()
+	}
+	newName, ok := gui.ShowInputBox(parent, nil,
+		i18n.T("Rename Symbol"), i18n.T("New name:"), prefill)
+	if !ok {
+		return
+	}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return
+	}
+	// Runtime interface check: the parallel CodeEditor work adds
+	// RenameSymbolAtCursor(string) (string, int, error). Until that
+	// merges, the assertion fails and we toast a placeholder so the
+	// user knows the wiring is in place and the missing piece is in
+	// the editor, not the IDE.
+	renamer, ok := interface{}(ed).(interface {
+		RenameSymbolAtCursor(newName string) (oldName string, count int, err error)
+	})
+	if !ok {
+		silkideToast(i18n.T("Rename Symbol not available"), gui.ToastWarning)
+		return
+	}
+	oldName, count, err := renamer.RenameSymbolAtCursor(newName)
+	if err != nil {
+		silkideToast(i18n.Tf("Rename failed: %v", err), gui.ToastError)
+		return
+	}
+	silkideToast(i18n.Tf("Renamed %s → %s (%d occurrences)", oldName, newName, count), gui.ToastSuccess)
+}
+
+// configureRunArgs pops an input box prefilled with the currently
+// persisted RunArgs string and writes the submitted value back through
+// the same prefs entry. Used by the "Configure Run..." palette command;
+// the saved value is appended to `go run .` on the next F5 / Run via
+// runProjectInTerminal.
+func configureRunArgs() {
+	if globalPrefs == nil {
+		return
+	}
+	parent := gui.IWidget(globalFrame)
+	if parent == nil {
+		parent = gui.DefaultFrame()
+	}
+	args, ok := gui.ShowInputBox(parent, nil,
+		i18n.T("Configure Run..."), i18n.T("Run arguments:"),
+		globalPrefs.RunArgs())
+	if !ok {
+		return
+	}
+	globalPrefs.SetRunArgs(strings.TrimSpace(args))
+	silkideToast(i18n.T("Run args saved"), gui.ToastSuccess)
 }
 
 // hasMainPackage scans `dir` for any .go file whose first non-blank

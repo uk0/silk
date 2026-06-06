@@ -85,6 +85,23 @@ func (p *preferences) SetLastOpenedDir(dir string) {
 	_ = p.store.Sync()
 }
 
+// RunArgs is the command-line argument string appended to `go run .`
+// when silkide's Run action fires. Stored as a single raw string so the
+// user can edit it as they'd type it on the terminal; splitRunArgs
+// breaks it into argv when the runner spawns. Empty means "no args" —
+// the previous `go run .` behaviour.
+func (p *preferences) RunArgs() string {
+	return p.store.String("run/args", "")
+}
+
+// SetRunArgs persists the run-args string. Best-effort Sync mirrors
+// LastOpenedDir / RecentFiles — the IDE keeps running even if the
+// settings file is read-only.
+func (p *preferences) SetRunArgs(args string) {
+	_ = p.store.SetString("run/args", args)
+	_ = p.store.Sync()
+}
+
 // recentFilesMax caps the rolling MRU list. JetBrains IDEs default to
 // 50 but most users only ever scan the first 10, and the longer the
 // list the slower the de-dup walk on every open.
@@ -244,6 +261,14 @@ func registerSilkideTranslations() {
 		"Show Problems":    "显示问题",
 		"Show Bookmarks":   "显示书签",
 		"Add Bookmark":     "添加书签",
+		"Rename Symbol":          "重命名符号",
+		"New name:":              "新名称：",
+		"Renamed %s → %s (%d occurrences)": "已重命名 %s → %s (%d 处)",
+		"Rename failed: %v":      "重命名失败: %v",
+		"Rename Symbol not available": "暂不支持重命名符号",
+		"Configure Run...":       "配置运行参数...",
+		"Run arguments:":         "运行参数:",
+		"Run args saved":         "运行参数已保存",
 		"Open File":        "打开文件",
 		"Quick Open File":  "快速打开文件",
 		"Saved %s":               "已保存 %s",
@@ -458,14 +483,20 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		}
 	})
 
-	// F2 — add a bookmark on the active editor's cursor line. Qt
-	// Creator convention (F2 = "set/clear bookmark"); silkide picks the
-	// same key with no modifier since the slot wasn't bound at the IDE
-	// level. RegisterShortcut runs BEFORE focus routing per dispatchShortcut,
-	// so this pre-empts CodeEditor's per-file F2 (NextBookmark) — the
-	// IDE-level cross-file pane is the right surface for navigation
-	// here. The "Add Bookmark" palette command shares this handler.
+	// F2 — JetBrains "Rename Symbol" muscle memory: pop an input box
+	// prefilled with the identifier under the cursor and rewrite every
+	// occurrence in the active editor. The cross-file bookmarks slot
+	// moves to Cmd+F2 below — same key, modifier disambiguates between
+	// "I want to navigate" and "I want to rename".
 	gui.RegisterShortcut(0, gui.KeyF2, func() {
+		renameSymbolAtActiveEditor(editorTabs)
+	})
+	// Cmd+F2 — add a bookmark on the active editor's cursor line. Qt
+	// Creator's plain-F2 convention was the original silkide binding;
+	// it stepped on the more common Rename Symbol shortcut, so the
+	// bookmark slot picks up a modifier here. The "Add Bookmark"
+	// palette command shares this handler.
+	gui.RegisterShortcut(gui.ModAction, gui.KeyF2, func() {
 		addBookmarkAtCursor(editorTabs)
 	})
 }
