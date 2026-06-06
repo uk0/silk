@@ -85,7 +85,22 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// discoverable through the shortcut wiring in prefs.go.
 	add("Run", "F5", func() { runProjectInTerminal(designCanvas) })
 	add("Build", "F6", func() { buildProject(designCanvas) })
+	add("Run go vet", "Shift+F6", func() { runProjectVet(designCanvas) })
 	add("Run Tests", "F7", func() { runProjectTests(designCanvas) })
+	add("Run with Coverage", "Cmd+Shift+F7", func() { runProjectWithCoverage(designCanvas) })
+	// "Show Coverage" — same handler as Run with Coverage. Discoverable
+	// under both names: "coverage" types as either intent and lands at
+	// the only thing that actually computes the gutter stripes.
+	add("Show Coverage", "", func() { runProjectWithCoverage(designCanvas) })
+	// "Show Test Results" — flip the bottom dock to the structured
+	// TestResultsPanel. Mirrors the existing Show Problems / Show
+	// Outline shape — same dock-flip + SetFocus idiom.
+	add("Show Test Results", "", func() {
+		if globalTestResults != nil {
+			dockSetActiveView(globalBottomDock, globalTestResults)
+			globalTestResults.SetFocus()
+		}
+	})
 	add("Export...", "", func() {
 		if designCanvas == nil {
 			return

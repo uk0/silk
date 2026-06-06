@@ -628,6 +628,29 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		globalProblems = problems
 		bottomDock.AddView(problems)
 
+		// Structured `go test -v` view — sibling of BuildOutput.
+		// runProjectTests pipes its captured stdout/stderr through
+		// SetOutput, and a failing row's File/Line locator routes to
+		// openFileInEditorAt (same jump path the BuildOutput error
+		// click uses). The locator from the test parser is the bare
+		// "file_test.go" basename `t.Errorf` prints, so resolve it
+		// against projectDir like the Problems panel does.
+		testResults := ged.NewTestResultsPanel()
+		testResults.SigResultActivated(func(r ged.TestResult) {
+			if r.File == "" {
+				return
+			}
+			file := r.File
+			if !filepath.IsAbs(file) {
+				if dir := projectDir(designCanvas); dir != "" {
+					file = filepath.Join(dir, file)
+				}
+			}
+			openFileInEditorAt(editorTabs, file, r.Line, 0)
+		})
+		globalTestResults = testResults
+		bottomDock.AddView(testResults)
+
 		globalBottomDock = bottomDock
 	}
 
@@ -983,6 +1006,19 @@ var globalProblems *ged.ProblemsPanel
 // same openFileInEditorAt path BuildOutput uses for clickable errors.
 var globalBookmarks *ged.BookmarksPanel
 
+// globalTestResults is the bottom-dock structured `go test -v` view.
+// Sibling tab of Terminal + BuildOutput + Problems. runProjectTests
+// feeds it the same captured output that lands in BuildOutput; on any
+// failure the panel is brought to the front (BuildOutput keeps the raw
+// log, this pane shows pass/fail rows you can click to jump to source).
+var globalTestResults *ged.TestResultsPanel
+
+// coverageTempFile is the path of the cover profile written by the most
+// recent runProjectWithCoverage invocation. Kept at the package level
+// so the next coverage run can delete the previous one — keeps a single
+// cover.out in os.TempDir rather than growing a pile.
+var coverageTempFile string
+
 // showHamburgerMenu pops the silkide application menu next to the
 // hamburger toolbar button. Hosts the four standard file actions
 // (New / Open / Save / Save As-via-Open) plus a separator and the
@@ -1309,14 +1345,16 @@ func buildProject(canvas *ged.GedView) {
 	}()
 }
 
-// runProjectTests runs "go test -v ./..." in the project directory
-// and pipes combined stdout+stderr into the BuildOutput pane. Mirrors
-// buildProject — same goroutine + reportBuildOutput dispatch — so the
-// "where does my toolchain output land?" answer is identical for build
-// and test. Future passes will fan out the same text into a dedicated
-// TestResultsPanel and a Go coverage parser; for now the raw log gives
-// the user a usable F7 flow without depending on those concurrent
-// changes.
+// runProjectTests runs "go test -v ./..." in the project directory and
+// fans the captured output into two panes: the raw BuildOutput log
+// (where the user reads the runner's verbatim stream) and the
+// structured TestResultsPanel (one row per test, click a FAIL to jump
+// to source). On any failure — non-nil exit error OR failed>0 in the
+// parsed tally — the test-results tab is brought to the front so the
+// pass/fail list lands in view instead of the raw scrollback that
+// reportBuildOutput just focused. Goroutine + main-thread dispatch
+// match buildProject so the IDE stays responsive while the toolchain
+// works.
 //
 // Wired to F7 + Cmd+Shift+T + the "Run Tests" palette command.
 func runProjectTests(canvas *ged.GedView) {
@@ -1337,10 +1375,196 @@ func runProjectTests(canvas *ged.GedView) {
 			text = err.Error()
 		}
 		reportBuildOutput(text)
-		if err == nil {
-			silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
-		} else {
+		// Structured pass/fail view. SetOutput re-parses the same text
+		// BuildOutput just consumed, so the two panes always agree on
+		// the latest run's content.
+		if globalTestResults != nil {
+			globalTestResults.SetOutput(text)
+		}
+		// Auto-focus the test-results tab on failure — the raw log was
+		// already promoted by reportBuildOutput, but a failed run is the
+		// case where the structured view earns its keep, so it wins.
+		_, failed, _ := testResultCounts()
+		if err != nil || failed > 0 {
+			if globalTestResults != nil {
+				dockSetActiveView(globalBottomDock, globalTestResults)
+			}
 			silkideToast(i18n.T("Tests failed"), gui.ToastError)
+		} else {
+			silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
+		}
+	}()
+}
+
+// testResultCounts is a nil-safe wrapper around globalTestResults.Counts()
+// so callers don't have to repeat the guard. Returns zeros when the
+// panel hasn't been built yet (e.g. very early test paths).
+func testResultCounts() (passed, failed, skipped int) {
+	if globalTestResults == nil {
+		return 0, 0, 0
+	}
+	return globalTestResults.Counts()
+}
+
+// runProjectWithCoverage runs "go test -coverprofile=<tmp> -covermode=set
+// ./..." in the project directory, parses the resulting profile through
+// core.ParseCoverage + core.BuildFileCoverage, and pushes per-file
+// line→covered maps into every editor tab whose tracked path matches a
+// covered file. Path matching is exact-first then suffix-fallback (the
+// cover profile records module-relative paths while openEditors keys are
+// absolute), so "silk/foo/bar.go" and "/abs/.../silk/foo/bar.go" line up.
+//
+// The cover profile lives in os.TempDir and is overwritten on each run;
+// the previous file is deleted at the start of the next run so the temp
+// dir doesn't accumulate. Bound to Cmd+Shift+F7 + the "Run with Coverage"
+// palette command.
+func runProjectWithCoverage(canvas *ged.GedView) {
+	if globalBuildOutput == nil {
+		buildOutputPane()
+	}
+	dir := projectDir(canvas)
+	// Tear down the previous run's profile before this one writes a new
+	// one — os.TempDir is shared with the rest of the system, and we don't
+	// want a stale cover.out from a previous silkide session leaking in
+	// if go test bails before writing.
+	if coverageTempFile != "" {
+		_ = os.Remove(coverageTempFile)
+	}
+	tmp, err := os.CreateTemp("", "silkide-cover-*.out")
+	if err != nil {
+		reportBuildOutput(fmt.Sprintf("coverage: temp file: %v", err))
+		return
+	}
+	_ = tmp.Close()
+	coverageTempFile = tmp.Name()
+
+	reportBuildOutput(fmt.Sprintf(
+		"$ go test -coverprofile=%s -covermode=set ./...   (cwd: %s)",
+		coverageTempFile, dir))
+	silkideToast(i18n.T("Running with coverage..."), gui.ToastInfo)
+	go func() {
+		cmd := exec.Command("go", "test",
+			"-coverprofile="+coverageTempFile, "-covermode=set", "./...")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, runErr := cmd.CombinedOutput()
+		text := string(out)
+		if runErr != nil && text == "" {
+			text = runErr.Error()
+		}
+		reportBuildOutput(text)
+		if globalTestResults != nil {
+			globalTestResults.SetOutput(text)
+		}
+
+		data, readErr := os.ReadFile(coverageTempFile)
+		if readErr != nil {
+			reportBuildOutput(fmt.Sprintf("coverage: read profile: %v", readErr))
+			silkideToast(i18n.T("Coverage failed"), gui.ToastError)
+			return
+		}
+		_, blocks, parseErr := core.ParseCoverage(string(data))
+		if parseErr != nil {
+			// Non-fatal: ParseCoverage returns the blocks it managed to
+			// recover alongside the error, so still render what we got.
+			reportBuildOutput(fmt.Sprintf("coverage: %v", parseErr))
+		}
+		fileCov := core.BuildFileCoverage(blocks)
+		applyCoverageToOpenEditors(fileCov)
+		if runErr != nil {
+			silkideToast(i18n.T("Coverage failed"), gui.ToastError)
+		} else {
+			silkideToast(i18n.T("Coverage applied"), gui.ToastSuccess)
+		}
+	}()
+}
+
+// applyCoverageToOpenEditors iterates the openEditors map and pushes the
+// matching per-file coverage map into each CodeEditor. coverageForPath
+// owns the exact-match-then-suffix-match policy; this helper is just
+// the side-effecting walk, so the matcher stays pure and unit-testable.
+func applyCoverageToOpenEditors(fc map[string]*core.FileCoverage) {
+	for path, ed := range openEditors {
+		if ed == nil {
+			continue
+		}
+		if cov, ok := coverageForPath(fc, path); ok {
+			ed.SetCoverage(cov.Covered)
+		}
+	}
+}
+
+// coverageForPath looks up `editorPath` in the per-file coverage map. The
+// `go test -coverprofile` output records paths the way the toolchain
+// observed them (typically "<module>/<pkg>/<file>.go" — module-relative)
+// while the editor tracks absolute filesystem paths, so an exact match
+// rarely hits first try; the suffix fallback rescues the common case
+// where the editor's path ENDS with the profile's recorded path.
+//
+// Returns (nil, false) when nothing matches. Pure helper so unit tests
+// can pin the policy without spawning go test.
+func coverageForPath(fc map[string]*core.FileCoverage, editorPath string) (*core.FileCoverage, bool) {
+	if editorPath == "" {
+		return nil, false
+	}
+	if cov, ok := fc[editorPath]; ok {
+		return cov, true
+	}
+	// Suffix match. Use "/" + key so we only match on a directory
+	// boundary — a profile key "foo.go" must not match an editor path
+	// ending in "wfoo.go".
+	for key, cov := range fc {
+		if key == "" {
+			continue
+		}
+		if strings.HasSuffix(editorPath, string(filepath.Separator)+key) ||
+			strings.HasSuffix(editorPath, "/"+key) {
+			return cov, true
+		}
+	}
+	return nil, false
+}
+
+// runProjectVet runs "go vet ./..." in the project directory. The
+// diagnostics it emits are in the same "file:line:col: msg" shape Go
+// build errors use, so feeding the captured text through
+// globalProblems.SetOutput (which already parses that format) gives
+// the user a structured, clickable issues list for free — no separate
+// parser. The raw log also lands in BuildOutput so the verbatim
+// runner stream is still visible if the user wants it.
+//
+// Bound to Shift+F6 + the "Run go vet" palette command.
+func runProjectVet(canvas *ged.GedView) {
+	if globalBuildOutput == nil {
+		buildOutputPane()
+	}
+	dir := projectDir(canvas)
+	reportBuildOutput(fmt.Sprintf("$ go vet ./...   (cwd: %s)", dir))
+	silkideToast(i18n.T("Running go vet..."), gui.ToastInfo)
+	go func() {
+		cmd := exec.Command("go", "vet", "./...")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.CombinedOutput()
+		text := string(out)
+		if err != nil && text == "" {
+			text = err.Error()
+		}
+		reportBuildOutput(text)
+		// Problems gets a separate SetOutput because reportBuildOutput
+		// also feeds it but its content is the raw stream including the
+		// "$ go vet …" header. The header line is harmless (Problems
+		// skips lines that don't match the file:line:col shape), so
+		// we don't have to gate it.
+		if globalProblems != nil {
+			globalProblems.SetOutput(text)
+		}
+		if err == nil {
+			silkideToast(i18n.T("go vet ok"), gui.ToastSuccess)
+		} else {
+			silkideToast(i18n.T("go vet failed"), gui.ToastError)
 		}
 	}()
 }

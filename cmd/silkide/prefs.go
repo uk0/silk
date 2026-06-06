@@ -254,6 +254,17 @@ func registerSilkideTranslations() {
 		"Tests passed":           "测试通过",
 		"Tests failed":           "测试失败",
 		"Run Tests":              "运行测试",
+		"Run with Coverage":      "运行测试 (覆盖率)",
+		"Show Coverage":          "显示覆盖率",
+		"Running with coverage...": "运行测试 (覆盖率) 中...",
+		"Coverage applied":       "覆盖率已应用",
+		"Coverage failed":        "覆盖率运行失败",
+		"Run go vet":             "运行 go vet",
+		"Running go vet...":      "运行 go vet 中...",
+		"go vet ok":              "go vet 通过",
+		"go vet failed":          "go vet 失败",
+		"Test Results":           "测试结果",
+		"Show Test Results":      "显示测试结果",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
 		"Save failed: %v":        "保存失败: %v",
 		"Run skipped: no main package": "未找到 main 包，已跳过运行",
@@ -400,6 +411,12 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF7, func() { runProjectTests(designCanvas) })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
+	// Shift+F6 → go vet; Cmd+Shift+F7 → tests with coverage. Both slot
+	// in next to the existing F6/F7 build/test pair so the muscle memory
+	// generalises: "F6 family runs static analysis (build/vet), F7 family
+	// runs tests (plain/coverage)".
+	gui.RegisterShortcut(gui.ModShift, gui.KeyF6, func() { runProjectVet(designCanvas) })
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, gui.KeyF7, func() { runProjectWithCoverage(designCanvas) })
 
 	// Cmd+Shift+P — open the Command Palette. JetBrains "Find Action"
 	// / VSCode command palette muscle memory: every action in the IDE
