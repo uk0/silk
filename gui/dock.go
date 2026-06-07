@@ -284,9 +284,28 @@ func (this *Dock) Draw(g paint.Painter) {
 	g.SetBrush1(t.FormColor)
 	g.Fill()
 
+	// Header strip: blend with the window chrome instead of a saturated
+	// gray title bar, then delineate it from the content with a hairline.
 	g.Rectangle(0, 0, this.Widget.w, this.headH)
-	g.SetBrush1(t.FormDarkColor)
+	g.SetBrush1(t.FormColor)
 	g.Fill()
+
+	// Active-panel accent: a 2px top bar on the dock that currently holds
+	// focus. Read the frame's active dock directly (no ActiveDock() call,
+	// which would mutate/Update during paint).
+	if frame := this.Frame(); frame != nil {
+		if active, ok := frame.activeDock.(*Dock); ok && active == this {
+			g.Rectangle(0, 0, this.Widget.w, 2)
+			g.SetBrush1(t.HighLightColor)
+			g.Fill()
+		}
+	}
+
+	// Bottom hairline separating header from content.
+	g.MoveTo(0, this.headH-0.5)
+	g.LineTo(this.Widget.w, this.headH-0.5)
+	g.SetPen1(t.SeperatorColor, 1)
+	g.Stroke()
 	//}
 }
 
