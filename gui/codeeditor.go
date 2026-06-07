@@ -19,6 +19,25 @@ func init() {
 	core.RegisterFactory("gui.CodeEditor", TypeOf((*CodeEditor)(nil)))
 }
 
+// Pathological-input guards. Real source files can occasionally arrive at the
+// editor with shapes the syntax pipeline was never tuned for: a minified bundle
+// on a single line, a generated file with hundreds of thousands of lines, or an
+// obfuscated source full of nested braces. The constants below let the editor
+// degrade gracefully instead of stalling the UI:
+//
+//   - maxHighlightLineLength: lines at or beyond this byte length skip
+//     tokenization and render as a single plain-text run. Syntax coloring is
+//     lost on that line; everything else (editing, find, scroll) still works.
+//   - maxFoldComputeLines: files at or beyond this line count skip fold-region
+//     computation. computeFoldRegions returns nil and folding is silently
+//     unavailable until the file shrinks; all other editor features stay live.
+//
+// Thresholds are deliberately generous — typical source stays well under both.
+const (
+	maxHighlightLineLength = 4000
+	maxFoldComputeLines    = 50000
+)
+
 // tokenType classifies a lexical token for syntax coloring.
 type tokenType int
 
@@ -2856,7 +2875,20 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 // tokenizeLine performs simple lexical analysis of a single Go source line.
 // inBlock indicates whether we are inside a block comment from a prior line.
 // Returns the token list and the updated inBlock state.
+//
+// Pathological-input guard: when len(line) >= maxHighlightLineLength the
+// tokenizer allocates a single fallback token spanning the whole line. If the
+// line started inside a block comment it stays a comment token (and inBlock
+// stays true), otherwise it renders as plain text. This trades coloring on
+// truly long lines for predictable cost — the rune-decode + per-rune scan is
+// the expensive part of the tokenizer.
 func tokenizeLine(line string, inBlock bool) ([]token, bool) {
+	if len(line) >= maxHighlightLineLength {
+		if inBlock {
+			return []token{{text: line, typ: tokComment}}, true
+		}
+		return []token{{text: line, typ: tokNormal}}, false
+	}
 	var tokens []token
 	runes := []rune(line)
 	n := len(runes)
@@ -4953,7 +4985,16 @@ func lastNonSpaceRune(s string) (rune, bool) {
 // an opener with no matching closer (unbalanced '{') is dropped. The result is
 // ordered by startLine. See the heuristic note above for the string/comment
 // limitation.
+//
+// Pathological-input guard: when len(lines) >= maxFoldComputeLines the scan is
+// skipped and nil is returned. Folding becomes unavailable on the giant file;
+// every other editor feature still works. The scan itself is iterative (no
+// recursion), so depth alone is safe — the threshold exists to bound the total
+// work done on every Draw call that asks for fold regions.
 func computeFoldRegions(lines []string) []foldRegion {
+	if len(lines) >= maxFoldComputeLines {
+		return nil
+	}
 	type opener struct {
 		line  int
 		depth int
