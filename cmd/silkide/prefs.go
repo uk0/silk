@@ -360,6 +360,8 @@ func registerSilkideTranslations() {
 		"Code Actions":           "代码操作",
 		"No code actions":        "无可用操作",
 		"Code action has no edit": "该操作无可应用编辑",
+		"Open Project":           "打开项目",
+		"Project: %s":            "项目: %s",
 		"Failed to read saved file": "读取已保存文件失败",
 		"Running %s...":          "运行 %s 中...",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",

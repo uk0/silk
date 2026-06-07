@@ -516,6 +516,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	if leftDock != nil {
 		fileExplorer := ged.NewFileExplorer()
 		fileExplorer.SetRootDir(".")
+		globalFileExplorer = fileExplorer
 		fileExplorer.SigFileOpen(func(path string) {
 			openFromTree(path, editorTabs, designCanvas, dock)
 		})
@@ -2353,6 +2354,10 @@ func saveActiveEditorToDisk(tabs *gui.TabWidget) bool {
 // the silkide process's cwd. Empty string means "fall back to the
 // caller's existing cwd".
 func projectDir(canvas *ged.GedView) string {
+	// An explicit "Open Project" choice wins over everything else.
+	if globalProjectRoot != "" {
+		return globalProjectRoot
+	}
 	if canvas != nil {
 		if scene := canvas.GedScene(); scene != nil {
 			if fn := scene.Filename(); fn != "" {
@@ -2364,6 +2369,30 @@ func projectDir(canvas *ged.GedView) string {
 		return cwd
 	}
 	return ""
+}
+
+// openProjectFolder re-roots silkide at a user-chosen project directory.
+// GLFW has no native folder picker, so the user selects any file inside the
+// project (go.mod is the natural pick) and we take its directory. Re-roots
+// the file tree + global search, sets globalProjectRoot (so projectDir now
+// returns it), and restarts gopls + the package list against the new root.
+func openProjectFolder(canvas *ged.GedView) {
+	picked := gui.OpenFileDialog()
+	if picked == "" {
+		return
+	}
+	dir := filepath.Dir(picked)
+	globalProjectRoot = dir
+	if globalFileExplorer != nil {
+		globalFileExplorer.SetRootDir(dir)
+	}
+	if globalSearch != nil {
+		globalSearch.SetRootDir(dir)
+	}
+	restartLSP(canvas)
+	refreshPackages(canvas)
+	silkideToast(i18n.Tf("Project: %s", filepath.Base(dir)), gui.ToastSuccess)
+	logEvent(ged.LogInfo, "Opened project "+dir)
 }
 
 // capitalise upper-cases the first byte of s if it's an ASCII lower
@@ -2857,6 +2886,13 @@ var globalDebugPanel *ged.DebugPanel
 // globalReferencesPanel lists LSP find-references results in the bottom
 // dock. Fed by findReferencesViaLSP; row click opens the file:line.
 var globalReferencesPanel *ged.ReferencesPanel
+
+// globalFileExplorer is the left-dock file tree, held package-level so
+// "Open Project" can re-root it at runtime. globalProjectRoot, when set by
+// Open Project, overrides projectDir() so build / run / LSP / packages all
+// target the chosen folder instead of the launch cwd.
+var globalFileExplorer *ged.FileExplorer
+var globalProjectRoot string
 
 // globalLSP is the background gopls client, populated by
 // startLSPBackground on a goroutine after main()'s buildPanels. nil
