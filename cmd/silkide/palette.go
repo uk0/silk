@@ -78,6 +78,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Quick Open File", "Cmd+P", func() {
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
 	})
+	// "Show Diff vs Saved" — diffs the active editor's in-buffer text
+	// against the file's saved-on-disk content in a modal dialog. First
+	// iteration is a popup; an in-tab diff editor is a follow-up.
+	add("Show Diff vs Saved", "", func() {
+		showDiffVsSaved(editorTabs)
+	})
 
 	// Run / Build / Test / Export. Run Tests carries two
 	// accelerators (F7 + Cmd+Shift+T); the hint surfaces F7 to match

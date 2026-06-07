@@ -648,6 +648,13 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 			}
 			openFileInEditorAt(editorTabs, file, r.Line, 0)
 		})
+		// Right-click "运行此测试" path: the panel signals a test name, we
+		// translate that into `go test -run ^<name>$ -v ./...` in projectDir
+		// and feed BuildOutput + the same panel via runSingleTest. Mirrors
+		// the existing F7/Run Tests wiring so the two paths stay consistent.
+		testResults.SigRunTestRequested(func(name string) {
+			runSingleTest(designCanvas, name)
+		})
 		globalTestResults = testResults
 		bottomDock.AddView(testResults)
 
@@ -818,11 +825,20 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	// the real silk module" at a glance. Empty when no go.mod is
 	// reachable from the cwd; we leave the cell off entirely in that
 	// case so designer-only projects stay uncluttered.
-	if modulePath := loadModulePath(cwd); modulePath != "" {
-		sb.AddPermanentWidget(gui.NewLabel(project + " · " + modulePath))
-	} else {
-		sb.AddPermanentWidget(gui.NewLabel(project))
+	//
+	// go.work detection runs in parallel — when one is reachable from
+	// the cwd, append " · workspace(N)" so multi-module setups are
+	// glanceably distinguishable from a plain single-module project.
+	// LoadGoWork errors are non-fatal (e.g. malformed go.work returns
+	// the partial parse alongside an error); we still take the Uses
+	// count it managed to recover.
+	modulePath := loadModulePath(cwd)
+	var work *core.GoWork
+	if _, ok := core.FindGoWork(cwd); ok {
+		gw, _ := core.LoadGoWork(cwd)
+		work = gw
 	}
+	sb.AddPermanentWidget(gui.NewLabel(formatProjectStatus(project, modulePath, work)))
 	sb.AddPermanentWidget(gui.NewLabel("main"))
 	sb.AddPermanentWidget(gui.NewLabel("Ln 1, Col 1"))
 	sb.AddPermanentWidget(gui.NewLabel("UTF-8"))
@@ -1740,6 +1756,150 @@ func gofmtSource(src string) (string, error) {
 		return "", err
 	}
 	return out.String(), nil
+}
+
+// formatProjectStatus builds the status-bar project-cell label from
+// the three sources the IDE pulls at startup: the project basename
+// (filepath.Base(cwd)), the module path read out of go.mod, and the
+// optional go.work workspace. Pure helper (no globals, no I/O) so the
+// resulting label can be unit-tested without standing up a frame.
+//
+// Variants:
+//
+//	"silk"                                 // no go.mod, no go.work
+//	"silk · silk/example"                  // go.mod only
+//	"silk · workspace"                     // go.work only, empty Uses
+//	"silk · workspace(3)"                  // go.work, 3 use modules
+//	"silk · silk/example · workspace(3)"   // both go.mod and go.work
+//
+// The " · workspace" badge appears whenever `work` is non-nil — the
+// caller is expected to only pass non-nil when FindGoWork succeeded.
+// Empty `project` falls back to "silkide" so the cell never collapses.
+func formatProjectStatus(project, module string, work *core.GoWork) string {
+	if project == "" {
+		project = "silkide"
+	}
+	out := project
+	if module != "" {
+		out += " · " + module
+	}
+	if work != nil {
+		if n := len(work.Uses); n > 0 {
+			out += fmt.Sprintf(" · workspace(%d)", n)
+		} else {
+			out += " · workspace"
+		}
+	}
+	return out
+}
+
+// showDiffVsSaved pops a modal Dialog containing a gui.DiffView that
+// compares the active editor's in-buffer text against the file's
+// saved-on-disk content. First iteration: a popup dialog (simplest
+// path that gets the diff in front of the user); a tabbed editor diff
+// is a follow-up.
+//
+// No-ops silently when there is no active code editor or the active
+// tab has no tracked file path (a fresh sample-seed tab never lived in
+// openEditors). Toast-and-return on read failure so the user sees why
+// nothing opened.
+func showDiffVsSaved(tabs *gui.TabWidget) {
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return
+	}
+	path := activeEditorPath(tabs)
+	if path == "" {
+		return
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		silkideToast(i18n.T("Failed to read saved file"), gui.ToastError)
+		return
+	}
+	parent := gui.IWidget(globalFrame)
+	if parent == nil {
+		parent = gui.DefaultFrame()
+	}
+	dlg := gui.NewDialog(i18n.Tf("Diff vs Saved: %s", filepath.Base(path)), parent)
+	dv := gui.NewDiffView()
+	dv.SetTexts(string(saved), ed.Text())
+	box := gui.NewVBox()
+	box.SetSpacing(0)
+	box.AddWidget(dv)
+	dlg.SetContent(box)
+	dlg.AddButton(i18n.T("Close"), gui.DialogOK)
+	dlg.SetSize(820, 560)
+	dlg.ShowModal()
+}
+
+// escapeTestRunRegex escapes the regex metacharacters in a Go test
+// name so it can be passed verbatim to `go test -run ^<name>$`. Go's
+// `-run` flag is an unanchored regex; we anchor with ^…$ at the call
+// site and escape the body here so subtest paths with "." or "/" don't
+// accidentally widen the match (e.g. "Foo/Bar" would otherwise let "/"
+// match anything). Idempotent for plain ASCII names with no
+// metacharacters.
+func escapeTestRunRegex(name string) string {
+	const meta = `\.+*?()|[]{}^$`
+	var b strings.Builder
+	b.Grow(len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if strings.IndexByte(meta, c) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// runSingleTest spawns `go test -run ^<escaped name>$ -v ./...` in the
+// project directory and fans the captured output into BuildOutput +
+// globalTestResults, mirroring runProjectTests. Used by the
+// TestResultsPanel right-click "运行此测试" entry — the panel signals
+// a test name, we translate it here and stream the new output back
+// through the same two panes the F7 path drives.
+//
+// Goroutine + main-thread dispatch matches runProjectTests so the IDE
+// stays responsive while the toolchain works. No-op on an empty name —
+// the panel only fires for rows where `r.Name` is non-empty, but the
+// guard makes the function safe to call from anywhere.
+func runSingleTest(canvas *ged.GedView, name string) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	if globalBuildOutput == nil {
+		buildOutputPane()
+	}
+	dir := projectDir(canvas)
+	pattern := "^" + escapeTestRunRegex(name) + "$"
+	reportBuildOutput(fmt.Sprintf("$ go test -run %s -v ./...   (cwd: %s)", pattern, dir))
+	silkideToast(i18n.Tf("Running %s...", name), gui.ToastInfo)
+	go func() {
+		cmd := exec.Command("go", "test", "-run", pattern, "-v", "./...")
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.CombinedOutput()
+		text := string(out)
+		if err != nil && text == "" {
+			text = err.Error()
+		}
+		reportBuildOutput(text)
+		if globalTestResults != nil {
+			globalTestResults.SetOutput(text)
+		}
+		_, failed, _ := testResultCounts()
+		if err != nil || failed > 0 {
+			if globalTestResults != nil {
+				dockSetActiveView(globalBottomDock, globalTestResults)
+			}
+			silkideToast(i18n.T("Tests failed"), gui.ToastError)
+		} else {
+			silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
+		}
+	}()
 }
 
 // loadModulePath walks upward from `cwd` looking for the first go.mod,
