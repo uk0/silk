@@ -14,6 +14,64 @@ import (
 
 var isDebugOn bool
 
+// LogLevel 标识一条Log的级别, 供日志订阅者(sink)区分处理
+type LogLevel int
+
+const (
+	LevelDebug LogLevel = iota
+	LevelInfo
+	LevelWarn
+	LevelError
+)
+
+// LogSink 是日志订阅回调, 每产生一条Log都会以对应级别和最终文本调用一次
+type LogSink func(level LogLevel, message string)
+
+var (
+	logSinksLock sync.RWMutex
+	logSinks     = make(map[int]LogSink)
+	logSinkNext  int
+)
+
+// RegisterLogSink 注册一个日志订阅者, 返回的函数用于注销该订阅者
+// 支持注册多个sink; 上层GUI(如LogPanel)可借此订阅日志而无需被core反向依赖
+func RegisterLogSink(sink LogSink) (unregister func()) {
+	logSinksLock.Lock()
+	id := logSinkNext
+	logSinkNext++
+	logSinks[id] = sink
+	logSinksLock.Unlock()
+
+	return func() {
+		logSinksLock.Lock()
+		delete(logSinks, id)
+		logSinksLock.Unlock()
+	}
+}
+
+// dispatchLog 将一条Log派发给所有已注册的sink
+// 先在读锁内复制sink列表, 释放锁后再调用, 以避免sink内部再次写日志时的重入死锁;
+// 每个sink调用都用recover包裹, 单个sink的panic不会影响其它sink或日志本身
+func dispatchLog(level LogLevel, message string) {
+	logSinksLock.RLock()
+	if len(logSinks) == 0 {
+		logSinksLock.RUnlock()
+		return
+	}
+	sinks := make([]LogSink, 0, len(logSinks))
+	for _, s := range logSinks {
+		sinks = append(sinks, s)
+	}
+	logSinksLock.RUnlock()
+
+	for _, sink := range sinks {
+		func() {
+			defer func() { recover() }()
+			sink(level, message)
+		}()
+	}
+}
+
 var logCategoryCache = make(map[string]string, 0)
 
 var liveObjs = make(map[string]int)
@@ -209,19 +267,23 @@ func IsDebugOn() bool {
 // 注, 此函数仅为方便使用, 和log.Printf功能相同
 func Log(a ...interface{}) {
 	log.Print(a...)
+	dispatchLog(LevelInfo, fmt.Sprint(a...))
 }
 
 // 输出Log, 相当于log.Printf
 // 注, 此函数仅为方便使用, 和log.Printf功能相同
 func Logf(format string, a ...interface{}) {
 	log.Printf(format, a...)
+	dispatchLog(LevelInfo, fmt.Sprintf(format, a...))
 }
 
 // 输出调试Log, 且在前面添加"debug: "字样
 // 此函数只在打开Debug开关时生效, 输出的Log不带堆栈信息
 func Debug(a ...interface{}) {
 	if isDebugOn {
-		log.Print("debug: ", fmt.Sprint(a...))
+		s := "debug: " + fmt.Sprint(a...)
+		log.Print(s)
+		dispatchLog(LevelDebug, s)
 	}
 }
 
@@ -229,17 +291,23 @@ func Debug(a ...interface{}) {
 // 此函数只在打开Debug开关时生效, 输出的Log带有堆栈信息
 func Trace(a ...interface{}) {
 	if isDebugOn {
-		log.Print("trace: ", fmt.Sprint(a...))
+		s := "trace: " + fmt.Sprint(a...)
+		log.Print(s)
+		dispatchLog(LevelDebug, s)
 	}
 }
 
 // 输出警告Log, 且在前面添加"warning: "字样
 func Warn(a ...interface{}) {
-	log.Print("warning: ", fmt.Sprint(a...))
+	s := "warning: " + fmt.Sprint(a...)
+	log.Print(s)
+	dispatchLog(LevelWarn, s)
 }
 
 // 输出错误Log, 且在前面添加"error: "字样
 // 此函数只输出Log, 不退出程序也不触发panic
 func Error(a ...interface{}) {
-	log.Print("error: ", fmt.Sprint(a...))
+	s := "error: " + fmt.Sprint(a...)
+	log.Print(s)
+	dispatchLog(LevelError, s)
 }
