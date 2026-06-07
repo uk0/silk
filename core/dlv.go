@@ -176,14 +176,32 @@ func (s *DebugSession) Port() int { return s.port }
 // SetBreakpoint 在 file:line 处下断点, 返回 dlv 分配的 ID
 // dlv 不要求 file 是绝对路径但强烈推荐, 否则其内部要靠 packageDir 解析
 func (s *DebugSession) SetBreakpoint(file string, line int) (*Breakpoint, error) {
+	// cond="" 即无条件断点 -- omitempty 让 cond 字段在这种情况下根本不出现在
+	// 线缆上, 与重构前 SetBreakpoint 发出的 JSON 逐字节一致, 不改变既有行为.
+	return s.createBreakpoint(file, line, "")
+}
+
+// SetConditionalBreakpoint 在 file:line 下一个带 Go 表达式条件的断点
+// 只有当 cond 在该行求值为 true 时 dlv 才会真正停下 (例如 "i == 3" / "err != nil").
+// 这是 IDE "右键断点 -> 编辑条件" 的后端; cond 的语法与 Eval 表达式一致.
+// 返回值形态与 SetBreakpoint 对齐 (同样是 *Breakpoint), 两者共用 createBreakpoint.
+func (s *DebugSession) SetConditionalBreakpoint(file string, line int, cond string) (*Breakpoint, error) {
+	return s.createBreakpoint(file, line, cond)
+}
+
+// createBreakpoint 是 SetBreakpoint / SetConditionalBreakpoint 共享的私有实现
+// 走 RPCServer.CreateBreakpoint, 把 cond 透传到 Breakpoint.Cond. cond 为空串时
+// 借 omitempty 省掉该字段, 等价于无条件断点. dlv API v2 的应答把断点放在
+// "Breakpoint" 字段下.
+func (s *DebugSession) createBreakpoint(file string, line int, cond string) (*Breakpoint, error) {
 	type bpSpec struct {
 		File string `json:"file"`
 		Line int    `json:"line"`
+		Cond string `json:"cond,omitempty"`
 	}
 	type createIn struct {
 		Breakpoint bpSpec `json:"Breakpoint"`
 	}
-	// dlv API v2 的应答把断点放在 "Breakpoint" 字段下
 	type createOut struct {
 		Breakpoint struct {
 			ID           int    `json:"id"`
@@ -193,7 +211,7 @@ func (s *DebugSession) SetBreakpoint(file string, line int) (*Breakpoint, error)
 		} `json:"Breakpoint"`
 	}
 	var out createOut
-	if err := s.rpcCall("CreateBreakpoint", createIn{Breakpoint: bpSpec{File: file, Line: line}}, &out); err != nil {
+	if err := s.rpcCall("CreateBreakpoint", createIn{Breakpoint: bpSpec{File: file, Line: line, Cond: cond}}, &out); err != nil {
 		return nil, err
 	}
 	return &Breakpoint{
@@ -510,6 +528,59 @@ func (s *DebugSession) Eval(expr string, goroutineID, frame int) (Variable, erro
 		Type:  out.Variable.Type,
 		Value: out.Variable.Value,
 	}, nil
+}
+
+// SetVariable 把 (goroutine, frame) 作用域下的某个变量 symbol 赋成 value
+// 这是 IDE 变量面板 "双击改值" 动作的后端.走 dlv 的 RPCServer.Set, 参数
+// {Scope: EvalScope, Symbol, Value}, 应答为空 (无 result). symbol 是变量名
+// (例如 "x" 或 "p.Field"), value 是 Go 字面量字符串 (dlv 自己解析, 例如 "42"
+// / "\"hi\"" / "true"). 类型不匹配或符号不存在时 dlv 回 error, 这里原样 wrap.
+// goroutineID=-1 表示当前 SelectedGoroutine, frame=0 是栈顶.
+func (s *DebugSession) SetVariable(symbol, value string, goroutineID, frame int) error {
+	type setIn struct {
+		Scope  evalScope `json:"Scope"`
+		Symbol string    `json:"Symbol"`
+		Value  string    `json:"Value"`
+	}
+	in := setIn{
+		Scope:  evalScope{GoroutineID: goroutineID, Frame: frame},
+		Symbol: symbol,
+		Value:  value,
+	}
+	// RPCServer.Set 没有 result body; out 传 nil, rpcCall 只校验 error 字段
+	return s.rpcCall("Set", in, nil)
+}
+
+// Restart 把被调进程从头重跑一遍, 不重启 dlv 进程本身
+// 走 RPCServer.Restart, 普通重启传 {Position:"", ResetArgs:false}:
+// Position 空表示从入口重新开始 (非空时是 checkpoint/位置, record/replay 才用到),
+// ResetArgs=false 保留原命令行参数. 断点默认跨 Restart 存活 -- dlv 会把它们
+// 重新绑到新进程上, 所以重启后不必重新 SetBreakpoint.
+// 应答里的 DiscardedBreakpoints 列出那些重新绑定失败而被丢弃的断点 (一般为空);
+// 非空时仅 Warn 一条, 不当成错误 -- 重启本身已经成功, 个别断点丢失不该让调用方失败.
+func (s *DebugSession) Restart() error {
+	type restartIn struct {
+		Position  string   `json:"Position"`
+		ResetArgs bool     `json:"ResetArgs"`
+		NewArgs   []string `json:"NewArgs,omitempty"`
+		Rerecord  bool     `json:"Rerecord"`
+	}
+	// dlv API v2 的应答把丢弃的断点放在 "DiscardedBreakpoints" 字段下;
+	// 每个元素带一个被丢弃的断点和原因, 这里只数个数用于 Warn.
+	type restartOut struct {
+		DiscardedBreakpoints []struct {
+			Reason string `json:"reason"`
+		} `json:"DiscardedBreakpoints"`
+	}
+	var out restartOut
+	in := restartIn{Position: "", ResetArgs: false}
+	if err := s.rpcCall("Restart", in, &out); err != nil {
+		return err
+	}
+	if n := len(out.DiscardedBreakpoints); n > 0 {
+		Warn(fmt.Sprintf("dlv restart discarded %d breakpoint(s)", n))
+	}
+	return nil
 }
 
 // rpcCall 是 JSON-RPC 1.0 在 TCP 上的单次 round-trip

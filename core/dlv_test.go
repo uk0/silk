@@ -791,3 +791,215 @@ func TestDlvListLocals_ClosedSession(t *testing.T) {
 		t.Fatalf("want closed error, got %v", err)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// SetVariable / SetConditionalBreakpoint / Restart -- protocol-level tests
+// 同样用 fake server, 只验证请求形态 + 应答解码, 不依赖 dlv 子进程.
+// -----------------------------------------------------------------------------
+
+// TestSetVariable_Decode: 断言 method=RPCServer.Set, params 带正确的
+// Scope/Symbol/Value, 应答空 result -> 方法返回 nil.
+func TestDlvSetVariable_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.Set" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		if first["Symbol"].(string) != "x" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Symbol=x"}`, id)
+		}
+		if first["Value"].(string) != "99" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Value=99"}`, id)
+		}
+		scope := first["Scope"].(map[string]interface{})
+		if int(scope["GoroutineID"].(float64)) != -1 || int(scope["Frame"].(float64)) != 0 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want GoroutineID=-1 Frame=0"}`, id)
+		}
+		// RPCServer.Set 在 dlv 里应答空 -- 给个 null result
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":null}`, id)
+	})
+
+	if err := sess.SetVariable("x", "99", -1, 0); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+}
+
+// TestSetVariable_ErrorPath: dlv 回 error (类型不符/符号不存在) -> 方法返回 error
+func TestDlvSetVariable_ErrorPath(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":"literal string can not be assigned to int"}`, id)
+	})
+
+	err := sess.SetVariable("x", `"oops"`, -1, 0)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "can not be assigned") {
+		t.Errorf("err = %v, want dlv message", err)
+	}
+}
+
+// TestSetVariable_ClosedSession: Close 后再调必须返回 closed 错误, 不 panic
+func TestDlvSetVariable_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	err := sess.SetVariable("x", "1", -1, 0)
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
+
+// TestSetConditionalBreakpoint_Decode: 断言 Breakpoint 对象带 cond + file/line,
+// 应答返回带 id 的断点 -> 方法回传该 id.
+func TestDlvSetConditionalBreakpoint_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.CreateBreakpoint" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		bp := first["Breakpoint"].(map[string]interface{})
+		if bp["cond"] == nil || bp["cond"].(string) != "i == 3" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want cond='i == 3', got %v"}`, id, bp["cond"])
+		}
+		if bp["file"].(string) != "main.go" || int(bp["line"].(float64)) != 12 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want file=main.go line=12"}`, id)
+		}
+		return fmt.Sprintf(
+			`{"id":%d,"result":{"Breakpoint":{"id":5,"file":"main.go","line":12,"functionName":"main.loop"}},"error":null}`,
+			id,
+		)
+	})
+
+	bp, err := sess.SetConditionalBreakpoint("main.go", 12, "i == 3")
+	if err != nil {
+		t.Fatalf("SetConditionalBreakpoint: %v", err)
+	}
+	if bp.ID != 5 || bp.Line != 12 || bp.File != "main.go" || bp.Function != "main.loop" {
+		t.Errorf("unexpected breakpoint: %+v", bp)
+	}
+}
+
+// TestSetConditionalBreakpoint_ClosedSession
+func TestDlvSetConditionalBreakpoint_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	_, err := sess.SetConditionalBreakpoint("main.go", 12, "i == 3")
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
+
+// TestSetBreakpoint_NoCondField: 重构后无条件断点必须仍然不在线缆上带 cond 字段
+// (omitempty 保证). 这把 createBreakpoint 重构对既有 SetBreakpoint 行为的等价性
+// 钉死, 防止回归.
+func TestDlvSetBreakpoint_NoCondField(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		bp := first["Breakpoint"].(map[string]interface{})
+		// 无条件断点: cond 键必须根本不存在
+		if _, present := bp["cond"]; present {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"cond should be omitted on unconditional bp"}`, id)
+		}
+		if int(bp["line"].(float64)) != 6 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"line wrong"}`, id)
+		}
+		return fmt.Sprintf(
+			`{"id":%d,"result":{"Breakpoint":{"id":3,"file":"main.go","line":6,"functionName":"main.main"}},"error":null}`,
+			id,
+		)
+	})
+
+	bp, err := sess.SetBreakpoint("main.go", 6)
+	if err != nil {
+		t.Fatalf("SetBreakpoint: %v", err)
+	}
+	if bp.ID != 3 || bp.Line != 6 {
+		t.Errorf("unexpected breakpoint: %+v", bp)
+	}
+}
+
+// TestRestart_Empty: method=RPCServer.Restart, params 带 Position=""/ResetArgs=false,
+// 应答 DiscardedBreakpoints 为空 -> 方法返回 nil.
+func TestDlvRestart_Empty(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.Restart" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		if first["Position"].(string) != "" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Position=''"}`, id)
+		}
+		if first["ResetArgs"].(bool) != false {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want ResetArgs=false"}`, id)
+		}
+		return fmt.Sprintf(`{"id":%d,"result":{"DiscardedBreakpoints":[]},"error":null}`, id)
+	})
+
+	if err := sess.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+}
+
+// TestRestart_DiscardedNonEmpty: 即便 dlv 报告丢了断点, Restart 仍返回 nil 且不 panic
+// (重启成功, 个别断点丢失只 Warn, 见 dlv.go 文档).
+func TestDlvRestart_DiscardedNonEmpty(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":{"DiscardedBreakpoints":[
+			{"reason":"could not rebind"},
+			{"reason":"file gone"}
+		]},"error":null}`, id)
+	})
+
+	if err := sess.Restart(); err != nil {
+		t.Fatalf("Restart with discarded bps should still be nil, got %v", err)
+	}
+}
+
+// TestRestart_ErrorPath: dlv 报错 -> 方法返回 error
+func TestDlvRestart_ErrorPath(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":"can not restart core dump"}`, id)
+	})
+
+	err := sess.Restart()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "can not restart") {
+		t.Errorf("err = %v, want dlv message", err)
+	}
+}
+
+// TestRestart_ClosedSession
+func TestDlvRestart_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	if err := sess.Restart(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
