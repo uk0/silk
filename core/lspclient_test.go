@@ -995,6 +995,325 @@ func TestLSPClientDidChange_Shape(t *testing.T) {
 	}
 }
 
+// -----------------------------------------------------------------------------
+// DocumentSymbol: hierarchical DocumentSymbol vs flat SymbolInformation 双形态
+// -----------------------------------------------------------------------------
+
+func TestLSPClientDocumentSymbol_DocumentSymbolShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/documentSymbol" {
+			t.Errorf("method = %q, want textDocument/documentSymbol", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		// 一个父 (struct) 带两个子 (字段). hierarchical 形态: 有 range/selectionRange, 没 location.
+		return &fakeReply{Result: json.RawMessage(`[
+{"name":"Server","detail":"struct{...}","kind":23,
+ "range":{"start":{"line":4,"character":0},"end":{"line":8,"character":1}},
+ "selectionRange":{"start":{"line":4,"character":5},"end":{"line":4,"character":11}},
+ "children":[
+   {"name":"Host","detail":"string","kind":8,
+    "range":{"start":{"line":5,"character":1},"end":{"line":5,"character":13}},
+    "selectionRange":{"start":{"line":5,"character":1},"end":{"line":5,"character":5}}},
+   {"name":"Port","detail":"int","kind":8,
+    "range":{"start":{"line":6,"character":1},"end":{"line":6,"character":9}},
+    "selectionRange":{"start":{"line":6,"character":1},"end":{"line":6,"character":5}}}
+ ]}
+]`)}
+	})
+
+	syms, err := c.DocumentSymbol("file:///a.go")
+	if err != nil {
+		t.Fatalf("DocumentSymbol: %v", err)
+	}
+	if len(syms) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(syms), syms)
+	}
+	parent := syms[0]
+	if parent.Name != "Server" || parent.Detail != "struct{...}" || parent.Kind != 23 || parent.Line != 4 {
+		t.Errorf("parent = %+v", parent)
+	}
+	if len(parent.Children) != 2 {
+		t.Fatalf("children len = %d, want 2: %+v", len(parent.Children), parent.Children)
+	}
+	if parent.Children[0].Name != "Host" || parent.Children[0].Line != 5 {
+		t.Errorf("children[0] = %+v", parent.Children[0])
+	}
+	if parent.Children[1].Name != "Port" || parent.Children[1].Line != 6 {
+		t.Errorf("children[1] = %+v", parent.Children[1])
+	}
+	// params 只带 textDocument, 没有 position
+	var gotParams struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Position *LSPPosition `json:"position"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.TextDocument.URI != "file:///a.go" {
+		t.Errorf("params uri = %q", gotParams.TextDocument.URI)
+	}
+	if gotParams.Position != nil {
+		t.Errorf("documentSymbol params carried a position: %+v", gotParams.Position)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDocumentSymbol_SymbolInformationShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	// legacy 扁平形态: 每条带 location, 没有 children. Line 取 location.range.start.line.
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"name":"main","kind":12,"location":{"uri":"file:///a.go","range":{"start":{"line":10,"character":0},"end":{"line":12,"character":1}}}},
+{"name":"Config","kind":23,"location":{"uri":"file:///a.go","range":{"start":{"line":2,"character":0},"end":{"line":5,"character":1}}},"containerName":""}
+]`)}
+	})
+
+	syms, err := c.DocumentSymbol("file:///a.go")
+	if err != nil {
+		t.Fatalf("DocumentSymbol: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(syms), syms)
+	}
+	if syms[0].Name != "main" || syms[0].Kind != 12 || syms[0].Line != 10 {
+		t.Errorf("syms[0] = %+v", syms[0])
+	}
+	if syms[1].Name != "Config" || syms[1].Kind != 23 || syms[1].Line != 2 {
+		t.Errorf("syms[1] = %+v", syms[1])
+	}
+	// SymbolInformation 形态是扁平的, Children 必须为空
+	if len(syms[0].Children) != 0 || len(syms[1].Children) != 0 {
+		t.Errorf("symbolInformation entries should have no children: %+v", syms)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDocumentSymbol_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	syms, err := c.DocumentSymbol("file:///a.go")
+	if err != nil {
+		t.Fatalf("DocumentSymbol: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("syms = %+v, want empty", syms)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDocumentSymbol_EmptyArray(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[]`)}
+	})
+
+	syms, err := c.DocumentSymbol("file:///a.go")
+	if err != nil {
+		t.Fatalf("DocumentSymbol: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("syms = %+v, want empty", syms)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDocumentSymbol_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "symbol index unavailable"}}
+	})
+
+	syms, err := c.DocumentSymbol("file:///a.go")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if syms != nil {
+		t.Errorf("syms = %+v, want nil on error", syms)
+	}
+	if !strings.Contains(err.Error(), "symbol index unavailable") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// -----------------------------------------------------------------------------
+// SignatureHelp: 签名 + 形参 + activeParameter, documentation 多态压平, null, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientSignatureHelp_Basic(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/signatureHelp" {
+			t.Errorf("method = %q, want textDocument/signatureHelp", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		return &fakeReply{Result: json.RawMessage(`{
+"signatures":[
+  {"label":"Atoi(s string) (int, error)","documentation":"Atoi converts a string to an int.",
+   "parameters":[{"label":"s string"},{"label":"base int"}]}
+],
+"activeSignature":0,
+"activeParameter":1
+}`)}
+	})
+
+	sh, err := c.SignatureHelp("file:///a.go", 3, 9)
+	if err != nil {
+		t.Fatalf("SignatureHelp: %v", err)
+	}
+	if sh == nil {
+		t.Fatal("SignatureHelp returned nil")
+	}
+	if len(sh.Signatures) != 1 {
+		t.Fatalf("signatures len = %d, want 1: %+v", len(sh.Signatures), sh.Signatures)
+	}
+	sig := sh.Signatures[0]
+	if sig.Label != "Atoi(s string) (int, error)" {
+		t.Errorf("label = %q", sig.Label)
+	}
+	if sig.Documentation != "Atoi converts a string to an int." {
+		t.Errorf("documentation = %q", sig.Documentation)
+	}
+	if len(sig.Parameters) != 2 || sig.Parameters[0] != "s string" || sig.Parameters[1] != "base int" {
+		t.Errorf("parameters = %+v", sig.Parameters)
+	}
+	if sh.ActiveSignature != 0 {
+		t.Errorf("activeSignature = %d, want 0", sh.ActiveSignature)
+	}
+	if sh.ActiveParameter != 1 {
+		t.Errorf("activeParameter = %d, want 1", sh.ActiveParameter)
+	}
+	// params 跟 hover 同形: 带 position
+	var gotParams struct {
+		Position LSPPosition `json:"position"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.Position.Line != 3 || gotParams.Position.Character != 9 {
+		t.Errorf("position = %+v", gotParams.Position)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientSignatureHelp_MarkupDocumentation(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	// documentation 走 MarkupContent{kind, value} 形态, 应被压平成 value
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`{
+"signatures":[
+  {"label":"Println(a ...any)","documentation":{"kind":"markdown","value":"writes to stdout"},
+   "parameters":[{"label":"a ...any"}]}
+],
+"activeSignature":0,
+"activeParameter":0
+}`)}
+	})
+
+	sh, err := c.SignatureHelp("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("SignatureHelp: %v", err)
+	}
+	if sh == nil || len(sh.Signatures) != 1 {
+		t.Fatalf("sh = %+v", sh)
+	}
+	if sh.Signatures[0].Documentation != "writes to stdout" {
+		t.Errorf("documentation = %q, want stringified markup value", sh.Signatures[0].Documentation)
+	}
+	if len(sh.Signatures[0].Parameters) != 1 || sh.Signatures[0].Parameters[0] != "a ...any" {
+		t.Errorf("parameters = %+v", sh.Signatures[0].Parameters)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientSignatureHelp_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	sh, err := c.SignatureHelp("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("SignatureHelp: %v", err)
+	}
+	if sh != nil {
+		t.Errorf("sh = %+v, want nil", sh)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientSignatureHelp_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "no signature here"}}
+	})
+
+	sh, err := c.SignatureHelp("file:///a.go", 1, 2)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if sh != nil {
+		t.Errorf("sh = %+v, want nil on error", sh)
+	}
+	if !strings.Contains(err.Error(), "no signature here") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
 // newPipedClient 构造一个 *LSPClient 把它的 stdin/stdout 接到 io.Pipe 上
 // 返回:
 //   - c     已经跑着 readLoop 的客户端

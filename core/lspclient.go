@@ -605,6 +605,200 @@ func (c *LSPClient) References(uri string, line, character int, includeDecl bool
 	return locs, nil
 }
 
+// LSPSymbol 是文件大纲里的一个符号 (函数/类型/变量等), 扁平化后的最小子集
+// 对应 IDE 的 outline / breadcrumb. 字段语义见 DocumentSymbol:
+//   - Detail   声明摘要 (函数签名等), legacy SymbolInformation 没有, 留空
+//   - Kind     LSP SymbolKind 数字枚举 (Function=12, Struct=23, ...)
+//   - Line     0 基行号, 取 range.start.line
+//   - Children 仅在 hierarchical (DocumentSymbol) 形态下填充; legacy 形态为空
+type LSPSymbol struct {
+	Name     string
+	Detail   string
+	Kind     int
+	Line     int
+	Children []LSPSymbol
+}
+
+// LSPSignature 是签名提示里的一条函数签名, SignatureInformation 的最小子集
+//   - Label         整条签名文本 (例如 "Println(a ...any) (n int, err error)")
+//   - Documentation 压平后的文档串 (复用 hover 的 contents 压平逻辑)
+//   - Parameters    每个形参的 label 文本
+type LSPSignature struct {
+	Label         string
+	Documentation string
+	Parameters    []string
+}
+
+// LSPSignatureHelp 是 textDocument/signatureHelp 压平后的结果
+// ActiveSignature / ActiveParameter 指示 UI 该高亮哪条签名 / 哪个形参 (0 基).
+type LSPSignatureHelp struct {
+	Signatures      []LSPSignature
+	ActiveSignature int
+	ActiveParameter int
+}
+
+// DocumentSymbol 请求 textDocument/documentSymbol 并归一成扁平/层级化的 LSPSymbol
+// params 只要 {textDocument:{uri}}, 没有 position. 响应形状由 server 能力决定,
+// 规范允许两种, gopls 走前者:
+//   - hierarchical []DocumentSymbol:
+//       {name, detail, kind, range, selectionRange, children []DocumentSymbol}
+//     -- 嵌套, 有 range/selectionRange, *没有* 顶层 location
+//   - legacy []SymbolInformation (扁平):
+//       {name, kind, location:{uri, range}, containerName}
+//     -- 没有 children, 位置藏在 location.range 里
+// 区分手段: 探测数组里第一个元素有没有 "location" 字段. 有 -> SymbolInformation,
+// 否则当 DocumentSymbol (它用 range/selectionRange, 没有顶层 location). 两种都
+// 拿不准时偏向 DocumentSymbol -- 它是现代 server 的默认, 也是 gopls 的形态.
+// DocumentSymbol 保留层级 (Children 递归填充); SymbolInformation 返回扁平切片
+// (Children 为空). null/空数组 -> 空切片, 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) DocumentSymbol(uri string) ([]LSPSymbol, error) {
+	params := map[string]interface{}{
+		"textDocument": map[string]string{"uri": uri},
+	}
+	resp, err := c.SendRequest("textDocument/documentSymbol", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		return nil, fmt.Errorf("lspclient: decode documentSymbol result: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	// 探测形状: SymbolInformation 一定带 location, DocumentSymbol 一定不带.
+	if rawSymbolHasLocation(raw[0]) {
+		return decodeSymbolInformation(raw)
+	}
+	return decodeDocumentSymbols(raw)
+}
+
+// rawSymbolHasLocation 探测一个 symbol 元素是不是 SymbolInformation (legacy 扁平)
+// 只看 "location" 字段在不在 -- 它是 SymbolInformation 独有, DocumentSymbol 没有.
+func rawSymbolHasLocation(raw json.RawMessage) bool {
+	var probe struct {
+		Location *json.RawMessage `json:"location"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return probe.Location != nil
+}
+
+// decodeDocumentSymbols 解 hierarchical []DocumentSymbol, 递归保留 Children
+// Line 取 range.start.line.
+func decodeDocumentSymbols(raw []json.RawMessage) ([]LSPSymbol, error) {
+	type docSymbol struct {
+		Name     string            `json:"name"`
+		Detail   string            `json:"detail"`
+		Kind     int               `json:"kind"`
+		Range    LSPRange          `json:"range"`
+		Children []json.RawMessage `json:"children"`
+	}
+	out := make([]LSPSymbol, 0, len(raw))
+	for _, item := range raw {
+		var ds docSymbol
+		if err := json.Unmarshal(item, &ds); err != nil {
+			return nil, fmt.Errorf("lspclient: decode documentSymbol entry: %w", err)
+		}
+		sym := LSPSymbol{
+			Name:   ds.Name,
+			Detail: ds.Detail,
+			Kind:   ds.Kind,
+			Line:   ds.Range.Start.Line,
+		}
+		if len(ds.Children) > 0 {
+			children, err := decodeDocumentSymbols(ds.Children)
+			if err != nil {
+				return nil, err
+			}
+			sym.Children = children
+		}
+		out = append(out, sym)
+	}
+	return out, nil
+}
+
+// decodeSymbolInformation 解 legacy []SymbolInformation 为扁平切片 (Children 空)
+// Line 取 location.range.start.line; 没有 detail 字段, 留空.
+func decodeSymbolInformation(raw []json.RawMessage) ([]LSPSymbol, error) {
+	type symbolInfo struct {
+		Name     string      `json:"name"`
+		Kind     int         `json:"kind"`
+		Location LSPLocation `json:"location"`
+	}
+	out := make([]LSPSymbol, 0, len(raw))
+	for _, item := range raw {
+		var si symbolInfo
+		if err := json.Unmarshal(item, &si); err != nil {
+			return nil, fmt.Errorf("lspclient: decode symbolInformation entry: %w", err)
+		}
+		out = append(out, LSPSymbol{
+			Name: si.Name,
+			Kind: si.Kind,
+			Line: si.Location.Range.Start.Line,
+		})
+	}
+	return out, nil
+}
+
+// SignatureHelp 请求 textDocument/signatureHelp 并压平成 LSPSignatureHelp
+// params 是跟 hover/completion 同形的 TextDocumentPositionParams. 响应:
+//   SignatureHelp{signatures []SignatureInformation, activeSignature, activeParameter}
+// 其中每条 SignatureInformation 的 documentation 跟 hover.contents 同样是
+//   string | MarkupContent | []MarkedString 多态, 直接复用 stringifyHoverContents.
+// 形参 documentation 当前不暴露 (UI 只展 label), 真要时在 LSPSignature 上扩字段即可.
+// server 返回 null (光标不在调用实参里) 时返回 (nil, nil), 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) SignatureHelp(uri string, line, character int) (*LSPSignatureHelp, error) {
+	resp, err := c.SendRequest("textDocument/signatureHelp", textDocumentPositionParams(uri, line, character))
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	var sh struct {
+		Signatures []struct {
+			Label         string          `json:"label"`
+			Documentation json.RawMessage `json:"documentation"`
+			Parameters    []struct {
+				Label string `json:"label"`
+			} `json:"parameters"`
+		} `json:"signatures"`
+		ActiveSignature int `json:"activeSignature"`
+		ActiveParameter int `json:"activeParameter"`
+	}
+	if err := json.Unmarshal(resp.Result, &sh); err != nil {
+		return nil, fmt.Errorf("lspclient: decode signatureHelp result: %w", err)
+	}
+	out := &LSPSignatureHelp{
+		ActiveSignature: sh.ActiveSignature,
+		ActiveParameter: sh.ActiveParameter,
+	}
+	out.Signatures = make([]LSPSignature, 0, len(sh.Signatures))
+	for _, s := range sh.Signatures {
+		sig := LSPSignature{Label: s.Label}
+		if len(s.Documentation) > 0 && string(s.Documentation) != "null" {
+			doc, err := stringifyHoverContents(s.Documentation)
+			if err != nil {
+				return nil, fmt.Errorf("lspclient: decode signature documentation: %w", err)
+			}
+			sig.Documentation = doc
+		}
+		sig.Parameters = make([]string, 0, len(s.Parameters))
+		for _, p := range s.Parameters {
+			sig.Parameters = append(sig.Parameters, p.Label)
+		}
+		out.Signatures = append(out.Signatures, sig)
+	}
+	return out, nil
+}
+
 // DidChange 发 textDocument/didChange 通知, 把整个文件最新内容推给 server
 // LSP 支持 incremental sync (按 range 发 diff), 这里走最简单的 *full document
 // sync*: 一次性把整篇 fullText 重新塞过去. 对一个文件大小一般 < 1MB 的 Go
