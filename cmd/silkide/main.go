@@ -2534,6 +2534,13 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	ed.SetFilePath(path)
 	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
 	openEditors[path] = ed
+	// Live LSP: each buffer change pushes didChange + a completion request
+	// to gopls. Cursor line/col are read on the main thread inside the hook
+	// (see lspOnEditorChanged) before the async fetch, so the column lines
+	// up with the edit that triggered it.
+	ed.SigChanged(func(text string) {
+		lspOnEditorChanged(path, ed, text)
+	})
 	focusEditorTab(tabs, ed)
 	logEvent(ged.LogInfo, "Opened "+path)
 	// Let the background gopls client see the buffer so subsequent
@@ -2992,6 +2999,10 @@ func startLSPBackground(projectDir string) {
 				if m == nil {
 					continue
 				}
+				if m.Method == "textDocument/publishDiagnostics" {
+					handlePublishDiagnostics(m)
+					continue
+				}
 				core.Log("lsp: ", m.Method)
 			}
 		}(client.Notifications())
@@ -3011,7 +3022,168 @@ func lspDidOpenFile(path string, text string) {
 	}
 	if err := globalLSP.DidOpen(fileURIOf(path), "go", text, 1); err != nil {
 		core.Warn("lsp: didOpen ", path, ": ", err)
+		return
 	}
+	lspVersions[path] = 1
+}
+
+// lspVersions tracks the monotonic textDocument version per open file.
+// gopls requires didChange versions to strictly increase; didOpen seeds 1.
+var lspVersions = map[string]int{}
+
+// lspCompletionGen de-dupes overlapping async completion fetches: only the
+// result whose generation still matches the latest request for a file is
+// applied, so a slow earlier fetch can't clobber a newer one.
+var lspCompletionGen = map[string]int{}
+
+// lspDiagnostics accumulates the latest diagnostics per file path. gopls
+// emits one publishDiagnostics per file; keeping a per-file map lets the
+// Problems panel show diagnostics across files instead of overwriting.
+var lspDiagnostics = map[string][]ged.Problem{}
+
+// lspOnEditorChanged is the SigChanged hook installed per editor. It reads
+// the cursor position on the main thread, then fires didChange + completion
+// off-thread — gopls RPCs block up to 10s and must never run on the UI loop.
+func lspOnEditorChanged(path string, ed *gui.CodeEditor, text string) {
+	if globalLSP == nil || ed == nil || !isGoFile(path) {
+		return
+	}
+	line := ed.CursorLine()
+	col := ed.CursorCol()
+	lspVersions[path]++
+	ver := lspVersions[path]
+	lspCompletionGen[path]++
+	gen := lspCompletionGen[path]
+	uri := fileURIOf(path)
+	go func() {
+		if err := globalLSP.DidChange(uri, ver, text); err != nil {
+			return
+		}
+		items, err := globalLSP.Completion(uri, line, col)
+		if err != nil || len(items) == 0 {
+			return
+		}
+		conv := make([]gui.ExternalCompletion, 0, len(items))
+		for _, it := range items {
+			ins := it.InsertText
+			if ins == "" {
+				ins = it.Label
+			}
+			conv = append(conv, gui.ExternalCompletion{
+				Label:  it.Label,
+				Detail: it.Detail,
+				Insert: ins,
+			})
+		}
+		gui.Post(func() {
+			// Stale-guard: a newer edit superseded this fetch — drop it.
+			if lspCompletionGen[path] != gen {
+				return
+			}
+			if e, ok := openEditors[path]; ok && e == ed {
+				ed.SetExternalCompletions(conv)
+				ed.TriggerCompletion()
+			}
+		})
+	}()
+}
+
+// goToDefinitionViaLSP resolves the symbol under the caret via gopls and
+// opens the target file:line. Bound to F12. The AST-based context-menu
+// "跳转定义" stays as the offline fallback; this is the cross-package path.
+func goToDefinitionViaLSP(tabs *gui.TabWidget) {
+	if globalLSP == nil {
+		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		return
+	}
+	ed := activeEditor(tabs)
+	path := activeEditorPath(tabs)
+	if ed == nil || path == "" || !isGoFile(path) {
+		return
+	}
+	line := ed.CursorLine()
+	col := ed.CursorCol()
+	uri := fileURIOf(path)
+	go func() {
+		locs, err := globalLSP.Definition(uri, line, col)
+		if err != nil || len(locs) == 0 {
+			return
+		}
+		target := uriToPath(locs[0].URI)
+		if target == "" {
+			return
+		}
+		dstLine := locs[0].Range.Start.Line + 1 // LSP 0-based → 1-based
+		dstCol := locs[0].Range.Start.Character
+		gui.Post(func() {
+			openFileInEditorAt(tabs, target, dstLine, dstCol)
+		})
+	}()
+}
+
+// uriToPath strips a "file://" scheme back to a filesystem path (the inverse
+// of fileURIOf). Handles the Windows "file:///C:/..." form by dropping the
+// spurious leading slash before a drive letter.
+func uriToPath(uri string) string {
+	p := strings.TrimPrefix(uri, "file://")
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:] // "/C:/foo" → "C:/foo"; POSIX paths have no "X:" at index 1-2
+	}
+	return filepath.FromSlash(p)
+}
+
+// handlePublishDiagnostics decodes a textDocument/publishDiagnostics
+// notification onto the Problems panel (1-based lines) and the editor's
+// red-squiggle markers (0-based), accumulating per file so one file's
+// diagnostics don't wipe another's. Runs on the notification goroutine;
+// all GUI mutation is marshalled through gui.Post.
+func handlePublishDiagnostics(m *core.LSPMessage) {
+	var p struct {
+		URI         string `json:"uri"`
+		Diagnostics []struct {
+			Range struct {
+				Start struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"start"`
+			} `json:"range"`
+			Severity int    `json:"severity"`
+			Message  string `json:"message"`
+		} `json:"diagnostics"`
+	}
+	if err := core.DecodeParams(m, &p); err != nil {
+		return
+	}
+	path := uriToPath(p.URI)
+	probs := make([]ged.Problem, 0, len(p.Diagnostics))
+	squig := map[int]string{}
+	for _, d := range p.Diagnostics {
+		sev := ged.SeverityWarning
+		if d.Severity == 1 {
+			sev = ged.SeverityError
+		}
+		probs = append(probs, ged.Problem{
+			File:     path,
+			Line:     d.Range.Start.Line + 1,
+			Col:      d.Range.Start.Character,
+			Severity: sev,
+			Message:  d.Message,
+		})
+		squig[d.Range.Start.Line] = d.Message
+	}
+	gui.Post(func() {
+		lspDiagnostics[path] = probs
+		var all []ged.Problem
+		for _, ps := range lspDiagnostics {
+			all = append(all, ps...)
+		}
+		if globalProblems != nil {
+			globalProblems.SetProblems(all)
+		}
+		if ed, ok := openEditors[path]; ok && ed != nil {
+			ed.SetErrors(squig)
+		}
+	})
 }
 
 // restartLSP closes the current gopls client (if any) and re-launches

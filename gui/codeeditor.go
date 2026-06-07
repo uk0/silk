@@ -462,6 +462,13 @@ func (this *CodeEditor) CursorLine() int {
 	return this.cursorLine
 }
 
+// CursorCol returns the current 0-based cursor column (rune index within
+// the line). LSP callers need it to build a textDocument position for
+// completion / go-to-definition requests.
+func (this *CodeEditor) CursorCol() int {
+	return this.cursorCol
+}
+
 // Lines returns the current editor lines.
 func (this *CodeEditor) Lines() []string {
 	return this.lines

@@ -113,6 +113,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		}
 	})
 	add("Stop Debugger", "", func() { stopDebugger() })
+	add("Go to Definition", "F12", func() { goToDefinitionViaLSP(editorTabs) })
 	add("Restart LSP", "", func() { restartLSP(designCanvas) })
 	add("Run go vet", "Shift+F6", func() { runProjectVet(designCanvas) })
 	add("Run Tests", "F7", func() { runProjectTests(designCanvas) })
