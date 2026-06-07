@@ -164,10 +164,16 @@ func (c *LSPClient) readLoop() {
 			return
 		}
 
+		// Hold mu across routeMessage: it reads c.pending, which SendRequest
+		// writes concurrently. The earlier "snapshot" (pending := c.pending)
+		// was a map-reference alias, not a copy, so the lookup raced the
+		// write. A real copy would instead drop responses for requests added
+		// after the copy. routeMessage only does a map lookup + a non-blocking
+		// channel send (buffered chans, select-default), so the critical
+		// section stays tiny.
 		c.mu.Lock()
-		pending := c.pending
+		routeMessage(m, c.pending, c.notifications)
 		c.mu.Unlock()
-		routeMessage(m, pending, c.notifications)
 	}
 }
 
@@ -179,8 +185,9 @@ func (c *LSPClient) readLoop() {
 // 注意:
 //   - 我们只识别数字 ID (NewRequest 总是写数字, 自洽).
 //   - pending map 里的 channel 是 buffered=1, 不会阻塞读循环.
-//   - 由于 readLoop 已经把 pending 的 *snapshot* 传进来, 这里不再加锁,
-//     调用方负责把锁的活儿留在 readLoop 那一层.
+//   - readLoop 在 c.mu 锁内调用本函数 (pending 与 SendRequest 的写并发,
+//     必须串行化); 这里只做 map 查找 + 非阻塞 channel 推送, 临界区极短.
+//     单测里直接传一个独占的 map (无并发写), 同样安全.
 func routeMessage(m *LSPMessage, pending map[int]chan *LSPMessage, notif chan<- *LSPMessage) {
 	if m == nil {
 		return
