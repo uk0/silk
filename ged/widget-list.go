@@ -45,7 +45,7 @@ var categoryDefs = []struct {
 }{
 	{
 		name:  "输入控件 (Input)",
-		names: []string{"gui.Button", "gui.Edit", "gui.TextArea", "gui.CheckBox", "gui.RadioButton", "gui.ComboBox", "gui.SpinBox", "gui.Slider", "gui.ToggleSwitch", "gui.SearchBox", "gui.NumberInput", "gui.DatePicker", "gui.Calendar", "gui.TimePicker", "gui.ColorPicker", "gui.Rating", "gui.DropdownButton", "gui.SwitchGroup"},
+		names: []string{"gui.Button", "gui.Edit", "gui.TextArea", "gui.CheckBox", "gui.RadioButton", "gui.ComboBox", "gui.SpinBox", "gui.Slider", "gui.ToggleSwitch", "gui.SearchBox", "gui.NumberInput", "gui.DatePicker", "gui.Calendar", "gui.TimePicker", "gui.ColorPicker", "gui.Rating", "gui.DropdownButton", "gui.SwitchGroup", "gui.PathEdit"},
 	},
 	{
 		name:  "显示控件 (Display)",
