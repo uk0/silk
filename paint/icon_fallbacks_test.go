@@ -2,6 +2,7 @@ package paint
 
 import (
 	"image/color"
+	"reflect"
 	"testing"
 )
 
@@ -79,5 +80,112 @@ func TestUnknownNameStillFallsToImageMissing(t *testing.T) {
 	}
 	if cast.name != "image-missing" {
 		t.Errorf("unknown name resolved to %q, want image-missing", cast.name)
+	}
+}
+
+// newIconNames lists every name added on top of the original fallback
+// set (semantic IDE icons + their aliases). Each must resolve through
+// the procedural path rather than the red-X placeholder.
+var newIconNames = []string{
+	"build",
+	"debug",
+	"stop",
+	"continue",
+	"play",
+	"step-over",
+	"step-into",
+	"step-out",
+	"warning",
+	"git-branch",
+	"git",
+	"terminal",
+	"go-file",
+	"file",
+	"function",
+	"gear",
+	"settings",
+	"folder-open",
+}
+
+// TestNewFallbacksRegistered: every new name is present in the
+// procedural registry, so LoadIcon hits genProceduralIcon instead of
+// logging "icon not found" and falling through to image-missing.
+func TestNewFallbacksRegistered(t *testing.T) {
+	for _, name := range newIconNames {
+		if proceduralFallbacks[name] == nil {
+			t.Errorf("%q missing from proceduralFallbacks registry", name)
+		}
+	}
+}
+
+// TestNewFallbackAliases: alias pairs share the same drawer so the
+// alternate spelling renders the identical glyph. Func values aren't
+// `==`-comparable, so compare the underlying code pointer.
+func TestNewFallbackAliases(t *testing.T) {
+	pairs := [][2]string{
+		{"play", "continue"},
+		{"git", "git-branch"},
+		{"gear", "settings"},
+		{"file", "go-file"},
+	}
+	for _, p := range pairs {
+		a := proceduralFallbacks[p[0]]
+		b := proceduralFallbacks[p[1]]
+		if a == nil || b == nil {
+			t.Errorf("alias pair %q/%q: one side missing from registry", p[0], p[1])
+			continue
+		}
+		if reflect.ValueOf(a).Pointer() != reflect.ValueOf(b).Pointer() {
+			t.Errorf("alias %q does not point to the same drawer as %q", p[0], p[1])
+		}
+	}
+}
+
+// TestNewFallbacksResolveViaLoadIcon: each new name routes to the
+// procedural branch — i.e. LoadIcon returns an *icon whose name is the
+// requested one (not "image-missing"). This exercises the same lookup
+// LoadIcon's switch performs and guards the wiring end-to-end.
+func TestNewFallbacksResolveViaLoadIcon(t *testing.T) {
+	for _, name := range newIconNames {
+		t.Run(name, func(t *testing.T) {
+			ic := LoadIcon(name)
+			if ic == nil {
+				t.Fatalf("%s: LoadIcon returned nil", name)
+			}
+			cast, ok := ic.(*icon)
+			if !ok {
+				t.Fatalf("%s: unexpected concrete type %T", name, ic)
+			}
+			if cast.name == "image-missing" {
+				t.Errorf("%s routed to image-missing; expected procedural fallback", name)
+			}
+		})
+	}
+}
+
+// TestNewFallbackDrawNoPanic: a smoke test that each new drawer runs
+// against a real Cairo surface at 16 and 32 without panicking. Mirrors
+// the surface-creation idiom used by the other paint tests
+// (NewPixmap(...).NewContext() — see icon_fallbacks.go's
+// genProceduralIcon and paint_test.go).
+func TestNewFallbackDrawNoPanic(t *testing.T) {
+	// Deduplicate so aliases don't run the same drawer twice; the set
+	// of distinct drawers is what we actually want to smoke.
+	seen := map[uintptr]bool{}
+	for _, name := range newIconNames {
+		draw := proceduralFallbacks[name]
+		if draw == nil {
+			t.Fatalf("%q missing from registry", name)
+		}
+		ptr := reflect.ValueOf(draw).Pointer()
+		if seen[ptr] {
+			continue
+		}
+		seen[ptr] = true
+		for _, size := range []int{16, 32} {
+			s := NewPixmap(size, size)
+			cc := s.NewContext()
+			draw(size, cc)
+		}
 	}
 }
