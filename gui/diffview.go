@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"strconv"
 	"strings"
 
 	"silk/core"
@@ -68,7 +69,18 @@ type DiffView struct {
 	// row need not be a change row in practice (a click on a Same row
 	// will set it), but JumpToNext/Prev only land on non-Same rows.
 	activeChangeRow int
+
+	// showGutter toggles the per-side line-number gutter. Default true —
+	// hosts that want a bare two-column diff (e.g. an embedded preview in
+	// a tooltip) can SetShowGutter(false) to suppress the numbers and
+	// reclaim the gutter width for the diff text.
+	showGutter bool
 }
+
+// diffGutterWidth is the fixed pixel width reserved at the left edge of
+// each column for the line-number gutter. Wide enough to hold a 4-digit
+// number in the default monospace font without crowding the diff text.
+const diffGutterWidth = 30.0
 
 // NewDiffView creates an empty diff viewer. Callers populate it with
 // SetTexts (or SetOldText/SetNewText) once the two sides are known.
@@ -76,7 +88,50 @@ func NewDiffView() *DiffView {
 	p := new(DiffView)
 	p.Init(p)
 	p.activeChangeRow = -1
+	p.showGutter = true
 	return p
+}
+
+// ShowGutter reports whether the per-side line-number gutter is rendered.
+func (this *DiffView) ShowGutter() bool { return this.showGutter }
+
+// SetShowGutter toggles the per-side line-number gutter. With the gutter
+// off the diff text expands into the reclaimed space; with it on each
+// column reserves diffGutterWidth px on the left for the line numbers.
+func (this *DiffView) SetShowGutter(b bool) {
+	if this.showGutter == b {
+		return
+	}
+	this.showGutter = b
+	this.Self().Update()
+}
+
+// gutterLineNumbers returns parallel slices of left-side and right-side
+// line numbers for each DiffRow. A 0 means "no number on this side":
+// added rows have no left counterpart, removed rows have no right
+// counterpart. The counters advance only when the row presents content
+// on that side — DiffSame and DiffModified bump both, DiffAdded bumps
+// only the right, DiffRemoved bumps only the left.
+func gutterLineNumbers(rows []DiffRow) (left, right []int) {
+	left = make([]int, len(rows))
+	right = make([]int, len(rows))
+	var lc, rc int
+	for i, r := range rows {
+		switch r.Status {
+		case DiffSame, DiffModified:
+			lc++
+			rc++
+			left[i] = lc
+			right[i] = rc
+		case DiffAdded:
+			rc++
+			right[i] = rc
+		case DiffRemoved:
+			lc++
+			left[i] = lc
+		}
+	}
+	return left, right
 }
 
 // OldText returns the left-side text.
@@ -414,11 +469,32 @@ func (this *DiffView) Draw(g paint.Painter) {
 	leftX := 0.0
 	rightX := colW
 
+	// Reserve a small gutter on the left edge of each column for the
+	// per-side line numbers. The diff text starts after the gutter so it
+	// never overlaps the numbers. Toggling SetShowGutter(false) zeros
+	// the reservation and gives the text the whole column.
+	var gw float64
+	if this.showGutter {
+		gw = diffGutterWidth
+	}
+
 	// Per-row tints. Light red/green washes — alpha kept moderate so the
 	// foreground text stays readable against the form background.
 	colRemoved := paint.Color{R: 255, G: 220, B: 220, A: 180}
 	colAdded := paint.Color{R: 220, G: 245, B: 220, A: 180}
 	colStripe := paint.Color{R: 0, G: 0, B: 0, A: 8} // subtle alternate stripe
+
+	// Dimmed gutter foreground — theme text colour at ~45% alpha so the
+	// numbers stay legible without competing with the diff text.
+	gutterFg := t.TextColor
+	gutterFg.A = 115
+
+	// Precompute the per-side line numbers once per Draw; cheap and keeps
+	// the inner loop free of branching state.
+	var leftNums, rightNums []int
+	if this.showGutter {
+		leftNums, rightNums = gutterLineNumbers(this.diffRows)
+	}
 
 	startRow := int(this.scrollY / lh)
 	if startRow < 0 {
@@ -454,14 +530,33 @@ func (this *DiffView) Draw(g paint.Painter) {
 		// Text baseline within the row.
 		ty := y + fe.Ascent + 1
 
+		// Line-number gutter — right-aligned, dimmed, monospace. Drawn
+		// before the diff text so the tint sits behind both. A zero
+		// number renders nothing (added rows have no left counterpart,
+		// removed rows have no right counterpart).
+		if this.showGutter {
+			g.SetBrush1(gutterFg)
+			if leftNums[row] > 0 {
+				s := strconv.Itoa(leftNums[row])
+				tw := f.TextExtents(s).Width
+				g.DrawText1(leftX+gw-diffLinePad-tw, ty, s)
+			}
+			if rightNums[row] > 0 {
+				s := strconv.Itoa(rightNums[row])
+				tw := f.TextExtents(s).Width
+				g.DrawText1(rightX+gw-diffLinePad-tw, ty, s)
+			}
+		}
+
 		// Foreground colour matches the theme text colour; tints supply
-		// the per-row status colour.
+		// the per-row status colour. Text starts after the gutter so it
+		// doesn't overlap the numbers.
 		g.SetBrush1(t.TextColor)
 		if dr.OldLine != "" {
-			g.DrawText1(leftX+diffLinePad, ty, dr.OldLine)
+			g.DrawText1(leftX+gw+diffLinePad, ty, dr.OldLine)
 		}
 		if dr.NewLine != "" {
-			g.DrawText1(rightX+diffLinePad, ty, dr.NewLine)
+			g.DrawText1(rightX+gw+diffLinePad, ty, dr.NewLine)
 		}
 	}
 
