@@ -358,19 +358,24 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	})
 	tb.AddSeparator()
 
-	// Run / Build / Debug / Preview / PropSheet. run.png and
-	// preview.png exist natively; build and debug don't have icons
-	// yet so they fall back to short text labels. Tooltips include
-	// the keyboard shortcut so users can discover F5/F6 from the
-	// hover affordance, JetBrains-style.
+	// Run / Build / Debug / Stop / Preview / PropSheet. run.png and
+	// preview.png exist natively; build/debug/stop resolve at runtime
+	// via paint.LoadIcon by semantic name, so the toolbar shows the
+	// real glyph once that art lands and degrades to the existing
+	// fallback until then. Tooltips include the keyboard shortcut so
+	// users can discover F5/F6 from the hover affordance,
+	// JetBrains-style.
 	if btn := tb.AddAction("", paint.LoadIcon("run"), func() { runProjectInTerminal(designCanvas) }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Run")+" (F5)")
 	}
-	if btn := tb.AddAction(i18n.T("Build"), nil, func() { buildProject(designCanvas) }); btn != nil {
+	if btn := tb.AddAction(i18n.T("Build"), paint.LoadIcon("build"), func() { buildProject(designCanvas) }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Build")+" (F6)")
 	}
-	if btn := tb.AddAction(i18n.T("Debug"), nil, func() { runProjectInDebugger(designCanvas) }); btn != nil {
+	if btn := tb.AddAction(i18n.T("Debug"), paint.LoadIcon("debug"), func() { runProjectInDebugger(designCanvas) }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Debug")+" (Shift+F5)")
+	}
+	if btn := tb.AddAction(i18n.T("Stop"), paint.LoadIcon("stop"), func() { stopDebugger() }); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Stop"))
 	}
 	tb.AddSeparator()
 	// Export (preview-eye icon): pops SaveFileDialog, dispatches by
@@ -785,9 +790,9 @@ func dockSetActiveView(d *gui.Dock, view gui.IWidget) {
 // openFileInEditor below).
 func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	tabs := gui.NewTabWidget()
-	tabs.AddTab(makeCodeEditor(sampleMainGo()), "main.go", nil)
-	tabs.AddTab(makeCodeEditor(sampleServerGo()), "server.go", nil)
-	tabs.AddTab(makeCodeEditor(sampleGoMod()), "go.mod", nil)
+	tabs.AddTab(makeCodeEditor(sampleMainGo()), "main.go", paint.LoadIcon("document"))
+	tabs.AddTab(makeCodeEditor(sampleServerGo()), "server.go", paint.LoadIcon("document"))
+	tabs.AddTab(makeCodeEditor(sampleGoMod()), "go.mod", paint.LoadIcon("document"))
 	return tabs
 }
 
@@ -2527,7 +2532,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// the change gutter (added/modified/removed bars). Without this the
 	// gutter stays empty regardless of uncommitted changes.
 	ed.SetFilePath(path)
-	tabs.AddTab(ed, filepath.Base(path), nil)
+	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
 	openEditors[path] = ed
 	focusEditorTab(tabs, ed)
 	logEvent(ged.LogInfo, "Opened "+path)
