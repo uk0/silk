@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"os/exec"
@@ -244,6 +245,34 @@ type CodeEditor struct {
 	// goSnippets table (used by tryExpandSnippet, ${N:text} placeholders) is
 	// independent and still consulted afterwards.
 	snippets *SnippetSet
+
+	// --- Tokenization cache (Draw hot path) ---
+	// tokenCache memoizes tokenizeLine output per line index, keyed by a
+	// fnv64a hash over the line bytes plus the incoming inBlock flag. A
+	// stable line short-circuits the per-rune lexer scan; lines that
+	// changed yield a hash mismatch and recompute transparently.
+	//
+	// Invalidation rule (kept deliberately coarse, see rebuildText):
+	//   - SetText / undo / redo / any line-count change clears the whole
+	//     map, because line-index assignments shift after insert/delete
+	//     and a stale entry at the new index would silently mis-color.
+	//   - In-line edits (typing a char, line replacement at constant
+	//     line count) rely on the hash mismatch to self-invalidate the
+	//     affected entry on its next read.
+	// Single-threaded by construction: Draw and every mutation handler
+	// run on the GLFW main thread, so the map needs no mutex.
+	tokenCache       map[int]tokenCacheEntry
+	tokenCacheLineCt int // line count at the last cache fill, for shift detection
+}
+
+// tokenCacheEntry holds the tokens emitted for a (line index, line bytes,
+// inBlock) triple, plus the resulting inBlock state. nextBlock is cached
+// alongside tokens because tokenizeLine returns both and downstream code
+// (drawHighlightedLine, minimap) consumes both.
+type tokenCacheEntry struct {
+	hash      uint64
+	tokens    []token
+	nextBlock bool
 }
 
 // NewCodeEditor creates a new code editor widget.
@@ -378,6 +407,8 @@ func (this *CodeEditor) SetText(s string) {
 	this.undoStack = nil
 	this.redoStack = nil
 	this.foldedLines = make(map[int]bool)
+	this.clearTokenCache()
+	this.tokenCacheLineCt = len(this.lines)
 	this.Self().Update()
 }
 
@@ -1250,8 +1281,22 @@ func (this *CodeEditor) selectNextOccurrence() {
 }
 
 // rebuildText syncs this.text from this.lines.
+//
+// This is the funnel every mutation path eventually hits, so it doubles as
+// the tokenization-cache invalidation hook. Rule:
+//   - line count changed (insert/delete/paste-multiline/undo-replace) →
+//     drop the whole map, because the line-index keys have shifted under
+//     us and a stale entry would silently mis-color a different line.
+//   - line count unchanged (in-line typing, character delete, line
+//     replacement) → leave the map alone; the fnv64a hash check inside
+//     tokenizeLineCached detects the byte change and recomputes that
+//     single entry on its next Draw.
 func (this *CodeEditor) rebuildText() {
 	this.text = strings.Join(this.lines, "\n")
+	if len(this.lines) != this.tokenCacheLineCt {
+		this.clearTokenCache()
+		this.tokenCacheLineCt = len(this.lines)
+	}
 	if this.onChanged != nil {
 		this.onChanged(this.text)
 	}
@@ -2426,7 +2471,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 				g.DrawText1(editorRight-14, y+fe.Ascent, "\u00BB")
 			}
 		}
-		inBlock = this.drawHighlightedLine(g, lineText, textOffX, y+fe.Ascent, inBlock)
+		inBlock = this.drawHighlightedLine(g, i, lineText, textOffX, y+fe.Ascent, inBlock)
 
 		// Folded-region hint: on a collapsed start line, draw a subtle "⋯}" after
 		// the text so the user sees the block is collapsed and where it ends.
@@ -2690,8 +2735,9 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 
 // drawHighlightedLine renders a single line with syntax coloring.
 // It returns the updated inBlockComment state after this line.
-func (this *CodeEditor) drawHighlightedLine(g paint.Painter, line string, x, y float64, inBlock bool) bool {
-	tokens, newInBlock := tokenizeLine(line, inBlock)
+// idx is the line's index in this.lines and feeds the tokenization cache.
+func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line string, x, y float64, inBlock bool) bool {
+	tokens, newInBlock := this.tokenizeLineCached(idx, line, inBlock)
 	for _, tok := range tokens {
 		c, ok := tokenColors[tok.typ]
 		if !ok {
@@ -2763,7 +2809,7 @@ func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64,
 		lineY := y + float64(i)*minimapLineH
 		line := this.lines[i]
 
-		tokens, newBlock := tokenizeLine(line, inBlock)
+		tokens, newBlock := this.tokenizeLineCached(i, line, inBlock)
 		inBlock = newBlock
 
 		// Draw each token as a colored horizontal bar
@@ -3071,6 +3117,54 @@ normalScan:
 func lineEndsInBlockComment(line string, inBlock bool) bool {
 	_, newState := tokenizeLine(line, inBlock)
 	return newState
+}
+
+// tokenLineHash returns a fnv64a hash that mixes the line bytes with the
+// incoming inBlock flag. The flag goes in as a trailing sentinel byte so a
+// line that flips between in-block and out-of-block context produces a
+// distinct key, even though its bytes are identical.
+func tokenLineHash(line string, inBlock bool) uint64 {
+	h := fnv.New64a()
+	// Writing to fnv64a is documented never to fail; the error is unused.
+	_, _ = h.Write([]byte(line))
+	if inBlock {
+		_, _ = h.Write([]byte{1})
+	} else {
+		_, _ = h.Write([]byte{0})
+	}
+	return h.Sum64()
+}
+
+// tokenizeLineCached is the Draw-path wrapper around tokenizeLine. It
+// memoizes the (tokens, nextBlock) pair under (lineIdx, fnv64a(line, inBlock));
+// a hit returns the cached slice directly, a miss runs the underlying
+// tokenizer and stores the result.
+//
+// The cache is single-threaded — Draw and every mutation handler run on the
+// GLFW main thread — so no locking is needed.
+//
+// Long lines past maxHighlightLineLength fall through to tokenizeLine's
+// single-token fallback and are cached just like any other line: the entry
+// is small (one token), and a hash hit still skips the per-rune scan.
+func (this *CodeEditor) tokenizeLineCached(idx int, line string, inBlock bool) ([]token, bool) {
+	h := tokenLineHash(line, inBlock)
+	if e, ok := this.tokenCache[idx]; ok && e.hash == h {
+		return e.tokens, e.nextBlock
+	}
+	tokens, next := tokenizeLine(line, inBlock)
+	if this.tokenCache == nil {
+		this.tokenCache = make(map[int]tokenCacheEntry)
+	}
+	this.tokenCache[idx] = tokenCacheEntry{hash: h, tokens: tokens, nextBlock: next}
+	return tokens, next
+}
+
+// clearTokenCache drops every cached entry. Called from SetText and from
+// rebuildText when the line count changes, since line-index keys are no
+// longer trustworthy after an insert/delete shift.
+func (this *CodeEditor) clearTokenCache() {
+	this.tokenCache = nil
+	this.tokenCacheLineCt = 0
 }
 
 func isDigit(r rune) bool {
