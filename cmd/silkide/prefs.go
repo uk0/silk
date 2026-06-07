@@ -571,12 +571,11 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction, gui.KeyF2, func() {
 		addBookmarkAtCursor(editorTabs)
 	})
-	// Cmd+D — diff the active editor's file against its committed HEAD
-	// via `git diff HEAD`. Shares showDiffVsHEAD with the "Diff vs HEAD"
-	// palette command. Cmd+D is otherwise unbound in silkide.
-	gui.RegisterShortcut(gui.ModAction, 'D', func() {
-		showDiffVsHEAD(editorTabs, designCanvas)
-	})
+	// "Diff vs HEAD" stays palette-only. dispatchShortcut runs BEFORE
+	// focus routing and consumes the key, so a global Cmd+D here would
+	// shadow the CodeEditor's multi-cursor "select next occurrence"
+	// (also Cmd+D) whenever an editor has focus. The VCS diff is a
+	// low-frequency action the palette command already covers.
 }
 
 // fitCanvasToView switches the design canvas to PL_FIT_VIEW so the
