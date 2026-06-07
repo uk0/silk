@@ -64,6 +64,14 @@ type TerminalPanel struct {
 	running bool
 	cancel  chan struct{}
 
+	// Extra env applied to every spawned process (KEY=VALUE entries). Merged
+	// on top of os.Environ() with override semantics (Qt Creator / VS Code).
+	extraEnv []string
+
+	// Per-invocation env passed to the next worker spawn. Set by submitCommand
+	// just before starting runWorker; only read by that worker.
+	nextEnv []string
+
 	// History -- last 50 typed commands, latest at the end.
 	history    []string
 	historyPos int // -1 = not browsing; 0..len-1 = browsing
@@ -136,13 +144,48 @@ func (this *TerminalPanel) SigSubmit(fn func(cmd string)) {
 // the same terminal scrollback the user types into. Returns
 // immediately — execution happens on a worker goroutine and output
 // streams in via pollPending. No-op if a command is already running
-// (the panel handles one command at a time).
+// (the panel handles one command at a time). Routes through
+// RunWithEnv so any SetExtraEnv state applies here too.
 func (this *TerminalPanel) Run(cmd string) {
+	this.RunWithEnv(cmd, this.extraEnv)
+}
+
+// RunWithEnv is like Run but augments the spawned process env with
+// the supplied KEY=VALUE entries. extraEnv entries OVERRIDE matching
+// keys in os.Environ() (Qt Creator / VS Code semantics: explicit env
+// wins). Entries with no '=' are preserved as-is.
+func (this *TerminalPanel) RunWithEnv(cmd string, extraEnv []string) {
 	if cmd == "" || this.running {
 		return
 	}
+	// Snapshot extraEnv so later caller mutation can't race the worker.
+	if len(extraEnv) > 0 {
+		this.nextEnv = append([]string(nil), extraEnv...)
+	} else {
+		this.nextEnv = nil
+	}
 	this.inputText = cmd
 	this.submitCommand()
+}
+
+// SetExtraEnv installs a persistent set of KEY=VALUE entries applied
+// to every subsequent Run / RunWithEnv invocation on this panel. The
+// slice is copied so later caller mutation does not affect us.
+func (this *TerminalPanel) SetExtraEnv(env []string) {
+	if len(env) == 0 {
+		this.extraEnv = nil
+		return
+	}
+	this.extraEnv = append([]string(nil), env...)
+}
+
+// ExtraEnv returns a copy of the persistent extra-env slice. Mutating
+// the returned slice does not affect the panel.
+func (this *TerminalPanel) ExtraEnv() []string {
+	if len(this.extraEnv) == 0 {
+		return nil
+	}
+	return append([]string(nil), this.extraEnv...)
 }
 
 // Hint pushes one system message line into the scrollback. Renders
@@ -292,14 +335,19 @@ func (this *TerminalPanel) submitCommand() {
 	this.running = true
 	this.cancel = make(chan struct{})
 	cancel := this.cancel
+	// Consume per-invocation env so the worker owns it for this run only.
+	env := this.nextEnv
+	this.nextEnv = nil
 	this.mu.Unlock()
 
-	go this.runWorker(cmd, this.cwd, cancel)
+	go this.runWorker(cmd, this.cwd, env, cancel)
 }
 
 // runWorker executes a single command in the background, streaming its
 // output into the shared buffer. It MUST NOT touch any UI state directly.
-func (this *TerminalPanel) runWorker(cmdLine, cwd string, cancel chan struct{}) {
+// extraEnv (if non-empty) is merged on top of os.Environ() with override
+// semantics; nil means use the inherited environment verbatim.
+func (this *TerminalPanel) runWorker(cmdLine, cwd string, extraEnv []string, cancel chan struct{}) {
 	// done is closed unconditionally when the worker exits, so the cancel
 	// watcher goroutine below always returns and never leaks.
 	done := make(chan struct{})
@@ -323,7 +371,11 @@ func (this *TerminalPanel) runWorker(cmdLine, cwd string, cancel chan struct{}) 
 		c = exec.Command("/bin/sh", "-c", cmdLine)
 	}
 	c.Dir = cwd
-	c.Env = os.Environ()
+	if len(extraEnv) > 0 {
+		c.Env = mergeEnv(os.Environ(), extraEnv)
+	} else {
+		c.Env = os.Environ()
+	}
 
 	stdout, err := c.StdoutPipe()
 	if err != nil {
@@ -368,6 +420,59 @@ func (this *TerminalPanel) runWorker(cmdLine, cwd string, cancel chan struct{}) 
 			this.pushWorkerLine("[terminal] 命令退出: "+err.Error(), true)
 		}
 	}
+}
+
+// mergeEnv returns base with extra overlaid: every "KEY=..." entry in
+// extra overrides the matching KEY= entry in base (preserving its
+// relative position); entries whose KEY is not present in base are
+// appended at the end. Within extra, last-wins for duplicate keys.
+// Malformed entries (no '=') are preserved verbatim — both lists pass
+// them through untouched. Neither input slice is mutated.
+func mergeEnv(base []string, extra []string) []string {
+	if len(extra) == 0 {
+		out := make([]string, len(base))
+		copy(out, base)
+		return out
+	}
+	// Last-wins collapse within extra; track ordered keys for appends.
+	override := make(map[string]string, len(extra))
+	var extraOrder []string
+	var malformed []string
+	for _, e := range extra {
+		i := strings.IndexByte(e, '=')
+		if i < 0 {
+			malformed = append(malformed, e)
+			continue
+		}
+		k := e[:i]
+		if _, seen := override[k]; !seen {
+			extraOrder = append(extraOrder, k)
+		}
+		override[k] = e
+	}
+	out := make([]string, 0, len(base)+len(extraOrder)+len(malformed))
+	usedFromExtra := make(map[string]bool, len(override))
+	for _, e := range base {
+		i := strings.IndexByte(e, '=')
+		if i < 0 {
+			out = append(out, e)
+			continue
+		}
+		k := e[:i]
+		if v, ok := override[k]; ok {
+			out = append(out, v)
+			usedFromExtra[k] = true
+		} else {
+			out = append(out, e)
+		}
+	}
+	for _, k := range extraOrder {
+		if !usedFromExtra[k] {
+			out = append(out, override[k])
+		}
+	}
+	out = append(out, malformed...)
+	return out
 }
 
 // pipeLines reads an io.Reader line-by-line and pushes each line into the
