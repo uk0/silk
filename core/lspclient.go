@@ -813,13 +813,29 @@ type LSPWorkspaceEdit struct {
 	Changes map[string][]LSPTextEdit // uri -> edits
 }
 
+// LSPCommand 是 LSP 的 Command: 一个可执行命令的引用 (title + command + 参数)
+// code action 既可能是裸 Command (顶层就是这个形状), 也可能是 CodeAction 里
+// 内嵌的 command 字段. Arguments 保留成 RawMessage 原样透出 -- 不同 command
+// 的参数形状各异, 留给上层在真正 workspace/executeCommand 时再解释.
+type LSPCommand struct {
+	Title     string          `json:"title"`
+	Command   string          `json:"command"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
 // LSPCodeAction 是 code action 菜单里的一项 (灯泡里的 quick-fix / refactor)
-// v1 只把菜单项的标题展出来: Title 必有, Kind 在 CodeAction 形态下有
-// (例如 "quickfix" / "refactor.extract"), 裸 Command 形态没有 kind 留空.
-// 这里有意不带 edit -- 应用编辑是后续 commit 的事, 这一版只负责"列菜单".
+// Title 必有; Kind 在 CodeAction 形态下有 (例如 "quickfix" / "refactor.extract"),
+// 裸 Command 形态没有 kind 留空. Edit / Command 携带"如何应用这一项":
+//   - Edit 非 nil 时是一份内联 WorkspaceEdit, 直接喂给 ApplyTextEdits 即可生效.
+//   - Command 非 nil 时是一条待执行命令 (裸 Command 形态, 或 CodeAction 自带 command).
+//
+// 两者都可能缺省 (留 nil), 也可能同时存在. 真正执行 command 走 workspace/executeCommand,
+// 那是后续 commit 的事, 这一版只负责把数据透出来.
 type LSPCodeAction struct {
-	Title string
-	Kind  string // 裸 Command 形态为空
+	Title   string
+	Kind    string            // 裸 Command 形态为空
+	Edit    *LSPWorkspaceEdit // 无内联编辑时为 nil
+	Command *LSPCommand       // 无命令时为 nil
 }
 
 // Formatting 请求 textDocument/formatting 并返回把整篇文档格式化所需的编辑
@@ -869,6 +885,19 @@ func (c *LSPClient) Rename(uri string, line, character int, newName string) (*LS
 	if len(resp.Result) == 0 || string(resp.Result) == "null" {
 		return nil, nil
 	}
+	return decodeWorkspaceEdit(resp.Result, "rename")
+}
+
+// decodeWorkspaceEdit 把一份 WorkspaceEdit 的原始 JSON 归一成 LSPWorkspaceEdit
+// WorkspaceEdit 有两种合法形态, server 任选 (rename 响应与 code action 的 edit 字段同此):
+//   - changes:         {uri: []TextEdit}            -- 简单 map 形态, 优先吃这个
+//   - documentChanges: [{textDocument:{uri}, edits:[]TextEdit}]  -- 带版本号的形态
+//
+// 处理顺序: 先看 changes, 非空就用; changes 缺省时再折叠 documentChanges 到同一个
+// Changes map (丢掉版本号, 上层只关心 uri->edits), 同一个 uri 出现多次就把 edits 串接.
+// 两者都给时以 changes 为准 -- 简单形态信息无损, 不必再读版本化形态. what 仅用于
+// 出错时拼报文 (调用方说明这份 edit 来自哪个请求).
+func decodeWorkspaceEdit(raw json.RawMessage, what string) (*LSPWorkspaceEdit, error) {
 	var we struct {
 		Changes         map[string][]LSPTextEdit `json:"changes"`
 		DocumentChanges []struct {
@@ -878,8 +907,8 @@ func (c *LSPClient) Rename(uri string, line, character int, newName string) (*LS
 			Edits []LSPTextEdit `json:"edits"`
 		} `json:"documentChanges"`
 	}
-	if err := json.Unmarshal(resp.Result, &we); err != nil {
-		return nil, fmt.Errorf("lspclient: decode rename result: %w", err)
+	if err := json.Unmarshal(raw, &we); err != nil {
+		return nil, fmt.Errorf("lspclient: decode %s result: %w", what, err)
 	}
 	out := &LSPWorkspaceEdit{Changes: map[string][]LSPTextEdit{}}
 	if len(we.Changes) > 0 {
@@ -899,8 +928,14 @@ func (c *LSPClient) Rename(uri string, line, character int, newName string) (*LS
 // 响应是一个数组, 每个元素是两种形态之一, server 混着发都合法:
 //   - 裸 Command:  {title, command, arguments}        -- 只有 title, 无 kind
 //   - CodeAction:  {title, kind, edit?, command?}     -- 有 kind
-// 两者都带 title, 所以宽松解码: 统一只取 title (+ kind 若有). 这一版不应用
-// edit (CodeAction.edit 是一份 WorkspaceEdit), 应用编辑留作后续 commit.
+//
+// 两者都带 title, 所以宽松解码: title 必取, kind / edit / command 有则取无则留空.
+//   - edit 是一份内联 WorkspaceEdit, 复用 rename 同款双形态折叠 (decodeWorkspaceEdit),
+//     压平到 Edit.Changes 供 ApplyTextEdits 应用.
+//   - 裸 Command 形态没有 edit, 顶层的 command/title 折进 Command 字段.
+//
+// 缺省字段一律留 nil/空, 不在"形态合法但稀疏"的项上报错. 真正执行 command
+// (workspace/executeCommand) 留作后续 commit, 这一版只把数据透出来.
 // null (区间内无可用动作) 归一成空切片, 不当错误.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) CodeAction(uri string, startLine, startChar, endLine, endChar int) ([]LSPCodeAction, error) {
@@ -922,18 +957,59 @@ func (c *LSPClient) CodeAction(uri string, startLine, startChar, endLine, endCha
 		return []LSPCodeAction{}, nil
 	}
 	// 宽松解码: Command 和 CodeAction 都带 title; kind 只有 CodeAction 有.
+	// edit/command 先收成 RawMessage, 缺省或 null 时留 nil, 不强行构造空对象.
 	var raw []struct {
-		Title string `json:"title"`
-		Kind  string `json:"kind"`
+		Title     string          `json:"title"`
+		Kind      string          `json:"kind"`
+		Edit      json.RawMessage `json:"edit"`
+		Command   json.RawMessage `json:"command"`
+		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(resp.Result, &raw); err != nil {
 		return nil, fmt.Errorf("lspclient: decode codeAction result: %w", err)
 	}
 	out := make([]LSPCodeAction, 0, len(raw))
 	for _, a := range raw {
-		out = append(out, LSPCodeAction{Title: a.Title, Kind: a.Kind})
+		act := LSPCodeAction{Title: a.Title, Kind: a.Kind}
+		// edit: 一份内联 WorkspaceEdit, 复用 rename 的双形态折叠.
+		if len(a.Edit) > 0 && string(a.Edit) != "null" {
+			edit, err := decodeWorkspaceEdit(a.Edit, "codeAction edit")
+			if err != nil {
+				return nil, err
+			}
+			act.Edit = edit
+		}
+		// command 有两种来源: CodeAction 内嵌的 command 对象, 或裸 Command 形态
+		// (command 是字符串, title/arguments 在顶层). 两种都折进 *LSPCommand;
+		// 缺省时 decodeCommandField 返回 nil.
+		act.Command = decodeCommandField(a.Command, a.Title, a.Arguments)
+		out = append(out, act)
 	}
 	return out, nil
+}
+
+// decodeCommandField 把 code action 项里的 command 归一成 *LSPCommand
+// LSP 把 command 编码成两种形态, 取决于这一项本身是 Command 还是 CodeAction:
+//   - 对象形态:  "command": {title, command, arguments}   -- CodeAction 内嵌的 command
+//   - 字符串形态: "command": "id", 顶层另有 title / arguments -- 裸 Command 项
+//
+// 对象形态直接解码; 字符串形态用顶层的 title + arguments 补齐. 缺省 (无 command
+// 或 null) 返回 nil. 形态合法但稀疏不报错: 解不出对象就退回字符串形态尽力补齐.
+func decodeCommandField(rawCmd json.RawMessage, topTitle string, topArgs json.RawMessage) *LSPCommand {
+	if len(rawCmd) == 0 || string(rawCmd) == "null" {
+		return nil
+	}
+	// 对象形态: {title, command, arguments}
+	var obj LSPCommand
+	if err := json.Unmarshal(rawCmd, &obj); err == nil && obj.Command != "" {
+		return &obj
+	}
+	// 字符串形态: command 是一个 id, title/arguments 在顶层 (裸 Command 项).
+	var id string
+	if err := json.Unmarshal(rawCmd, &id); err != nil || id == "" {
+		return nil
+	}
+	return &LSPCommand{Title: topTitle, Command: id, Arguments: topArgs}
 }
 
 // DidChange 发 textDocument/didChange 通知, 把整个文件最新内容推给 server

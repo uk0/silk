@@ -1579,7 +1579,9 @@ func TestLSPClientCodeAction_CommandAndAction(t *testing.T) {
 		// 第一项是裸 Command (有 command, 无 kind), 第二项是 CodeAction (有 kind + edit).
 		return &fakeReply{Result: json.RawMessage(`[
 {"title":"Organize Imports","command":"gopls.organize_imports","arguments":["file:///a.go"]},
-{"title":"Extract function","kind":"refactor.extract","edit":{"changes":{}}}
+{"title":"Extract function","kind":"refactor.extract","edit":{"changes":{
+  "file:///a.go":[{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":0}},"newText":"x := 1\n"}]
+}}}
 ]`)}
 	})
 
@@ -1590,13 +1592,34 @@ func TestLSPClientCodeAction_CommandAndAction(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("len = %d, want 2: %+v", len(actions), actions)
 	}
-	// 裸 Command: 有 title, kind 留空
+	// 裸 Command: 有 title, kind 留空, 无内联 edit, command 折进 Command 字段.
 	if actions[0].Title != "Organize Imports" || actions[0].Kind != "" {
 		t.Errorf("actions[0] = %+v, want bare Command with empty kind", actions[0])
 	}
-	// CodeAction: title + kind
+	if actions[0].Edit != nil {
+		t.Errorf("actions[0].Edit = %+v, want nil for bare Command", actions[0].Edit)
+	}
+	if actions[0].Command == nil {
+		t.Fatalf("actions[0].Command = nil, want bare Command surfaced")
+	}
+	if actions[0].Command.Title != "Organize Imports" || actions[0].Command.Command != "gopls.organize_imports" {
+		t.Errorf("actions[0].Command = %+v", actions[0].Command)
+	}
+	if got := string(actions[0].Command.Arguments); got != `["file:///a.go"]` {
+		t.Errorf("actions[0].Command.Arguments = %s, want top-level arguments", got)
+	}
+	// CodeAction: title + kind, 内联 edit 折叠进 Edit.Changes, 无 command.
 	if actions[1].Title != "Extract function" || actions[1].Kind != "refactor.extract" {
 		t.Errorf("actions[1] = %+v", actions[1])
+	}
+	if actions[1].Command != nil {
+		t.Errorf("actions[1].Command = %+v, want nil (no command on this action)", actions[1].Command)
+	}
+	if actions[1].Edit == nil {
+		t.Fatalf("actions[1].Edit = nil, want inline WorkspaceEdit")
+	}
+	if got := actions[1].Edit.Changes["file:///a.go"]; len(got) != 1 || got[0].NewText != "x := 1\n" {
+		t.Errorf("actions[1].Edit.Changes = %+v", actions[1].Edit.Changes)
 	}
 	// 校验 range + context.diagnostics 形状
 	var gotParams struct {
@@ -1664,6 +1687,169 @@ func TestLSPClientCodeAction_ServerError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "code action provider failed") {
 		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// CodeAction 形态, edit 用 changes map 形态 -> 折叠进 Edit.Changes (uri->edits).
+func TestLSPClientCodeAction_EditChangesShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"title":"Add missing import","kind":"quickfix","edit":{"changes":{"file:///a.go":[
+  {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import \"fmt\"\n"}
+]}}}
+]`)}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 5, 2, 5, 8)
+	if err != nil {
+		t.Fatalf("CodeAction: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(actions), actions)
+	}
+	a := actions[0]
+	if a.Title != "Add missing import" || a.Kind != "quickfix" {
+		t.Errorf("action = %+v", a)
+	}
+	if a.Command != nil {
+		t.Errorf("Command = %+v, want nil", a.Command)
+	}
+	if a.Edit == nil {
+		t.Fatal("Edit = nil, want inline WorkspaceEdit")
+	}
+	edits := a.Edit.Changes["file:///a.go"]
+	if len(edits) != 1 || edits[0].NewText != "import \"fmt\"\n" || edits[0].Range.Start.Line != 0 {
+		t.Errorf("Edit.Changes[a.go] = %+v", edits)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// CodeAction 形态, edit 用 documentChanges 数组形态 -> 折叠进 Edit.Changes,
+// 同一个 uri 出现两次时把 edits 串接 (复用 rename 同款折叠).
+func TestLSPClientCodeAction_EditDocumentChangesShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"title":"Fix all","kind":"source.fixAll","edit":{"documentChanges":[
+  {"textDocument":{"uri":"file:///a.go","version":2},"edits":[
+    {"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},"newText":"foo"}
+  ]},
+  {"textDocument":{"uri":"file:///b.go","version":1},"edits":[
+    {"range":{"start":{"line":4,"character":2},"end":{"line":4,"character":5}},"newText":"bar"}
+  ]},
+  {"textDocument":{"uri":"file:///a.go","version":2},"edits":[
+    {"range":{"start":{"line":9,"character":1},"end":{"line":9,"character":4}},"newText":"baz"}
+  ]}
+]}}
+]`)}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("CodeAction: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(actions), actions)
+	}
+	a := actions[0]
+	if a.Title != "Fix all" || a.Kind != "source.fixAll" || a.Command != nil {
+		t.Errorf("action = %+v", a)
+	}
+	if a.Edit == nil {
+		t.Fatal("Edit = nil, want folded WorkspaceEdit")
+	}
+	if len(a.Edit.Changes) != 2 {
+		t.Fatalf("Changes len = %d, want 2 (a.go + b.go): %+v", len(a.Edit.Changes), a.Edit.Changes)
+	}
+	// a.go 的两段 edits 折叠到一起
+	if got := a.Edit.Changes["file:///a.go"]; len(got) != 2 || got[0].NewText != "foo" || got[1].Range.Start.Line != 9 {
+		t.Errorf("a.go edits = %+v, want 2 folded edits", got)
+	}
+	if got := a.Edit.Changes["file:///b.go"]; len(got) != 1 || got[0].NewText != "bar" {
+		t.Errorf("b.go edits = %+v", got)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// 裸 Command (title + command, 无 edit) -> Title + Command 落位, Edit 留 nil.
+func TestLSPClientCodeAction_BareCommand(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"title":"Regenerate cgo","command":"gopls.regenerate_cgo","arguments":[{"URI":"file:///a.go"}]}
+]`)}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("CodeAction: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(actions), actions)
+	}
+	a := actions[0]
+	if a.Title != "Regenerate cgo" || a.Kind != "" {
+		t.Errorf("action = %+v, want bare Command", a)
+	}
+	if a.Edit != nil {
+		t.Errorf("Edit = %+v, want nil for bare Command", a.Edit)
+	}
+	if a.Command == nil {
+		t.Fatal("Command = nil, want bare Command surfaced")
+	}
+	if a.Command.Title != "Regenerate cgo" || a.Command.Command != "gopls.regenerate_cgo" {
+		t.Errorf("Command = %+v", a.Command)
+	}
+	if got := string(a.Command.Arguments); got != `[{"URI":"file:///a.go"}]` {
+		t.Errorf("Command.Arguments = %s, want top-level arguments preserved", got)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// 只有 title (+ kind) 的稀疏项 -> Edit nil, Command nil (不回归早先纯标题行为).
+func TestLSPClientCodeAction_TitleOnly(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"title":"Extract variable","kind":"refactor.extract"}
+]`)}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("CodeAction: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(actions), actions)
+	}
+	a := actions[0]
+	if a.Title != "Extract variable" || a.Kind != "refactor.extract" {
+		t.Errorf("action = %+v", a)
+	}
+	if a.Edit != nil || a.Command != nil {
+		t.Errorf("sparse item: Edit=%+v Command=%+v, want both nil", a.Edit, a.Command)
 	}
 
 	_ = srvIn.Close()
