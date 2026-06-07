@@ -5,6 +5,7 @@ import (
 	//	"silk/factory"
 	"silk/paint"
 	"math"
+	"strings"
 	"unicode"
 )
 
@@ -67,6 +68,16 @@ type Edit struct {
 	// AcceptCompletion knows what range to replace when the user picks
 	// a candidate. Defaults to the entire current text on a fresh edit.
 	completionPrefixStart int
+
+	// maxLength caps the buffer at this many runes when > 0. Zero (the
+	// default) means unlimited. Typing past the cap is silently rejected
+	// in OnTextInput; pastes longer than the remaining headroom are
+	// truncated to fit in pasteString. SetMaxLength(N) with N below the
+	// current rune length truncates the buffer to N runes and fires the
+	// change callback — the API call is a deliberate limit reset, not a
+	// stray keystroke, so the trim is loud (callback) but not user-
+	// visible (no toast).
+	maxLength int
 }
 
 func NewEdit() *Edit {
@@ -326,6 +337,21 @@ func (this *Edit) OnMouseStop(x, y float64) {
 func (this *Edit) OnTextInput(s string) {
 	if this.readonly {
 		return
+	}
+	// MaxLength gate (typing path only): when the buffer is already at
+	// the cap and nothing is selected (so the keystroke would grow the
+	// buffer), drop the keystroke silently. The paste path is handled
+	// separately by pasteString, which truncates the inserted slice
+	// instead of rejecting it wholesale.
+	if this.maxLength > 0 {
+		begin, end := this.sel0, this.sel1
+		if begin > end {
+			begin, end = end, begin
+		}
+		grow := len([]rune(s)) - (end - begin)
+		if grow > 0 && this.RunesCount()+grow > this.maxLength {
+			return
+		}
 	}
 	// Validator gate: if installed, classify the candidate text BEFORE
 	// committing. Invalid drops the keystroke; Intermediate / Acceptable
@@ -741,8 +767,88 @@ func nextWordBoundary(runes []rune, caret int) int {
 func (this *Edit) paste() {
 	i, err := Clipboard.Data("text/plain")
 	if err == nil {
-		this.OnTextInput(i.(string))
+		this.pasteString(i.(string))
 	}
+}
+
+// sanitizePasteForSingleLine cleans clipboard text before it enters a
+// single-line Edit. The rule: strip every CR (it's a layout artifact —
+// CRLF or bare CR — that the single-line renderer can't draw), and
+// replace every LF with a space (an embedded newline in a single-line
+// field must not turn into two visual rows or render a tofu glyph).
+// Leading and trailing whitespace are LEFT INTACT — a user who pastes
+// " hello " into a search box meant the spaces, and trimming would
+// surprise them. Pure helper: no widget state, unit-testable.
+func sanitizePasteForSingleLine(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
+// pasteString commits clipboard text at the current selection. For a
+// single-line Edit the input is first run through
+// sanitizePasteForSingleLine (CR stripped, LF -> space); multi-line
+// Edits keep the raw payload. When maxLength is set, the inserted slice
+// is truncated to fit the remaining headroom — existing buffer content
+// is never trimmed, so a user pasting too much only loses the tail of
+// the new payload, not what they already typed.
+func (this *Edit) pasteString(s string) {
+	if this.readonly {
+		return
+	}
+	if !this.ml {
+		s = sanitizePasteForSingleLine(s)
+	}
+	if this.maxLength > 0 {
+		begin, end := this.sel0, this.sel1
+		if begin > end {
+			begin, end = end, begin
+		}
+		headroom := this.maxLength - (this.RunesCount() - (end - begin))
+		if headroom <= 0 {
+			return
+		}
+		rs := []rune(s)
+		if len(rs) > headroom {
+			s = string(rs[:headroom])
+		}
+	}
+	this.OnTextInput(s)
+}
+
+// MaxLength returns the configured rune cap, or 0 when the buffer is
+// unlimited (the default).
+func (this *Edit) MaxLength() int {
+	return this.maxLength
+}
+
+// SetMaxLength sets the rune cap. n <= 0 clears any existing cap. When
+// n is positive and the current buffer already exceeds n, the buffer is
+// truncated to n runes and the change callback fires — an explicit API
+// call is a deliberate limit reset, not a stray keystroke we should
+// silently swallow.
+func (this *Edit) SetMaxLength(n int) {
+	if n < 0 {
+		n = 0
+	}
+	this.maxLength = n
+	if n == 0 {
+		return
+	}
+	if this.RunesCount() <= n {
+		return
+	}
+	// Truncate via TextBlock so the trailing-"\n" sentinel is preserved.
+	rs := []rune(this.Text())
+	this.TextBlock.SetText(string(rs[:n]))
+	if this.sel0 > n {
+		this.sel0 = n
+	}
+	if this.sel1 > n {
+		this.sel1 = n
+	}
+	this.emitChanged()
+	this.Layout()
 }
 
 func (this *Edit) Copy() {
