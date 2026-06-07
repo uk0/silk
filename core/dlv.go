@@ -261,11 +261,28 @@ func (s *DebugSession) Continue() (*StopState, error) {
 	return s.command("continue")
 }
 
-// Step 等同于 dlv 的 "next" -- 同一 goroutine 内单步, 不进入函数调用
-// 选 next 而非 step-in 是出于 IDE Debug 工具栏最直觉的 "Step Over" 语义;
-// 真正的 step-in 等后续 commit 加 StepIn 方法时再用 "step" 名字.
+// Step 是 Next 的同义词 (step-over), 历史遗留方法, 保留以兼容已引用它的调用方
+// (silkide 等). 与 Next 一样发 dlv 的 "next": 同一 goroutine 内单步, 不进入
+// 函数调用. 新代码应优先用 Next; Step 不再扩展语义.
 func (s *DebugSession) Step() (*StopState, error) {
 	return s.command("next")
+}
+
+// Next 是 IDE Debug 工具栏的 "Step Over": 执行当前行, 跨过 (不进入) 行内的函数
+// 调用. 对应 dlv 的 "next". 与 Step 等价 -- Step 是历史别名, 两者发同一条命令.
+func (s *DebugSession) Next() (*StopState, error) {
+	return s.command("next")
+}
+
+// StepInto 是 "Step Into": 进入当前行所调用的函数. 对应 dlv 的 "step".
+// 当前行没有函数调用时 dlv 退化为一次 next.
+func (s *DebugSession) StepInto() (*StopState, error) {
+	return s.command("step")
+}
+
+// StepOut 是 "Step Out": 运行到当前函数返回 (跳出当前帧). 对应 dlv 的 "stepOut".
+func (s *DebugSession) StepOut() (*StopState, error) {
+	return s.command("stepOut")
 }
 
 // command 是 Continue/Step 共享的内部包装. dlv 的 Command RPC 在 API v2 下

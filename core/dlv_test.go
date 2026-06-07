@@ -1003,3 +1003,115 @@ func TestDlvRestart_ClosedSession(t *testing.T) {
 		t.Fatalf("want closed error, got %v", err)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Next / StepInto / StepOut -- step-over/into/out, protocol-level tests.
+// 三个动作只在 dlv 的 Command name 上有差别 (next/step/stepOut); 都用 fake
+// server 断言发出的 name, 并验证返回的 StopState 解码自应答的 currentThread.
+// -----------------------------------------------------------------------------
+
+// stepCmdServer 预编程 fake server: 断言 method=RPCServer.Command 且 name==want,
+// 然后回一个停在 file:line(fn) 的 DebuggerState. 复用在三个 step 动作的测试里.
+func stepCmdServer(t *testing.T, srv *fakeRPCServer, want, file string, line int, fn string) {
+	t.Helper()
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.Command" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		if first["name"] == nil || first["name"].(string) != want {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want name=%s, got %v"}`, id, want, first["name"])
+		}
+		return fmt.Sprintf(
+			`{"id":%d,"result":{"State":{"exited":false,"currentThread":{"file":%q,"line":%d,"function":{"name":%q}}}},"error":null}`,
+			id, file, line, fn,
+		)
+	})
+}
+
+// TestNext_Decode: Next 必须发 {name:"next"}, 返回应答里的 File/Line/Function.
+func TestDlvNext_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	stepCmdServer(t, srv, "next", "n.go", 11, "main.next")
+	st, err := sess.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	want := &StopState{Reason: "next", File: "n.go", Line: 11, Function: "main.next"}
+	if *st != *want {
+		t.Errorf("Next state = %+v, want %+v", *st, *want)
+	}
+}
+
+// TestStepInto_Decode: StepInto 必须发 {name:"step"}.
+func TestDlvStepInto_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	stepCmdServer(t, srv, "step", "i.go", 22, "main.callee")
+	st, err := sess.StepInto()
+	if err != nil {
+		t.Fatalf("StepInto: %v", err)
+	}
+	want := &StopState{Reason: "step", File: "i.go", Line: 22, Function: "main.callee"}
+	if *st != *want {
+		t.Errorf("StepInto state = %+v, want %+v", *st, *want)
+	}
+}
+
+// TestStepOut_Decode: StepOut 必须发 {name:"stepOut"}.
+func TestDlvStepOut_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	stepCmdServer(t, srv, "stepOut", "o.go", 33, "main.caller")
+	st, err := sess.StepOut()
+	if err != nil {
+		t.Fatalf("StepOut: %v", err)
+	}
+	want := &StopState{Reason: "stepOut", File: "o.go", Line: 33, Function: "main.caller"}
+	if *st != *want {
+		t.Errorf("StepOut state = %+v, want %+v", *st, *want)
+	}
+}
+
+// TestStep_IsNextSynonym: Step (历史别名) 必须仍发 {name:"next"}, 与 Next 等价.
+// 钉死兼容性 -- silkide 仍可能引用 Step.
+func TestDlvStep_IsNextSynonym(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	stepCmdServer(t, srv, "next", "s.go", 6, "main.main")
+	st, err := sess.Step()
+	if err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	want := &StopState{Reason: "next", File: "s.go", Line: 6, Function: "main.main"}
+	if *st != *want {
+		t.Errorf("Step state = %+v, want %+v", *st, *want)
+	}
+}
+
+// TestStepActions_ClosedSession: Step/Next/StepInto/StepOut 在 closed session 上
+// 都必须返回 closed 错误且不 panic.
+func TestDlvStepActions_ClosedSession(t *testing.T) {
+	type stepFn struct {
+		name string
+		call func(*DebugSession) (*StopState, error)
+	}
+	for _, f := range []stepFn{
+		{"Step", (*DebugSession).Step},
+		{"Next", (*DebugSession).Next},
+		{"StepInto", (*DebugSession).StepInto},
+		{"StepOut", (*DebugSession).StepOut},
+	} {
+		sess := &DebugSession{closed: true}
+		_, err := f.call(sess)
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("%s on closed session: want closed error, got %v", f.name, err)
+		}
+	}
+}
