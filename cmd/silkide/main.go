@@ -3346,6 +3346,67 @@ func formatSignature(sh *core.LSPSignatureHelp) string {
 	return sh.Signatures[idx].Label
 }
 
+// codeActionsViaLSP asks gopls for quick-fixes / refactors at the caret and
+// pops a menu of their titles; selecting one applies its WorkspaceEdit via
+// the shared applyWorkspaceEdit. Bound to Cmd+. The RPC runs off-thread; the
+// menu is built on the main thread anchored near the caret.
+func codeActionsViaLSP(tabs *gui.TabWidget) {
+	if globalLSP == nil {
+		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		return
+	}
+	ed := activeEditor(tabs)
+	path := activeEditorPath(tabs)
+	if ed == nil || path == "" || !isGoFile(path) {
+		return
+	}
+	line := ed.CursorLine()
+	col := ed.CursorCol()
+	uri := fileURIOf(path)
+	gx, gy := ed.MapToGlobal(80, 60)
+	go func() {
+		actions, err := globalLSP.CodeAction(uri, line, col, line, col)
+		if err != nil {
+			return
+		}
+		if len(actions) == 0 {
+			gui.Post(func() { silkideToast(i18n.T("No code actions"), gui.ToastInfo) })
+			return
+		}
+		gui.Post(func() {
+			menu := gui.NewPopupMenu()
+			for _, a := range actions {
+				act := a // capture per-iteration
+				menu.AddButton1(act.Title, nil).Action().BindFunc0(func() {
+					applyCodeAction(act)
+				})
+			}
+			menu.ShowAsPopup(gx, gy, true)
+		})
+	}()
+}
+
+// applyCodeAction applies a selected code action. Inline edits go through
+// applyWorkspaceEdit (open editors get SetText, closed files are rewritten);
+// command-only actions need workspace/executeCommand, which is a follow-up,
+// so they report rather than silently no-op.
+func applyCodeAction(a core.LSPCodeAction) {
+	if a.Edit != nil {
+		n, err := applyWorkspaceEdit(a.Edit)
+		if err != nil {
+			silkideToast(i18n.Tf("Code action failed: %v", err), gui.ToastError)
+			return
+		}
+		silkideToast(i18n.Tf("Applied: %s (%d file(s))", a.Title, n), gui.ToastSuccess)
+		return
+	}
+	if a.Command != nil {
+		silkideToast(i18n.Tf("Command action not yet supported: %s", a.Title), gui.ToastWarning)
+		return
+	}
+	silkideToast(i18n.T("Code action has no edit"), gui.ToastInfo)
+}
+
 // formatDocumentViaLSP reformats the active editor through gopls
 // (textDocument/formatting, which also runs goimports) and applies the
 // returned edits. Complements gofmt-on-save with an on-demand reformat.

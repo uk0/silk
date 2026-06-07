@@ -357,6 +357,9 @@ func registerSilkideTranslations() {
 		"Renamed across %d file(s)": "已重命名 %d 个文件",
 		"Find References":        "查找引用",
 		"No references found":    "未找到引用",
+		"Code Actions":           "代码操作",
+		"No code actions":        "无可用操作",
+		"Code action has no edit": "该操作无可应用编辑",
 		"Failed to read saved file": "读取已保存文件失败",
 		"Running %s...":          "运行 %s 中...",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
@@ -535,6 +538,8 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'I', func() { formatDocumentViaLSP(editorTabs) })
 	// Find References via gopls (Shift+F12) — lists usages in the panel.
 	gui.RegisterShortcut(gui.ModShift, gui.KeyF12, func() { findReferencesViaLSP(editorTabs) })
+	// Code Actions / quick-fixes via gopls (Cmd+.).
+	gui.RegisterShortcut(gui.ModAction, '.', func() { codeActionsViaLSP(editorTabs) })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
 	// Shift+F6 → go vet; Cmd+Shift+F7 → tests with coverage. Both slot
 	// in next to the existing F6/F7 build/test pair so the muscle memory

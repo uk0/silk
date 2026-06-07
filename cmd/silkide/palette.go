@@ -116,6 +116,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Go to Definition", "F12", func() { goToDefinitionViaLSP(editorTabs) })
 	add("Format Document", "Cmd+Shift+I", func() { formatDocumentViaLSP(editorTabs) })
 	add("Find References", "Shift+F12", func() { findReferencesViaLSP(editorTabs) })
+	add("Code Actions", "Cmd+.", func() { codeActionsViaLSP(editorTabs) })
 	add("Restart LSP", "", func() { restartLSP(designCanvas) })
 	add("Run go vet", "Shift+F6", func() { runProjectVet(designCanvas) })
 	add("Run Tests", "F7", func() { runProjectTests(designCanvas) })
