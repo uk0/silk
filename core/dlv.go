@@ -315,6 +315,203 @@ func (s *DebugSession) command(name string) (*StopState, error) {
 	return st, nil
 }
 
+// StackFrame 是 goroutine 调用栈上的一帧
+// Delve Stackframe 还带 Locals/Arguments/FrameOffset 等; IDE 当前只画 File/Line/Function
+type StackFrame struct {
+	File     string
+	Line     int
+	Function string
+}
+
+// Goroutine 是 dlv 看到的一个用户 goroutine
+// CurrentLoc 是 PC 当前所在位置, UserCurrentLoc 是去掉 runtime 帧之后的用户视角位置.
+// IDE 显示用的是后者 -- 用户更关心自己的代码, 不在乎卡在 runtime.gopark.
+type Goroutine struct {
+	ID       int
+	File     string
+	Line     int
+	Function string
+}
+
+// Variable 是 dlv Eval/ListLocalVars 应答的极简投影
+// Delve 的 Variable 还有 Kind/Addr/Children/Len/Cap/Flags/... 一大堆字段,
+// IDE 第一版的悬浮 + watch panel 只需要 Name/Type/Value, 其它留给后续 commit.
+type Variable struct {
+	Name  string
+	Type  string
+	Value string
+}
+
+// loadConfig 是 dlv 在 Eval/Stacktrace(Full)/ListLocalVars 里要求的取值上限
+// 默认值的取舍:
+//   - MaxStringLen 256       够看大多数字符串, 又不会一次拉回 MB 级数据
+//   - MaxArrayValues 64      切片/数组前 64 个元素够 IDE 预览
+//   - MaxStructFields -1     字段不限制 (struct 字段数一般有限)
+//   - MaxVariableRecurse 1   嵌套展开 1 层, 再深由用户在 UI 上点开
+type loadConfig struct {
+	FollowPointers     bool `json:"FollowPointers"`
+	MaxVariableRecurse int  `json:"MaxVariableRecurse"`
+	MaxStringLen       int  `json:"MaxStringLen"`
+	MaxArrayValues     int  `json:"MaxArrayValues"`
+	MaxStructFields    int  `json:"MaxStructFields"`
+}
+
+func defaultLoadConfig() loadConfig {
+	return loadConfig{
+		FollowPointers:     true,
+		MaxVariableRecurse: 1,
+		MaxStringLen:       256,
+		MaxArrayValues:     64,
+		MaxStructFields:    -1,
+	}
+}
+
+// evalScope 是 dlv EvalScope: 选哪一个 goroutine 的哪一帧
+// GoroutineID = -1 表示当前(SelectedGoroutine), Frame 0 是栈顶
+type evalScope struct {
+	GoroutineID int `json:"GoroutineID"`
+	Frame       int `json:"Frame"`
+}
+
+// rpcLocation / rpcVariable 是 dlv 应答的薄信封, 只挑我们暴露的字段
+// 这些类型不出包, 上层永远拿到的是 StackFrame / Variable / Goroutine.
+type rpcLocation struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Function *struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+type rpcVariable struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// Stacktrace 返回当前/指定 goroutine 的调用栈
+// goroutineID = -1 表示当前 SelectedGoroutine. depth 是最多取几帧 (栈顶起算).
+// Full=false 让 dlv 不带 Locals/Arguments -- 我们这里只画位置, 想看局部变量走
+// ListLocals. 这样应答体积更小.
+func (s *DebugSession) Stacktrace(goroutineID, depth int) ([]StackFrame, error) {
+	type stackIn struct {
+		ID     int  `json:"Id"`
+		Depth  int  `json:"Depth"`
+		Full   bool `json:"Full"`
+		Defers bool `json:"Defers"`
+	}
+	type rpcFrame struct {
+		Location rpcLocation `json:"Location"`
+	}
+	type stackOut struct {
+		Locations []rpcFrame `json:"Locations"`
+	}
+	var out stackOut
+	if err := s.rpcCall("Stacktrace", stackIn{ID: goroutineID, Depth: depth, Full: false, Defers: false}, &out); err != nil {
+		return nil, err
+	}
+	frames := make([]StackFrame, 0, len(out.Locations))
+	for _, f := range out.Locations {
+		fr := StackFrame{File: f.Location.File, Line: f.Location.Line}
+		if f.Location.Function != nil {
+			fr.Function = f.Location.Function.Name
+		}
+		frames = append(frames, fr)
+	}
+	return frames, nil
+}
+
+// ListGoroutines 拉取所有 goroutine
+// 不分页 (Start=0, Count=0 在 dlv 里语义是 "全部"); 一旦 IDE 真要分页再加.
+// 取 UserCurrentLoc 而非 CurrentLoc -- 用户关心自己写的代码而不是 runtime 帧.
+func (s *DebugSession) ListGoroutines() ([]Goroutine, error) {
+	type listIn struct {
+		Start int `json:"Start"`
+		Count int `json:"Count"`
+	}
+	type rpcGoroutine struct {
+		ID             int         `json:"id"`
+		CurrentLoc     rpcLocation `json:"currentLoc"`
+		UserCurrentLoc rpcLocation `json:"userCurrentLoc"`
+	}
+	type listOut struct {
+		Goroutines []rpcGoroutine `json:"Goroutines"`
+		// Nextg int -- 分页游标, 当前不消费
+	}
+	var out listOut
+	if err := s.rpcCall("ListGoroutines", listIn{Start: 0, Count: 0}, &out); err != nil {
+		return nil, err
+	}
+	gs := make([]Goroutine, 0, len(out.Goroutines))
+	for _, g := range out.Goroutines {
+		// 优先 UserCurrentLoc; 如果 File 为空 (纯 runtime goroutine) 回落到 CurrentLoc
+		loc := g.UserCurrentLoc
+		if loc.File == "" {
+			loc = g.CurrentLoc
+		}
+		out := Goroutine{ID: g.ID, File: loc.File, Line: loc.Line}
+		if loc.Function != nil {
+			out.Function = loc.Function.Name
+		}
+		gs = append(gs, out)
+	}
+	return gs, nil
+}
+
+// ListLocals 拉取指定 frame 的局部变量
+// goroutineID=-1 -> 当前 goroutine; frame=0 -> 栈顶. 不含函数参数 (那是
+// ListFunctionArgs), 想要全量参数+局部以后再加 ListArgs 方法.
+func (s *DebugSession) ListLocals(goroutineID, frame int) ([]Variable, error) {
+	type listIn struct {
+		Scope evalScope  `json:"Scope"`
+		Cfg   loadConfig `json:"Cfg"`
+	}
+	type listOut struct {
+		Variables []rpcVariable `json:"Variables"`
+	}
+	var out listOut
+	in := listIn{
+		Scope: evalScope{GoroutineID: goroutineID, Frame: frame},
+		Cfg:   defaultLoadConfig(),
+	}
+	if err := s.rpcCall("ListLocalVars", in, &out); err != nil {
+		return nil, err
+	}
+	vs := make([]Variable, 0, len(out.Variables))
+	for _, v := range out.Variables {
+		vs = append(vs, Variable{Name: v.Name, Type: v.Type, Value: v.Value})
+	}
+	return vs, nil
+}
+
+// Eval 在 (goroutine, frame) 作用域下求值一个 Go 表达式
+// 表达式形态遵循 dlv 文档: 支持局部/包级变量 + 成员/索引/解引用, 不支持函数调用.
+// 这是 hover-to-inspect 和 watch panel 的基础.
+func (s *DebugSession) Eval(expr string, goroutineID, frame int) (Variable, error) {
+	type evalIn struct {
+		Scope evalScope  `json:"Scope"`
+		Expr  string     `json:"Expr"`
+		Cfg   loadConfig `json:"Cfg"`
+	}
+	type evalOut struct {
+		Variable rpcVariable `json:"Variable"`
+	}
+	var out evalOut
+	in := evalIn{
+		Scope: evalScope{GoroutineID: goroutineID, Frame: frame},
+		Expr:  expr,
+		Cfg:   defaultLoadConfig(),
+	}
+	if err := s.rpcCall("Eval", in, &out); err != nil {
+		return Variable{}, err
+	}
+	return Variable{
+		Name:  out.Variable.Name,
+		Type:  out.Variable.Type,
+		Value: out.Variable.Value,
+	}, nil
+}
+
 // rpcCall 是 JSON-RPC 1.0 在 TCP 上的单次 round-trip
 // 串行化由 s.mu 提供 -- net/rpc 的 JSON codec 不允许两个 goroutine 同时写一个 conn.
 // out 必须是非空指针; 调用方负责字段对应到 Delve 的应答结构.

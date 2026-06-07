@@ -477,3 +477,317 @@ func TestDlvRPCCall_EOFWrapping(t *testing.T) {
 		t.Fatal("io.EOF wrapping broken")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Stacktrace / ListGoroutines / ListLocals / Eval -- protocol-level tests
+// 都用 fake server: 验证请求形态 + 应答解码, 不依赖 dlv 子进程.
+// -----------------------------------------------------------------------------
+
+// newSessionWithFakeServer 是一个测试小工厂, 把 newFakeRPCServer + DebugSession
+// 装在一起, 让每个新方法的协议测试更短.
+func newSessionWithFakeServer(t *testing.T) (*fakeRPCServer, *DebugSession) {
+	t.Helper()
+	srv, clientConn := newFakeRPCServer(t)
+	sess := &DebugSession{
+		conn: clientConn,
+		enc:  json.NewEncoder(clientConn),
+		dec:  json.NewDecoder(clientConn),
+	}
+	return srv, sess
+}
+
+// TestStacktrace_Decode: 预编程 fake server 回三帧, 断言 method + params + 解码
+func TestDlvStacktrace_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.Stacktrace" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		// params 是 [ {Id,Depth,Full,Defers} ]
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		if int(first["Id"].(float64)) != -1 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Id=-1"}`, id)
+		}
+		if int(first["Depth"].(float64)) != 50 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Depth=50"}`, id)
+		}
+		if first["Full"].(bool) != false {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Full=false"}`, id)
+		}
+		return fmt.Sprintf(`{"id":%d,"result":{"Locations":[
+			{"Location":{"file":"a.go","line":10,"function":{"name":"main.main"}}},
+			{"Location":{"file":"b.go","line":20,"function":{"name":"runtime.gopark"}}},
+			{"Location":{"file":"c.go","line":30,"function":{"name":"runtime.goexit"}}}
+		]},"error":null}`, id)
+	})
+
+	frames, err := sess.Stacktrace(-1, 50)
+	if err != nil {
+		t.Fatalf("Stacktrace: %v", err)
+	}
+	if len(frames) != 3 {
+		t.Fatalf("want 3 frames, got %d: %+v", len(frames), frames)
+	}
+	want := []StackFrame{
+		{File: "a.go", Line: 10, Function: "main.main"},
+		{File: "b.go", Line: 20, Function: "runtime.gopark"},
+		{File: "c.go", Line: 30, Function: "runtime.goexit"},
+	}
+	for i, w := range want {
+		if frames[i] != w {
+			t.Errorf("frame[%d] = %+v, want %+v", i, frames[i], w)
+		}
+	}
+}
+
+// TestStacktrace_ErrorPath: server 报错 -> 方法返回 error 且不返回部分结果
+func TestDlvStacktrace_ErrorPath(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":"goroutine not found"}`, id)
+	})
+
+	frames, err := sess.Stacktrace(99, 10)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "goroutine not found") {
+		t.Errorf("err = %v, want it to contain dlv error", err)
+	}
+	if frames != nil {
+		t.Errorf("frames should be nil on error, got %+v", frames)
+	}
+}
+
+// TestStacktrace_ClosedSession: pre-call Close, Stacktrace 必须返回 closed 错误
+func TestDlvStacktrace_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	_, err := sess.Stacktrace(-1, 10)
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
+
+// TestListGoroutines_Decode: 验证 method/params + UserCurrentLoc 优先回落策略
+func TestDlvListGoroutines_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.ListGoroutines" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		if int(first["Start"].(float64)) != 0 || int(first["Count"].(float64)) != 0 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Start=0 Count=0"}`, id)
+		}
+		// goroutine 1: 有 user loc; goroutine 2: user loc 空, 回落到 currentLoc;
+		// goroutine 3: 都有, 取 user loc.
+		return fmt.Sprintf(`{"id":%d,"result":{"Goroutines":[
+			{"id":1,"userCurrentLoc":{"file":"u.go","line":5,"function":{"name":"main.run"}},"currentLoc":{"file":"runtime.go","line":1}},
+			{"id":2,"userCurrentLoc":{"file":"","line":0},"currentLoc":{"file":"runtime.go","line":7,"function":{"name":"runtime.gopark"}}},
+			{"id":3,"userCurrentLoc":{"file":"u3.go","line":42,"function":{"name":"main.foo"}},"currentLoc":{"file":"runtime.go","line":99}}
+		]},"error":null}`, id)
+	})
+
+	gs, err := sess.ListGoroutines()
+	if err != nil {
+		t.Fatalf("ListGoroutines: %v", err)
+	}
+	if len(gs) != 3 {
+		t.Fatalf("want 3 goroutines, got %d: %+v", len(gs), gs)
+	}
+	want := []Goroutine{
+		{ID: 1, File: "u.go", Line: 5, Function: "main.run"},
+		{ID: 2, File: "runtime.go", Line: 7, Function: "runtime.gopark"},
+		{ID: 3, File: "u3.go", Line: 42, Function: "main.foo"},
+	}
+	for i, w := range want {
+		if gs[i] != w {
+			t.Errorf("goroutine[%d] = %+v, want %+v", i, gs[i], w)
+		}
+	}
+}
+
+// TestListGoroutines_ErrorPath
+func TestDlvListGoroutines_ErrorPath(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":"not stopped"}`, id)
+	})
+
+	gs, err := sess.ListGoroutines()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "not stopped") {
+		t.Errorf("err = %v, want dlv message", err)
+	}
+	if gs != nil {
+		t.Errorf("gs should be nil on error, got %+v", gs)
+	}
+}
+
+// TestListLocals_Decode: 验证 EvalScope + LoadConfig 形态, 解 3 个变量
+func TestDlvListLocals_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.ListLocalVars" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		scope := first["Scope"].(map[string]interface{})
+		if int(scope["GoroutineID"].(float64)) != -1 || int(scope["Frame"].(float64)) != 0 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want GoroutineID=-1 Frame=0"}`, id)
+		}
+		cfg := first["Cfg"].(map[string]interface{})
+		// 默认上限的几个关键字段
+		if int(cfg["MaxStringLen"].(float64)) != 256 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want MaxStringLen=256"}`, id)
+		}
+		if int(cfg["MaxArrayValues"].(float64)) != 64 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want MaxArrayValues=64"}`, id)
+		}
+		if int(cfg["MaxStructFields"].(float64)) != -1 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want MaxStructFields=-1"}`, id)
+		}
+		return fmt.Sprintf(`{"id":%d,"result":{"Variables":[
+			{"name":"x","type":"int","value":"42"},
+			{"name":"s","type":"string","value":"hello"},
+			{"name":"p","type":"*int","value":"0xc000010050"}
+		]},"error":null}`, id)
+	})
+
+	vs, err := sess.ListLocals(-1, 0)
+	if err != nil {
+		t.Fatalf("ListLocals: %v", err)
+	}
+	if len(vs) != 3 {
+		t.Fatalf("want 3 vars, got %d: %+v", len(vs), vs)
+	}
+	want := []Variable{
+		{Name: "x", Type: "int", Value: "42"},
+		{Name: "s", Type: "string", Value: "hello"},
+		{Name: "p", Type: "*int", Value: "0xc000010050"},
+	}
+	for i, w := range want {
+		if vs[i] != w {
+			t.Errorf("var[%d] = %+v, want %+v", i, vs[i], w)
+		}
+	}
+}
+
+// TestListLocals_ErrorPath
+func TestDlvListLocals_ErrorPath(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":"frame out of range"}`, id)
+	})
+
+	vs, err := sess.ListLocals(-1, 99)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "frame out of range") {
+		t.Errorf("err = %v, want dlv message", err)
+	}
+	if vs != nil {
+		t.Errorf("vs should be nil on error, got %+v", vs)
+	}
+}
+
+// TestEval_Decode: 验证 Expr/Scope 形态, 解一个 Variable
+func TestDlvEval_Decode(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		if req["method"].(string) != "RPCServer.Eval" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"wrong method %s"}`, id, req["method"])
+		}
+		first := req["params"].([]interface{})[0].(map[string]interface{})
+		if first["Expr"].(string) != "x+1" {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want Expr=x+1"}`, id)
+		}
+		scope := first["Scope"].(map[string]interface{})
+		if int(scope["GoroutineID"].(float64)) != -1 || int(scope["Frame"].(float64)) != 0 {
+			return fmt.Sprintf(`{"id":%d,"result":null,"error":"want GoroutineID=-1 Frame=0"}`, id)
+		}
+		return fmt.Sprintf(`{"id":%d,"result":{"Variable":{"name":"x+1","type":"int","value":"43"}},"error":null}`, id)
+	})
+
+	v, err := sess.Eval("x+1", -1, 0)
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	want := Variable{Name: "x+1", Type: "int", Value: "43"}
+	if v != want {
+		t.Errorf("v = %+v, want %+v", v, want)
+	}
+}
+
+// TestEval_ErrorPath: 表达式不存在 -> dlv 返回 error, Eval 也返回 error
+func TestDlvEval_ErrorPath(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	srv.handle(func(req map[string]interface{}) string {
+		id := int(req["id"].(float64))
+		return fmt.Sprintf(`{"id":%d,"result":null,"error":"could not find symbol value for nope"}`, id)
+	})
+
+	v, err := sess.Eval("nope", -1, 0)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "could not find symbol") {
+		t.Errorf("err = %v, want dlv message", err)
+	}
+	if v != (Variable{}) {
+		t.Errorf("v should be zero on error, got %+v", v)
+	}
+}
+
+// TestEval_ClosedSession: Close 后再 Eval 应该立刻返回 closed 错误
+func TestDlvEval_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	_, err := sess.Eval("x", -1, 0)
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
+
+// TestListGoroutines_ClosedSession + TestListLocals_ClosedSession
+// 一并覆盖 closed 早退路径, 防止后续重构忘了某条
+func TestDlvListGoroutines_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	_, err := sess.ListGoroutines()
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
+
+func TestDlvListLocals_ClosedSession(t *testing.T) {
+	sess := &DebugSession{closed: true}
+	_, err := sess.ListLocals(-1, 0)
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("want closed error, got %v", err)
+	}
+}
