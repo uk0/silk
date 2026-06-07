@@ -66,6 +66,10 @@ func main() {
 	// correctly the first time, and the saved window size is honoured
 	// instead of bouncing through the default and resizing.
 	installLocale()
+	// Dark theme by default: the editor and bottom panels already render
+	// dark, so a dark shell unifies the IDE (VS Code / JetBrains style)
+	// instead of the old light-shell-around-dark-editor mismatch.
+	gui.SetThemeMode(gui.ThemeDark)
 	prefs := newPreferences()
 	globalPrefs = prefs
 
