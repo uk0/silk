@@ -234,6 +234,16 @@ type CodeEditor struct {
 	// it (the gocoverage parser lives outside the editor).
 	coverage map[int]bool
 
+	// --- Diff Gutter Markers ---
+	// diffMarkers maps line (0-based, matching breakpoints/bookmarks/coverage)
+	// -> the VCS diff state the host wants rendered. The editor does NOT compute
+	// the diff; the host pushes a precomputed set via SetDiffMarkers and the
+	// editor only renders a coloured bar (added/modified) or a small triangle
+	// (removed) per entry. Nil / absent lines draw nothing, so unchanged lines
+	// stay clean. Like breakpoints, this is a UI/state layer and is NOT re-mapped
+	// when lines are inserted/deleted.
+	diffMarkers map[int]DiffMarkerKind
+
 	// --- Multi-Cursor Editing ---
 	// Primary cursor is (cursorLine, cursorCol). additionalCursors stores
 	// extra caret positions that receive the same text input / edits.
@@ -2445,6 +2455,34 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 				g.LineTo(tx, ty+3)
 				g.LineTo(tx, ty-3)
 				g.Fill()
+			}
+		}
+
+		// Diff gutter marker: a host-pushed VCS bar at the gutter's INNER edge
+		// (between the line number and the text), so it composes with—rather than
+		// fights—the git stripe on the left edge. Added/Modified draw a thin
+		// full-height bar; Removed draws a small downward triangle at the line's
+		// top-left, signalling line(s) deleted after this one (Qt Creator / VS
+		// Code style). Absent lines draw nothing. See diffMarkerColor.
+		if len(this.diffMarkers) > 0 {
+			if kind, ok := this.diffMarkers[i]; ok {
+				if col, draw := diffMarkerColor(kind); draw {
+					g.SetBrush1(col)
+					if kind == DiffMarkerRemoved {
+						// Downward triangle (~5px) at the line's top edge.
+						tx := this.gutterW - 6
+						ty := y + 1
+						g.MoveTo(tx, ty)
+						g.LineTo(tx+5, ty)
+						g.LineTo(tx+2.5, ty+5)
+						g.LineTo(tx, ty)
+						g.Fill()
+					} else {
+						// Full-line-height vertical bar at the inner edge.
+						g.Rectangle(this.gutterW-3, y, 3, lh)
+						g.Fill()
+					}
+				}
 			}
 		}
 
@@ -4993,6 +5031,133 @@ func (this *CodeEditor) LineCovered(line int) (covered bool, has bool) {
 	}
 	covered, has = this.coverage[line]
 	return covered, has
+}
+
+// --- Diff Gutter Markers ---
+//
+// VCS-style diff markers are the coloured bar in the left margin (VS Code / Qt
+// Creator / GitHub) flagging which lines were Added, Modified, or Removed. The
+// editor does NOT compute the diff: the host pushes a precomputed map via
+// SetDiffMarkers and the editor renders it. Lines are keyed 0-based (same
+// convention as breakpoints / bookmarks / coverage) and are NOT re-mapped when
+// lines are inserted or deleted.
+
+// DiffMarkerKind is the VCS diff state of a single line.
+type DiffMarkerKind int
+
+const (
+	DiffMarkerNone     DiffMarkerKind = iota // no marker — draw nothing
+	DiffMarkerAdded                          // green bar — new line
+	DiffMarkerModified                       // blue bar — changed line
+	DiffMarkerRemoved                        // red triangle — line(s) removed AFTER this line
+)
+
+// lineMarker pairs a (visible) line index with its diff kind. It is the unit
+// returned by visibleDiffMarkers so the render path can iterate an in-range,
+// flattened slice instead of probing the map per row.
+type lineMarker struct {
+	line int
+	kind DiffMarkerKind
+}
+
+// diffMarkerColor maps a marker kind to its gutter colour and whether it should
+// be drawn at all. DiffMarkerNone (and any unknown kind) returns draw=false so
+// callers can skip cleanly. Colours match the editor's gutter palette: green
+// add, blue modify, red remove — the same hues the git gutter already uses.
+func diffMarkerColor(kind DiffMarkerKind) (paint.Color, bool) {
+	switch kind {
+	case DiffMarkerAdded:
+		return paint.Color{R: 80, G: 200, B: 120, A: 230}, true
+	case DiffMarkerModified:
+		return paint.Color{R: 70, G: 140, B: 220, A: 230}, true
+	case DiffMarkerRemoved:
+		return paint.Color{R: 220, G: 60, B: 60, A: 230}, true
+	default:
+		return paint.Color{}, false
+	}
+}
+
+// visibleDiffMarkers flattens the marker map to the entries whose line falls in
+// the inclusive [firstLine, lastLine] viewport range, sorted by line. It is a
+// pure helper (no GL, no receiver state) so the viewport-culling logic can be
+// unit-tested directly. Entries with a non-drawable kind (DiffMarkerNone) are
+// skipped. A nil/empty map yields nil.
+func visibleDiffMarkers(markers map[int]DiffMarkerKind, firstLine, lastLine int) []lineMarker {
+	if len(markers) == 0 {
+		return nil
+	}
+	out := make([]lineMarker, 0, len(markers))
+	for line, kind := range markers {
+		if line < firstLine || line > lastLine {
+			continue
+		}
+		if _, draw := diffMarkerColor(kind); !draw {
+			continue
+		}
+		out = append(out, lineMarker{line: line, kind: kind})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].line < out[b].line })
+	return out
+}
+
+// SetDiffMarkers replaces the whole marker set. The argument is copied so the
+// host is free to mutate its own copy afterwards; entries with kind
+// DiffMarkerNone are dropped so the set stays minimal. Passing nil clears the
+// markers (same effect as ClearDiffMarkers). Triggers a repaint.
+func (this *CodeEditor) SetDiffMarkers(markers map[int]DiffMarkerKind) {
+	if markers == nil {
+		this.diffMarkers = nil
+		this.Self().Update()
+		return
+	}
+	m := make(map[int]DiffMarkerKind, len(markers))
+	for line, kind := range markers {
+		if kind == DiffMarkerNone {
+			continue
+		}
+		m[line] = kind
+	}
+	this.diffMarkers = m
+	this.Self().Update()
+}
+
+// ClearDiffMarkers drops all diff markers. The gutter bars become invisible.
+func (this *CodeEditor) ClearDiffMarkers() {
+	this.diffMarkers = nil
+	this.Self().Update()
+}
+
+// DiffMarkers returns a copy of the current marker set, so mutating the result
+// does not affect the editor's internal state.
+func (this *CodeEditor) DiffMarkers() map[int]DiffMarkerKind {
+	m := make(map[int]DiffMarkerKind, len(this.diffMarkers))
+	for line, kind := range this.diffMarkers {
+		m[line] = kind
+	}
+	return m
+}
+
+// SetDiffFromLines builds the marker set from three line lists (0-based) and
+// installs it. added → DiffMarkerAdded, modified → DiffMarkerModified, removed
+// → DiffMarkerRemoved. Overlap precedence is Removed > Modified > Added: a line
+// listed in more than one bucket takes the highest-precedence kind, applied by
+// writing Added first, then Modified, then Removed last so it wins. Triggers a
+// repaint via SetDiffMarkers.
+func (this *CodeEditor) SetDiffFromLines(added, modified, removed []int) {
+	m := make(map[int]DiffMarkerKind, len(added)+len(modified)+len(removed))
+	for _, line := range added {
+		m[line] = DiffMarkerAdded
+	}
+	for _, line := range modified {
+		m[line] = DiffMarkerModified
+	}
+	for _, line := range removed {
+		m[line] = DiffMarkerRemoved
+	}
+	this.SetDiffMarkers(m)
 }
 
 // --- Code Folding ---
