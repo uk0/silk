@@ -351,6 +351,8 @@ func registerSilkideTranslations() {
 		"No debug session":       "无调试会话",
 		"LSP not running":        "LSP 未运行",
 		"Go to Definition":       "跳转到定义",
+		"Format Document":        "格式化文档",
+		"Format failed: %v":      "格式化失败: %v",
 		"Failed to read saved file": "读取已保存文件失败",
 		"Running %s...":          "运行 %s 中...",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
@@ -524,6 +526,9 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// Go to Definition via gopls (F12). Silently falls back when LSP is
 	// down; the AST context-menu "跳转定义" stays as the offline path.
 	gui.RegisterShortcut(0, gui.KeyF12, func() { goToDefinitionViaLSP(editorTabs) })
+	// Format Document via gopls (Cmd+Shift+I). Complements gofmt-on-save
+	// with an on-demand reformat; gopls also applies goimports.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'I', func() { formatDocumentViaLSP(editorTabs) })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
 	// Shift+F6 → go vet; Cmd+Shift+F7 → tests with coverage. Both slot
 	// in next to the existing F6/F7 build/test pair so the muscle memory

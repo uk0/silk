@@ -1414,21 +1414,22 @@ func runProjectInTerminal(canvas *ged.GedView) {
 	// join the parsed tokens so the terminal still sees one command
 	// line rather than argv pieces.
 	cmdline := "go run ."
+	var runEnv []string
 	if globalPrefs != nil {
 		if args := strings.TrimSpace(globalPrefs.RunArgs()); args != "" {
 			cmdline += " " + args
 		}
-		// Environment variables: TerminalPanel.Run takes only a single
-		// cmd string and its worker hard-codes c.Env = os.Environ(), so
-		// we can't pass the env list through the existing public API.
-		// Surface it as a visible Hint + toast so the user can confirm
-		// the prefs are loaded; tightening this to real env-injection
-		// is a follow-up that needs a TerminalPanel.RunEnv overload.
-		if env := globalPrefs.RunEnv(); len(env) > 0 {
-			globalTerminal.Hint(i18n.Tf("silkide: %d env entries configured (not yet forwarded to go run)", len(env)))
-		}
+		// Environment variables from the Run Configuration are forwarded
+		// to the spawned process: RunWithEnv merges them over the inherited
+		// os.Environ() with explicit entries winning (Qt Creator / VS Code
+		// semantics). Empty list falls back to plain Run.
+		runEnv = globalPrefs.RunEnv()
 	}
-	globalTerminal.Run(cmdline)
+	if len(runEnv) > 0 {
+		globalTerminal.RunWithEnv(cmdline, runEnv)
+	} else {
+		globalTerminal.Run(cmdline)
+	}
 	silkideToast(i18n.T("Running..."), gui.ToastInfo)
 }
 
@@ -3117,6 +3118,47 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 		dstCol := locs[0].Range.Start.Character
 		gui.Post(func() {
 			openFileInEditorAt(tabs, target, dstLine, dstCol)
+		})
+	}()
+}
+
+// formatDocumentViaLSP reformats the active editor through gopls
+// (textDocument/formatting, which also runs goimports) and applies the
+// returned edits. Complements gofmt-on-save with an on-demand reformat.
+// Bound to Cmd+Shift+I + a palette command. The gopls RPC runs off the
+// main thread; the result is applied via gui.Post only if the buffer is
+// unchanged (a stale-guard against edits made during the round-trip).
+func formatDocumentViaLSP(tabs *gui.TabWidget) {
+	if globalLSP == nil {
+		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		return
+	}
+	ed := activeEditor(tabs)
+	path := activeEditorPath(tabs)
+	if ed == nil || path == "" || !isGoFile(path) {
+		return
+	}
+	uri := fileURIOf(path)
+	original := ed.Text()
+	go func() {
+		edits, err := globalLSP.Formatting(uri)
+		if err != nil || len(edits) == 0 {
+			return
+		}
+		formatted, applyErr := core.ApplyTextEdits(original, edits)
+		if applyErr != nil {
+			gui.Post(func() {
+				silkideToast(i18n.Tf("Format failed: %v", applyErr), gui.ToastError)
+			})
+			return
+		}
+		gui.Post(func() {
+			// Only apply if the buffer hasn't changed out from under us.
+			if e, ok := openEditors[path]; ok && e == ed && ed.Text() == original {
+				line := ed.CursorLine()
+				ed.SetText(formatted)
+				ed.ScrollToLine(line)
+			}
 		})
 	}()
 }
