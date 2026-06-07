@@ -207,35 +207,176 @@ func (this *CompletionPopup) buildItems(editor *CodeEditor) {
 	}
 }
 
-// filter narrows items by the current prefix (case-insensitive).
+// filter narrows items by the current prefix using fuzzy subsequence matching
+// (see RankCompletions / fuzzyMatch) and ranks survivors by score.
 func (this *CompletionPopup) filter() {
-	this.filtered = nil
-	if this.prefix == "" {
-		// Show all items when triggered by dot or Ctrl+Space with no prefix
-		this.filtered = append(this.filtered, this.items...)
-	} else {
-		lower := strings.ToLower(this.prefix)
-		for _, item := range this.items {
-			if strings.HasPrefix(strings.ToLower(item.Text), lower) {
-				this.filtered = append(this.filtered, item)
-			}
-		}
-	}
-	// Sort: exact prefix first, then alphabetically
-	sort.SliceStable(this.filtered, func(i, j int) bool {
-		a := this.filtered[i].Text
-		b := this.filtered[j].Text
-		aExact := strings.HasPrefix(a, this.prefix)
-		bExact := strings.HasPrefix(b, this.prefix)
-		if aExact != bExact {
-			return aExact
-		}
-		return a < b
-	})
+	this.filtered = RankCompletions(this.items, this.prefix)
 	// Limit to a reasonable number
 	if len(this.filtered) > 50 {
 		this.filtered = this.filtered[:50]
 	}
+}
+
+// fuzzyMatch scores `query` against `candidate` and reports whether every rune
+// of query appears in candidate in order (subsequence). A non-negative score is
+// returned only when matched is true; higher means a stronger match.
+//
+// Scoring tiers (highest first):
+//   - exact equality                  → 1_000_000
+//   - case-insensitive exact equality →   900_000
+//   - case-sensitive prefix           →   100_000 - len(candidate)
+//   - case-insensitive prefix         →    50_000 - len(candidate)
+//   - subsequence (in order)          → sum of per-char bonuses:
+//       +12 per matched rune
+//       +20 extra when the match is on a consecutive run with the previous one
+//       +25 extra when the matched rune sits at a word boundary
+//             (start of string, after '.' / '_' / '/', or camelCase transition)
+//       +15 extra when the case matches exactly
+//       -2 per skipped (gap) rune in candidate
+//     plus a small -len(candidate)/4 penalty so shorter candidates rank higher
+//     on otherwise-equal scores.
+//
+// Empty query is treated as "matches everything" with score 1 so callers can
+// use the same filter path without a special case.
+func fuzzyMatch(candidate, query string) (score int, matched bool) {
+	if query == "" {
+		return 1, true
+	}
+	if candidate == query {
+		return 1_000_000, true
+	}
+	cLower := strings.ToLower(candidate)
+	qLower := strings.ToLower(query)
+	if cLower == qLower {
+		return 900_000, true
+	}
+	if strings.HasPrefix(candidate, query) {
+		s := 100_000 - len(candidate)
+		if s < 1 {
+			s = 1
+		}
+		return s, true
+	}
+	if strings.HasPrefix(cLower, qLower) {
+		s := 50_000 - len(candidate)
+		if s < 1 {
+			s = 1
+		}
+		return s, true
+	}
+
+	// Subsequence walk over runes.
+	cRunes := []rune(candidate)
+	qRunes := []rune(query)
+	qi := 0
+	prevMatched := -2 // index in cRunes of last matched rune
+	total := 0
+	for ci := 0; ci < len(cRunes) && qi < len(qRunes); ci++ {
+		cr := cRunes[ci]
+		qr := qRunes[qi]
+		if toLowerRune(cr) != toLowerRune(qr) {
+			continue
+		}
+		bonus := 12
+		if ci == prevMatched+1 {
+			bonus += 20 // consecutive run
+		}
+		if isWordBoundary(cRunes, ci) {
+			bonus += 25
+		}
+		if cr == qr {
+			bonus += 15 // exact case
+		}
+		// Gap penalty: skipped chars since last match (excluding the consecutive case).
+		if prevMatched >= 0 && ci > prevMatched+1 {
+			bonus -= 2 * (ci - prevMatched - 1)
+		}
+		total += bonus
+		prevMatched = ci
+		qi++
+	}
+	if qi < len(qRunes) {
+		return 0, false
+	}
+	// Length tie-breaker baked into the score: shorter wins.
+	total -= len(cRunes) / 4
+	if total < 1 {
+		total = 1
+	}
+	return total, true
+}
+
+// RankCompletions filters items by fuzzyMatch against query and returns a new
+// slice sorted by descending score; ties are broken by ascending candidate
+// length, then by original input order (stable sort). An empty query returns
+// a copy of items with their original ordering preserved.
+func RankCompletions(items []CompletionItem, query string) []CompletionItem {
+	if query == "" {
+		out := make([]CompletionItem, len(items))
+		copy(out, items)
+		return out
+	}
+	type scored struct {
+		item  CompletionItem
+		score int
+		order int
+	}
+	survivors := make([]scored, 0, len(items))
+	for i, it := range items {
+		s, ok := fuzzyMatch(it.Text, query)
+		if !ok || s == 0 {
+			continue
+		}
+		survivors = append(survivors, scored{item: it, score: s, order: i})
+	}
+	sort.SliceStable(survivors, func(i, j int) bool {
+		if survivors[i].score != survivors[j].score {
+			return survivors[i].score > survivors[j].score
+		}
+		li := len(survivors[i].item.Text)
+		lj := len(survivors[j].item.Text)
+		if li != lj {
+			return li < lj
+		}
+		return survivors[i].order < survivors[j].order
+	})
+	out := make([]CompletionItem, len(survivors))
+	for i, s := range survivors {
+		out[i] = s.item
+	}
+	return out
+}
+
+// isWordBoundary reports whether the rune at index i in runes starts a new
+// "word" for ranking purposes: start of string, after a separator
+// ('.', '_', '/', '-', ' '), or a camelCase transition (lower→upper).
+func isWordBoundary(runes []rune, i int) bool {
+	if i == 0 {
+		return true
+	}
+	prev := runes[i-1]
+	switch prev {
+	case '.', '_', '/', '-', ' ':
+		return true
+	}
+	cur := runes[i]
+	if cur >= 'A' && cur <= 'Z' && prev >= 'a' && prev <= 'z' {
+		return true
+	}
+	return false
+}
+
+// toLowerRune is the ASCII fast-path lowercaser used by fuzzyMatch; falls back
+// to a string-based path for non-ASCII so we still get correct unicode folding
+// without pulling in unicode imports for hot scoring.
+func toLowerRune(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
+	}
+	if r < 128 {
+		return r
+	}
+	return []rune(strings.ToLower(string(r)))[0]
 }
 
 // kindIcon returns a short label for the completion item kind.
