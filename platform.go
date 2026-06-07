@@ -11,7 +11,7 @@ import (
 
 func createFrame() *gui.Frame {
 	f := gui.NewFrameWindow()
-	f.SetUuid(core.GenUuid())
+	f.SetUuid(core.NewUuid())
 	f.SetTitle("新框架窗口")
 
 	menu := f.MainMenu()
@@ -41,7 +41,6 @@ func createFrame() *gui.Frame {
 
 func main() {
 	defer core.Close()
-	core.SetLogLevel("trace")
 
 	mainFrame := createFrame()
 	mainFrame.SetUuidStr("d5ffc927-fcd3-4fc2-b7bc-f6e081b88d1c")

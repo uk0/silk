@@ -3,13 +3,14 @@
 package main
 
 import (
+	"fmt"
+
 	"silk/core"
+	"silk/ged"
 	"silk/graph"
 	"silk/gui"
 	//	"silk/prop"
 	_ "silk/prop"
-	"fmt"
-	"mod/map"
 )
 
 const mainFrameUuid = "d5ffc927-fcd3-4fc2-b7bc-f6e081b88d1c"
@@ -61,7 +62,6 @@ func recursAddRectItems(parent graph.IItem, depth int) {
 
 func main() {
 	//.SetAppName("测试用沙盒", "sandbox")
-	core.SetLogLevel("trace")
 	//core.SetStackTraceLevel("trace")
 	//	core.SetDebug(true)
 
@@ -105,7 +105,7 @@ func main() {
 	btnNewFrame := menu.AddButton1("新框架窗口", nil)
 	btnNewFrame.Action().BindFunc0(func() {
 		f := gui.NewFrameWindow()
-		f.SetUuid(core.GenUuid())
+		f.SetUuid(core.NewUuid())
 		f.SetTitle("新框架窗口")
 		f.SetVisible(true)
 	})
@@ -169,7 +169,7 @@ func main() {
 
 	//frame1.Show()
 
-	wmView := wmap.NewMapView()
+	wmView := ged.NewGedView()
 	wmView.AddStandardTools()
 	//wmScene := wmap.NewScene()
 	//wmView.SetScene(wmScene)
