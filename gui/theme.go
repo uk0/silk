@@ -137,7 +137,7 @@ func Theme() *defaultTheme {
 
 		t.TextColor = paint.Color{33, 37, 41, 255}            // near-black, softer than pure black
 		t.HighLightColor = paint.Color{59, 130, 246, 255}     // modern blue (Tailwind blue-500)
-		t.BorderColor = paint.Color{209, 213, 219, 255}       // softer border (gray-300)
+		t.BorderColor = paint.Color{209, 213, 219, 160}       // softer border (gray-300), hairline alpha
 		t.BorderPen = paint.NewPen(t.BorderColor, 1)
 		t.ViewBGColor = paint.Color{255, 255, 255, 255}
 		t.ScrollWidth = 14
@@ -151,7 +151,7 @@ func Theme() *defaultTheme {
 		t.MenuActiveBGColor = paint.Color{59, 130, 246, 255}   // blue highlight
 		t.MenuActiveTextColor = paint.Color{255, 255, 255, 255}
 		t.MenuGrayTextColor = paint.Color{156, 163, 175, 255}  // gray-400
-		t.SeperatorColor = paint.Color{243, 244, 246, 255}     // very light separator (gray-100)
+		t.SeperatorColor = paint.Color{243, 244, 246, 160}     // very light separator (gray-100), hairline alpha
 		//t.MenuItemHeight = 24
 		//t.MenuTextIndent = 32
 		t.MenuSubMarkWidth = 8
@@ -159,13 +159,13 @@ func Theme() *defaultTheme {
 		t.MenuMargin = Margin{4, 4, 4, 4}
 		t.MenuBarMargin = Margin{4, 4, 2, 2}
 		t.MenuItemMargin = Margin{8, 12, 4, 4}
-		t.ButtonMargin = Margin{8, 8, 4, 4}
+		t.ButtonMargin = Margin{12, 12, 7, 7}
 
 		// Button and scrollbar drawing is now programmatic; only tab faces still use pixmaps
 		t.TabFace = newPixmapFace(core.ResourceDir() + `/theme/default/tab.png`)
 		t.TabHoverFace = newPixmapFace(core.ResourceDir() + `/theme/default/tab-hover.png`)
 
-		t.EditPadding = Padding{3, 2, 2, 2}
+		t.EditPadding = Padding{8, 6, 5, 5}
 
 		t.TabBarHeight = 26
 		t.MinTabWidth = 32
@@ -194,7 +194,7 @@ func Theme() *defaultTheme {
 			t.TextColor = paint.Color{228, 228, 231, 255}     // zinc-200
 			t.ViewBGColor = paint.Color{24, 24, 27, 255}      // zinc-900
 			t.HighLightColor = paint.Color{96, 165, 250, 255} // blue-400
-			t.BorderColor = paint.Color{63, 63, 70, 255}      // zinc-700
+			t.BorderColor = paint.Color{63, 63, 70, 160}      // zinc-700, hairline alpha
 			t.BorderPen = paint.NewPen(t.BorderColor, 1)
 			t.MenuBGColor = paint.Color{39, 39, 42, 255}      // zinc-800
 			t.MenuBorderColor = paint.Color{63, 63, 70, 255}  // zinc-700
@@ -202,7 +202,7 @@ func Theme() *defaultTheme {
 			t.MenuActiveBGColor = paint.Color{59, 130, 246, 255} // blue-500
 			t.MenuActiveTextColor = paint.Color{255, 255, 255, 255}
 			t.MenuGrayTextColor = paint.Color{113, 113, 122, 255} // zinc-500
-			t.SeperatorColor = paint.Color{63, 63, 70, 255}   // zinc-700
+			t.SeperatorColor = paint.Color{63, 63, 70, 160}   // zinc-700, hairline alpha
 			t.TabActiveTextColor = paint.Color{255, 255, 255, 255}
 			t.TabTextColor = paint.Color{161, 161, 170, 255}  // zinc-400
 		}
@@ -432,15 +432,35 @@ func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
 	w, h float64, active, hover, closeBtn, hoverCloseBtn, downCloseBtn bool) {
 	//core.Debug(w, h)
 	m := t.TabMargin
+	// Programmatic tab rendering (the tab.png faces are no longer required).
+	// The face occupies the cell minus the top/bottom tab margins, matching
+	// the geometry the pixmap path used.
+	tx, ty := 0.0, m.T
+	tw, th := w, h-m.T-m.B
+	radius := 4.0
 	if active {
-		g.Translate(0, m.T)
-		t.TabFace.Draw(g, w, h-m.T-m.B)
-		g.Translate(0, -m.T)
+		// Active tab fills with the editor/content background so it visually
+		// connects to its pane, plus a bottom accent bar in HighLightColor.
+		roundedRect(g, tx, ty, tw, th, radius)
+		g.SetBrush1(t.ViewBGColor)
+		g.Fill()
+		accent := 2.0
+		g.Rectangle(tx, ty+th-accent, tw, accent)
+		g.SetBrush1(t.HighLightColor)
+		g.Fill()
 	} else if hover {
-		g.Translate(0, m.T)
-		t.TabHoverFace.Draw(g, w, h-m.T-m.B)
-		g.Translate(0, -m.T)
+		// Hover: subtle fill leaning toward the active/content background at
+		// low alpha — a hint of elevation without the full active treatment.
+		hc := t.ViewBGColor
+		hc.A = 40
+		roundedRect(g, tx, ty, tw, th, radius)
+		g.SetBrush1(hc)
+		g.Fill()
 	} else {
+		// Inactive: flat chrome fill, no indicator.
+		g.Rectangle(tx, ty, tw, th)
+		g.SetBrush1(t.FormColor)
+		g.Fill()
 	}
 
 	if icon != nil {
@@ -644,7 +664,7 @@ func (t *defaultTheme) DrawCheckBox(g paint.Painter, box *CheckBox) {
 }
 
 func (t *defaultTheme) DrawCaret(g paint.Painter, x, y, w, h float64) {
-	g.SetBrush1(paint.Color{255, 0, 0, 255})
+	g.SetBrush1(t.TextColor)
 	w = 2.0
 	g.Rectangle(x, y, w, h)
 	g.Fill()
@@ -703,13 +723,12 @@ func (t *defaultTheme) DrawSeperator(c paint.Painter, w, h float64, vertical boo
 func (t *defaultTheme) DrawMenu(g paint.Painter, m *Menu) {
 	w, h := m.Size()
 	if m.IsPopup() {
-		// Modern popup menu: white background, rounded corners, subtle shadow
+		// Modern popup menu: rounded corners, real soft elevation shadow.
 		radius := 6.0
 
-		// Shadow layer (offset down-right by 2px, slightly larger)
-		roundedRect(g, 2, 2, w, h, radius)
-		g.SetBrush1(paint.Color{0, 0, 0, 30})
-		g.Fill()
+		// Soft drop shadow under the body (drawn BEFORE the body fill so the
+		// menu sits on top). blur gives the elevation falloff.
+		paint.DrawShadowRect(g, 0, 0, w, h, radius, 6, paint.Color{0, 0, 0, 90})
 
 		// Main background
 		roundedRect(g, 0, 0, w, h, radius)
