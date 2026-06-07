@@ -90,9 +90,13 @@ func currentWelcomePalette() welcomePalette {
 	t := gui.Theme()
 	dark := gui.CurrentThemeMode() == gui.ThemeDark
 
+	// surface uses the raised FormLightColor (not ViewBGColor) so the card reads
+	// as elevated above the page: in dark mode ViewBGColor == FormColor (both
+	// zinc-900) which would make the card invisible, whereas FormLightColor is
+	// zinc-800 (raised) in dark and white in light — a distinct card in both.
 	p := welcomePalette{
 		background: t.FormColor,
-		surface:    t.ViewBGColor,
+		surface:    t.FormLightColor,
 		border:     t.BorderColor,
 		title:      t.TextColor,
 		text:       t.TextColor,
@@ -211,11 +215,15 @@ func (this *WelcomeScreen) Draw(g paint.Painter) {
 	rightY := cy + 30
 	rightH := contentH - 50
 
-	// Card background
-	g.Rectangle(rightX, rightY, rightW, rightH)
+	// Card background: a rounded, elevated surface floating on the page.
+	const cardRadius = 8.0
+	// Soft drop shadow under the card for elevation (alpha-only, theme-neutral).
+	paint.DrawShadowRect(g, rightX, rightY, rightW, rightH, cardRadius, 6,
+		paint.Color{0, 0, 0, 60})
+	welcomeRoundRect(g, rightX, rightY, rightW, rightH, cardRadius)
 	g.SetBrush1(pal.surface)
 	g.Fill()
-	g.Rectangle(rightX+0.5, rightY+0.5, rightW-1, rightH-1)
+	welcomeRoundRect(g, rightX+0.5, rightY+0.5, rightW-1, rightH-1, cardRadius)
 	g.SetPen1(pal.border, 1)
 	g.Stroke()
 
@@ -264,9 +272,9 @@ func (this *WelcomeScreen) Draw(g paint.Painter) {
 
 			hovered := i == this.hoverIdx
 
-			// Hover background
+			// Hover background (rounded to match the card / buttons)
 			if hovered {
-				g.Rectangle(listX, iy, listW, itemH)
+				welcomeRoundRect(g, listX, iy, listW, itemH, 6)
 				g.SetBrush1(pal.hoverBG)
 				g.Fill()
 			}
@@ -328,6 +336,34 @@ func fileIconColor(path string, pal *welcomePalette) paint.Color {
 	}
 }
 
+// welcomeRoundRect emits a self-contained, closed rounded-rectangle path on g
+// (no Fill/Stroke). The caller commits it with Fill() and/or Stroke(). r is the
+// corner radius, clamped to half the width/height. gui.roundedRect /
+// paint.drawRoundedRectPath are unexported, so the welcome screen draws its own.
+func welcomeRoundRect(g paint.Painter, x, y, w, h, r float64) {
+	if r <= 0 {
+		g.Rectangle(x, y, w, h)
+		return
+	}
+	if r > w/2 {
+		r = w / 2
+	}
+	if r > h/2 {
+		r = h / 2
+	}
+	const piHalf = 1.5707963267948966 // math.Pi/2
+	g.MoveTo(x+r, y)
+	g.LineTo(x+w-r, y)
+	g.Arc(x+w-r, y+r, r, -piHalf, 0)
+	g.LineTo(x+w, y+h-r)
+	g.Arc(x+w-r, y+h-r, r, 0, piHalf)
+	g.LineTo(x+r, y+h)
+	g.Arc(x+r, y+h-r, r, piHalf, 2*piHalf)
+	g.LineTo(x, y+r)
+	g.Arc(x+r, y+r, r, 2*piHalf, 3*piHalf)
+	g.LineTo(x+r, y)
+}
+
 // drawWelcomeButton draws a styled button on the welcome screen.
 // If outlined is true, the button is drawn with a transparent fill and a
 // colored border; otherwise it is a solid, filled button.
@@ -349,14 +385,15 @@ func drawWelcomeButton(g paint.Painter, x, y, w, h float64, text string,
 		}
 	}
 
-	// Button background
-	g.Rectangle(x, y, w, h)
+	// Button background (rounded)
+	const btnRadius = 6.0
+	welcomeRoundRect(g, x, y, w, h, btnRadius)
 	g.SetBrush1(bgDraw)
 	g.Fill()
 
 	// Border (outlined style or subtle for filled)
 	if outlined || hover {
-		g.Rectangle(x+0.5, y+0.5, w-1, h-1)
+		welcomeRoundRect(g, x+0.5, y+0.5, w-1, h-1, btnRadius)
 		g.SetPen1(borderDraw, 1)
 		g.Stroke()
 	}
