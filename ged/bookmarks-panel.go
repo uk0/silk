@@ -15,7 +15,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.BookmarksPanel",
 		Name: "书签",
-		Icon: "tree",
+		Icon: "tree-view",
 		Desc: "跨文件代码书签列表",
 	})
 }

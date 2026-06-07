@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.CodeOutlinePanel",
 		Name: "大纲",
-		Icon: "tree",
+		Icon: "tree-view",
 		Desc: "代码大纲面板",
 	})
 }

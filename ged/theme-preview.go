@@ -12,7 +12,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.ThemePreviewPanel",
 		Name: "主题",
-		Icon: "colorpicker",
+		Icon: "design",
 		Desc: "主题预览与切换",
 	})
 }

@@ -93,7 +93,7 @@ func templateDataBrowser() *ProjectTemplate {
 	return &ProjectTemplate{
 		Name:        "数据浏览器",
 		Description: "数据查询与浏览界面，包含搜索框和数据表格",
-		Icon:        "table",
+		Icon:        "document",
 		Width:       140,
 		Height:      100,
 		Widgets: []TemplateWidget{
@@ -112,7 +112,7 @@ func templateSettingsPanel() *ProjectTemplate {
 	return &ProjectTemplate{
 		Name:        "设置面板",
 		Description: "应用设置界面，包含基本设置和高级设置分组",
-		Icon:        "settings",
+		Icon:        "propsheet",
 		Width:       120,
 		Height:      110,
 		Widgets: []TemplateWidget{
@@ -144,7 +144,7 @@ func templateDashboard() *ProjectTemplate {
 	return &ProjectTemplate{
 		Name:        "仪表盘",
 		Description: "系统监控仪表盘，显示CPU、内存、磁盘使用率",
-		Icon:        "chart",
+		Icon:        "document",
 		Width:       120,
 		Height:      85,
 		Widgets: []TemplateWidget{
@@ -169,7 +169,7 @@ func templateChatUI() *ProjectTemplate {
 	return &ProjectTemplate{
 		Name:        "聊天界面",
 		Description: "即时通讯聊天界面，包含消息列表和发送按钮",
-		Icon:        "chat",
+		Icon:        "document",
 		Width:       110,
 		Height:      100,
 		Widgets: []TemplateWidget{

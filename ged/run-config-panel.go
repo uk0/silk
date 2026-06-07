@@ -15,7 +15,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.RunConfig",
 		Name: "运行配置",
-		Icon: "play",
+		Icon: "run",
 		Desc: "运行配置 (命令行参数 / 工作目录 / 环境变量)",
 	})
 }
