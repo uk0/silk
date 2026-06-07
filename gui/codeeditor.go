@@ -675,6 +675,279 @@ func (this *CodeEditor) dedupCursors() {
 	this.additionalCursors = out
 }
 
+// dedupCursorsList is the pure-helper twin of dedupCursors. Removes duplicate
+// positions while preserving the order of first occurrence. Used by the
+// arrow-key multi-cursor mover (and the multi-cursor unit tests).
+func dedupCursorsList(in []cursorPos) []cursorPos {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[cursorPos]bool, len(in))
+	out := make([]cursorPos, 0, len(in))
+	for _, c := range in {
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
+}
+
+// moveAllCursorsBy moves the primary cursor and every additional cursor by
+// the same (dLine, dCol) delta, clamping each to its line bounds and
+// collapsing duplicates. Used by Left/Right/Up/Down when secondary cursors
+// are active. Per-cursor selections are not tracked, so this drops selection
+// state.
+func (this *CodeEditor) moveAllCursorsBy(dLine, dCol int) {
+	move := func(p cursorPos) cursorPos {
+		// Horizontal: cross line boundaries when stepping off either end.
+		// This matches the single-cursor Left/Right behavior.
+		p.col += dCol
+		for p.col < 0 && p.line > 0 {
+			p.line--
+			p.col += len([]rune(this.lines[p.line])) + 1
+		}
+		for p.line < len(this.lines)-1 && p.col > len([]rune(this.lines[p.line])) {
+			p.col -= len([]rune(this.lines[p.line])) + 1
+			p.line++
+		}
+		// Vertical: clamp the column to the new line's length.
+		p.line += dLine
+		return this.clampCursorPos(p)
+	}
+	primary := move(cursorPos{line: this.cursorLine, col: this.cursorCol})
+	this.cursorLine = primary.line
+	this.cursorCol = primary.col
+	for i := range this.additionalCursors {
+		this.additionalCursors[i] = move(this.additionalCursors[i])
+	}
+	this.dedupCursors()
+}
+
+// moveAllCursorsToLineBound moves every cursor to col 0 (when toEnd is false)
+// or to the end of its own line (when toEnd is true). Used by Home/End in
+// multi-cursor mode.
+func (this *CodeEditor) moveAllCursorsToLineBound(toEnd bool) {
+	bound := func(line int) int {
+		if !toEnd {
+			return 0
+		}
+		if line < 0 || line >= len(this.lines) {
+			return 0
+		}
+		return len([]rune(this.lines[line]))
+	}
+	this.cursorCol = bound(this.cursorLine)
+	for i := range this.additionalCursors {
+		this.additionalCursors[i].col = bound(this.additionalCursors[i].line)
+	}
+	this.dedupCursors()
+}
+
+// --- Pure helpers (used by unit tests) ---
+//
+// These mirror the *AtAllCursors methods but operate on an explicit
+// (text, primary, extras, ins) tuple and return the new state without
+// touching the editor. They exist so the multi-cursor edit math can be
+// covered by a fast, dependency-free test suite. The mutating *AtAllCursors
+// methods remain the production path so existing callers don't change.
+
+// applyInsertAtCursors inserts ins at the primary cursor and every extra
+// cursor, processing positions back-to-front so earlier insertions don't
+// shift later ones. Returns the new text plus the post-insert cursor
+// positions. Only single-line inserts are supported (callers panic on '\n'
+// in production via the OnTextInput multi-line fallback).
+func applyInsertAtCursors(text string, primary cursorPos, extras []cursorPos, ins string) (string, cursorPos, []cursorPos) {
+	insRunes := []rune(ins)
+	if len(insRunes) == 0 {
+		return text, primary, append([]cursorPos(nil), extras...)
+	}
+	lines := strings.Split(text, "\n")
+	all := append([]cursorPos{primary}, extras...)
+	// Descending order: bigger (line, col) first.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].line != all[j].line {
+			return all[i].line > all[j].line
+		}
+		return all[i].col > all[j].col
+	})
+	for _, c := range all {
+		if c.line < 0 || c.line >= len(lines) {
+			continue
+		}
+		runes := []rune(lines[c.line])
+		if c.col < 0 {
+			c.col = 0
+		}
+		if c.col > len(runes) {
+			c.col = len(runes)
+		}
+		newRunes := make([]rune, 0, len(runes)+len(insRunes))
+		newRunes = append(newRunes, runes[:c.col]...)
+		newRunes = append(newRunes, insRunes...)
+		newRunes = append(newRunes, runes[c.col:]...)
+		lines[c.line] = string(newRunes)
+	}
+	shift := func(p cursorPos) cursorPos {
+		extra := 0
+		for _, c := range all {
+			if c.line == p.line && c.col < p.col {
+				extra += len(insRunes)
+			}
+		}
+		p.col += extra + len(insRunes)
+		return p
+	}
+	newPrimary := shift(primary)
+	newExtras := make([]cursorPos, 0, len(extras))
+	for _, e := range extras {
+		newExtras = append(newExtras, shift(e))
+	}
+	newExtras = dedupCursorsList(append([]cursorPos{newPrimary}, newExtras...))
+	// Drop the primary from the head (first element) — the caller tracks it
+	// separately. dedupCursorsList preserves order of first occurrence.
+	if len(newExtras) > 0 && newExtras[0] == newPrimary {
+		newExtras = newExtras[1:]
+	}
+	return strings.Join(lines, "\n"), newPrimary, newExtras
+}
+
+// applyBackspaceAtCursors deletes one rune to the left at the primary and
+// every extra cursor, processed back-to-front. Line-joins (at col 0) collapse
+// the current line into the previous one. Cursors at (0,0) are no-ops.
+func applyBackspaceAtCursors(text string, primary cursorPos, extras []cursorPos) (string, cursorPos, []cursorPos) {
+	lines := strings.Split(text, "\n")
+	all := append([]cursorPos{primary}, extras...)
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].line != all[j].line {
+			return all[i].line > all[j].line
+		}
+		return all[i].col > all[j].col
+	})
+	type op struct {
+		line    int
+		col     int
+		joined  bool
+		prevLen int
+	}
+	var ops []op
+	for _, c := range all {
+		if c.line < 0 || c.line >= len(lines) {
+			continue
+		}
+		if c.col > 0 {
+			runes := []rune(lines[c.line])
+			if c.col > len(runes) {
+				c.col = len(runes)
+			}
+			newRunes := append(runes[:c.col-1], runes[c.col:]...)
+			lines[c.line] = string(newRunes)
+			ops = append(ops, op{line: c.line, col: c.col - 1})
+		} else if c.line > 0 {
+			prev := lines[c.line-1]
+			prevLen := len([]rune(prev))
+			lines[c.line-1] = prev + lines[c.line]
+			lines = append(lines[:c.line], lines[c.line+1:]...)
+			ops = append(ops, op{line: c.line, col: 0, joined: true, prevLen: prevLen})
+		}
+	}
+	shift := func(p cursorPos) cursorPos {
+		for _, o := range ops {
+			if o.joined {
+				if p.line == o.line {
+					p.line = o.line - 1
+					p.col += o.prevLen
+				} else if p.line > o.line {
+					p.line--
+				}
+			} else {
+				if p.line == o.line && p.col > o.col {
+					p.col--
+				}
+			}
+		}
+		return p
+	}
+	newPrimary := shift(primary)
+	newExtras := make([]cursorPos, 0, len(extras))
+	for _, e := range extras {
+		newExtras = append(newExtras, shift(e))
+	}
+	newExtras = dedupCursorsList(append([]cursorPos{newPrimary}, newExtras...))
+	if len(newExtras) > 0 && newExtras[0] == newPrimary {
+		newExtras = newExtras[1:]
+	}
+	return strings.Join(lines, "\n"), newPrimary, newExtras
+}
+
+// applyDeleteAtCursors forward-deletes one rune at the primary and every
+// extra cursor, processed back-to-front. Line-joins (at end-of-line) collapse
+// the next line into the current one.
+func applyDeleteAtCursors(text string, primary cursorPos, extras []cursorPos) (string, cursorPos, []cursorPos) {
+	lines := strings.Split(text, "\n")
+	all := append([]cursorPos{primary}, extras...)
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].line != all[j].line {
+			return all[i].line > all[j].line
+		}
+		return all[i].col > all[j].col
+	})
+	type op struct {
+		line    int
+		col     int
+		joined  bool
+		nextLen int
+	}
+	var ops []op
+	for _, c := range all {
+		if c.line < 0 || c.line >= len(lines) {
+			continue
+		}
+		runes := []rune(lines[c.line])
+		if c.col < 0 {
+			c.col = 0
+		}
+		if c.col < len(runes) {
+			newRunes := append(runes[:c.col], runes[c.col+1:]...)
+			lines[c.line] = string(newRunes)
+			ops = append(ops, op{line: c.line, col: c.col})
+		} else if c.line < len(lines)-1 {
+			curLen := len(runes)
+			lines[c.line] = lines[c.line] + lines[c.line+1]
+			lines = append(lines[:c.line+1], lines[c.line+2:]...)
+			ops = append(ops, op{line: c.line, col: curLen, joined: true, nextLen: curLen})
+		}
+	}
+	shift := func(p cursorPos) cursorPos {
+		for _, o := range ops {
+			if o.joined {
+				if p.line == o.line+1 {
+					p.line = o.line
+					p.col += o.nextLen
+				} else if p.line > o.line+1 {
+					p.line--
+				}
+			} else {
+				if p.line == o.line && p.col > o.col {
+					p.col--
+				}
+			}
+		}
+		return p
+	}
+	newPrimary := shift(primary)
+	newExtras := make([]cursorPos, 0, len(extras))
+	for _, e := range extras {
+		newExtras = append(newExtras, shift(e))
+	}
+	newExtras = dedupCursorsList(append([]cursorPos{newPrimary}, newExtras...))
+	if len(newExtras) > 0 && newExtras[0] == newPrimary {
+		newExtras = newExtras[1:]
+	}
+	return strings.Join(lines, "\n"), newPrimary, newExtras
+}
+
 // insertAtAllCursors inserts the given (single-line) text at every cursor
 // position — primary and additional — processing them back-to-front so
 // earlier cursor indices remain valid. After the insertion, each cursor's
@@ -3799,6 +4072,15 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.NavGoBack()
 			return
 		}
+		// Multi-cursor: step every caret one rune to the left (with line wrap).
+		// Selection state is dropped because per-cursor selections aren't tracked.
+		if len(this.additionalCursors) > 0 && !shift {
+			this.clearSelection()
+			this.moveAllCursorsBy(0, -1)
+			this.ensureCursorVisible()
+			this.Self().Update()
+			return
+		}
 		beginSelIfShift()
 		this.clampCursor()
 		if this.cursorCol > 0 {
@@ -3815,6 +4097,13 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		if alt && !ctrl && !shift {
 			// Alt+Right: navigate forward
 			this.NavGoForward()
+			return
+		}
+		if len(this.additionalCursors) > 0 && !shift {
+			this.clearSelection()
+			this.moveAllCursorsBy(0, +1)
+			this.ensureCursorVisible()
+			this.Self().Update()
 			return
 		}
 		beginSelIfShift()
@@ -3851,6 +4140,14 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.moveLineUp()
 			return
 		}
+		// Plain Up with secondary cursors: move every caret up one line.
+		if len(this.additionalCursors) > 0 && !shift {
+			this.clearSelection()
+			this.moveAllCursorsBy(-1, 0)
+			this.ensureCursorVisible()
+			this.Self().Update()
+			return
+		}
 		beginSelIfShift()
 		if this.cursorLine > 0 {
 			this.cursorLine--
@@ -3880,6 +4177,14 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.moveLineDown()
 			return
 		}
+		// Plain Down with secondary cursors: move every caret down one line.
+		if len(this.additionalCursors) > 0 && !shift {
+			this.clearSelection()
+			this.moveAllCursorsBy(+1, 0)
+			this.ensureCursorVisible()
+			this.Self().Update()
+			return
+		}
 		beginSelIfShift()
 		if this.cursorLine < len(this.lines)-1 {
 			this.cursorLine++
@@ -3890,12 +4195,24 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyHome:
+		if len(this.additionalCursors) > 0 && !shift {
+			this.clearSelection()
+			this.moveAllCursorsToLineBound(false)
+			this.Self().Update()
+			return
+		}
 		beginSelIfShift()
 		this.cursorCol = 0
 		endSelIfShift()
 		this.Self().Update()
 
 	case KeyEnd:
+		if len(this.additionalCursors) > 0 && !shift {
+			this.clearSelection()
+			this.moveAllCursorsToLineBound(true)
+			this.Self().Update()
+			return
+		}
 		beginSelIfShift()
 		this.clampCursor()
 		this.cursorCol = len([]rune(this.lines[this.cursorLine]))
