@@ -160,7 +160,7 @@ func TestOnRightDownMovesCursor(t *testing.T) {
 	textX := e.gutterW + 20
 	e.cursorLine = 0
 	e.cursorCol = 0
-	e.OnRightDown(textX, yForLine(2))
+	e.repositionCaretForRightClick(textX, yForLine(2))
 	if e.cursorLine != 2 {
 		t.Errorf("OnRightDown should move cursor to line 2, got %d", e.cursorLine)
 	}
@@ -192,13 +192,13 @@ func TestOnRightDownPreservesSelectionWhenClickingInside(t *testing.T) {
 
 	// Right-click inside the selection (line 1, mid-text) keeps the selection.
 	textX := e.gutterW + 20
-	e.OnRightDown(textX, yForLine(1))
+	e.repositionCaretForRightClick(textX, yForLine(1))
 	if !e.HasSelection() {
 		t.Errorf("right-click inside selection should preserve it")
 	}
 
 	// Right-click outside the selection collapses to caret at the click point.
-	e.OnRightDown(textX, yForLine(3))
+	e.repositionCaretForRightClick(textX, yForLine(3))
 	if e.HasSelection() {
 		t.Errorf("right-click outside selection should collapse it")
 	}

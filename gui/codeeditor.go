@@ -3164,17 +3164,15 @@ func (this *CodeEditor) promptRenameSymbol(word string) {
 	_, _, _ = this.RenameSymbolAtCursor(newName)
 }
 
-// OnRightDown opens the editor's context menu at the click point.
-// Following Qt Creator, the caret is first moved to the click position
-// so the subsequent Rename / Go to Definition / Find References act on
-// the word the user actually right-clicked, not wherever the caret
-// happened to be.
-func (this *CodeEditor) OnRightDown(x, y float64) {
-	this.SetFocus()
-
-	// Map the click to a buffer position and move the caret there, but
-	// only inside the text area — clicks in the gutter, minimap, find /
-	// goto-line bars, or status bar shouldn't reposition the caret.
+// repositionCaretForRightClick mirrors Qt Creator's right-click caret
+// rule and is the GL-free part of OnRightDown: clicks inside the text
+// area move the caret to the click point, EXCEPT when the click lands
+// inside an active selection (so Cut/Copy keep operating on it). Clicks
+// in the gutter / minimap / find-bar / goto-bar / status bar leave the
+// caret alone. Extracted from OnRightDown so tests can exercise the
+// caret-move logic without invoking ShowContextMenu (which calls into
+// cgo paths that are unsafe in a headless test process).
+func (this *CodeEditor) repositionCaretForRightClick(x, y float64) {
 	w, h := this.Size()
 	mmW := this.minimapWidth()
 	inGutter := x < this.gutterW && y >= this.topOffset()
@@ -3186,20 +3184,27 @@ func (this *CodeEditor) OnRightDown(x, y float64) {
 		gotoBarTop = this.findBarHeight
 	}
 	inGotoBar := this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.findBarHeight
-	if !inGutter && !inMinimap && !inStatus && !inFindBar && !inGotoBar {
-		// Right-click outside any existing selection collapses to a
-		// caret at the click point, matching common IDE behaviour.
-		// When the click lands inside the current selection, leave the
-		// selection intact so Cut / Copy still operate on it.
-		line, col := this.posFromXY(x, y)
-		if !this.hasSelection || !this.posInSelection(line, col) {
-			this.clearSelection()
-			this.cursorLine = line
-			this.cursorCol = col
-			this.clampCursor()
-		}
-		this.Self().Update()
+	if inGutter || inMinimap || inStatus || inFindBar || inGotoBar {
+		return
 	}
+	line, col := this.posFromXY(x, y)
+	if !this.hasSelection || !this.posInSelection(line, col) {
+		this.clearSelection()
+		this.cursorLine = line
+		this.cursorCol = col
+		this.clampCursor()
+	}
+	this.Self().Update()
+}
+
+// OnRightDown opens the editor's context menu at the click point.
+// Following Qt Creator, the caret is first moved to the click position
+// so the subsequent Rename / Go to Definition / Find References act on
+// the word the user actually right-clicked, not wherever the caret
+// happened to be.
+func (this *CodeEditor) OnRightDown(x, y float64) {
+	this.SetFocus()
+	this.repositionCaretForRightClick(x, y)
 
 	items := this.contextMenuItems(this.hasSelection, this.clipboardHasText(), this.wordAtCursor())
 	ShowContextMenu(this.Self(), x, y, func(m *Menu) {
