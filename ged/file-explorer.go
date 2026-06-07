@@ -219,6 +219,7 @@ func (this *FileExplorer) Draw(g paint.Painter) {
 	normalFont := paint.NewFont(t.Font.Family(), 11, false, false)
 	boldFont := paint.NewFont(t.Font.Family(), 11, true, false)
 	rh := this.rowHeight
+	iconSize := 16.0 // matches the 16x16 resource icons; fits the 22px row
 	startY := headerH - this.scrollY
 
 	for i, entry := range this.flatList {
@@ -242,58 +243,29 @@ func (this *FileExplorer) Draw(g paint.Painter) {
 			g.Fill()
 		}
 
-		// Expand/collapse triangle for directories
+		// Expand/collapse expander icon for directories. It occupies the
+		// same 10px slot the triangle did; the click hit-region is the whole
+		// row (hitTest), so it is unchanged. Vertically centered like the
+		// tree-view expander.
 		if entry.isDir && len(entry.children) > 0 {
-			triX := textX
-			triY := rowY + rh/2
-			g.Save()
+			name := "expander-collapsed"
 			if entry.expanded {
-				// Down-pointing triangle
-				g.MoveTo(triX, triY-3)
-				g.LineTo(triX+6, triY-3)
-				g.LineTo(triX+3, triY+3)
-			} else {
-				// Right-pointing triangle
-				g.MoveTo(triX, triY-4)
-				g.LineTo(triX+6, triY)
-				g.LineTo(triX, triY+4)
+				name = "expander-expanded"
 			}
-			if i == this.selectedIdx {
-				g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
-			} else {
-				g.SetBrush1(paint.Color{R: 120, G: 120, B: 130, A: 255})
-			}
-			g.Fill()
-			g.Restore()
-			textX += 10
-		} else if !entry.isDir {
-			textX += 10
-		} else {
-			textX += 10
+			ey := rowY + math.Floor((rh-iconSize)/2)
+			g.DrawIcon1(gui.LoadIcon(name), textX, ey, iconSize, false)
 		}
+		textX += 10
 
-		// File type indicator dot
-		dotR := 3.0
-		dotX := textX + dotR
-		dotY := rowY + rh/2
-		dotColor := this.fileTypeColor(entry)
-		g.Save()
-		if entry.isDir {
-			// Folder: small filled rectangle
-			g.SetBrush1(dotColor)
-			g.Rectangle(dotX-3, dotY-3, 6, 5)
-			g.Fill()
-			// Folder tab
-			g.Rectangle(dotX-3, dotY-4, 3, 1)
-			g.Fill()
-		} else {
-			// File: colored dot
-			g.SetBrush1(dotColor)
-			g.Arc(dotX, dotY, dotR, 0, 2*math.Pi)
-			g.Fill()
-		}
-		g.Restore()
-		textX += dotR*2 + 4
+		// Type icon: a folder glyph for directories, a document glyph for
+		// files. File glyphs default to "document" for every extension
+		// (per-extension art is a follow-up); both names are guaranteed-present
+		// resources, so there is no red-X risk. Drawn in the slot the colored
+		// dot previously held, vertically centered.
+		iy := rowY + math.Floor((rh-iconSize)/2)
+		iconName := iconNameForEntry(entry.isDir, strings.ToLower(filepath.Ext(entry.name)))
+		g.DrawIcon1(gui.LoadIcon(iconName), textX, iy, iconSize, false)
+		textX += iconSize + 4
 
 		// Text
 		if entry.isDir {
@@ -335,22 +307,18 @@ func (this *FileExplorer) Draw(g paint.Painter) {
 	}
 }
 
-// fileTypeColor returns the indicator color for the given entry.
-func (this *FileExplorer) fileTypeColor(entry *fileEntry) paint.Color {
-	if entry.isDir {
-		return paint.Color{R: 220, G: 180, B: 60, A: 255} // yellow/gold
+// iconNameForEntry maps a tree entry to a resource icon name. Directories use
+// "folder"; every file uses "document" for now (per-extension art such as a
+// dedicated Go glyph is a follow-up). The ext argument is the lower-cased
+// filepath.Ext result (e.g. ".go"). The return value is always one of the
+// guaranteed-present resource names {folder, document}, so a row never renders
+// the red-X missing-icon placeholder.
+func iconNameForEntry(isDir bool, ext string) string {
+	if isDir {
+		return "folder"
 	}
-	ext := strings.ToLower(filepath.Ext(entry.name))
-	switch ext {
-	case ".go":
-		return paint.Color{R: 0, G: 173, B: 131, A: 255} // green
-	case ".mod", ".sum":
-		return paint.Color{R: 230, G: 140, B: 50, A: 255} // orange
-	case ".md", ".txt":
-		return paint.Color{R: 80, G: 140, B: 220, A: 255} // blue
-	default:
-		return paint.Color{R: 160, G: 160, B: 170, A: 255} // gray
-	}
+	_ = ext // reserved for future per-extension glyphs
+	return "document"
 }
 
 // collectGitStatus runs `git status --porcelain` in rootDir and rebuilds
