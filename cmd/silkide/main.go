@@ -85,6 +85,11 @@ func main() {
 	// is goroutine-safe enough for our purposes (single writer, panel
 	// requests a redraw on the next tick).
 	refreshPackages(designCanvas)
+	// Launch gopls in the background so subsequent .go file opens can
+	// push DidOpen notifications at it. Goroutine-bounded LookPath +
+	// initialize; failure is silent (core.Warn) so silkide works fine
+	// on machines without gopls installed.
+	startLSPBackground(projectDir(designCanvas))
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
@@ -364,8 +369,8 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	if btn := tb.AddAction(i18n.T("Build"), nil, func() { buildProject(designCanvas) }); btn != nil {
 		gui.SetToolTip(btn, i18n.T("Build")+" (F6)")
 	}
-	if btn := tb.AddAction(i18n.T("Debug"), nil, func() {}); btn != nil {
-		gui.SetToolTip(btn, i18n.T("Debug"))
+	if btn := tb.AddAction(i18n.T("Debug"), nil, func() { runProjectInDebugger(designCanvas) }); btn != nil {
+		gui.SetToolTip(btn, i18n.T("Debug")+" (Shift+F5)")
 	}
 	tb.AddSeparator()
 	// Export (preview-eye icon): pops SaveFileDialog, dispatches by
@@ -2354,6 +2359,10 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	tabs.AddTab(ed, filepath.Base(path), nil)
 	openEditors[path] = ed
 	focusEditorTab(tabs, ed)
+	// Let the background gopls client see the buffer so subsequent
+	// hover/definition/completion (next commit) have something to work
+	// against. nil-safe when LSP launch failed at startup.
+	lspDidOpenFile(path, string(data))
 	return true
 }
 
@@ -2553,4 +2562,229 @@ require (
 	github.com/some/dep v1.2.3
 )
 `
+}
+
+// globalDebug is the currently-running dlv session, or nil when no
+// debugger has been launched (or it's been closed via stopDebugger).
+// Single-session model — Shift+F5 on top of a live session is a no-op
+// short of stopping the previous one first; matches JetBrains "one
+// debug configuration at a time" UX.
+var globalDebug *core.DebugSession
+
+// globalLSP is the background gopls client, populated by
+// startLSPBackground on a goroutine after main()'s buildPanels. nil
+// when gopls isn't on PATH or the initialize handshake failed — every
+// downstream consumer (lspDidOpenFile, restartLSP) must nil-check
+// before reaching in.
+var globalLSP *core.LSPClient
+
+// runProjectInDebugger launches `dlv debug` in the project directory,
+// uploads every open editor's breakpoints (lines are 0-based in the
+// editor, 1-based for dlv -- shift by +1), then Continues on a
+// goroutine. The first stop hit posts a toast and opens the file at
+// the stopped line so the user lands on the right source line without
+// hunting through tabs.
+//
+// Errors at launch (dlv missing / port pick failure) toast a clear
+// message and bail. The session pointer is stored in globalDebug so
+// stopDebugger can tear it down cleanly via the palette.
+func runProjectInDebugger(canvas *ged.GedView) {
+	if globalDebug != nil {
+		silkideToast(i18n.T("Debugger already running"), gui.ToastWarning)
+		return
+	}
+	dir := projectDir(canvas)
+	var args []string
+	if globalPrefs != nil {
+		args = splitRunArgs(strings.TrimSpace(globalPrefs.RunArgs()))
+	}
+	sess, err := core.LaunchDebug(dir, args)
+	if err != nil {
+		silkideToast(i18n.Tf("Debugger failed: %v", err), gui.ToastError)
+		return
+	}
+	globalDebug = sess
+
+	// Push every open editor's breakpoints onto the dlv session.
+	// Editor lines are 0-based; dlv expects 1-based, so shift here.
+	// Failures are non-fatal (a breakpoint on an unreachable line
+	// returns an error from dlv but shouldn't abort the run) -- we
+	// log via core.Warn and keep going.
+	for path, ed := range openEditors {
+		if ed == nil {
+			continue
+		}
+		for _, line := range ed.Breakpoints() {
+			if _, bpErr := sess.SetBreakpoint(path, line+1); bpErr != nil {
+				core.Warn("dlv: SetBreakpoint ", path, ":", line+1, ": ", bpErr)
+			}
+		}
+	}
+
+	silkideToast(i18n.T("Debugger started"), gui.ToastInfo)
+	go func() {
+		st, contErr := sess.Continue()
+		if contErr != nil {
+			silkideToast(i18n.Tf("Debugger error: %v", contErr), gui.ToastError)
+			return
+		}
+		if st == nil {
+			return
+		}
+		if st.Reason == "exited" {
+			silkideToast(i18n.T("Debuggee exited"), gui.ToastInfo)
+			return
+		}
+		// Display 1-based file:line per Go error convention; the
+		// openFileInEditorAt path also takes 1-based lines.
+		silkideToast(i18n.Tf("Stopped at %s:%d", filepath.Base(st.File), st.Line), gui.ToastInfo)
+		if st.File != "" && st.Line > 0 {
+			// editorTabs is reachable via the package-level openEditors
+			// map's CodeEditor parent, but the simpler path is to use
+			// globalFrame's center dock TabWidget. openFileInEditorAt
+			// just needs the *gui.TabWidget; resolve it through the
+			// active editor's parent on the next paint tick.
+			if tabs := centerEditorTabs(); tabs != nil {
+				openFileInEditorAt(tabs, st.File, st.Line, 0)
+			}
+		}
+	}()
+}
+
+// stopDebugger tears down a live dlv session and clears the package
+// pointer. Safe to call when no session is live; the palette command
+// fires this unconditionally so the user can always pick "Stop
+// Debugger" without first checking state.
+func stopDebugger() {
+	sess := globalDebug
+	globalDebug = nil
+	if sess == nil {
+		return
+	}
+	_ = sess.Close()
+	silkideToast(i18n.T("Debugger stopped"), gui.ToastInfo)
+}
+
+// centerEditorTabs walks every open editor to find a *gui.TabWidget
+// ancestor -- the editor tabs the IDE pushes new code editors into.
+// Avoids threading the *TabWidget pointer through the package globals
+// just for the debugger's "land on file:line" flow.
+func centerEditorTabs() *gui.TabWidget {
+	for _, ed := range openEditors {
+		if ed == nil {
+			continue
+		}
+		var w gui.IWidget = ed
+		for w != nil {
+			if tabs, ok := w.(*gui.TabWidget); ok {
+				return tabs
+			}
+			w = w.Parent()
+		}
+	}
+	return nil
+}
+
+// startLSPBackground kicks off gopls on a goroutine so the IDE main
+// thread keeps painting through the initialize handshake. The client
+// is stored in globalLSP on success; failure (gopls not on PATH, or
+// initialize timed out) is logged via core.Warn and silently dropped
+// -- silkide is meant to keep working without LSP, so this never
+// toasts.
+//
+// A second goroutine drains the Notifications channel and forwards
+// each message to core.Log; unexpected payloads are not fatal. Both
+// goroutines exit when the client closes (notifications channel is
+// closed by readLoop's failAllPending path).
+func startLSPBackground(projectDir string) {
+	go func() {
+		client, err := core.LaunchLSPClient("gopls")
+		if err != nil {
+			core.Warn("silkide: gopls not available: ", err)
+			return
+		}
+		rootURI := ""
+		if projectDir != "" {
+			rootURI = fileURIOf(projectDir)
+		}
+		if _, initErr := client.Initialize(core.LSPInitializeParams{
+			ProcessID: os.Getpid(),
+			RootURI:   rootURI,
+		}); initErr != nil {
+			core.Warn("silkide: gopls initialize: ", initErr)
+			_ = client.Close()
+			return
+		}
+		globalLSP = client
+		core.Log("silkide: gopls ready (rootURI=", rootURI, ")")
+		// Drain notifications -- publishDiagnostics, window/logMessage,
+		// etc. We don't act on them yet; later commits will route
+		// diagnostics into the Problems panel.
+		go func(notifs <-chan *core.LSPMessage) {
+			for m := range notifs {
+				if m == nil {
+					continue
+				}
+				core.Log("lsp: ", m.Method)
+			}
+		}(client.Notifications())
+	}()
+}
+
+// lspDidOpenFile pushes a textDocument/didOpen notification at gopls
+// when the IDE opens a .go file. nil-safe when the LSP client failed
+// to launch; non-.go paths are skipped (gopls would reject them, and
+// .silkui has no language server here).
+func lspDidOpenFile(path string, text string) {
+	if globalLSP == nil {
+		return
+	}
+	if !isGoFile(path) {
+		return
+	}
+	if err := globalLSP.DidOpen(fileURIOf(path), "go", text, 1); err != nil {
+		core.Warn("lsp: didOpen ", path, ": ", err)
+	}
+}
+
+// restartLSP closes the current gopls client (if any) and re-launches
+// it against the current projectDir. Exposed through the "Restart LSP"
+// palette command -- handy when gopls gets wedged or the project's
+// go.mod changes and we want a clean index.
+func restartLSP(canvas *ged.GedView) {
+	if globalLSP != nil {
+		_ = globalLSP.Close()
+		globalLSP = nil
+	}
+	startLSPBackground(projectDir(canvas))
+	silkideToast(i18n.T("Restarting LSP..."), gui.ToastInfo)
+}
+
+// fileURIOf converts a filesystem path to a "file://" URI. dlv +
+// gopls both accept absolute paths in this form; relative paths get
+// resolved via filepath.Abs first so the URI matches what the
+// language server already indexed under projectDir.
+func fileURIOf(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	// Windows paths come back like "C:\foo\bar" -- LSP URIs use forward
+	// slashes throughout and need a leading "/" before the drive letter
+	// so "file:///C:/foo/bar" parses correctly.
+	abs = filepath.ToSlash(abs)
+	if len(abs) > 0 && abs[0] != '/' {
+		abs = "/" + abs
+	}
+	return "file://" + abs
+}
+
+// isGoFile returns true when path looks like a Go source file. Tests
+// (foo_test.go) count -- gopls accepts didOpen on them and we don't
+// want the IDE to silently skip LSP semantics in test files.
+func isGoFile(path string) bool {
+	return strings.HasSuffix(path, ".go")
 }

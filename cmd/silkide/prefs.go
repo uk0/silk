@@ -355,6 +355,19 @@ func registerSilkideTranslations() {
 		// 1-for-1 from English to Chinese.
 		"Selected: %s":       "已选中: %s",
 		"Selected: %d items": "已选中: %d 项",
+		// Debugger + LSP wiring strings. Shift+F5 / palette "Debug"
+		// share these via runProjectInDebugger; the LSP background
+		// launch only surfaces "Restart LSP" through the palette.
+		"Debugger started":   "调试器已启动",
+		"Debugger stopped":   "调试器已停止",
+		"Debugger already running": "调试器已在运行",
+		"Debuggee exited":    "被调试程序已退出",
+		"Stop Debugger":      "停止调试器",
+		"Restart LSP":        "重启 LSP",
+		"Restarting LSP...":  "正在重启 LSP...",
+		"Debugger failed: %v": "调试器启动失败: %v",
+		"Debugger error: %v": "调试器错误: %v",
+		"Stopped at %s:%d":   "已停在 %s:%d",
 	})
 }
 
@@ -482,6 +495,10 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// it). Cmd+Shift+T is the second F7 binding for laptops without
 	// function rows.
 	gui.RegisterShortcut(0, gui.KeyF5, func() { runProjectInTerminal(designCanvas) })
+	// Shift+F5 → launch dlv against the project. Pairs with the Debug
+	// toolbar button and the "Debug" palette command -- all three hit
+	// the same runProjectInDebugger entry point.
+	gui.RegisterShortcut(gui.ModShift, gui.KeyF5, func() { runProjectInDebugger(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF7, func() { runProjectTests(designCanvas) })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })

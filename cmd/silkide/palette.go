@@ -91,6 +91,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// discoverable through the shortcut wiring in prefs.go.
 	add("Run", "F5", func() { runProjectInTerminal(designCanvas) })
 	add("Build", "F6", func() { buildProject(designCanvas) })
+	// Debugger + LSP wiring. "Debug" mirrors the Shift+F5 shortcut and
+	// the toolbar Debug button; the other two are palette-only because
+	// they're rarely-used lifecycle controls.
+	add("Debug", "Shift+F5", func() { runProjectInDebugger(designCanvas) })
+	add("Stop Debugger", "", func() { stopDebugger() })
+	add("Restart LSP", "", func() { restartLSP(designCanvas) })
 	add("Run go vet", "Shift+F6", func() { runProjectVet(designCanvas) })
 	add("Run Tests", "F7", func() { runProjectTests(designCanvas) })
 	add("Run with Coverage", "Cmd+Shift+F7", func() { runProjectWithCoverage(designCanvas) })
