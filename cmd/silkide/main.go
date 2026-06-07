@@ -720,6 +720,14 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		})
 		bottomDock.AddView(globalDebugPanel)
 
+		// LSP find-references results. Fed by findReferencesViaLSP; a row
+		// click opens the usage's file:line in the editor.
+		globalReferencesPanel = ged.NewReferencesPanel()
+		globalReferencesPanel.SigLocationActivated(func(file string, line, col int) {
+			openFileInEditorAt(editorTabs, file, line, col)
+		})
+		bottomDock.AddView(globalReferencesPanel)
+
 		globalBottomDock = bottomDock
 	}
 
@@ -2617,6 +2625,16 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	ed.SigChanged(func(text string) {
 		lspOnEditorChanged(path, ed, text)
 	})
+	// LSP hover + signature help: the editor fires position events; silkide
+	// does the async gopls fetch + ShowToolTip off the main thread. Hover
+	// carries a precise global anchor; signature help anchors near the
+	// editor (precise caret anchoring is a follow-up).
+	ed.SigHoverRequested(func(line, col int, gx, gy float64) {
+		hoverViaLSP(path, line, col, gx, gy)
+	})
+	ed.SigSignatureRequested(func(line, col int) {
+		signatureHelpViaLSP(ed, path, line, col)
+	})
 	focusEditorTab(tabs, ed)
 	logEvent(ged.LogInfo, "Opened "+path)
 	// Let the background gopls client see the buffer so subsequent
@@ -2835,6 +2853,10 @@ var globalDebug *core.DebugSession
 // a breakpoint. Orphaned until now; fed by debugHandleStop via gui.Post
 // (the dlv RPCs run off the main thread, so GUI updates are marshalled).
 var globalDebugPanel *ged.DebugPanel
+
+// globalReferencesPanel lists LSP find-references results in the bottom
+// dock. Fed by findReferencesViaLSP; row click opens the file:line.
+var globalReferencesPanel *ged.ReferencesPanel
 
 // globalLSP is the background gopls client, populated by
 // startLSPBackground on a goroutine after main()'s buildPanels. nil
@@ -3195,6 +3217,133 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 			openFileInEditorAt(tabs, target, dstLine, dstCol)
 		})
 	}()
+}
+
+// findReferencesViaLSP asks gopls for every usage of the symbol under the
+// caret and lists them in the ReferencesPanel. Bound to Shift+F12. The RPC
+// runs off the main thread; results post back via gui.Post.
+func findReferencesViaLSP(tabs *gui.TabWidget) {
+	if globalLSP == nil {
+		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		return
+	}
+	ed := activeEditor(tabs)
+	path := activeEditorPath(tabs)
+	if ed == nil || path == "" || !isGoFile(path) {
+		return
+	}
+	line := ed.CursorLine()
+	col := ed.CursorCol()
+	uri := fileURIOf(path)
+	go func() {
+		locs, err := globalLSP.References(uri, line, col, true)
+		if err != nil {
+			return
+		}
+		if len(locs) == 0 {
+			gui.Post(func() { silkideToast(i18n.T("No references found"), gui.ToastInfo) })
+			return
+		}
+		refs := make([]ged.ReferenceLoc, 0, len(locs))
+		for _, l := range locs {
+			p := uriToPath(l.URI)
+			refs = append(refs, ged.ReferenceLoc{
+				File:    p,
+				Line:    l.Range.Start.Line + 1, // 0-based LSP → 1-based
+				Col:     l.Range.Start.Character,
+				Preview: referencePreview(p, l.Range.Start.Line),
+			})
+		}
+		gui.Post(func() {
+			if globalReferencesPanel != nil {
+				globalReferencesPanel.SetLocations(refs)
+				dockSetActiveView(globalBottomDock, globalReferencesPanel)
+			}
+		})
+	}()
+}
+
+// referencePreview returns the trimmed source line (0-based) for a
+// reference row — from the open buffer if the file is open, else from disk.
+func referencePreview(path string, line0 int) string {
+	var lines []string
+	if ed, ok := openEditors[path]; ok && ed != nil {
+		lines = ed.Lines()
+	} else if data, err := os.ReadFile(path); err == nil {
+		lines = strings.Split(string(data), "\n")
+	}
+	if line0 >= 0 && line0 < len(lines) {
+		return strings.TrimSpace(lines[line0])
+	}
+	return ""
+}
+
+// lspHoverGen / lspSigGen drop stale async hover/signature results: only
+// the latest request for the editor is allowed to display.
+var lspHoverGen int
+var lspSigGen int
+
+// hoverViaLSP fetches gopls hover docs for the identifier the mouse is over
+// and shows them in a tooltip at the editor-provided global anchor.
+func hoverViaLSP(path string, line, col int, gx, gy float64) {
+	if globalLSP == nil || !isGoFile(path) {
+		return
+	}
+	lspHoverGen++
+	gen := lspHoverGen
+	uri := fileURIOf(path)
+	go func() {
+		h, err := globalLSP.Hover(uri, line, col)
+		if err != nil || h == nil || h.Contents == "" {
+			return
+		}
+		gui.Post(func() {
+			if lspHoverGen != gen {
+				return // a newer hover superseded this one
+			}
+			gui.ShowToolTip(gx, gy, h.Contents)
+		})
+	}()
+}
+
+// signatureHelpViaLSP fetches the call's parameter hints and shows the
+// active signature in a tooltip. Anchored near the editor's top-left
+// (precise caret anchoring needs a caret-global-coord editor API — a
+// follow-up); the value here is seeing the signature + active parameter.
+func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
+	if globalLSP == nil || ed == nil || !isGoFile(path) {
+		return
+	}
+	lspSigGen++
+	gen := lspSigGen
+	uri := fileURIOf(path)
+	go func() {
+		sh, err := globalLSP.SignatureHelp(uri, line, col)
+		if err != nil || sh == nil || len(sh.Signatures) == 0 {
+			return
+		}
+		text := formatSignature(sh)
+		if text == "" {
+			return
+		}
+		gui.Post(func() {
+			if lspSigGen != gen {
+				return
+			}
+			gx, gy := ed.MapToGlobal(60, 40)
+			gui.ShowToolTip(gx, gy, text)
+		})
+	}()
+}
+
+// formatSignature renders the active signature's label (the parameter list)
+// for the tooltip. ActiveParameter highlighting is a follow-up.
+func formatSignature(sh *core.LSPSignatureHelp) string {
+	idx := sh.ActiveSignature
+	if idx < 0 || idx >= len(sh.Signatures) {
+		idx = 0
+	}
+	return sh.Signatures[idx].Label
 }
 
 // formatDocumentViaLSP reformats the active editor through gopls
