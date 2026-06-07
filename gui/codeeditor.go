@@ -54,7 +54,7 @@ const (
 
 // tokenColors maps each token type to a display color (dark-theme palette).
 var tokenColors = map[tokenType]paint.Color{
-	tokNormal:   {R: 200, G: 200, B: 210, A: 255},
+	tokNormal:   {R: 212, G: 212, B: 222, A: 255},
 	tokKeyword:  {R: 86, G: 156, B: 214, A: 255},  // blue
 	tokString:   {R: 206, G: 145, B: 120, A: 255}, // orange/brown
 	tokComment:  {R: 106, G: 153, B: 85, A: 255},  // green
@@ -2345,14 +2345,14 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 		// Error line background tint (draw before current line highlight)
 		if _, hasErr := this.errorLines[i]; hasErr {
-			g.SetBrush1(paint.Color{R: 255, G: 220, B: 220, A: 80})
+			g.SetBrush1(paint.Color{R: 130, G: 50, B: 50, A: 60})
 			g.Rectangle(this.gutterW, y, editorRight-this.gutterW, lh)
 			g.Fill()
 		}
 
 		// Current line highlight
 		if i == this.cursorLine && !this.hasSelection {
-			g.SetBrush1(paint.Color{R: 45, G: 45, B: 60, A: 255})
+			g.SetBrush1(paint.Color{R: 44, G: 44, B: 54, A: 255})
 			g.Rectangle(this.gutterW, y, editorRight-this.gutterW, lh)
 			g.Fill()
 		}
@@ -2380,7 +2380,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 				selEndX = textOffX + this.measureText(string(lineRunes)) + 8
 			}
 			if selEndX > selStartX {
-				g.SetBrush1(paint.Color{R: 60, G: 100, B: 180, A: 255})
+				g.SetBrush1(paint.Color{R: 70, G: 110, B: 190, A: 95})
 				g.Rectangle(selStartX, y, selEndX-selStartX, lh)
 				g.Fill()
 			}
@@ -2653,7 +2653,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			prefix := string(runes[:col])
 			cx := textOffX + this.measureText(prefix)
 			cy := float64(this.lineToVisualRow(this.cursorLine))*lh - this.scrollY + topOff
-			g.SetBrush1(paint.Color{R: 200, G: 200, B: 230, A: 255})
+			g.SetBrush1(paint.Color{R: 212, G: 212, B: 222, A: 255})
 			g.Rectangle(cx, cy, 1.5, lh)
 			g.Fill()
 		}
@@ -2669,7 +2669,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			cx := textOffX + this.measureText(prefix)
 			cy := float64(this.lineToVisualRow(cc.line))*lh - this.scrollY + topOff
 			// Dim color: same hue, half alpha.
-			g.SetBrush1(paint.Color{R: 200, G: 200, B: 230, A: 160})
+			g.SetBrush1(paint.Color{R: 212, G: 212, B: 222, A: 160})
 			g.Rectangle(cx, cy, 1.5, lh)
 			g.Fill()
 		}
