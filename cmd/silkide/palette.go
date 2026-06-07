@@ -188,6 +188,22 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			globalBookmarks.SetFocus()
 		}
 	})
+	// Show Packages — flip the left dock to the PackagesPanel tab.
+	// Mirrors Find in Files / Show Outline — same dock-flip + SetFocus
+	// idiom, just targets globalPackages in the left dock.
+	add("Show Packages", "", func() {
+		if globalPackages != nil {
+			dockSetActiveView(globalLeftDock, globalPackages)
+			globalPackages.SetFocus()
+		}
+	})
+	// Refresh Packages — re-run `go list -json ./...` in projectDir
+	// and feed the result back into globalPackages. No accelerator:
+	// the initial load fires at startup and most users won't need to
+	// trigger this by hand.
+	add("Refresh Packages", "", func() {
+		refreshPackages(designCanvas)
+	})
 	// Add Bookmark — bookmark the active editor's cursor line. Cmd+F2
 	// because plain F2 is now Rename Symbol (JetBrains muscle memory).
 	// Same helper the shortcut calls so the entry point doesn't matter.

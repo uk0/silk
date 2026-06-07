@@ -80,6 +80,11 @@ func main() {
 	// through to GedScene.OpenFile / Save without the global plumbing
 	// SuggestDocDock would otherwise force.
 	editorTabs, designCanvas := buildPanels(frame)
+	// Kick off the initial `go list -json` walk on a goroutine so the
+	// frame keeps painting while it runs. globalPackages.SetPackages
+	// is goroutine-safe enough for our purposes (single writer, panel
+	// requests a redraw on the next tick).
+	refreshPackages(designCanvas)
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
@@ -528,6 +533,23 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 			openFileInEditorAt(editorTabs, path, line, 0)
 		})
 		leftDock.AddView(globalSearch)
+
+		// Packages panel — sibling tab in the same left dock. Mirrors
+		// the structure `go list -json ./...` produces: collapsible
+		// package headers with file rows underneath. SigPackageActivated
+		// fires a toast (richer "open package" handling is a follow-up);
+		// SigFileActivated routes through the same openFileInEditor path
+		// the FileExplorer uses, so clicking a file row behaves like
+		// clicking it in the tree.
+		globalPackages = ged.NewPackagesPanel()
+		globalPackages.SigPackageActivated(func(pkg core.GoListPackage) {
+			silkideToast(packagesActivatedToastMessage(pkg), gui.ToastInfo)
+		})
+		globalPackages.SigFileActivated(func(pkg core.GoListPackage, file string) {
+			openFileInEditor(editorTabs, filepath.Join(pkg.Dir, file))
+		})
+		leftDock.AddView(globalPackages)
+
 		globalLeftDock = leftDock
 	}
 
@@ -774,6 +796,53 @@ var globalSearch *ged.GlobalSearchPanel
 // active tab to globalSearch without threading the dock reference
 // through every shortcut handler.
 var globalLeftDock *gui.Dock
+
+// globalPackages is the left-dock view of `go list -json ./...` for
+// the current project: collapsible package headers with file rows
+// underneath. refreshPackages re-runs LoadGoListJSON in a goroutine
+// and pushes the result via SetPackages on success.
+var globalPackages *ged.PackagesPanel
+
+// refreshPackages reloads the package list for the project rooted at
+// projectDir(canvas). LoadGoListJSON shells out to `go list -json` so
+// the call runs on a goroutine to keep the UI thread responsive; on
+// failure we log via core.Warn rather than toast — running silkide
+// against a non-Go directory is normal and the noisy errors `go list`
+// emits aren't actionable for the user. The panel itself is the only
+// thing that needs to know about the result; SetPackages handles its
+// own redraw.
+func refreshPackages(canvas *ged.GedView) {
+	if globalPackages == nil {
+		return
+	}
+	dir := projectDir(canvas)
+	if dir == "" {
+		return
+	}
+	go func() {
+		pkgs, err := core.LoadGoListJSON(dir)
+		if err != nil {
+			core.Warn("silkide: go list -json failed in", dir, ":", err)
+			return
+		}
+		globalPackages.SetPackages(pkgs)
+	}()
+}
+
+// packagesActivatedToastMessage is the user-facing string the
+// SigPackageActivated callback toasts. Pure helper so the message
+// shape is unit-testable without standing up a frame; falls back to
+// the package Dir when ImportPath is empty (the stdlib / GOPATH edge
+// case `go list` reports for packages outside a module).
+func packagesActivatedToastMessage(pkg core.GoListPackage) string {
+	if pkg.ImportPath != "" {
+		return pkg.ImportPath
+	}
+	if pkg.Dir != "" {
+		return pkg.Dir
+	}
+	return i18n.T("(empty)")
+}
 
 func buildTerminalPane() gui.IWidget {
 	if globalTerminal == nil {

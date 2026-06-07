@@ -299,6 +299,8 @@ func registerSilkideTranslations() {
 		"Show Outline":     "显示大纲",
 		"Show Problems":    "显示问题",
 		"Show Bookmarks":   "显示书签",
+		"Show Packages":    "显示包列表",
+		"Refresh Packages": "刷新包列表",
 		"Add Bookmark":     "添加书签",
 		"Rename Symbol":          "重命名符号",
 		"New name:":              "新名称：",
