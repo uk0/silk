@@ -102,6 +102,45 @@ func (p *preferences) SetRunArgs(args string) {
 	_ = p.store.Sync()
 }
 
+// RunWorkingDir is the project directory the runner should treat as
+// "cwd" instead of the auto-detected projectDir. Empty means "use
+// projectDir as-is" — backwards-compatible with pre-RunConfigPanel
+// builds that only persisted run/args.
+func (p *preferences) RunWorkingDir() string {
+	return p.store.String("run/workingDir", "")
+}
+
+// SetRunWorkingDir persists the run working-directory override.
+func (p *preferences) SetRunWorkingDir(dir string) {
+	_ = p.store.SetString("run/workingDir", dir)
+	_ = p.store.Sync()
+}
+
+// RunEnv is the list of "KEY=value" environment variable lines forwarded
+// to the spawned `go run`. Stored as a StringList mirroring RecentFiles /
+// OpenSession. Empty means "no extra env" — matches the historical
+// behaviour where the run worker inherited os.Environ() verbatim.
+func (p *preferences) RunEnv() []string {
+	return p.store.StringList("run/env", nil)
+}
+
+// SetRunEnv persists the run environment-variable list.
+func (p *preferences) SetRunEnv(env []string) {
+	_ = p.store.SetStringList("run/env", env)
+	_ = p.store.Sync()
+}
+
+// effectiveRunDir returns the directory the runner should use: the user-
+// configured prefsDir when non-empty, falling back to the auto-detected
+// autoDir otherwise. Pure helper so the override rule is unit-testable
+// without spinning up a Frame or terminal panel.
+func effectiveRunDir(prefsDir, autoDir string) string {
+	if prefsDir != "" {
+		return prefsDir
+	}
+	return autoDir
+}
+
 // recentFilesMax caps the rolling MRU list. JetBrains IDEs default to
 // 50 but most users only ever scan the first 10, and the longer the
 // list the slower the de-dup walk on every open.
@@ -267,8 +306,12 @@ func registerSilkideTranslations() {
 		"Rename failed: %v":      "重命名失败: %v",
 		"Rename Symbol not available": "暂不支持重命名符号",
 		"Configure Run...":       "配置运行参数...",
+		"Run Configuration":      "运行配置",
+		"OK":                     "确定",
 		"Run arguments:":         "运行参数:",
 		"Run args saved":         "运行参数已保存",
+		"Run config saved":       "运行配置已保存",
+		"silkide: %d env entries configured (not yet forwarded to go run)": "silkide: 已配置 %d 项环境变量（暂未转发给 go run）",
 		"Open File":        "打开文件",
 		"Quick Open File":  "快速打开文件",
 		"Saved %s":               "已保存 %s",

@@ -1248,7 +1248,15 @@ func runProjectInTerminal(canvas *ged.GedView) {
 		// Force-build the terminal pane so the user sees output.
 		buildTerminalPane()
 	}
-	cwd := projectDir(canvas)
+	// Auto-detected project dir is the fallback; the persisted
+	// RunWorkingDir overrides it when set (host-override rule). Empty
+	// override yields the historical projectDir behaviour, so legacy
+	// configs that never touched the field keep working.
+	autoDir := projectDir(canvas)
+	cwd := autoDir
+	if globalPrefs != nil {
+		cwd = effectiveRunDir(strings.TrimSpace(globalPrefs.RunWorkingDir()), autoDir)
+	}
 	if cwd != "" {
 		globalTerminal.SetCwd(cwd)
 	}
@@ -1279,6 +1287,15 @@ func runProjectInTerminal(canvas *ged.GedView) {
 	if globalPrefs != nil {
 		if args := strings.TrimSpace(globalPrefs.RunArgs()); args != "" {
 			cmdline += " " + args
+		}
+		// Environment variables: TerminalPanel.Run takes only a single
+		// cmd string and its worker hard-codes c.Env = os.Environ(), so
+		// we can't pass the env list through the existing public API.
+		// Surface it as a visible Hint + toast so the user can confirm
+		// the prefs are loaded; tightening this to real env-injection
+		// is a follow-up that needs a TerminalPanel.RunEnv overload.
+		if env := globalPrefs.RunEnv(); len(env) > 0 {
+			globalTerminal.Hint(i18n.Tf("silkide: %d env entries configured (not yet forwarded to go run)", len(env)))
 		}
 	}
 	globalTerminal.Run(cmdline)
@@ -1396,12 +1413,14 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 	silkideToast(i18n.Tf("Renamed %s → %s (%d occurrences)", oldName, newName, count), gui.ToastSuccess)
 }
 
-// configureRunArgs pops an input box prefilled with the currently
-// persisted RunArgs string and writes the submitted value back through
-// the same prefs entry. Used by the "Configure Run..." palette command;
-// the saved value is appended to `go run .` on the next F5 / Run via
-// runProjectInTerminal.
-func configureRunArgs() {
+// configureRun pops a structured "Run Configuration" modal — a Dialog
+// hosting a fresh ged.RunConfigPanel — letting the user edit args,
+// working directory, and environment variables in one surface. Used by
+// the "Configure Run..." palette command. The panel emits SigChanged
+// on every in-panel edit; we shadow the value in a local mutable
+// RunConfig and commit all three prefs on OK (Cancel discards). The
+// saved values feed runProjectInTerminal on the next F5 / Run.
+func configureRun() {
 	if globalPrefs == nil {
 		return
 	}
@@ -1409,14 +1428,36 @@ func configureRunArgs() {
 	if parent == nil {
 		parent = gui.DefaultFrame()
 	}
-	args, ok := gui.ShowInputBox(parent, nil,
-		i18n.T("Configure Run..."), i18n.T("Run arguments:"),
-		globalPrefs.RunArgs())
-	if !ok {
+	dlg := gui.NewDialog(i18n.T("Run Configuration"), parent)
+	panel := ged.NewRunConfigPanel()
+	initial := ged.RunConfig{
+		Args:       globalPrefs.RunArgs(),
+		WorkingDir: globalPrefs.RunWorkingDir(),
+		Env:        globalPrefs.RunEnv(),
+	}
+	panel.SetConfig(initial)
+	// Mirror in-panel edits into a local working copy. The dialog model
+	// is decoupled from prefs so Cancel discards cleanly — only OK
+	// commits.
+	pending := initial
+	panel.SigChanged(func(cfg ged.RunConfig) {
+		pending = cfg
+	})
+
+	box := gui.NewVBox()
+	box.SetSpacing(0)
+	box.AddWidget(panel)
+	dlg.SetContent(box)
+	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	dlg.AddButton(i18n.T("OK"), gui.DialogOK)
+	dlg.SetSize(560, 420)
+	if dlg.ShowModal() != gui.DialogOK {
 		return
 	}
-	globalPrefs.SetRunArgs(strings.TrimSpace(args))
-	silkideToast(i18n.T("Run args saved"), gui.ToastSuccess)
+	globalPrefs.SetRunArgs(strings.TrimSpace(pending.Args))
+	globalPrefs.SetRunWorkingDir(strings.TrimSpace(pending.WorkingDir))
+	globalPrefs.SetRunEnv(pending.Env)
+	silkideToast(i18n.T("Run config saved"), gui.ToastSuccess)
 }
 
 // hasMainPackage scans `dir` for any .go file whose first non-blank

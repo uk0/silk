@@ -202,9 +202,10 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	})
 
 	// Run configuration. No accelerator: rarely-edited, so we don't
-	// pollute the keyboard map. Pops an input box, persists the args
-	// string into prefs; the next Run picks it up.
-	add("Configure Run...", "", configureRunArgs)
+	// pollute the keyboard map. Pops the RunConfigPanel modal which
+	// edits args / working dir / env in one surface; OK commits all
+	// three through globalPrefs so the next Run picks them up.
+	add("Configure Run...", "", configureRun)
 
 	// Surfaces.
 	add("Project Settings", "", func() { showProjectSettingsDialog(designCanvas) })
