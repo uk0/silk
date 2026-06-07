@@ -103,6 +103,15 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// the toolbar Debug button; the other two are palette-only because
 	// they're rarely-used lifecycle controls.
 	add("Debug", "Shift+F5", func() { runProjectInDebugger(designCanvas) })
+	add("Continue", "Shift+F5", func() { debugContinue() })
+	add("Step Over", "F10", func() { debugStep("over") })
+	add("Step Into", "F11", func() { debugStep("into") })
+	add("Step Out", "Shift+F11", func() { debugStep("out") })
+	add("Show Debug", "", func() {
+		if globalDebugPanel != nil {
+			dockSetActiveView(globalBottomDock, globalDebugPanel)
+		}
+	})
 	add("Stop Debugger", "", func() { stopDebugger() })
 	add("Restart LSP", "", func() { restartLSP(designCanvas) })
 	add("Run go vet", "Shift+F6", func() { runProjectVet(designCanvas) })

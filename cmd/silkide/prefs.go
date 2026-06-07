@@ -343,6 +343,12 @@ func registerSilkideTranslations() {
 		"git diff failed (not a repo?)": "git diff 失败（不是仓库？）",
 		"Show Log":               "显示日志",
 		"Clear Log":              "清空日志",
+		"Continue":               "继续",
+		"Step Over":              "单步跳过",
+		"Step Into":              "单步进入",
+		"Step Out":               "单步跳出",
+		"Show Debug":             "显示调试",
+		"No debug session":       "无调试会话",
 		"Failed to read saved file": "读取已保存文件失败",
 		"Running %s...":          "运行 %s 中...",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
@@ -507,6 +513,12 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModShift, gui.KeyF5, func() { runProjectInDebugger(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF6, func() { buildProject(designCanvas) })
 	gui.RegisterShortcut(0, gui.KeyF7, func() { runProjectTests(designCanvas) })
+	// Debugger stepping (Qt Creator key layout: F10 over, F11 into,
+	// Shift+F11 out). Active only when a dlv session is live; debugStep
+	// shows a toast and no-ops otherwise. Continue is Shift+F5.
+	gui.RegisterShortcut(0, gui.KeyF10, func() { debugStep("over") })
+	gui.RegisterShortcut(0, gui.KeyF11, func() { debugStep("into") })
+	gui.RegisterShortcut(gui.ModShift, gui.KeyF11, func() { debugStep("out") })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
 	// Shift+F6 → go vet; Cmd+Shift+F7 → tests with coverage. Both slot
 	// in next to the existing F6/F7 build/test pair so the muscle memory

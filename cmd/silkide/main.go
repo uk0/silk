@@ -691,6 +691,30 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		globalLog = ged.NewLogPanel()
 		bottomDock.AddView(globalLog)
 
+		// Debugger pane — call stack + locals. Fed by debugHandleStop when
+		// dlv stops at a breakpoint. SigFrameSelected re-fetches locals for
+		// the chosen frame; SigFrameActivated opens the frame's file:line.
+		globalDebugPanel = ged.NewDebugPanel()
+		globalDebugPanel.SigFrameSelected(func(index int, frame core.StackFrame) {
+			if globalDebug == nil {
+				return
+			}
+			sess := globalDebug
+			go func() {
+				locals, _ := sess.ListLocals(-1, index)
+				gui.Post(func() { globalDebugPanel.SetVariables(locals) })
+			}()
+		})
+		globalDebugPanel.SigFrameActivated(func(frame core.StackFrame) {
+			if frame.File == "" || frame.Line <= 0 {
+				return
+			}
+			if tabs := centerEditorTabs(); tabs != nil {
+				openFileInEditorAt(tabs, frame.File, frame.Line, 0)
+			}
+		})
+		bottomDock.AddView(globalDebugPanel)
+
 		globalBottomDock = bottomDock
 	}
 
@@ -2499,6 +2523,10 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 		return false
 	}
 	ed := makeCodeEditor(string(data))
+	// Give the editor its path so RefreshGitStatus → git diff lights up
+	// the change gutter (added/modified/removed bars). Without this the
+	// gutter stays empty regardless of uncommitted changes.
+	ed.SetFilePath(path)
 	tabs.AddTab(ed, filepath.Base(path), nil)
 	openEditors[path] = ed
 	focusEditorTab(tabs, ed)
@@ -2715,6 +2743,11 @@ require (
 // debug configuration at a time" UX.
 var globalDebug *core.DebugSession
 
+// globalDebugPanel shows the call stack + locals when execution stops at
+// a breakpoint. Orphaned until now; fed by debugHandleStop via gui.Post
+// (the dlv RPCs run off the main thread, so GUI updates are marshalled).
+var globalDebugPanel *ged.DebugPanel
+
 // globalLSP is the background gopls client, populated by
 // startLSPBackground on a goroutine after main()'s buildPanels. nil
 // when gopls isn't on PATH or the initialize handshake failed — every
@@ -2734,7 +2767,10 @@ var globalLSP *core.LSPClient
 // stopDebugger can tear it down cleanly via the palette.
 func runProjectInDebugger(canvas *ged.GedView) {
 	if globalDebug != nil {
-		silkideToast(i18n.T("Debugger already running"), gui.ToastWarning)
+		// Already debugging: Shift+F5 now means "continue to the next
+		// stop" instead of erroring, so the user drives the whole
+		// stop → inspect → continue loop from one key.
+		debugContinue()
 		return
 	}
 	dir := projectDir(canvas)
@@ -2770,29 +2806,103 @@ func runProjectInDebugger(canvas *ged.GedView) {
 	go func() {
 		st, contErr := sess.Continue()
 		if contErr != nil {
-			silkideToast(i18n.Tf("Debugger error: %v", contErr), gui.ToastError)
+			gui.Post(func() {
+				silkideToast(i18n.Tf("Debugger error: %v", contErr), gui.ToastError)
+			})
 			return
 		}
-		if st == nil {
-			return
-		}
-		if st.Reason == "exited" {
+		debugHandleStop(st)
+	}()
+}
+
+// debugHandleStop pulls the call stack + locals after any dlv stop
+// (Continue / step) and pushes them into the DebugPanel. The dlv RPCs
+// run on the caller's goroutine (already off the UI thread); only the
+// GUI mutation is marshalled through gui.Post — this is what makes the
+// panel safe to update from the background Continue goroutine.
+func debugHandleStop(st *core.StopState) {
+	if st == nil {
+		return
+	}
+	if st.Reason == "exited" {
+		gui.Post(func() {
 			silkideToast(i18n.T("Debuggee exited"), gui.ToastInfo)
-			return
+			if globalDebugPanel != nil {
+				globalDebugPanel.Clear()
+			}
+		})
+		return
+	}
+	var frames []core.StackFrame
+	var locals []core.Variable
+	if globalDebug != nil {
+		frames, _ = globalDebug.Stacktrace(-1, 50)
+		locals, _ = globalDebug.ListLocals(-1, 0)
+	}
+	gui.Post(func() {
+		if globalDebugPanel != nil {
+			globalDebugPanel.SetCallStack(frames)
+			globalDebugPanel.SetVariables(locals)
+			dockSetActiveView(globalBottomDock, globalDebugPanel)
 		}
 		// Display 1-based file:line per Go error convention; the
 		// openFileInEditorAt path also takes 1-based lines.
 		silkideToast(i18n.Tf("Stopped at %s:%d", filepath.Base(st.File), st.Line), gui.ToastInfo)
 		if st.File != "" && st.Line > 0 {
-			// editorTabs is reachable via the package-level openEditors
-			// map's CodeEditor parent, but the simpler path is to use
-			// globalFrame's center dock TabWidget. openFileInEditorAt
-			// just needs the *gui.TabWidget; resolve it through the
-			// active editor's parent on the next paint tick.
 			if tabs := centerEditorTabs(); tabs != nil {
 				openFileInEditorAt(tabs, st.File, st.Line, 0)
 			}
 		}
+	})
+}
+
+// debugContinue resumes a live dlv session to the next stop. Bound to
+// Shift+F5 when a session is already running.
+func debugContinue() {
+	if globalDebug == nil {
+		silkideToast(i18n.T("No debug session"), gui.ToastWarning)
+		return
+	}
+	sess := globalDebug
+	go func() {
+		st, err := sess.Continue()
+		if err != nil {
+			gui.Post(func() {
+				silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError)
+			})
+			return
+		}
+		debugHandleStop(st)
+	}()
+}
+
+// debugStep single-steps the live session and refreshes the DebugPanel.
+// kind is "over" (dlv next), "into" (step), or "out" (stepOut). Bound to
+// F8 / F11 / Shift+F11.
+func debugStep(kind string) {
+	if globalDebug == nil {
+		silkideToast(i18n.T("No debug session"), gui.ToastWarning)
+		return
+	}
+	sess := globalDebug
+	go func() {
+		var st *core.StopState
+		var err error
+		switch kind {
+		case "into":
+			st, err = sess.StepInto()
+		case "out":
+			st, err = sess.StepOut()
+		default:
+			st, err = sess.Next()
+		}
+		if err != nil {
+			gui.Post(func() {
+				silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError)
+			})
+			return
+		}
+		debugHandleStop(st)
 	}()
 }
 
@@ -2809,6 +2919,9 @@ func stopDebugger() {
 	_ = sess.Close()
 	silkideToast(i18n.T("Debugger stopped"), gui.ToastInfo)
 	logEvent(ged.LogInfo, "Debugger stopped")
+	if globalDebugPanel != nil {
+		globalDebugPanel.Clear()
+	}
 }
 
 // centerEditorTabs walks every open editor to find a *gui.TabWidget
