@@ -799,6 +799,143 @@ func (c *LSPClient) SignatureHelp(uri string, line, character int) (*LSPSignatur
 	return out, nil
 }
 
+// LSPTextEdit 是一处文本编辑: 在 Range 区间上用 NewText 替换
+// formatting/rename 都用它当返回单元 -- LSP 的 TextEdit 就是 {range, newText}.
+type LSPTextEdit struct {
+	Range   LSPRange `json:"range"`
+	NewText string   `json:"newText"`
+}
+
+// LSPWorkspaceEdit 是 rename 跨文件改动的结果, 按 uri 分组的 TextEdit
+// LSP 的 WorkspaceEdit 有两种合法形态 (changes map 与 documentChanges 数组),
+// 这里统一压平到 Changes (uri -> edits), 让上层不必关心 server 选了哪种.
+type LSPWorkspaceEdit struct {
+	Changes map[string][]LSPTextEdit // uri -> edits
+}
+
+// LSPCodeAction 是 code action 菜单里的一项 (灯泡里的 quick-fix / refactor)
+// v1 只把菜单项的标题展出来: Title 必有, Kind 在 CodeAction 形态下有
+// (例如 "quickfix" / "refactor.extract"), 裸 Command 形态没有 kind 留空.
+// 这里有意不带 edit -- 应用编辑是后续 commit 的事, 这一版只负责"列菜单".
+type LSPCodeAction struct {
+	Title string
+	Kind  string // 裸 Command 形态为空
+}
+
+// Formatting 请求 textDocument/formatting 并返回把整篇文档格式化所需的编辑
+// gopls 对 Go 文件等价于跑一遍 gofmt: 它要 options{tabSize, insertSpaces},
+// Go 用 tab 缩进, 所以默认 {tabSize:4, insertSpaces:false} (insertSpaces=false
+// 时 tabSize 仅作展示宽度提示, gopls 实际产出真 tab). 响应是 []TextEdit,
+// null (无需改动 / server 不支持) 归一成空切片, 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) Formatting(uri string) ([]LSPTextEdit, error) {
+	params := map[string]interface{}{
+		"textDocument": map[string]string{"uri": uri},
+		"options": map[string]interface{}{
+			"tabSize":      4,
+			"insertSpaces": false,
+		},
+	}
+	resp, err := c.SendRequest("textDocument/formatting", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return []LSPTextEdit{}, nil
+	}
+	var edits []LSPTextEdit
+	if err := json.Unmarshal(resp.Result, &edits); err != nil {
+		return nil, fmt.Errorf("lspclient: decode formatting result: %w", err)
+	}
+	return edits, nil
+}
+
+// Rename 请求 textDocument/rename 并把跨工作区的改动归一成 LSPWorkspaceEdit
+// 响应里的 WorkspaceEdit 有两种合法形态, server 任选:
+//   - changes:         {uri: []TextEdit}            -- 简单 map 形态, 优先吃这个
+//   - documentChanges: [{textDocument:{uri}, edits:[]TextEdit}]  -- 带版本号的形态
+// 处理顺序: 先看 changes, 非空就用; changes 缺省时再折叠 documentChanges
+// 到同一个 Changes map (丢掉版本号, 上层只关心 uri->edits). 两者都给时以
+// changes 为准 -- 简单形态信息无损, 不必再读版本化形态.
+// server 返回 null (符号不可改 / 没有出现处) 时返回 (nil, nil), 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) Rename(uri string, line, character int, newName string) (*LSPWorkspaceEdit, error) {
+	params := textDocumentPositionParams(uri, line, character)
+	params["newName"] = newName
+	resp, err := c.SendRequest("textDocument/rename", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	var we struct {
+		Changes         map[string][]LSPTextEdit `json:"changes"`
+		DocumentChanges []struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Edits []LSPTextEdit `json:"edits"`
+		} `json:"documentChanges"`
+	}
+	if err := json.Unmarshal(resp.Result, &we); err != nil {
+		return nil, fmt.Errorf("lspclient: decode rename result: %w", err)
+	}
+	out := &LSPWorkspaceEdit{Changes: map[string][]LSPTextEdit{}}
+	if len(we.Changes) > 0 {
+		out.Changes = we.Changes
+		return out, nil
+	}
+	// changes 缺省: 折叠 documentChanges, 同一个 uri 出现多次就把 edits 串接.
+	for _, dc := range we.DocumentChanges {
+		out.Changes[dc.TextDocument.URI] = append(out.Changes[dc.TextDocument.URI], dc.Edits...)
+	}
+	return out, nil
+}
+
+// CodeAction 请求 textDocument/codeAction 并把灯泡菜单项的标题列出来
+// params 需要 range + context.diagnostics; 我们只想列"这个区间有哪些动作",
+// 不带具体诊断, context.diagnostics 给空数组即可 (gopls 仍会给出 source/refactor 类项).
+// 响应是一个数组, 每个元素是两种形态之一, server 混着发都合法:
+//   - 裸 Command:  {title, command, arguments}        -- 只有 title, 无 kind
+//   - CodeAction:  {title, kind, edit?, command?}     -- 有 kind
+// 两者都带 title, 所以宽松解码: 统一只取 title (+ kind 若有). 这一版不应用
+// edit (CodeAction.edit 是一份 WorkspaceEdit), 应用编辑留作后续 commit.
+// null (区间内无可用动作) 归一成空切片, 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) CodeAction(uri string, startLine, startChar, endLine, endChar int) ([]LSPCodeAction, error) {
+	params := map[string]interface{}{
+		"textDocument": map[string]string{"uri": uri},
+		"range": LSPRange{
+			Start: LSPPosition{Line: startLine, Character: startChar},
+			End:   LSPPosition{Line: endLine, Character: endChar},
+		},
+		"context": map[string]interface{}{
+			"diagnostics": []interface{}{},
+		},
+	}
+	resp, err := c.SendRequest("textDocument/codeAction", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return []LSPCodeAction{}, nil
+	}
+	// 宽松解码: Command 和 CodeAction 都带 title; kind 只有 CodeAction 有.
+	var raw []struct {
+		Title string `json:"title"`
+		Kind  string `json:"kind"`
+	}
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		return nil, fmt.Errorf("lspclient: decode codeAction result: %w", err)
+	}
+	out := make([]LSPCodeAction, 0, len(raw))
+	for _, a := range raw {
+		out = append(out, LSPCodeAction{Title: a.Title, Kind: a.Kind})
+	}
+	return out, nil
+}
+
 // DidChange 发 textDocument/didChange 通知, 把整个文件最新内容推给 server
 // LSP 支持 incremental sync (按 range 发 diff), 这里走最简单的 *full document
 // sync*: 一次性把整篇 fullText 重新塞过去. 对一个文件大小一般 < 1MB 的 Go

@@ -1314,6 +1314,363 @@ func TestLSPClientSignatureHelp_ServerError(t *testing.T) {
 	<-done
 }
 
+// -----------------------------------------------------------------------------
+// Formatting: []TextEdit, null -> 空切片, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientFormatting_Edits(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/formatting" {
+			t.Errorf("method = %q, want textDocument/formatting", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		return &fakeReply{Result: json.RawMessage(`[
+{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":4}},"newText":"\t"},
+{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":2}},"newText":""}
+]`)}
+	})
+
+	edits, err := c.Formatting("file:///a.go")
+	if err != nil {
+		t.Fatalf("Formatting: %v", err)
+	}
+	if len(edits) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(edits), edits)
+	}
+	if edits[0].NewText != "\t" || edits[0].Range.End.Character != 4 {
+		t.Errorf("edits[0] = %+v", edits[0])
+	}
+	if edits[1].NewText != "" || edits[1].Range.Start.Line != 2 || edits[1].Range.End.Character != 2 {
+		t.Errorf("edits[1] = %+v", edits[1])
+	}
+	// 校验 options 真带了 tabSize/insertSpaces, 且没有 position (formatting 不是 position-based)
+	var gotParams struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Options struct {
+			TabSize      int  `json:"tabSize"`
+			InsertSpaces bool `json:"insertSpaces"`
+		} `json:"options"`
+		Position *LSPPosition `json:"position"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.TextDocument.URI != "file:///a.go" {
+		t.Errorf("params uri = %q", gotParams.TextDocument.URI)
+	}
+	if gotParams.Options.TabSize != 4 || gotParams.Options.InsertSpaces {
+		t.Errorf("options = %+v, want {tabSize:4 insertSpaces:false}", gotParams.Options)
+	}
+	if gotParams.Position != nil {
+		t.Errorf("formatting params carried a position: %+v", gotParams.Position)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientFormatting_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	edits, err := c.Formatting("file:///a.go")
+	if err != nil {
+		t.Fatalf("Formatting: %v", err)
+	}
+	if edits == nil || len(edits) != 0 {
+		t.Errorf("edits = %+v, want empty non-nil slice", edits)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientFormatting_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "format failed"}}
+	})
+
+	edits, err := c.Formatting("file:///a.go")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if edits != nil {
+		t.Errorf("edits = %+v, want nil on error", edits)
+	}
+	if !strings.Contains(err.Error(), "format failed") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// -----------------------------------------------------------------------------
+// Rename: changes map vs documentChanges 数组双形态, null, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientRename_ChangesShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/rename" {
+			t.Errorf("method = %q, want textDocument/rename", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		return &fakeReply{Result: json.RawMessage(`{"changes":{"file:///a.go":[
+{"range":{"start":{"line":1,"character":5},"end":{"line":1,"character":8}},"newText":"Bar"}
+]}}`)}
+	})
+
+	we, err := c.Rename("file:///a.go", 1, 5, "Bar")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if we == nil {
+		t.Fatal("Rename returned nil WorkspaceEdit")
+	}
+	if len(we.Changes) != 1 {
+		t.Fatalf("changes len = %d, want 1: %+v", len(we.Changes), we.Changes)
+	}
+	edits := we.Changes["file:///a.go"]
+	if len(edits) != 1 || edits[0].NewText != "Bar" || edits[0].Range.Start.Character != 5 {
+		t.Errorf("edits = %+v", edits)
+	}
+	// 校验 newName 真序列化进了 params
+	var gotParams struct {
+		NewName  string      `json:"newName"`
+		Position LSPPosition `json:"position"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.NewName != "Bar" {
+		t.Errorf("newName = %q, want Bar", gotParams.NewName)
+	}
+	if gotParams.Position.Line != 1 || gotParams.Position.Character != 5 {
+		t.Errorf("position = %+v", gotParams.Position)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientRename_DocumentChangesShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	// 版本化形态: documentChanges 数组, 没有 changes map. 同一个 uri 出现两次,
+	// 校验 client 把 edits 折叠到同一个 key 下.
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`{"documentChanges":[
+{"textDocument":{"uri":"file:///a.go","version":3},"edits":[
+  {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"newText":"Baz"}
+]},
+{"textDocument":{"uri":"file:///b.go","version":1},"edits":[
+  {"range":{"start":{"line":4,"character":2},"end":{"line":4,"character":5}},"newText":"Baz"}
+]},
+{"textDocument":{"uri":"file:///a.go","version":3},"edits":[
+  {"range":{"start":{"line":7,"character":1},"end":{"line":7,"character":4}},"newText":"Baz"}
+]}
+]}`)}
+	})
+
+	we, err := c.Rename("file:///a.go", 0, 0, "Baz")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if we == nil {
+		t.Fatal("Rename returned nil WorkspaceEdit")
+	}
+	if len(we.Changes) != 2 {
+		t.Fatalf("changes len = %d, want 2 (a.go + b.go): %+v", len(we.Changes), we.Changes)
+	}
+	// a.go 的两段 edits 被折叠到一起
+	if got := we.Changes["file:///a.go"]; len(got) != 2 || got[0].NewText != "Baz" || got[1].Range.Start.Line != 7 {
+		t.Errorf("a.go edits = %+v, want 2 folded edits", got)
+	}
+	if got := we.Changes["file:///b.go"]; len(got) != 1 || got[0].Range.Start.Line != 4 {
+		t.Errorf("b.go edits = %+v", got)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientRename_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	we, err := c.Rename("file:///a.go", 1, 2, "X")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if we != nil {
+		t.Errorf("we = %+v, want nil", we)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientRename_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "cannot rename builtin"}}
+	})
+
+	we, err := c.Rename("file:///a.go", 1, 2, "X")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if we != nil {
+		t.Errorf("we = %+v, want nil on error", we)
+	}
+	if !strings.Contains(err.Error(), "cannot rename builtin") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// -----------------------------------------------------------------------------
+// CodeAction: 裸 Command 与 CodeAction 混排, range/context 形状, null, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientCodeAction_CommandAndAction(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/codeAction" {
+			t.Errorf("method = %q, want textDocument/codeAction", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		// 第一项是裸 Command (有 command, 无 kind), 第二项是 CodeAction (有 kind + edit).
+		return &fakeReply{Result: json.RawMessage(`[
+{"title":"Organize Imports","command":"gopls.organize_imports","arguments":["file:///a.go"]},
+{"title":"Extract function","kind":"refactor.extract","edit":{"changes":{}}}
+]`)}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 1, 0, 3, 0)
+	if err != nil {
+		t.Fatalf("CodeAction: %v", err)
+	}
+	if len(actions) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(actions), actions)
+	}
+	// 裸 Command: 有 title, kind 留空
+	if actions[0].Title != "Organize Imports" || actions[0].Kind != "" {
+		t.Errorf("actions[0] = %+v, want bare Command with empty kind", actions[0])
+	}
+	// CodeAction: title + kind
+	if actions[1].Title != "Extract function" || actions[1].Kind != "refactor.extract" {
+		t.Errorf("actions[1] = %+v", actions[1])
+	}
+	// 校验 range + context.diagnostics 形状
+	var gotParams struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Range   LSPRange `json:"range"`
+		Context struct {
+			Diagnostics []json.RawMessage `json:"diagnostics"`
+		} `json:"context"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.TextDocument.URI != "file:///a.go" {
+		t.Errorf("params uri = %q", gotParams.TextDocument.URI)
+	}
+	if gotParams.Range.Start.Line != 1 || gotParams.Range.End.Line != 3 {
+		t.Errorf("range = %+v, want start.line=1 end.line=3", gotParams.Range)
+	}
+	if gotParams.Context.Diagnostics == nil {
+		t.Errorf("context.diagnostics missing; want empty array")
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientCodeAction_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("CodeAction: %v", err)
+	}
+	if actions == nil || len(actions) != 0 {
+		t.Errorf("actions = %+v, want empty non-nil slice", actions)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientCodeAction_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "code action provider failed"}}
+	})
+
+	actions, err := c.CodeAction("file:///a.go", 0, 0, 1, 0)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if actions != nil {
+		t.Errorf("actions = %+v, want nil on error", actions)
+	}
+	if !strings.Contains(err.Error(), "code action provider failed") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
 // newPipedClient 构造一个 *LSPClient 把它的 stdin/stdout 接到 io.Pipe 上
 // 返回:
 //   - c     已经跑着 readLoop 的客户端
