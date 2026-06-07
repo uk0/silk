@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,6 +39,16 @@ type GitCommit struct {
 	Subject string
 	Author  string
 	Date    string
+}
+
+// GitBlameLine 是 `git blame` 里最终文件的一行归属信息
+// Hash 是该行最后一次改动的提交; Author 是该提交作者; Line 是 1-based 行号;
+// Content 是该行源码文本(不含末尾换行).
+type GitBlameLine struct {
+	Hash    string // commit hash, 已缩短为 8 位便于 gutter 展示
+	Author  string
+	Line    int    // 最终文件里的 1-based 行号
+	Content string // 该行源码文本
 }
 
 // GitAvailable 报告 PATH 上是否能找到 git 可执行文件
@@ -128,7 +139,29 @@ func GitShortLog(dir string, n int) ([]GitCommit, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseShortLog(out), nil
+}
 
+// GitLogFile 返回单个文件最近 n 条提交摘要(`git log -n <n> -- <file>`)
+// 即"文件历史"视图. 与 GitShortLog 共用完全相同的 0x1f 字段格式和 parseShortLog
+// 解析, 区别仅在末尾加了 `-- <file>` 把日志限定到该文件. 单行字段不齐时跳过.
+func GitLogFile(dir, file string, n int) ([]GitCommit, error) {
+	out, err := runGit(dir, "log",
+		fmt.Sprintf("-n%d", n),
+		"--pretty=format:%h%x1f%s%x1f%an%x1f%ad",
+		"--date=short",
+		"--", file)
+	if err != nil {
+		return nil, err
+	}
+	return parseShortLog(out), nil
+}
+
+// parseShortLog 解析 `--pretty=format:%h%x1f%s%x1f%an%x1f%ad` 的 0x1f 分隔输出
+// 由 GitShortLog 和 GitLogFile 共用: 用 0x1f(unit separator)分隔
+// hash/subject/author/date 四个字段, 避免 subject 里出现普通分隔符导致误切.
+// 空行跳过, 单行字段数不足时跳过该行继续, 永远不 panic.
+func parseShortLog(out string) []GitCommit {
 	var commits []GitCommit
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
@@ -148,7 +181,87 @@ func GitShortLog(dir string, n int) ([]GitCommit, error) {
 			Date:    parts[3],
 		})
 	}
-	return commits, nil
+	return commits
+}
+
+// GitBlame 返回文件每一行的最后改动归属(`git blame --line-porcelain -- <file>`)
+// 即"git blame" gutter / 行注释视图. 用 --line-porcelain 这种稳定的机器格式:
+// 每一行(最终文件的一行)对应一个 block —— 先是一行头
+//
+//	<40-hex> <orig-line> <final-line> [<num-lines>]
+//
+// 接着若干 "key value" 元数据行(author / author-time / ...), 最后一行 TAB 开头
+// 即该行源码文本. 这里只取 hash(头行第一个字段)、author(`author ` 行)和那条
+// TAB 内容行. Hash 缩短到 8 位便于 gutter 展示.
+// 健壮解析: 头行字段不齐、缺 author、缺内容行的畸形 block 直接跳过不收集, 永不 panic.
+func GitBlame(dir, file string) ([]GitBlameLine, error) {
+	out, err := runGit(dir, "blame", "--line-porcelain", "--", file)
+	if err != nil {
+		return nil, err
+	}
+
+	var lines []GitBlameLine
+	var cur GitBlameLine
+	var haveHeader bool // 已读到本 block 的头行
+	sc := bufio.NewScanner(strings.NewReader(out))
+	// blame 的源码行可能很长, 调大 Scanner 缓冲上限到 1MiB 防止 ErrTooLong.
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		// TAB 开头的是该 block 的源码内容行, 也是一个 block 的收尾.
+		if strings.HasPrefix(line, "\t") {
+			if haveHeader {
+				cur.Content = line[1:]
+				lines = append(lines, cur)
+			}
+			// 不论是否成功收集, 都重置, 等待下一个 block 的头行.
+			cur = GitBlameLine{}
+			haveHeader = false
+			continue
+		}
+		// 元数据行 "author Foo Bar"
+		if strings.HasPrefix(line, "author ") {
+			if haveHeader {
+				cur.Author = line[len("author "):]
+			}
+			continue
+		}
+		// 其余非头行的元数据(author-time/committer/summary/...)直接忽略;
+		// 头行是唯一以 40-hex 开头并带数字字段的行, 用字段数+全 hex 判定.
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && isHex40(fields[0]) {
+			finalLine, perr := atoiStrict(fields[2])
+			if perr != nil {
+				// 头行 final-line 不是合法整数 —— 畸形, 跳过该 block.
+				haveHeader = false
+				continue
+			}
+			cur = GitBlameLine{
+				Hash: shortHash(fields[0]),
+				Line: finalLine,
+			}
+			haveHeader = true
+		}
+		// 其它行(不匹配任何已知形态)忽略, 继续.
+	}
+	return lines, nil
+}
+
+// GitShow 返回文件在某个修订版本下的内容(`git show <rev>:<file>`)
+// 用于把工作副本与任意提交对比, 或展示"原始"内容. rev 可为 "HEAD"、分支名、SHA 等.
+// 空文件返回 ("", nil); rev 或路径非法时 git 非零退出, 原样返回带诊断的 error.
+func GitShow(dir, rev, file string) (string, error) {
+	return runGit(dir, "show", rev+":"+file)
+}
+
+// GitRevParse 把一个 ref(如 "HEAD"、分支名)解析为完整 SHA(`git rev-parse <ref>`)
+// 返回去掉首尾空白的 40-hex SHA. 未知 ref 时 git 非零退出, 返回带诊断的 error.
+func GitRevParse(dir, ref string) (string, error) {
+	out, err := runGit(dir, "rev-parse", ref)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // runGit 是所有 git 调用的共享私有助手
@@ -198,6 +311,35 @@ func stripGitQuotes(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
+}
+
+// isHex40 判定 s 是否恰好是 40 位十六进制(blame line-porcelain 头行的提交 SHA)
+// 用来把头行从其它元数据行里区分出来, 避免误把 "author-time 123" 当成头行.
+func isHex40(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// shortHash 把 40-hex 提交 SHA 缩短到 8 位便于 gutter 展示; 短于 8 位时原样返回.
+func shortHash(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
+// atoiStrict 解析一个十进制整数, 仅是 strconv.Atoi 的薄封装
+// 单列出来是为了让 blame 头行解析的意图(严格整数, 失败即视为畸形)更清楚.
+func atoiStrict(s string) (int, error) {
+	return strconv.Atoi(s)
 }
 
 // ErrNotGitRepo 是供上层用 errors.Is 区分"非 git 仓库"场景的哨兵错误

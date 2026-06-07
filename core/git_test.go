@@ -233,6 +233,160 @@ func TestGitShortLog(t *testing.T) {
 	}
 }
 
+// isHex40Test 判定 s 是否恰好 40 位十六进制(测试侧独立实现, 不依赖被测私有助手)
+func isHex40Test(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestGitRevParse(t *testing.T) {
+	if !GitAvailable() {
+		t.Skip("git not installed")
+	}
+	dir, _ := setupRepo(t)
+
+	// 首提交之后, HEAD 应能解析成一个 40-hex 完整 SHA
+	sha, err := GitRevParse(dir, "HEAD")
+	if err != nil {
+		t.Fatalf("GitRevParse(HEAD): %v", err)
+	}
+	if !isHex40Test(sha) {
+		t.Errorf("GitRevParse(HEAD) = %q, want a 40-hex SHA", sha)
+	}
+
+	// 不存在的 ref 应当报错(而非 panic)且不返回 SHA
+	if got, err := GitRevParse(dir, "no-such-ref-xyz"); err == nil {
+		t.Errorf("GitRevParse on bogus ref returned nil error; got SHA=%q", got)
+	}
+}
+
+func TestGitShow(t *testing.T) {
+	if !GitAvailable() {
+		t.Skip("git not installed")
+	}
+	dir, file := setupRepo(t)
+
+	// HEAD:file 应返回首提交里的内容
+	const committed = "line one\nline two\n"
+	got, err := GitShow(dir, "HEAD", file)
+	if err != nil {
+		t.Fatalf("GitShow(HEAD, %q): %v", file, err)
+	}
+	if got != committed {
+		t.Errorf("GitShow(HEAD) = %q, want committed content %q", got, committed)
+	}
+
+	// 提交之后改动工作副本: GitShow 仍应返回已提交(旧)内容, 而非工作副本
+	writeFile(t, dir, file, "WORKING COPY CHANGED\n")
+	got2, err := GitShow(dir, "HEAD", file)
+	if err != nil {
+		t.Fatalf("GitShow(HEAD, %q) after worktree edit: %v", file, err)
+	}
+	if got2 != committed {
+		t.Errorf("GitShow(HEAD) after edit = %q, want committed content %q (not the working copy)", got2, committed)
+	}
+
+	// 不存在的路径应当报错(而非 panic)
+	if _, err := GitShow(dir, "HEAD", "no-such-file.txt"); err == nil {
+		t.Error("GitShow on missing path returned nil error, want error")
+	}
+}
+
+func TestGitLogFile(t *testing.T) {
+	if !GitAvailable() {
+		t.Skip("git not installed")
+	}
+	dir, file := setupRepo(t)
+
+	// 在该文件上再追加一次提交, 让它有两条历史
+	writeFile(t, dir, file, "line one\nline two\nline three\n")
+	mustGit(t, dir, "add", file)
+	mustGit(t, dir, "commit", "-m", "second commit")
+
+	commits, err := GitLogFile(dir, file, 10)
+	if err != nil {
+		t.Fatalf("GitLogFile: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("GitLogFile returned %d commits, want 2; got=%+v", len(commits), commits)
+	}
+	// git log 默认新提交在前
+	if commits[0].Subject != "second commit" {
+		t.Errorf("commits[0].Subject = %q, want %q", commits[0].Subject, "second commit")
+	}
+	if commits[1].Subject != "initial commit" {
+		t.Errorf("commits[1].Subject = %q, want %q", commits[1].Subject, "initial commit")
+	}
+	for i, c := range commits {
+		if c.Hash == "" {
+			t.Errorf("commits[%d].Hash is empty", i)
+		}
+		if c.Author != "Test User" {
+			t.Errorf("commits[%d].Author = %q, want %q", i, c.Author, "Test User")
+		}
+	}
+
+	// 共享的 parseShortLog 重构不应改变 GitShortLog 的行为:
+	// 此仓库现有两条提交, 取 1 条仍应是最新的 "second commit"
+	short, err := GitShortLog(dir, 1)
+	if err != nil {
+		t.Fatalf("GitShortLog after refactor: %v", err)
+	}
+	if len(short) != 1 {
+		t.Fatalf("GitShortLog(1) returned %d commits, want 1", len(short))
+	}
+	if short[0].Subject != "second commit" {
+		t.Errorf("GitShortLog(1)[0].Subject = %q, want %q", short[0].Subject, "second commit")
+	}
+}
+
+func TestGitBlame(t *testing.T) {
+	if !GitAvailable() {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	mustGit(t, dir, "init")
+	mustGit(t, dir, "config", "--local", "user.email", "test@example.com")
+	mustGit(t, dir, "config", "--local", "user.name", "Test User")
+
+	const file = "blame.txt"
+	writeFile(t, dir, file, "alpha\nbeta\ngamma\n")
+	mustGit(t, dir, "add", file)
+	mustGit(t, dir, "commit", "-m", "blame seed")
+
+	lines, err := GitBlame(dir, file)
+	if err != nil {
+		t.Fatalf("GitBlame: %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("GitBlame returned %d lines, want 3; got=%+v", len(lines), lines)
+	}
+
+	wantContent := []string{"alpha", "beta", "gamma"}
+	for i, bl := range lines {
+		if bl.Line != i+1 {
+			t.Errorf("lines[%d].Line = %d, want %d (1-based)", i, bl.Line, i+1)
+		}
+		if bl.Content != wantContent[i] {
+			t.Errorf("lines[%d].Content = %q, want %q", i, bl.Content, wantContent[i])
+		}
+		if bl.Hash == "" {
+			t.Errorf("lines[%d].Hash is empty", i)
+		}
+		if bl.Author != "Test User" {
+			t.Errorf("lines[%d].Author = %q, want %q", i, bl.Author, "Test User")
+		}
+	}
+}
+
 func TestRunGitBogusSubcommandErrors(t *testing.T) {
 	if !GitAvailable() {
 		t.Skip("git not installed")
