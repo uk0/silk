@@ -136,6 +136,10 @@ func init() {
 		panic("failed to init GLFW: " + err.Error())
 	}
 
+	// Let off-thread Post() callers wake a blocked WaitEvents so their queued
+	// GUI tasks run promptly on the main thread (see uiqueue.go / drainUITasks).
+	SetUIWakeup(glfw.PostEmptyEvent)
+
 	// Get DPI from primary monitor
 	mon := glfw.GetPrimaryMonitor()
 	if mon != nil {
@@ -1264,6 +1268,11 @@ func MainLoop() {
 			glfw.WaitEventsTimeout(0.047)
 		}
 		processTimers()
+
+		// Run tasks queued from background goroutines (dlv/LSP callbacks)
+		// on the main thread now that this frame's input + timers are done
+		// and before the paint pass, so GUI state is mutated safely.
+		drainUITasks()
 
 		// When the perf overlay is visible we request a repaint every
 		// iteration so the FPS counter stays live even on an otherwise
