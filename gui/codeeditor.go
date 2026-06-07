@@ -227,6 +227,19 @@ type CodeEditor struct {
 	navStack       NavigationStack
 	cbNavigate     func(filePath string, line int) // callback for cross-file navigation
 
+	// --- LSP host hooks (hover + signature help) ---
+	// These are host-driven signals: the editor only reports WHERE the user is
+	// (line/col + global anchor) and lets the host (silkide) run the async gopls
+	// RPC and display the result via ShowToolTip. The editor never blocks on the
+	// fetch. Both are nil-safe: with no callback registered they are a no-op.
+	cbHoverRequested     func(line, col int, gx, gy float64) // mouse settled over an identifier
+	cbSignatureRequested func(line, col int)                 // typed a "(" or "," signature trigger
+	// hoverReqLine/hoverReqCol track the identifier (line, word-start col) last
+	// reported via cbHoverRequested so we fire exactly once per identifier as the
+	// mouse moves, instead of on every pixel. -1 means "nothing reported yet".
+	hoverReqLine int
+	hoverReqCol  int
+
 	// --- Git Gutter ---
 	gitStatus map[int]GitLineStatus
 
@@ -312,6 +325,8 @@ func (this *CodeEditor) Init(iw IWidget) {
 	this.statusBarHeight = 20
 	this.hoverErrorLine = -1
 	this.hoverLinkLine = -1
+	this.hoverReqLine = -1
+	this.hoverReqCol = -1
 	this.breakpoints = make(map[int]bool)
 	this.foldedLines = make(map[int]bool)
 	this.snippets = NewGoSnippetSet()
@@ -508,6 +523,27 @@ func (this *CodeEditor) FilePath() string {
 // The callback receives the target file path and line number.
 func (this *CodeEditor) SetNavigateCallback(fn func(string, int)) {
 	this.cbNavigate = fn
+}
+
+// SigHoverRequested registers the host hook fired when the mouse settles over
+// an identifier in the text area. The editor reports (line, col) plus a global
+// anchor (gx, gy); the host runs the async LSP Hover RPC and shows the result
+// (e.g. via ShowToolTip). The editor does NOT fetch or display hover text — it
+// only signals where the user is hovering. The callback fires once per
+// identifier (see hoverReqLine/hoverReqCol) and never while the completion
+// popup is visible. Passing nil disables the signal (no-op).
+func (this *CodeEditor) SigHoverRequested(fn func(line, col int, gx, gy float64)) {
+	this.cbHoverRequested = fn
+}
+
+// SigSignatureRequested registers the host hook fired when the user types a
+// signature trigger ("(" or ","). The editor passes the cursor (line, col)
+// AFTER the insert; the host runs the async LSP SignatureHelp RPC and shows the
+// result. Typing ")" dismisses any shown help (the editor calls HideToolTip on
+// ")"); Esc dismissal is left to the host. Passing nil disables the signal
+// (no-op).
+func (this *CodeEditor) SigSignatureRequested(fn func(line, col int)) {
+	this.cbSignatureRequested = fn
 }
 
 // pushNavPosition records the current position onto the navigation stack.
@@ -3519,6 +3555,70 @@ func (this *CodeEditor) OnMouseMove(x, y float64) {
 		this.hoverErrorLine = -1
 		HideToolTip()
 	}
+
+	// LSP hover signal: report to the host when the mouse settles over a NEW
+	// identifier in the text area. We don't fetch or display anything here —
+	// the host runs the async Hover RPC and shows the tooltip. Fire once per
+	// identifier (gated on a change of word-start (line, col)) so the host gets
+	// one event per word, not one per pixel. Suppressed while the completion
+	// popup is up to avoid fighting it.
+	this.maybeFireHover(x, y)
+}
+
+// maybeFireHover detects an identifier under the mouse in the text area and, if
+// it differs from the last identifier reported, fires cbHoverRequested with the
+// (line, word-start col) and a global anchor. Split out of OnMouseMove so the
+// position-change gating is unit-testable without a GLFW context. No-op when no
+// hover callback is registered or the completion popup is visible.
+func (this *CodeEditor) maybeFireHover(x, y float64) {
+	if this.cbHoverRequested == nil {
+		return
+	}
+	if this.completion != nil && this.completion.visible {
+		return
+	}
+	line, col, ok := this.hoverIdentAt(x, y)
+	if !ok {
+		// Off any identifier: reset so re-entering the same word re-fires.
+		this.hoverReqLine = -1
+		this.hoverReqCol = -1
+		return
+	}
+	if line == this.hoverReqLine && col == this.hoverReqCol {
+		return // still the same identifier — host already got this event
+	}
+	this.hoverReqLine = line
+	this.hoverReqCol = col
+	gx, gy := this.MapToGlobal(x, y)
+	this.cbHoverRequested(line, col, gx, gy)
+}
+
+// hoverIdentAt maps mouse (x, y) to the identifier under it, returning the
+// line and the word-START column plus ok=true when the position lands on a word
+// in the TEXT area (not the gutter). Returns ok=false in the gutter, off a
+// word, or out of range. The word-start col gives a stable per-identifier key
+// so hover fires once per word rather than per column.
+func (this *CodeEditor) hoverIdentAt(x, y float64) (line, col int, ok bool) {
+	if x < this.gutterW { // gutter (line numbers / breakpoints), never an identifier
+		return 0, 0, false
+	}
+	line, c := this.posFromXY(x, y)
+	if line < 0 || line >= len(this.lines) {
+		return 0, 0, false
+	}
+	// Confirm the resolved column sits on an identifier rune. wordBoundsAt
+	// returns a single-rune span (col, col+1) for punctuation/whitespace, so a
+	// "start != end" check is not enough — gate on the rune class directly.
+	runes := []rune(this.lines[line])
+	if c >= len(runes) {
+		return 0, 0, false
+	}
+	ch := runes[c]
+	if !(unicode.IsLetter(ch) || unicode.IsDigit(ch) || ch == '_') {
+		return 0, 0, false
+	}
+	start, _ := this.wordBoundsAt(line, c)
+	return line, start, true
 }
 
 func (this *CodeEditor) OnLeftUp(x, y float64) {
@@ -3813,6 +3913,26 @@ func (this *CodeEditor) OnTextInput(s string) {
 
 	// Trigger completion after typing
 	this.tryTriggerCompletion(s)
+
+	// LSP signature-help signal: on a "(" or "," trigger, report the cursor
+	// position (already advanced past the insert) so the host runs the async
+	// SignatureHelp RPC and shows it. Typing ")" closes the function call, so we
+	// dismiss any shown help here; Esc dismissal is left to the host. The editor
+	// never fetches signature text itself.
+	if isSignatureTrigger(s) {
+		if this.cbSignatureRequested != nil {
+			this.cbSignatureRequested(this.cursorLine, this.cursorCol)
+		}
+	} else if s == ")" {
+		HideToolTip()
+	}
+}
+
+// isSignatureTrigger reports whether typing s should request LSP signature help.
+// gopls treats "(" (call start) and "," (next argument) as signature-help
+// triggers; everything else (including ")" which CLOSES the call) is not.
+func isSignatureTrigger(s string) bool {
+	return s == "(" || s == ","
 }
 
 // tryTriggerCompletion checks whether to show the completion popup after input.
