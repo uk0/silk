@@ -2,12 +2,14 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -374,6 +376,257 @@ func (c *LSPClient) DidOpen(uri, languageID, text string, version int) error {
 			Version:    version,
 			Text:       text,
 		},
+	})
+}
+
+// -----------------------------------------------------------------------------
+// 典型 IDE 操作的类型化便利封装
+// -----------------------------------------------------------------------------
+//
+// 这一段把 IDE 真正吃饭的几个 LSP RPC 包成 *typed* 方法:
+//   - Completion / Hover / Definition / References  (request)
+//   - DidChange                                     (notification)
+//
+// 设计取舍:
+//   - 类型刻意取最小子集. LSP 规范的 CompletionItem/Hover/Location 字段巨多,
+//     绝大部分 IDE 拉一次 hover/补全就把数据展给用户, 不再深加工; gopls 也
+//     把所有重要的东西塞进 Label/Detail/Contents.value 这些字符串字段里.
+//     真要扩字段, 在 LSPCompletionItem / LSPHover / LSPLocation 上加 JSON tag
+//     即可, 不会改方法签名.
+//   - 几个 RPC 的响应里存在 *形状多态*, 因为 LSP 规范允许 server 在两种合法
+//     形状中任选:
+//       * completion: CompletionList{IsIncomplete, Items} 或 raw []CompletionItem
+//       * definition: Location 或 []Location
+//       * hover.contents: string 或 MarkupContent{Kind, Value} 或 []MarkedString
+//     这里的做法是先尝试 "数组/对象" 中的一种, 失败再退到另一种, 别让上层
+//     去关心 server 选择了哪种.
+//   - 所有方法共用 SendRequest 的 10s 默认超时. 如果上层要更细的预算, 后续
+//     可以加 *Context 变体, 不破坏当前 API.
+
+// LSPPosition 是 LSP 中通用的"行/列"坐标 (零基)
+type LSPPosition struct {
+	Line      int `json:"line"`
+	Character int `json:"character"`
+}
+
+// LSPRange 是 LSP 的 [start, end) 文本区间
+type LSPRange struct {
+	Start LSPPosition `json:"start"`
+	End   LSPPosition `json:"end"`
+}
+
+// LSPLocation 是带 URI 的源代码定位, definition/references 的基本返回单元
+type LSPLocation struct {
+	URI   string   `json:"uri"`
+	Range LSPRange `json:"range"`
+}
+
+// LSPCompletionItem 是补全列表里的一条
+// 字段是 LSP CompletionItem 的最小子集; gopls 在补全里把签名 / 注释往
+// Detail/Documentation 里塞, Label 是用户看到的标识. InsertText 缺省时
+// 通常等于 Label.
+type LSPCompletionItem struct {
+	Label      string `json:"label"`
+	Detail     string `json:"detail,omitempty"`
+	Kind       int    `json:"kind,omitempty"`
+	InsertText string `json:"insertText,omitempty"`
+}
+
+// LSPHover 是简化后的 hover 结果
+// 把 LSP 那一坨 contents 多态形态压平成一个字符串: UI 层只用得到这个.
+type LSPHover struct {
+	Contents string
+}
+
+// textDocumentPositionParams 拼一份所有 position-based RPC 共用的 params
+// completion / hover / definition / references 都接收 {textDocument, position},
+// 抽出来一处, 各方法少四行重复代码.
+func textDocumentPositionParams(uri string, line, character int) map[string]interface{} {
+	return map[string]interface{}{
+		"textDocument": map[string]string{"uri": uri},
+		"position":     LSPPosition{Line: line, Character: character},
+	}
+}
+
+// Completion 请求 textDocument/completion 并返回补全项列表
+// gopls 在两种合法响应形状之间任意切换:
+//   - CompletionList: {"isIncomplete": bool, "items": []CompletionItem}
+//   - 直接的 []CompletionItem
+// 这里都接住: 先按 CompletionList 解, items 非空就用; 否则当裸数组解.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) Completion(uri string, line, character int) ([]LSPCompletionItem, error) {
+	resp, err := c.SendRequest("textDocument/completion", textDocumentPositionParams(uri, line, character))
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	// 优先按 CompletionList 解 -- gopls 默认就走这个分支
+	var list struct {
+		IsIncomplete bool                `json:"isIncomplete"`
+		Items        []LSPCompletionItem `json:"items"`
+	}
+	if err := json.Unmarshal(resp.Result, &list); err == nil && list.Items != nil {
+		return list.Items, nil
+	}
+	// 退化到 raw []CompletionItem -- 规范允许, 一些 server 这么发
+	var items []LSPCompletionItem
+	if err := json.Unmarshal(resp.Result, &items); err != nil {
+		return nil, fmt.Errorf("lspclient: decode completion result: %w", err)
+	}
+	return items, nil
+}
+
+// Hover 请求 textDocument/hover 并把多态的 contents 压平成一个字符串
+// 规范里 contents 有三种合法形态:
+//   - 字符串                               -> 直接用
+//   - MarkupContent{kind, value}           -> 取 value (gopls 默认走这个)
+//   - 数组 (string 或 MarkedString)        -> 用 "\n" join
+// 服务器返回 null (光标位置没有可悬停信息) 时, 返回 (nil, nil), 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) Hover(uri string, line, character int) (*LSPHover, error) {
+	resp, err := c.SendRequest("textDocument/hover", textDocumentPositionParams(uri, line, character))
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	var outer struct {
+		Contents json.RawMessage `json:"contents"`
+	}
+	if err := json.Unmarshal(resp.Result, &outer); err != nil {
+		return nil, fmt.Errorf("lspclient: decode hover result: %w", err)
+	}
+	if len(outer.Contents) == 0 || string(outer.Contents) == "null" {
+		return &LSPHover{}, nil
+	}
+	contents, err := stringifyHoverContents(outer.Contents)
+	if err != nil {
+		return nil, fmt.Errorf("lspclient: decode hover contents: %w", err)
+	}
+	return &LSPHover{Contents: contents}, nil
+}
+
+// stringifyHoverContents 把 hover.contents 的三种规范形态都压成一段字符串
+// 解码顺序基于 JSON 第一个非空白字节:
+//   "  -> string 形态
+//   {  -> MarkupContent / MarkedString 对象形态
+//   [  -> 数组形态 (string 或 MarkedString 混排)
+// 任何一种都不动 caller, 失败时 raw 原样返回上层做诊断.
+func stringifyHoverContents(raw json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "", nil
+	}
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "", err
+		}
+		return s, nil
+	case '{':
+		// MarkupContent {kind, value} 或 MarkedString {language, value}
+		var obj struct {
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return "", err
+		}
+		return obj.Value, nil
+	case '[':
+		var arr []json.RawMessage
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return "", err
+		}
+		parts := make([]string, 0, len(arr))
+		for _, item := range arr {
+			s, err := stringifyHoverContents(item)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, s)
+		}
+		return strings.Join(parts, "\n"), nil
+	default:
+		return "", fmt.Errorf("unexpected hover contents shape: %s", string(trimmed))
+	}
+}
+
+// Definition 请求 textDocument/definition 并归一为 []LSPLocation
+// 规范允许 server 在两种形态间任选:
+//   - 单个 Location 对象
+//   - []Location (gopls 在跨实例 / 嵌入 / 接口实现处会用这个)
+// null 表示没找到定义, 返回 (nil, nil), 上层照空切片处理即可.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) Definition(uri string, line, character int) ([]LSPLocation, error) {
+	resp, err := c.SendRequest("textDocument/definition", textDocumentPositionParams(uri, line, character))
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	trimmed := bytes.TrimSpace(resp.Result)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var locs []LSPLocation
+		if err := json.Unmarshal(resp.Result, &locs); err != nil {
+			return nil, fmt.Errorf("lspclient: decode definition result: %w", err)
+		}
+		return locs, nil
+	}
+	var loc LSPLocation
+	if err := json.Unmarshal(resp.Result, &loc); err != nil {
+		return nil, fmt.Errorf("lspclient: decode definition result: %w", err)
+	}
+	return []LSPLocation{loc}, nil
+}
+
+// References 请求 textDocument/references 并返回所有出现处
+// 规范固定只返回 []Location 一种形态 (没有像 definition 那样的多态).
+// includeDecl 控制是否把定义点也算一次引用, 通常上层是 true (跟 IDE 一致).
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) References(uri string, line, character int, includeDecl bool) ([]LSPLocation, error) {
+	params := textDocumentPositionParams(uri, line, character)
+	params["context"] = map[string]bool{"includeDeclaration": includeDecl}
+	resp, err := c.SendRequest("textDocument/references", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	var locs []LSPLocation
+	if err := json.Unmarshal(resp.Result, &locs); err != nil {
+		return nil, fmt.Errorf("lspclient: decode references result: %w", err)
+	}
+	return locs, nil
+}
+
+// DidChange 发 textDocument/didChange 通知, 把整个文件最新内容推给 server
+// LSP 支持 incremental sync (按 range 发 diff), 这里走最简单的 *full document
+// sync*: 一次性把整篇 fullText 重新塞过去. 对一个文件大小一般 < 1MB 的 Go
+// 项目, 完全够用, 也避免维护一份精确的 diff 状态机. version 是单调递增的
+// 文档版本号, 跟前一次 didOpen/didChange 的 version 配套递增, 让 server 能
+// 判别响应里的位置是基于哪个版本算出来的.
+// 通知不会有响应; 失败仅意味着写 pipe 失败.
+func (c *LSPClient) DidChange(uri string, version int, fullText string) error {
+	type textDocument struct {
+		URI     string `json:"uri"`
+		Version int    `json:"version"`
+	}
+	type contentChange struct {
+		Text string `json:"text"`
+	}
+	type params struct {
+		TextDocument   textDocument    `json:"textDocument"`
+		ContentChanges []contentChange `json:"contentChanges"`
+	}
+	return c.SendNotification("textDocument/didChange", params{
+		TextDocument:   textDocument{URI: uri, Version: version},
+		ContentChanges: []contentChange{{Text: fullText}},
 	})
 }
 

@@ -571,6 +571,430 @@ func TestLSPClientSendRequest_Concurrent(t *testing.T) {
 	srvWG.Wait()
 }
 
+// -----------------------------------------------------------------------------
+// 类型化便利封装: Completion / Hover / Definition / References / DidChange
+// 共用 newPipedClient + runFakeServer 把 in-process 假服务器复用起来
+// -----------------------------------------------------------------------------
+
+// runFakeServer 是一个通用的"假 LSP 服务器", 单线程, 读到请求后调 reply 拿响应字节
+// reply 是 ((method, id, params) -> rawResult OR rawError) 的形状; nil 表示"不回".
+// 返回的 done 在 server 自然退出 (pipe 关闭) 后关闭, 方便 test 收尾.
+type fakeReply struct {
+	Result json.RawMessage // 非 nil 则当 result; 优先级高于 Err
+	Err    *LSPError       // 非 nil 则当 error
+}
+
+func runFakeServer(t *testing.T, srvIn io.ReadCloser, srvOut io.WriteCloser, reply func(method string, id *json.RawMessage, params json.RawMessage) *fakeReply) chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		br := bufio.NewReader(srvIn)
+		for {
+			m, err := ReadLSPMessage(br)
+			if err != nil {
+				return
+			}
+			if m.ID == nil {
+				continue // 通知不回
+			}
+			r := reply(m.Method, m.ID, m.Params)
+			if r == nil {
+				continue
+			}
+			resp := &LSPMessage{
+				JSONRPC: "2.0",
+				ID:      m.ID,
+				Result:  r.Result,
+				Error:   r.Err,
+			}
+			if err := WriteLSPMessage(srvOut, resp); err != nil {
+				return
+			}
+		}
+	}()
+	return done
+}
+
+func TestLSPClientCompletion_CompletionListShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(method string, id *json.RawMessage, _ json.RawMessage) *fakeReply {
+		if method != "textDocument/completion" {
+			t.Errorf("method = %q, want textDocument/completion", method)
+		}
+		return &fakeReply{Result: json.RawMessage(`{"isIncomplete":false,"items":[{"label":"Println","detail":"func(a ...any)","kind":3,"insertText":"Println"},{"label":"Print","kind":3}]}`)}
+	})
+
+	items, err := c.Completion("file:///a.go", 10, 4)
+	if err != nil {
+		t.Fatalf("Completion: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(items), items)
+	}
+	if items[0].Label != "Println" || items[0].Detail != "func(a ...any)" || items[0].Kind != 3 || items[0].InsertText != "Println" {
+		t.Errorf("items[0] = %+v", items[0])
+	}
+	if items[1].Label != "Print" || items[1].Kind != 3 {
+		t.Errorf("items[1] = %+v", items[1])
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientCompletion_RawArrayShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[{"label":"Foo"},{"label":"Bar","detail":"int"}]`)}
+	})
+
+	items, err := c.Completion("file:///a.go", 0, 0)
+	if err != nil {
+		t.Fatalf("Completion: %v", err)
+	}
+	if len(items) != 2 || items[0].Label != "Foo" || items[1].Label != "Bar" || items[1].Detail != "int" {
+		t.Fatalf("items = %+v", items)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientCompletion_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	items, err := c.Completion("file:///a.go", 0, 0)
+	if err != nil {
+		t.Fatalf("Completion: %v", err)
+	}
+	if items != nil {
+		t.Errorf("items = %+v, want nil", items)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientHover_StringContents(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		if method != "textDocument/hover" {
+			t.Errorf("method = %q", method)
+		}
+		return &fakeReply{Result: json.RawMessage(`{"contents":"func Println(a ...any)"}`)}
+	})
+
+	h, err := c.Hover("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Hover: %v", err)
+	}
+	if h == nil {
+		t.Fatal("Hover returned nil")
+	}
+	if h.Contents != "func Println(a ...any)" {
+		t.Errorf("Contents = %q", h.Contents)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientHover_MarkupObjectContents(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`{"contents":{"kind":"markdown","value":"func Println(a ...any)"}}`)}
+	})
+
+	h, err := c.Hover("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Hover: %v", err)
+	}
+	if h == nil || h.Contents != "func Println(a ...any)" {
+		t.Errorf("Contents = %+v", h)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientHover_ArrayContents(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		// 数组里混 string 和 MarkedString 对象 (LSP 规范允许)
+		return &fakeReply{Result: json.RawMessage(`{"contents":["line1",{"language":"go","value":"line2"}]}`)}
+	})
+
+	h, err := c.Hover("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Hover: %v", err)
+	}
+	if h == nil || h.Contents != "line1\nline2" {
+		t.Errorf("Contents = %+v", h)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientHover_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	h, err := c.Hover("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Hover: %v", err)
+	}
+	if h != nil {
+		t.Errorf("Hover = %+v, want nil", h)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDefinition_SingleLocation(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		if method != "textDocument/definition" {
+			t.Errorf("method = %q", method)
+		}
+		return &fakeReply{Result: json.RawMessage(`{"uri":"file:///b.go","range":{"start":{"line":3,"character":4},"end":{"line":3,"character":10}}}`)}
+	})
+
+	locs, err := c.Definition("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if len(locs) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(locs), locs)
+	}
+	got := locs[0]
+	if got.URI != "file:///b.go" || got.Range.Start.Line != 3 || got.Range.End.Character != 10 {
+		t.Errorf("loc = %+v", got)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDefinition_ArrayLocations(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"uri":"file:///b.go","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
+{"uri":"file:///c.go","range":{"start":{"line":5,"character":2},"end":{"line":5,"character":7}}}
+]`)}
+	})
+
+	locs, err := c.Definition("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if len(locs) != 2 || locs[0].URI != "file:///b.go" || locs[1].URI != "file:///c.go" || locs[1].Range.Start.Line != 5 {
+		t.Fatalf("locs = %+v", locs)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDefinition_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	locs, err := c.Definition("file:///a.go", 1, 2)
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if locs != nil {
+		t.Errorf("locs = %+v, want nil", locs)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientReferences_Locations(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/references" {
+			t.Errorf("method = %q", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		return &fakeReply{Result: json.RawMessage(`[
+{"uri":"file:///a.go","range":{"start":{"line":1,"character":2},"end":{"line":1,"character":5}}},
+{"uri":"file:///b.go","range":{"start":{"line":7,"character":0},"end":{"line":7,"character":3}}}
+]`)}
+	})
+
+	locs, err := c.References("file:///a.go", 1, 2, true)
+	if err != nil {
+		t.Fatalf("References: %v", err)
+	}
+	if len(locs) != 2 || locs[0].URI != "file:///a.go" || locs[1].URI != "file:///b.go" {
+		t.Fatalf("locs = %+v", locs)
+	}
+	// 校验 includeDeclaration 真的被序列化到了 params.context 里
+	var got struct {
+		Context struct {
+			IncludeDeclaration bool `json:"includeDeclaration"`
+		} `json:"context"`
+		Position LSPPosition `json:"position"`
+	}
+	if err := json.Unmarshal(capturedParams, &got); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if !got.Context.IncludeDeclaration {
+		t.Errorf("includeDeclaration = false, want true")
+	}
+	if got.Position.Line != 1 || got.Position.Character != 2 {
+		t.Errorf("position = %+v", got.Position)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientReferences_IncludeDeclFalse(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		capturedParams = append(capturedParams[:0:0], params...)
+		return &fakeReply{Result: json.RawMessage(`[]`)}
+	})
+
+	if _, err := c.References("file:///a.go", 0, 0, false); err != nil {
+		t.Fatalf("References: %v", err)
+	}
+	var got struct {
+		Context struct {
+			IncludeDeclaration bool `json:"includeDeclaration"`
+		} `json:"context"`
+	}
+	if err := json.Unmarshal(capturedParams, &got); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if got.Context.IncludeDeclaration {
+		t.Errorf("includeDeclaration = true, want false")
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientCompletion_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "internal error"}}
+	})
+
+	items, err := c.Completion("file:///a.go", 1, 2)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if items != nil {
+		t.Errorf("items = %+v, want nil on error", items)
+	}
+	if !strings.Contains(err.Error(), "internal error") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDidChange_Shape(t *testing.T) {
+	buf := &memWriteCloser{Buffer: &bytes.Buffer{}}
+	c := &LSPClient{
+		stdin:   buf,
+		pending: map[int]chan *LSPMessage{},
+	}
+	if err := c.DidChange("file:///a.go", 7, "package main\n// changed\n"); err != nil {
+		t.Fatalf("DidChange: %v", err)
+	}
+	out := buf.String()
+	idx := strings.Index(out, "\r\n\r\n")
+	if idx < 0 {
+		t.Fatalf("output missing header terminator: %q", out)
+	}
+	body := out[idx+4:]
+	var got struct {
+		Method string `json:"method"`
+		Params struct {
+			TextDocument struct {
+				URI     string `json:"uri"`
+				Version int    `json:"version"`
+			} `json:"textDocument"`
+			ContentChanges []struct {
+				Text string `json:"text"`
+			} `json:"contentChanges"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("body not valid JSON: %v (%q)", err, body)
+	}
+	if got.Method != "textDocument/didChange" {
+		t.Errorf("method = %q", got.Method)
+	}
+	if got.Params.TextDocument.URI != "file:///a.go" {
+		t.Errorf("uri = %q", got.Params.TextDocument.URI)
+	}
+	if got.Params.TextDocument.Version != 7 {
+		t.Errorf("version = %d", got.Params.TextDocument.Version)
+	}
+	if len(got.Params.ContentChanges) != 1 || got.Params.ContentChanges[0].Text != "package main\n// changed\n" {
+		t.Errorf("contentChanges = %+v", got.Params.ContentChanges)
+	}
+}
+
 // newPipedClient 构造一个 *LSPClient 把它的 stdin/stdout 接到 io.Pipe 上
 // 返回:
 //   - c     已经跑着 readLoop 的客户端
