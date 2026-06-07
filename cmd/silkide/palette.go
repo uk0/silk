@@ -84,6 +84,14 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Show Diff vs Saved", "", func() {
 		showDiffVsSaved(editorTabs)
 	})
+	// "Diff vs HEAD" — diff the active editor's file against its
+	// committed HEAD version via `git diff HEAD -- <file>`, rendered in
+	// the same DiffView popup as Show Diff vs Saved. Cmd+D is free, so it
+	// carries an accelerator; the handler is shared so the palette entry
+	// doubles as keyboard documentation.
+	add("Diff vs HEAD", "Cmd+D", func() {
+		showDiffVsHEAD(editorTabs, designCanvas)
+	})
 
 	// Run / Build / Test / Export. Run Tests carries two
 	// accelerators (F7 + Cmd+Shift+T); the hint surfaces F7 to match
@@ -111,6 +119,21 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		if globalTestResults != nil {
 			dockSetActiveView(globalBottomDock, globalTestResults)
 			globalTestResults.SetFocus()
+		}
+	})
+	// "Show Log" — flip the bottom dock to the runtime LogPanel and
+	// focus it. Same dock-flip + SetFocus idiom as Show Test Results /
+	// Show Problems, just targets globalLog. "Clear Log" empties the
+	// pane; both are palette-only lifecycle controls (no accelerator).
+	add("Show Log", "", func() {
+		if globalLog != nil {
+			dockSetActiveView(globalBottomDock, globalLog)
+			globalLog.SetFocus()
+		}
+	})
+	add("Clear Log", "", func() {
+		if globalLog != nil {
+			globalLog.Clear()
 		}
 	})
 	add("Export...", "", func() {

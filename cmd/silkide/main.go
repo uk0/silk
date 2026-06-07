@@ -685,6 +685,12 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		globalTestResults = testResults
 		bottomDock.AddView(testResults)
 
+		// Runtime log pane — sibling of BuildOutput. Records silkide's
+		// own lifecycle events (file opens, build/debug/LSP up-down) via
+		// logEvent. Distinct from BuildOutput's raw toolchain stream.
+		globalLog = ged.NewLogPanel()
+		bottomDock.AddView(globalLog)
+
 		globalBottomDock = bottomDock
 	}
 
@@ -1035,6 +1041,7 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 			rebindAutoSaver(canvas.GedScene())
 			recordRecentFile(path)
 			watchForReload(canvas, path)
+			logEvent(ged.LogInfo, "Opened "+path)
 			if centerDock != nil {
 				// Bring the design canvas to the front so the user sees
 				// the loaded scene immediately.
@@ -1102,6 +1109,26 @@ var globalBookmarks *ged.BookmarksPanel
 // failure the panel is brought to the front (BuildOutput keeps the raw
 // log, this pane shows pass/fail rows you can click to jump to source).
 var globalTestResults *ged.TestResultsPanel
+
+// globalLog is the bottom-dock runtime log pane (ged.LogPanel). Sibling
+// tab of Terminal / BuildOutput / Problems / TestResults. Where
+// BuildOutput is the raw toolchain stream, this pane records silkide's
+// own lifecycle events (file opens, build start/finish, debugger and
+// gopls up/down). Fed exclusively through logEvent so call sites stay
+// one-liners and safe before the panel exists.
+var globalLog *ged.LogPanel
+
+// logEvent appends one runtime-log line to globalLog. nil-safe so
+// lifecycle hooks that fire before buildPanels constructs the pane
+// (or in tests that never build it) are no-ops rather than panics —
+// the same guard idiom the other global panels use (reportBuildOutput,
+// silkideToast).
+func logEvent(level ged.LogLevel, msg string) {
+	if globalLog == nil {
+		return
+	}
+	globalLog.Append(level, msg)
+}
 
 // coverageTempFile is the path of the cover profile written by the most
 // recent runProjectWithCoverage invocation. Kept at the package level
@@ -1597,6 +1624,7 @@ func buildProject(canvas *ged.GedView) {
 	}
 	dir := projectDir(canvas)
 	reportBuildOutput(fmt.Sprintf("$ go build ./...   (cwd: %s)", dir))
+	logEvent(ged.LogInfo, "Build started")
 	go func() {
 		cmd := exec.Command("go", "build", "./...")
 		if dir != "" {
@@ -1610,6 +1638,7 @@ func buildProject(canvas *ged.GedView) {
 			text += "\nbuild ok"
 		}
 		reportBuildOutput(text)
+		logEvent(buildEventLevel(err), "Build finished")
 		// Toast on completion. Goroutine-thread call into ShowToast is
 		// the same shape reportBuildOutput already uses to push into
 		// BuildOutput.SetOutput from here — the toast manager has its
@@ -1939,6 +1968,120 @@ func showDiffVsSaved(tabs *gui.TabWidget) {
 	dlg := gui.NewDialog(i18n.Tf("Diff vs Saved: %s", filepath.Base(path)), parent)
 	dv := gui.NewDiffView()
 	dv.SetTexts(string(saved), ed.Text())
+	box := gui.NewVBox()
+	box.SetSpacing(0)
+	box.AddWidget(dv)
+	dlg.SetContent(box)
+	dlg.AddButton(i18n.T("Close"), gui.DialogOK)
+	dlg.SetSize(820, 560)
+	dlg.ShowModal()
+}
+
+// buildEventLevel maps a build/test exit error to the LogPanel level
+// the "Build finished" event is recorded at: a non-nil error (non-zero
+// exit / spawn failure) logs as a warning, a clean run as info. Pure so
+// the classifier can be unit-tested without spawning the toolchain.
+func buildEventLevel(exitErr error) ged.LogLevel {
+	if exitErr != nil {
+		return ged.LogWarn
+	}
+	return ged.LogInfo
+}
+
+// diffOldNewFromHunks reconstructs the "before" (old) and "after" (new)
+// line slices for one DiffFile from its parsed hunks, so a unified diff
+// can be fed into gui.DiffView (which takes two whole-text sides).
+//
+// Per line kind:
+//   - context  → present in both old and new
+//   - removed  → old only
+//   - added    → new only
+//   - noNewline → a modifier on the prior line, contributes nothing
+//
+// The result is the concatenation of every hunk's lines in order; gaps
+// between hunks (unchanged regions git elided) are not reconstructed —
+// DiffView shows the changed neighbourhoods, which is what "vs HEAD"
+// wants. Pure function, no I/O.
+func diffOldNewFromHunks(hunks []core.DiffHunk) (oldLines, newLines []string) {
+	for _, h := range hunks {
+		for _, ln := range h.Lines {
+			switch ln.Kind {
+			case core.DiffLineContext:
+				oldLines = append(oldLines, ln.Text)
+				newLines = append(newLines, ln.Text)
+			case core.DiffLineRemoved:
+				oldLines = append(oldLines, ln.Text)
+			case core.DiffLineAdded:
+				newLines = append(newLines, ln.Text)
+			case core.DiffLineNoNewline:
+				// "\ No newline at end of file" — modifies the prior line,
+				// occupies no line of its own in either side.
+			}
+		}
+	}
+	return oldLines, newLines
+}
+
+// showDiffVsHEAD runs `git diff HEAD -- <file>` for the active editor's
+// file and renders the result into a gui.DiffView popup, mirroring
+// showDiffVsSaved's modal shape. The old/new sides are reconstructed
+// from the first DiffFile's hunks via diffOldNewFromHunks, so the
+// before/after panes show exactly the changed neighbourhoods git
+// reports.
+//
+// No-ops silently when there is no active code editor or the active tab
+// has no tracked file path. On an empty diff a "no changes" toast fires;
+// on a git error (not a repo / git missing) a clear toast fires and the
+// function returns without crashing. The action is recorded via
+// logEvent regardless of outcome so the log shows the user asked.
+func showDiffVsHEAD(tabs *gui.TabWidget, canvas *ged.GedView) {
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return
+	}
+	path := activeEditorPath(tabs)
+	if path == "" {
+		return
+	}
+	dir := projectDir(canvas)
+	rel := path
+	if dir != "" {
+		if r, err := filepath.Rel(dir, path); err == nil {
+			rel = r
+		}
+	}
+	logEvent(ged.LogInfo, "Diff vs HEAD: "+rel)
+
+	cmd := exec.Command("git", "diff", "HEAD", "--", rel)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		silkideToast(i18n.T("git diff failed (not a repo?)"), gui.ToastError)
+		return
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo)
+		return
+	}
+	files, parseErr := core.ParseUnifiedDiff(string(out))
+	if parseErr != nil {
+		core.Warn("silkide: parse git diff: ", parseErr)
+	}
+	if len(files) == 0 {
+		silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo)
+		return
+	}
+	oldLines, newLines := diffOldNewFromHunks(files[0].Hunks)
+
+	parent := gui.IWidget(globalFrame)
+	if parent == nil {
+		parent = gui.DefaultFrame()
+	}
+	dlg := gui.NewDialog(i18n.Tf("Diff vs HEAD: %s", filepath.Base(path)), parent)
+	dv := gui.NewDiffView()
+	dv.SetTexts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"))
 	box := gui.NewVBox()
 	box.SetSpacing(0)
 	box.AddWidget(dv)
@@ -2359,6 +2502,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	tabs.AddTab(ed, filepath.Base(path), nil)
 	openEditors[path] = ed
 	focusEditorTab(tabs, ed)
+	logEvent(ged.LogInfo, "Opened "+path)
 	// Let the background gopls client see the buffer so subsequent
 	// hover/definition/completion (next commit) have something to work
 	// against. nil-safe when LSP launch failed at startup.
@@ -2622,6 +2766,7 @@ func runProjectInDebugger(canvas *ged.GedView) {
 	}
 
 	silkideToast(i18n.T("Debugger started"), gui.ToastInfo)
+	logEvent(ged.LogInfo, "Debugger launched")
 	go func() {
 		st, contErr := sess.Continue()
 		if contErr != nil {
@@ -2663,6 +2808,7 @@ func stopDebugger() {
 	}
 	_ = sess.Close()
 	silkideToast(i18n.T("Debugger stopped"), gui.ToastInfo)
+	logEvent(ged.LogInfo, "Debugger stopped")
 }
 
 // centerEditorTabs walks every open editor to find a *gui.TabWidget
@@ -2701,6 +2847,7 @@ func startLSPBackground(projectDir string) {
 		client, err := core.LaunchLSPClient("gopls")
 		if err != nil {
 			core.Warn("silkide: gopls not available: ", err)
+			logEvent(ged.LogWarn, "gopls unavailable")
 			return
 		}
 		rootURI := ""
@@ -2712,11 +2859,13 @@ func startLSPBackground(projectDir string) {
 			RootURI:   rootURI,
 		}); initErr != nil {
 			core.Warn("silkide: gopls initialize: ", initErr)
+			logEvent(ged.LogWarn, "gopls unavailable")
 			_ = client.Close()
 			return
 		}
 		globalLSP = client
 		core.Log("silkide: gopls ready (rootURI=", rootURI, ")")
+		logEvent(ged.LogInfo, "gopls started")
 		// Drain notifications -- publishDiagnostics, window/logMessage,
 		// etc. We don't act on them yet; later commits will route
 		// diagnostics into the Problems panel.

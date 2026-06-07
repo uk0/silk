@@ -337,6 +337,12 @@ func registerSilkideTranslations() {
 		"Show Test Results":      "显示测试结果",
 		"Show Diff vs Saved":     "对比已保存版本",
 		"Diff vs Saved: %s":      "对比已保存版本: %s",
+		"Diff vs HEAD":           "对比 HEAD 版本",
+		"Diff vs HEAD: %s":       "对比 HEAD 版本: %s",
+		"No changes vs HEAD":     "与 HEAD 无差异",
+		"git diff failed (not a repo?)": "git diff 失败（不是仓库？）",
+		"Show Log":               "显示日志",
+		"Clear Log":              "清空日志",
 		"Failed to read saved file": "读取已保存文件失败",
 		"Running %s...":          "运行 %s 中...",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
@@ -564,6 +570,12 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// palette command shares this handler.
 	gui.RegisterShortcut(gui.ModAction, gui.KeyF2, func() {
 		addBookmarkAtCursor(editorTabs)
+	})
+	// Cmd+D — diff the active editor's file against its committed HEAD
+	// via `git diff HEAD`. Shares showDiffVsHEAD with the "Diff vs HEAD"
+	// palette command. Cmd+D is otherwise unbound in silkide.
+	gui.RegisterShortcut(gui.ModAction, 'D', func() {
+		showDiffVsHEAD(editorTabs, designCanvas)
 	})
 }
 
