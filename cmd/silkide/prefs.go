@@ -353,6 +353,8 @@ func registerSilkideTranslations() {
 		"Go to Definition":       "跳转到定义",
 		"Format Document":        "格式化文档",
 		"Format failed: %v":      "格式化失败: %v",
+		"Rename: no changes":     "重命名: 无改动",
+		"Renamed across %d file(s)": "已重命名 %d 个文件",
 		"Failed to read saved file": "读取已保存文件失败",
 		"Running %s...":          "运行 %s 中...",
 		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",

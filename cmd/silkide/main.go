@@ -1524,6 +1524,13 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 	if newName == "" {
 		return
 	}
+	// Prefer gopls semantic rename (cross-file, type-aware) when LSP is up
+	// and this is a .go file; fall back to the editor's single-file text
+	// rename otherwise.
+	if path := activeEditorPath(tabs); globalLSP != nil && isGoFile(path) {
+		renameSymbolViaLSP(ed, path, newName)
+		return
+	}
 	// Runtime interface check: the parallel CodeEditor work adds
 	// RenameSymbolAtCursor(string) (string, int, error). Until that
 	// merges, the assertion fails and we toast a placeholder so the
@@ -1542,6 +1549,74 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 		return
 	}
 	silkideToast(i18n.Tf("Renamed %s → %s (%d occurrences)", oldName, newName, count), gui.ToastSuccess)
+}
+
+// renameSymbolViaLSP performs a workspace-wide semantic rename through
+// gopls. The Rename RPC runs off the main thread; the returned
+// WorkspaceEdit is applied on the main thread (it mutates editor buffers
+// and writes closed files). Open editors get SetText (a dirty buffer the
+// user can review/save/undo); files not currently open are rewritten on
+// disk. Cross-file and type-aware, unlike the single-file text fallback.
+func renameSymbolViaLSP(ed *gui.CodeEditor, path, newName string) {
+	uri := fileURIOf(path)
+	line := ed.CursorLine()
+	col := ed.CursorCol()
+	go func() {
+		we, err := globalLSP.Rename(uri, line, col, newName)
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("Rename failed: %v", err), gui.ToastError) })
+			return
+		}
+		if we == nil || len(we.Changes) == 0 {
+			gui.Post(func() { silkideToast(i18n.T("Rename: no changes"), gui.ToastInfo) })
+			return
+		}
+		gui.Post(func() {
+			n, applyErr := applyWorkspaceEdit(we)
+			if applyErr != nil {
+				silkideToast(i18n.Tf("Rename failed: %v", applyErr), gui.ToastError)
+				return
+			}
+			silkideToast(i18n.Tf("Renamed across %d file(s)", n), gui.ToastSuccess)
+		})
+	}()
+}
+
+// applyWorkspaceEdit applies a gopls WorkspaceEdit. Open editors are
+// updated via SetText (visible, dirty buffer); closed files are read,
+// edited, and rewritten on disk. Must run on the main thread (SetText is
+// a GUI mutation). Returns the number of files touched. On the first
+// per-file error it stops and reports — a partially-applied rename is
+// possible, which is why the toast surfaces the count.
+func applyWorkspaceEdit(we *core.LSPWorkspaceEdit) (int, error) {
+	changed := 0
+	for uri, edits := range we.Changes {
+		path := uriToPath(uri)
+		if path == "" || len(edits) == 0 {
+			continue
+		}
+		if ed, ok := openEditors[path]; ok && ed != nil {
+			newText, err := core.ApplyTextEdits(ed.Text(), edits)
+			if err != nil {
+				return changed, err
+			}
+			ed.SetText(newText)
+		} else {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return changed, err
+			}
+			newText, err := core.ApplyTextEdits(string(data), edits)
+			if err != nil {
+				return changed, err
+			}
+			if err := os.WriteFile(path, []byte(newText), 0o644); err != nil {
+				return changed, err
+			}
+		}
+		changed++
+	}
+	return changed, nil
 }
 
 // configureRun pops a structured "Run Configuration" modal — a Dialog
