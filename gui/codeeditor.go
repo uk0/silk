@@ -164,6 +164,10 @@ type CodeEditor struct {
 
 	// --- Code Completion ---
 	completion *CompletionPopup
+	// externalCompletions holds candidates injected by an external provider
+	// (e.g. silkide's gopls LSP client). They persist until replaced or
+	// cleared and are merged into the popup on every (re)build.
+	externalCompletions []ExternalCompletion
 
 	// --- Symbol Navigation ---
 	symbolPopup *SymbolPopup
@@ -3815,18 +3819,50 @@ func (this *CodeEditor) tryTriggerCompletion(typed string) {
 	lastRune := []rune(typed)[len([]rune(typed))-1]
 	if lastRune == '.' {
 		// Trigger after dot
-		this.completion.Show("", this)
+		this.showCompletion("")
 		return
 	}
 	if unicode.IsLetter(lastRune) || lastRune == '_' {
 		// Build prefix from current word
 		prefix := this.currentWordPrefix()
 		if len(prefix) >= 1 {
-			this.completion.Show(prefix, this)
+			this.showCompletion(prefix)
 		}
 	} else {
 		this.completion.Dismiss()
 	}
+}
+
+// showCompletion opens the popup for prefix, then merges any externally
+// injected candidates into it. It is the single internal entry point for
+// (re)building the popup so external items survive every keystroke re-trigger.
+func (this *CodeEditor) showCompletion(prefix string) {
+	if this.completion == nil {
+		this.completion = NewCompletionPopup(this)
+	}
+	this.completion.Show(prefix, this)
+	this.mergeExternalIntoPopup()
+}
+
+// mergeExternalIntoPopup folds this.externalCompletions into the popup's
+// candidate set (external wins on label collision) and re-ranks against the
+// current prefix. No-op when there are no external items so the built-in
+// behaviour is unchanged.
+func (this *CodeEditor) mergeExternalIntoPopup() {
+	if this.completion == nil || len(this.externalCompletions) == 0 {
+		return
+	}
+	this.completion.items = mergeCompletions(this.completion.items, this.externalCompletions)
+	this.completion.filter()
+	if len(this.completion.filtered) == 0 {
+		this.completion.visible = false
+		return
+	}
+	this.completion.visible = true
+	if this.completion.selectedIdx >= len(this.completion.filtered) {
+		this.completion.selectedIdx = 0
+	}
+	this.completion.scrollY = 0
 }
 
 // currentWordPrefix returns the word being typed at the cursor position.
@@ -4037,11 +4073,8 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 
 	// Ctrl+Space triggers completion
 	if ctrl && key == KeySpace {
-		if this.completion == nil {
-			this.completion = NewCompletionPopup(this)
-		}
 		prefix := this.currentWordPrefix()
-		this.completion.Show(prefix, this)
+		this.showCompletion(prefix)
 		this.Self().Update()
 		return
 	}
@@ -4104,7 +4137,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			if prefix == "" {
 				this.completion.Dismiss()
 			} else {
-				this.completion.Show(prefix, this)
+				this.showCompletion(prefix)
 			}
 		}
 
@@ -5506,4 +5539,100 @@ func (this *CodeEditor) clampCursorVisible() {
 	}
 	this.cursorLine = target
 	this.clampCursor()
+}
+
+// --- External completion injection ---
+//
+// The editor's built-in completer only knows keywords, builtin types, gui.*
+// helpers, and identifiers scraped from the open buffer. A host (e.g. silkide
+// driving a gopls LSP client) can feed richer candidates into the SAME popup
+// without the editor having to import core or understand the LSP wire format:
+// the host converts its protocol items into ExternalCompletion values and
+// pushes them in via SetExternalCompletions.
+//
+// Lifetime: injected items PERSIST until replaced by another
+// SetExternalCompletions call or removed by ClearExternalCompletions. They are
+// merged into the popup on every (re)build (see showCompletion), so they keep
+// showing as the user types and the prefix narrows — matching how an LSP
+// completion list behaves. The host is responsible for clearing them when they
+// go stale (e.g. on file/cursor change or when the popup is dismissed).
+//
+// Dedup precedence: on a label (CompletionItem.Text) collision between a
+// built-in and an external candidate, the EXTERNAL one wins — the LSP knows the
+// real symbol and signature, so it replaces the buffer-scraped guess.
+
+// ExternalCompletion is a completion candidate supplied by an external provider
+// (e.g. an LSP server). The host converts its protocol items into this shape;
+// the editor merges them with its built-in candidates in the same popup.
+type ExternalCompletion struct {
+	Label  string // shown in the list
+	Detail string // right-aligned hint (type/signature)
+	Insert string // text inserted on accept (defaults to Label if empty)
+}
+
+// SetExternalCompletions replaces the injected candidate set. Pass the items a
+// host fetched from its provider; they are merged into the popup on the next
+// (re)build and persist until replaced or cleared. A nil/empty slice is
+// equivalent to ClearExternalCompletions.
+func (this *CodeEditor) SetExternalCompletions(items []ExternalCompletion) {
+	this.externalCompletions = items
+}
+
+// ClearExternalCompletions drops all injected candidates, returning the popup
+// to its built-in sources.
+func (this *CodeEditor) ClearExternalCompletions() {
+	this.externalCompletions = nil
+}
+
+// TriggerCompletion programmatically opens the completion popup at the current
+// cursor, merging in any external candidates. A host calls this after fetching
+// provider results (e.g. an LSP completion response) and injecting them via
+// SetExternalCompletions.
+func (this *CodeEditor) TriggerCompletion() {
+	this.showCompletion(this.currentWordPrefix())
+	this.Self().Update()
+}
+
+// externalToItem converts an ExternalCompletion to the editor's internal
+// CompletionItem. Insert defaults to Label when empty so accepting the item
+// inserts the visible text; external items are tagged CikFunction so they pick
+// up the function-kind icon/color in the popup.
+func externalToItem(e ExternalCompletion) CompletionItem {
+	text := e.Insert
+	if text == "" {
+		text = e.Label
+	}
+	return CompletionItem{Text: text, Kind: CikFunction, Detail: e.Detail}
+}
+
+// mergeCompletions appends external candidates to the built-in ones, deduping
+// by Text with EXTERNAL winning on collision (the external item replaces the
+// built-in in place, preserving overall order). The built-in slice is not
+// mutated. Ranking/limiting is left to the caller's filter() pass.
+func mergeCompletions(builtin []CompletionItem, external []ExternalCompletion) []CompletionItem {
+	if len(external) == 0 {
+		out := make([]CompletionItem, len(builtin))
+		copy(out, builtin)
+		return out
+	}
+	out := make([]CompletionItem, len(builtin))
+	copy(out, builtin)
+	// Index built-ins by Text so an external item with the same label replaces
+	// the built-in in place rather than duplicating it.
+	idx := make(map[string]int, len(out))
+	for i, it := range out {
+		if _, ok := idx[it.Text]; !ok {
+			idx[it.Text] = i
+		}
+	}
+	for _, e := range external {
+		item := externalToItem(e)
+		if pos, ok := idx[item.Text]; ok {
+			out[pos] = item // external wins
+			continue
+		}
+		idx[item.Text] = len(out)
+		out = append(out, item)
+	}
+	return out
 }
