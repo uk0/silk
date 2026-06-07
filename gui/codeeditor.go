@@ -3077,6 +3077,168 @@ func (this *CodeEditor) OnLeftUp(x, y float64) {
 	this.mouseDown = false
 }
 
+// editorContextMenuItem is one row of the right-click menu produced by
+// contextMenuItems. Splitting the menu out of OnRightDown keeps the
+// per-entry wiring (label, enablement, action) directly testable:
+// tests can call contextMenuItems and invoke Action without standing
+// up a Popup, a Window, or a GLFW context.
+type editorContextMenuItem struct {
+	Label     string
+	Enabled   bool
+	Separator bool   // true when this entry is just a visual separator
+	Action    func() // nil when Separator or Enabled is false
+}
+
+// contextMenuItems builds the right-click menu for the editor at the
+// current cursor / selection state. The Cut and Copy entries are
+// disabled when there is no selection (matches Qt Creator / VS Code).
+// Paste is disabled when the clipboard carries no text. Rename Symbol
+// is disabled when the cursor sits on whitespace / punctuation (empty
+// word). Go to Definition and Find References require a word at
+// cursor, mirroring the underlying methods which silently no-op on an
+// empty word — disabling here just makes that visible to the user.
+func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []editorContextMenuItem {
+	hasWord := word != ""
+	return []editorContextMenuItem{
+		{
+			Label:   "剪切",
+			Enabled: hasSel,
+			Action:  func() { this.editorCut() },
+		},
+		{
+			Label:   "复制",
+			Enabled: hasSel,
+			Action:  func() { this.editorCopy() },
+		},
+		{
+			Label:   "粘贴",
+			Enabled: hasClip,
+			Action:  func() { this.pasteClipboard() },
+		},
+		{
+			Label:   "全选",
+			Enabled: true,
+			Action:  func() { this.editorSelectAll() },
+		},
+		{Separator: true},
+		{
+			Label:   "重命名符号",
+			Enabled: hasWord,
+			Action:  func() { this.promptRenameSymbol(word) },
+		},
+		{
+			Label:   "跳转定义",
+			Enabled: hasWord,
+			Action:  func() { this.GoToDefinitionAtCursor() },
+		},
+		{
+			Label:   "查找引用",
+			Enabled: hasWord,
+			Action:  func() { this.HighlightReferencesAtCursor() },
+		},
+	}
+}
+
+// clipboardHasText reports whether the framework clipboard currently
+// holds plain text. Used by OnRightDown to decide whether to enable
+// the Paste entry; tests drive contextMenuItems directly with a bool
+// so this never runs without a real GLFW window.
+func (this *CodeEditor) clipboardHasText() bool {
+	d, err := Clipboard.Data("text/plain")
+	if err != nil {
+		return false
+	}
+	s, ok := d.(string)
+	return ok && s != ""
+}
+
+// promptRenameSymbol pops an input dialog seeded with the identifier
+// under the cursor and, on submit, delegates to RenameSymbolAtCursor.
+// Errors are swallowed silently — the editor has no toast surface of
+// its own, and a failed rename leaves the buffer untouched anyway.
+func (this *CodeEditor) promptRenameSymbol(word string) {
+	newName, ok := ShowInputBox(this.Self(), nil, "重命名符号", "新名称:", word)
+	if !ok {
+		return
+	}
+	_, _, _ = this.RenameSymbolAtCursor(newName)
+}
+
+// OnRightDown opens the editor's context menu at the click point.
+// Following Qt Creator, the caret is first moved to the click position
+// so the subsequent Rename / Go to Definition / Find References act on
+// the word the user actually right-clicked, not wherever the caret
+// happened to be.
+func (this *CodeEditor) OnRightDown(x, y float64) {
+	this.SetFocus()
+
+	// Map the click to a buffer position and move the caret there, but
+	// only inside the text area — clicks in the gutter, minimap, find /
+	// goto-line bars, or status bar shouldn't reposition the caret.
+	w, h := this.Size()
+	mmW := this.minimapWidth()
+	inGutter := x < this.gutterW && y >= this.topOffset()
+	inMinimap := this.showMinimap && mmW > 0 && x > w-mmW
+	inStatus := y > h-this.statusBarHeight
+	inFindBar := this.findActive && y < this.findBarHeight
+	gotoBarTop := 0.0
+	if this.findActive {
+		gotoBarTop = this.findBarHeight
+	}
+	inGotoBar := this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.findBarHeight
+	if !inGutter && !inMinimap && !inStatus && !inFindBar && !inGotoBar {
+		// Right-click outside any existing selection collapses to a
+		// caret at the click point, matching common IDE behaviour.
+		// When the click lands inside the current selection, leave the
+		// selection intact so Cut / Copy still operate on it.
+		line, col := this.posFromXY(x, y)
+		if !this.hasSelection || !this.posInSelection(line, col) {
+			this.clearSelection()
+			this.cursorLine = line
+			this.cursorCol = col
+			this.clampCursor()
+		}
+		this.Self().Update()
+	}
+
+	items := this.contextMenuItems(this.hasSelection, this.clipboardHasText(), this.wordAtCursor())
+	ShowContextMenu(this.Self(), x, y, func(m *Menu) {
+		for _, it := range items {
+			if it.Separator {
+				m.AddSeparator()
+				continue
+			}
+			btn := m.AddButton1(it.Label, nil)
+			if !it.Enabled {
+				btn.SetEnabled(false)
+				continue
+			}
+			action := it.Action
+			btn.Action().BindFunc0(func() { action() })
+		}
+	})
+}
+
+// posInSelection reports whether (line, col) lies inside the current
+// selection range. Used by OnRightDown to decide whether the right-
+// click should keep or collapse the existing selection.
+func (this *CodeEditor) posInSelection(line, col int) bool {
+	if !this.hasSelection {
+		return false
+	}
+	sl, sc, el, ec := this.selectionRange()
+	if line < sl || line > el {
+		return false
+	}
+	if line == sl && col < sc {
+		return false
+	}
+	if line == el && col > ec {
+		return false
+	}
+	return true
+}
+
 // OnMouseLeave clears hover link state when the cursor leaves the editor.
 func (this *CodeEditor) OnMouseLeave() {
 	if this.hoverLinkLine >= 0 {
