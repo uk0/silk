@@ -758,6 +758,64 @@ func decodeSymbolInformation(raw []json.RawMessage) ([]LSPSymbol, error) {
 	return out, nil
 }
 
+// LSPWorkspaceSymbol 是 workspace/symbol 项目级搜索里的一条命中 (IDE 的 Cmd+T
+// "Go to Symbol in Workspace"). 跟文件级的 LSPSymbol 不同, 工作区符号一定带
+// URI (符号落在哪个文件) 和 ContainerName (所属包/类型), 所以单开一个类型而不是
+// 复用扁平的 LSPSymbol:
+//   - Kind            LSP SymbolKind 数字枚举 (Function=12, Struct=23, ...)
+//   - Line/Character  0 基坐标, 取 location.range.start
+type LSPWorkspaceSymbol struct {
+	Name          string
+	Kind          int
+	ContainerName string
+	URI           string
+	Line          int // 0 基, 取 location.range.start.line
+	Character     int
+}
+
+// WorkspaceSymbol 请求 workspace/symbol 做项目级符号搜索, 是 DocumentSymbol 的工作区对偶
+// params 只要 {query}: 空串表示"全部符号" (gopls 会返回一个有上界的集合), 非空则做模糊匹配.
+// 响应是一个数组, 每个元素在两种合法形态间任选, server 混发都合法:
+//   - legacy SymbolInformation: {name, kind, containerName, location:{uri, range}}
+//     -- location 是完整 Location, 带 range
+//   - 现代 WorkspaceSymbol:      {name, kind, containerName, location:{uri}}
+//     -- location 可能只带 uri, range 省略 (真要坐标时 server 靠 workspaceSymbol/resolve 补)
+// 两种形态塞进同一个解码结构即可: location 用 LSPLocation 收, range 缺省时 json 保持零值,
+// 于是 Line/Character 自然落到 0 -- 正是"缺 range 就默认 0"的期望, 无需特判.
+// null/空数组 -> 空切片, 不当错误; server 端错误经 SendRequest 包好后原样透出.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) WorkspaceSymbol(query string) ([]LSPWorkspaceSymbol, error) {
+	params := map[string]interface{}{"query": query}
+	resp, err := c.SendRequest("workspace/symbol", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return []LSPWorkspaceSymbol{}, nil
+	}
+	var raw []struct {
+		Name          string      `json:"name"`
+		Kind          int         `json:"kind"`
+		ContainerName string      `json:"containerName"`
+		Location      LSPLocation `json:"location"`
+	}
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		return nil, fmt.Errorf("lspclient: decode workspace/symbol result: %w", err)
+	}
+	out := make([]LSPWorkspaceSymbol, 0, len(raw))
+	for _, s := range raw {
+		out = append(out, LSPWorkspaceSymbol{
+			Name:          s.Name,
+			Kind:          s.Kind,
+			ContainerName: s.ContainerName,
+			URI:           s.Location.URI,
+			Line:          s.Location.Range.Start.Line,
+			Character:     s.Location.Range.Start.Character,
+		})
+	}
+	return out, nil
+}
+
 // SignatureHelp 请求 textDocument/signatureHelp 并压平成 LSPSignatureHelp
 // params 是跟 hover/completion 同形的 TextDocumentPositionParams. 响应:
 //   SignatureHelp{signatures []SignatureInformation, activeSignature, activeParameter}

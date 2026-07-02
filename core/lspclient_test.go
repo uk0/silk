@@ -1211,6 +1211,161 @@ func TestLSPClientDocumentSymbol_ServerError(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// WorkspaceSymbol: 项目级符号搜索 (Cmd+T). SymbolInformation vs WorkspaceSymbol
+// 两种 location 形态, query 透传, null/空数组 -> 空切片, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientWorkspaceSymbol_SymbolInformationShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "workspace/symbol" {
+			t.Errorf("method = %q, want workspace/symbol", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		// 标准 SymbolInformation: 每条带完整 location{uri, range} + containerName.
+		return &fakeReply{Result: json.RawMessage(`[
+{"name":"Server","kind":23,"containerName":"core","location":{"uri":"file:///core/server.go","range":{"start":{"line":10,"character":5},"end":{"line":10,"character":11}}}},
+{"name":"Serve","kind":12,"containerName":"core.Server","location":{"uri":"file:///core/server.go","range":{"start":{"line":20,"character":0},"end":{"line":22,"character":1}}}}
+]`)}
+	})
+
+	syms, err := c.WorkspaceSymbol("Foo")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbol: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(syms), syms)
+	}
+	if syms[0].Name != "Server" || syms[0].Kind != 23 || syms[0].ContainerName != "core" ||
+		syms[0].URI != "file:///core/server.go" || syms[0].Line != 10 || syms[0].Character != 5 {
+		t.Errorf("syms[0] = %+v", syms[0])
+	}
+	if syms[1].Name != "Serve" || syms[1].Kind != 12 || syms[1].ContainerName != "core.Server" ||
+		syms[1].URI != "file:///core/server.go" || syms[1].Line != 20 {
+		t.Errorf("syms[1] = %+v", syms[1])
+	}
+	// query 透传: params 必须是 {"query":"Foo"}
+	var gotParams struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.Query != "Foo" {
+		t.Errorf("query = %q, want Foo", gotParams.Query)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// WorkspaceSymbol (现代形态): location 可能只带 uri, range 省略 -> Line/Character 落 0.
+// 混一条只有 {uri} 的和一条带完整 range 的, 校验两种都解得动.
+func TestLSPClientWorkspaceSymbol_WorkspaceSymbolShape(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[
+{"name":"Handler","kind":11,"containerName":"api","location":{"uri":"file:///api/h.go"}},
+{"name":"Handle","kind":12,"containerName":"api","location":{"uri":"file:///api/h.go","range":{"start":{"line":3,"character":6},"end":{"line":3,"character":12}}}}
+]`)}
+	})
+
+	syms, err := c.WorkspaceSymbol("Handle")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbol: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("len = %d, want 2: %+v", len(syms), syms)
+	}
+	// 只有 uri, 没有 range -> Line/Character 默认 0, URI 仍解出来.
+	if syms[0].Name != "Handler" || syms[0].URI != "file:///api/h.go" ||
+		syms[0].Line != 0 || syms[0].Character != 0 {
+		t.Errorf("syms[0] (uri-only location) = %+v", syms[0])
+	}
+	// 带完整 range 的照常解出坐标.
+	if syms[1].Name != "Handle" || syms[1].Line != 3 || syms[1].Character != 6 {
+		t.Errorf("syms[1] (full location) = %+v", syms[1])
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientWorkspaceSymbol_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	// 空 query 走"全部符号"路径; server 回 null -> 空切片.
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	syms, err := c.WorkspaceSymbol("")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbol: %v", err)
+	}
+	if syms == nil || len(syms) != 0 {
+		t.Errorf("syms = %+v, want empty non-nil slice", syms)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientWorkspaceSymbol_EmptyArray(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`[]`)}
+	})
+
+	syms, err := c.WorkspaceSymbol("Nope")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbol: %v", err)
+	}
+	if syms == nil || len(syms) != 0 {
+		t.Errorf("syms = %+v, want empty non-nil slice", syms)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientWorkspaceSymbol_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "workspace symbol index unavailable"}}
+	})
+
+	syms, err := c.WorkspaceSymbol("Foo")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if syms != nil {
+		t.Errorf("syms = %+v, want nil on error", syms)
+	}
+	if !strings.Contains(err.Error(), "workspace symbol index unavailable") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// -----------------------------------------------------------------------------
 // SignatureHelp: 签名 + 形参 + activeParameter, documentation 多态压平, null, error
 // -----------------------------------------------------------------------------
 
