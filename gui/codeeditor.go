@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 func init() {
@@ -261,6 +262,13 @@ type CodeEditor struct {
 	// mouse moves, instead of on every pixel. -1 means "nothing reported yet".
 	hoverReqLine int
 	hoverReqCol  int
+
+	// --- Run-Test Gutter Marker ---
+	// cbTestRun is fired when the user clicks the run-test ▶ gutter marker next
+	// to a top-level Go test function in a *_test.go file. The host (silkide) runs
+	// `go test -run ^Name$`. Nil-safe: with no callback the marker still draws,
+	// and clicking it is consumed (no breakpoint toggle) but does nothing.
+	cbTestRun func(name string)
 
 	// --- Git Gutter ---
 	gitStatus map[int]GitLineStatus
@@ -2546,6 +2554,11 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	for _, reg := range foldRegions {
 		foldStartEnd[reg.startLine] = reg.endLine
 	}
+	// testLines maps each test-func declaration line (0-based) to its name so the
+	// render loop can draw a run ▶ marker beside it. It is nil (no allocation)
+	// unless the edited file is a *_test.go, keeping the common non-test file case
+	// free of work in the draw hot path.
+	testLines := this.testFuncLines()
 	startRow := int(this.scrollY / lh)
 	if startRow < 0 {
 		startRow = 0
@@ -2695,6 +2708,26 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		if this.breakpoints[i] {
 			g.SetBrush1(paint.Color{R: 230, G: 60, B: 60, A: 255})
 			g.Arc(10.0, gutterCenterY, 4.5, 0, 2*math.Pi)
+			g.Fill()
+		}
+
+		// Run-test ▶ marker: a small green play triangle at the gutter's LEFT edge
+		// for every top-level Go test function (Test/Benchmark/Fuzz/Example) when
+		// the file is a *_test.go. Slot: x in [testRunGutterX, testRunGutterX+
+		// testRunGutterSize] (~12px, the left "action" column), vertically centred.
+		// It never overlaps the right-aligned line number, the fold triangle, or the
+		// diff marker (all pinned to the gutter's inner/right edge); it shares the
+		// left column with the breakpoint dot, which is atypical on a func signature
+		// line. The click (OnLeftDown) runs the test and consumes the event. Only
+		// visible lines draw — this is inside the viewport-bounded, clipped loop.
+		if _, isTest := testLines[i]; isTest {
+			g.SetBrush1(paint.Color{R: 90, G: 200, B: 100, A: 235})
+			half := testRunGutterSize / 2
+			tip := testRunGutterX + testRunGutterSize*0.8
+			g.MoveTo(testRunGutterX, gutterCenterY-half)
+			g.LineTo(tip, gutterCenterY)
+			g.LineTo(testRunGutterX, gutterCenterY+half)
+			g.LineTo(testRunGutterX, gutterCenterY-half)
 			g.Fill()
 		}
 
@@ -3688,6 +3721,16 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 	if x < this.gutterW && y >= this.topOffset() {
 		line, _ := this.posFromXY(x, y)
 		if line >= 0 && line < len(this.lines) {
+			// Run-test ▶ marker takes priority over the fold zone and the
+			// breakpoint fall-through: a click on the left-edge marker of a test
+			// function fires the host run callback and consumes the click (no
+			// breakpoint toggle, no caret move).
+			if name, ok := this.testRunMarkerAt(x, line); ok {
+				if this.cbTestRun != nil {
+					this.cbTestRun(name)
+				}
+				return
+			}
 			// Fold-marker hit zone: the ~12px strip at the gutter's right edge.
 			if x >= this.gutterW-12 {
 				if _, foldable := this.foldRegionAt(line); foldable {
@@ -5499,6 +5542,105 @@ func (this *CodeEditor) PrevBookmark() {
 	this.clearSelection()
 	this.ensureCursorVisible()
 	this.Self().Update()
+}
+
+// --- Run-Test Gutter Marker ---
+//
+// A small green ▶ (play) triangle is drawn in the gutter beside every top-level
+// Go test function when the edited file is a *_test.go. Clicking it fires
+// cbTestRun(name) so the host (silkide) can run `go test -run ^Name$`.
+//
+// Slot: the LEFT edge of the gutter, x in [testRunGutterX, testRunGutterX+
+// testRunGutterSize] (~12px), vertically centred on the line. The gutter's
+// inner/right edge is fully committed on a func line — right-aligned line number
+// (ends at gutterW-8), fold triangle (gutterW-12 hit strip), and diff marker
+// (gutterW-6..gutterW) — so the marker lives on the left. That left column also
+// hosts the breakpoint dot (centre x=10), but a breakpoint on a bare test
+// signature line is atypical, and the click handler gives the run marker
+// priority so the two never fight for one click (F9 still toggles a breakpoint
+// on the cursor line).
+
+const (
+	testRunGutterX    = 1.0  // left inset of the run ▶ marker
+	testRunGutterSize = 12.0 // marker box size (width == height, ~12px)
+)
+
+// isGoTestFuncName reports whether name is a Go test-style function name: one of
+// the prefixes Test / Benchmark / Fuzz / Example followed by either nothing or a
+// non-lowercase rune. This mirrors cmd/go's isTest rule exactly, so bare "Test"
+// counts, "TestFoo" / "Test_foo" / "Test1" count, but "Testfoo" and "Testing"
+// do NOT (the rune right after the prefix is a lowercase letter). Pure (no
+// receiver) so it is unit-testable in isolation.
+func isGoTestFuncName(name string) bool {
+	for _, prefix := range []string{"Test", "Benchmark", "Fuzz", "Example"} {
+		if isTestFuncWithPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTestFuncWithPrefix implements cmd/go's isTest rule for a single prefix:
+// name must start with prefix and, if longer, the first trailing rune must not
+// be a lowercase letter.
+func isTestFuncWithPrefix(name, prefix string) bool {
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	if len(name) == len(prefix) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(name[len(prefix):])
+	return !unicode.IsLower(r)
+}
+
+// testFuncLines returns a map of 0-based line index -> test-func name for every
+// top-level test function in the buffer, but ONLY when the edited file is a
+// *_test.go. For any other file it returns nil (no allocation), keeping the draw
+// hot path free of work in the common case. ParseSymbols is the same O(lines)
+// scan the breadcrumb already runs every frame, so recomputing here is cheap.
+func (this *CodeEditor) testFuncLines() map[int]string {
+	if !strings.HasSuffix(this.FilePath(), "_test.go") {
+		return nil
+	}
+	var out map[int]string
+	for _, s := range this.ParseSymbols() {
+		if s.Kind == SymFunc && isGoTestFuncName(s.Name) {
+			if out == nil {
+				out = make(map[int]string)
+			}
+			out[s.Line] = s.Name
+		}
+	}
+	return out
+}
+
+// testRunMarkerHitX reports whether a gutter x-coordinate falls inside the run ▶
+// marker's horizontal slot. Pure / layout-independent so the hit-test can be
+// unit-tested without font metrics.
+func testRunMarkerHitX(x float64) bool {
+	return x >= 0 && x <= testRunGutterX+testRunGutterSize
+}
+
+// testRunMarkerAt reports the test-func name to run when the gutter is clicked at
+// horizontal position x on editor line `line` (the caller maps the click Y to a
+// line via posFromXY). ok is false when x is outside the marker slot or `line`
+// is not a test-func line, so any other gutter click falls through to the
+// existing fold / breakpoint handling.
+func (this *CodeEditor) testRunMarkerAt(x float64, line int) (string, bool) {
+	if !testRunMarkerHitX(x) {
+		return "", false
+	}
+	name, ok := this.testFuncLines()[line]
+	return name, ok
+}
+
+// SigTestRunRequested registers the callback fired when the user clicks the
+// run-test ▶ gutter marker beside a Go test function. The argument is the
+// function name (e.g. "TestFoo"); the host runs `go test -run ^Name$`. Mirrors
+// the SigWidgetClicked / SigChanged idiom.
+func (this *CodeEditor) SigTestRunRequested(fn func(name string)) {
+	this.cbTestRun = fn
 }
 
 // --- Breakpoints ---
