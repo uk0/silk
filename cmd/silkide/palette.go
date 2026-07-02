@@ -247,6 +247,20 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Refresh Packages", "", func() {
 		refreshPackages(designCanvas)
 	})
+	// Git changes — flip to the panel + reload git status.
+	add("Show Git Changes", "", func() {
+		if globalGitChanges != nil {
+			dockSetActiveView(globalBottomDock, globalGitChanges)
+		}
+		refreshGitChanges(designCanvas)
+	})
+	add("Refresh Git Changes", "", func() {
+		refreshGitChanges(designCanvas)
+	})
+	// Workspace symbol search (gopls workspace/symbol).
+	add("Go to Symbol in Workspace", "Cmd+T", func() {
+		showSymbolFinder(designCanvas, editorTabs)
+	})
 	// Add Bookmark — bookmark the active editor's cursor line. Cmd+F2
 	// because plain F2 is now Rename Symbol (JetBrains muscle memory).
 	// Same helper the shortcut calls so the entry point doesn't matter.

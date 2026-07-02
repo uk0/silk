@@ -90,6 +90,7 @@ func main() {
 	// is goroutine-safe enough for our purposes (single writer, panel
 	// requests a redraw on the next tick).
 	refreshPackages(designCanvas)
+	refreshGitChanges(designCanvas)
 	// Launch gopls in the background so subsequent .go file opens can
 	// push DidOpen notifications at it. Goroutine-bounded LookPath +
 	// initialize; failure is silent (core.Warn) so silkide works fine
@@ -723,6 +724,29 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 				openFileInEditorAt(tabs, frame.File, frame.Line, 0)
 			}
 		})
+		// Watch expressions: the panel emits the submitted expr (it doesn't
+		// append it itself); merge with existing exprs, evaluate against the
+		// live session (or show a placeholder when not debugging), push back.
+		globalDebugPanel.SigWatchAdded(func(expr string) {
+			exprs := append(globalDebugPanel.WatchExprs(), expr)
+			sess := globalDebug
+			if sess == nil {
+				out := make([]ged.WatchEntry, 0, len(exprs))
+				for _, e := range exprs {
+					out = append(out, ged.WatchEntry{Expr: e, Value: "(not running)"})
+				}
+				globalDebugPanel.SetWatches(out)
+				return
+			}
+			go func() {
+				entries := evalWatches(sess, exprs)
+				gui.Post(func() {
+					if globalDebugPanel != nil {
+						globalDebugPanel.SetWatches(entries)
+					}
+				})
+			}()
+		})
 		bottomDock.AddView(globalDebugPanel)
 
 		// LSP find-references results. Fed by findReferencesViaLSP; a row
@@ -732,6 +756,23 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 			openFileInEditorAt(editorTabs, file, line, col)
 		})
 		bottomDock.AddView(globalReferencesPanel)
+
+		// Git changes — uncommitted files (git status --porcelain). Row click
+		// opens the file; the diff affordance opens it + shows vs HEAD. Fed by
+		// refreshGitChanges on startup / project change / manual refresh.
+		globalGitChanges = ged.NewGitChangesPanel()
+		globalGitChanges.SigFileActivated(func(entry core.GitStatusEntry) {
+			if dir := projectDir(designCanvas); dir != "" {
+				openFileInEditor(editorTabs, filepath.Join(dir, entry.Path))
+			}
+		})
+		globalGitChanges.SigFileDiff(func(entry core.GitStatusEntry) {
+			if dir := projectDir(designCanvas); dir != "" {
+				openFileInEditor(editorTabs, filepath.Join(dir, entry.Path))
+			}
+			showDiffVsHEAD(editorTabs, designCanvas)
+		})
+		bottomDock.AddView(globalGitChanges)
 
 		globalBottomDock = bottomDock
 	}
@@ -806,7 +847,35 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	tabs.AddTab(makeCodeEditor(sampleMainGo()), "main.go", paint.LoadIcon("document"))
 	tabs.AddTab(makeCodeEditor(sampleServerGo()), "server.go", paint.LoadIcon("document"))
 	tabs.AddTab(makeCodeEditor(sampleGoMod()), "go.mod", paint.LoadIcon("document"))
+	// Wire the tab X button (it was a no-op): remove the tab and untrack its
+	// editor from openEditors so the file reopens cleanly and LSP/diff state
+	// doesn't leak the closed buffer. Synchronous removal is safe — TabBar's
+	// OnLeftUp doesn't touch the tab slice after CloseTab returns.
+	tabs.TabBar().SetCloseCallback(func(tb *gui.TabBar, idx int) bool {
+		closeEditorTab(tabs, idx)
+		return true
+	})
 	return tabs
+}
+
+// closeEditorTab removes editor tab idx and untracks its editor from
+// openEditors (so a later open re-reads the file and LSP/diff state doesn't
+// keep pointing at the closed buffer).
+func closeEditorTab(tabs *gui.TabWidget, idx int) {
+	if tabs == nil || idx < 0 || idx >= tabs.Count() {
+		return
+	}
+	if st := tabs.Stack(); st != nil {
+		if ed, ok := st.Page(idx).(*gui.CodeEditor); ok {
+			for p, e := range openEditors {
+				if e == ed {
+					delete(openEditors, p)
+					break
+				}
+			}
+		}
+	}
+	tabs.RemoveTab(idx)
 }
 
 // makeCodeEditor seeds a CodeEditor with the given text. The editor
@@ -864,6 +933,30 @@ var globalPackages *ged.PackagesPanel
 // emits aren't actionable for the user. The panel itself is the only
 // thing that needs to know about the result; SetPackages handles its
 // own redraw.
+// refreshGitChanges reloads the git-status file list into the GitChangesPanel
+// off the main thread. No-op outside a git repo / before the panel exists.
+func refreshGitChanges(canvas *ged.GedView) {
+	if globalGitChanges == nil {
+		return
+	}
+	dir := projectDir(canvas)
+	if dir == "" {
+		return
+	}
+	go func() {
+		entries, err := core.GitStatusPorcelain(dir)
+		if err != nil {
+			core.Warn("git status: ", err)
+			return
+		}
+		gui.Post(func() {
+			if globalGitChanges != nil {
+				globalGitChanges.SetEntries(entries)
+			}
+		})
+	}()
+}
+
 func refreshPackages(canvas *ged.GedView) {
 	if globalPackages == nil {
 		return
@@ -2913,6 +3006,9 @@ var globalDebugPanel *ged.DebugPanel
 // dock. Fed by findReferencesViaLSP; row click opens the file:line.
 var globalReferencesPanel *ged.ReferencesPanel
 
+// globalGitChanges lists uncommitted files (git status) in the bottom dock.
+var globalGitChanges *ged.GitChangesPanel
+
 // globalFileExplorer is the left-dock file tree, held package-level so
 // "Open Project" can re-root it at runtime. globalProjectRoot, when set by
 // Open Project, overrides projectDir() so build / run / LSP / packages all
@@ -2992,6 +3088,24 @@ func runProjectInDebugger(canvas *ged.GedView) {
 // run on the caller's goroutine (already off the UI thread); only the
 // GUI mutation is marshalled through gui.Post — this is what makes the
 // panel safe to update from the background Continue goroutine.
+// evalWatches evaluates each watch expression in the stopped frame via dlv.
+// Runs on a background goroutine (Eval is a blocking RPC). A failed eval fills
+// Err rather than dropping the row, so the user sees which watch is invalid.
+func evalWatches(sess *core.DebugSession, exprs []string) []ged.WatchEntry {
+	out := make([]ged.WatchEntry, 0, len(exprs))
+	for _, e := range exprs {
+		we := ged.WatchEntry{Expr: e}
+		if v, err := sess.Eval(e, -1, 0); err != nil {
+			we.Err = err.Error()
+		} else {
+			we.Value = v.Value
+			we.Type = v.Type
+		}
+		out = append(out, we)
+	}
+	return out
+}
+
 func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 	if sess == nil || st == nil {
 		return
@@ -3020,6 +3134,18 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 			globalDebugPanel.SetCallStack(frames)
 			globalDebugPanel.SetVariables(locals)
 			dockSetActiveView(globalBottomDock, globalDebugPanel)
+			// Refresh watch values for this stop: read exprs on the main
+			// thread (panel state), Eval off-thread, push back via Post.
+			if exprs := globalDebugPanel.WatchExprs(); len(exprs) > 0 {
+				go func() {
+					entries := evalWatches(sess, exprs)
+					gui.Post(func() {
+						if globalDebugPanel != nil {
+							globalDebugPanel.SetWatches(entries)
+						}
+					})
+				}()
+			}
 		}
 		// Display 1-based file:line per Go error convention; the
 		// openFileInEditorAt path also takes 1-based lines.

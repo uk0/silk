@@ -357,6 +357,9 @@ func registerSilkideTranslations() {
 		"Rename aborted: buffer changed":  "重命名已取消: 缓冲区已改动",
 		"Renamed across %d file(s)":       "已重命名 %d 个文件",
 		"Find References":                 "查找引用",
+		"Go to Symbol in Workspace":       "跳转到工作区符号",
+		"Show Git Changes":                "显示 Git 更改",
+		"Refresh Git Changes":             "刷新 Git 更改",
 		"No references found":             "未找到引用",
 		"Code Actions":                    "代码操作",
 		"No code actions":                 "无可用操作",
@@ -544,6 +547,8 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// Code Actions / quick-fixes via gopls (Cmd+.).
 	gui.RegisterShortcut(gui.ModAction, '.', func() { codeActionsViaLSP(editorTabs) })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
+	// Cmd+T — Go to Symbol in Workspace (gopls workspace/symbol search).
+	gui.RegisterShortcut(gui.ModAction, 'T', func() { showSymbolFinder(designCanvas, editorTabs) })
 	// Shift+F6 → go vet; Cmd+Shift+F7 → tests with coverage. Both slot
 	// in next to the existing F6/F7 build/test pair so the muscle memory
 	// generalises: "F6 family runs static analysis (build/vet), F7 family
