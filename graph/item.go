@@ -17,6 +17,12 @@ type IItem interface {
 
 	Parent() IItem
 	SetParent(a IItem)
+	// SetParentAt re-parents this item and inserts it at a specific index
+	// among the new parent's children (Children() order). It lets undo/redo
+	// restore an item to the exact slot it held before a move; plain
+	// SetParent always tail-inserts and so loses that position. index == -1
+	// appends (identical to SetParent).
+	SetParentAt(a IItem, index int)
 	Root() IItem
 	Scene() IScene
 
@@ -349,6 +355,25 @@ func (this *Item) Detach() {
 }
 
 func (this *Item) SetParent(newParent IItem) {
+	// Tail-insert (append) — the historical behaviour, unchanged for every
+	// existing caller. -1 is SetParentAt's "append" sentinel.
+	this.SetParentAt(newParent, -1)
+}
+
+// SetParentAt re-parents this item and inserts it at the given 0-based
+// position among newParent's children, in the same head-first order that
+// Children() and IndexInParent() use (head == index 0 == back / drawn
+// first; tail == front). It exists so an undo can put an item back in the
+// exact sibling slot it occupied before a move — plain SetParent always
+// appends at the tail and so loses the original position.
+//
+// index == -1 is the "append" sentinel and reproduces SetParent's tail
+// insert; any other out-of-range value is clamped into [0, n] (n == current
+// child count), so index >= n also appends and index < -1 inserts at the
+// head. A nil newParent detaches (index ignored). Re-parenting to the
+// current parent is a no-op — use Raise/Lower/BringToFront/SendToBack to
+// reorder within a single parent.
+func (this *Item) SetParentAt(newParent IItem, index int) {
 	if newParent != nil {
 		newParent = newParent.Self()
 	}
@@ -386,14 +411,41 @@ func (this *Item) SetParent(newParent IItem) {
 	} else {
 		p := newParent.NakedItem()
 		if p.child == nil {
+			// Empty ring: index is irrelevant, this becomes the sole child.
 			p.child = this
 			this.next = this
 			this.prev = this
-		} else {
+		} else if index == -1 {
+			// Append at the tail: splice in just before the head, leaving the
+			// head pointer untouched. Kept O(1) — this is SetParent's hot path.
 			this.next = p.child
 			this.prev = p.child.prev
 			this.prev.next = this
 			this.next.prev = this
+		} else {
+			// Index-aware insert (undo/redo). Count children, clamp index
+			// into [0, n], then splice in before the node currently at that
+			// position. index == n wraps back to the head, i.e. tail insert.
+			n := 1
+			for c := p.child; c.next != p.child; c = c.next {
+				n++
+			}
+			if index > n {
+				index = n
+			} else if index < 0 {
+				index = 0
+			}
+			at := p.child
+			for i := 0; i < index; i++ {
+				at = at.next
+			}
+			this.next = at
+			this.prev = at.prev
+			this.prev.next = this
+			this.next.prev = this
+			if index == 0 {
+				p.child = this // this is the new head
+			}
 		}
 		this.parent = newParent
 		scene := newParent.Scene()
