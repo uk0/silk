@@ -13,8 +13,9 @@ import (
 )
 
 // git CLI 的最小封装
-// 设计目标: 让 IDE 查询仓库状态(diff/status/branch/log)而无需每个调用方
-// 自己重写 os/exec 的样板. 与已合并的 core.ParseUnifiedDiff 配套使用:
+// 设计目标: 让 IDE 查询仓库状态(diff/status/branch/log)并驱动提交流程
+// (stage/unstage/commit), 而无需每个调用方自己重写 os/exec 的样板.
+// 与已合并的 core.ParseUnifiedDiff 配套使用:
 // GitDiffHead/GitDiffFile 产出 unified diff 文本, 交给 ParseUnifiedDiff 渲染.
 // 全部走 stdlib(os/exec, strings, bufio, fmt, errors, bytes, context, time),
 // 每个解析都是"跳过并收集"或干净返回 error, 永远不 panic.
@@ -262,6 +263,77 @@ func GitRevParse(dir, ref string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// GitStage 把给定路径加入暂存区(`git add -- <paths...>`)
+// 只暂存显式给出的路径(用 `--` 与选项分隔, 刻意不用 `git add .`), 供 Git Changes
+// 面板逐文件勾选暂存. paths 为空时直接返回 nil 不调用 git —— 空 pathspec 的
+// `git add` 会报错, 且"没选任何文件"本就该是 no-op.
+func GitStage(dir string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"add", "--"}, paths...)
+	_, err := runGit(dir, args...)
+	return err
+}
+
+// GitUnstage 把给定路径移出暂存区但保留工作树改动(`git reset HEAD -- <paths...>`)
+// 与 GitStage 相反: 只把 index 里这些路径还原成 HEAD 版本, 不动工作副本.
+// paths 为空时直接返回 nil 不调用 git.
+func GitUnstage(dir string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := append([]string{"reset", "HEAD", "--"}, paths...)
+	_, err := runGit(dir, args...)
+	return err
+}
+
+// GitStageAll 暂存工作树里的全部改动(`git add -A`: 新增/修改/删除/未跟踪都进 index)
+// 这是本封装里唯一的批量暂存形式 —— 需要"全部暂存"用它, 精确逐文件暂存用 GitStage.
+func GitStageAll(dir string) error {
+	_, err := runGit(dir, "add", "-A")
+	return err
+}
+
+// GitCommitChanges 用给定信息提交(`git commit -m <message>`)并返回新提交的短 hash
+// (命名避开同名的 GitCommit 结构体 —— 那是 git log 的提交摘要类型).
+// message 去空白后为空时直接返回 error 快速失败(git 本身也会拒绝空信息, 这里提前挡掉).
+// 若暂存区为空, git commit 以 "nothing to commit" 非零退出, runGit 会把它转成带命令
+// 上下文的 error 原样返回(与 GitRevParse 遇未知 ref 同一套路), 不 panic.
+// 提交成功后再跑 `git rev-parse --short HEAD` 取回短 hash.
+func GitCommitChanges(dir, message string) (string, error) {
+	if strings.TrimSpace(message) == "" {
+		return "", fmt.Errorf("git commit: empty commit message")
+	}
+	if _, err := runGit(dir, "commit", "-m", message); err != nil {
+		return "", err
+	}
+	out, err := runGit(dir, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// GitHasStagedChanges 报告 index 相对 HEAD 是否有已暂存改动
+// 走 `git diff --cached --quiet`: 退出码 0 表示无暂存改动, 退出码 1 表示有 ——
+// 这个 1 是"存在 diff"的信号而非报错. 因此这里把退出码 1 映射成 (true, nil),
+// 退出码 0 映射成 (false, nil); 只有其它退出码(如非仓库的 128)或超时才当真正的
+// error 返回. 供 UI 据此决定 Commit 按钮是否可点. 不 panic.
+func GitHasStagedChanges(dir string) (bool, error) {
+	if _, err := runGit(dir, "diff", "--cached", "--quiet"); err != nil {
+		// runGit 用 %w 包了底层 err; 底层是 *exec.ExitError 且退出码为 1 时,
+		// 那是"有暂存改动"的正常信号, 不是错误.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return true, nil
+		}
+		return false, err
+	}
+	// 退出码 0: index 与 HEAD 一致, 无暂存改动
+	return false, nil
 }
 
 // runGit 是所有 git 调用的共享私有助手
