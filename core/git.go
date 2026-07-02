@@ -255,6 +255,41 @@ func GitShow(dir, rev, file string) (string, error) {
 	return runGit(dir, "show", rev+":"+file)
 }
 
+// GitShowCommit 返回某次提交的完整 unified diff(`git show --no-color <rev>`)
+// 供 IDE 的 Git History 面板在点击某条提交时展示该提交的全部改动 —— 注意与逐文件的
+// GitShow(dir, rev, file) 不同: 那个取的是单文件在某版本下的内容, 这里给的是"整个
+// 提交"的差异. 用 --no-color 强制机器可读的纯文本输出(不受用户 color.ui=always 之类
+// 配置影响, 否则 ANSI 转义会污染 +/- 前缀). 输出前半是提交头(commit/Author/Date/信息),
+// 后半是标准 unified diff. 调用方可原样展示, 也可把整段输出直接喂给 core.ParseUnifiedDiff
+// —— 后者的 default 分支会跳过提交头噪声, 只从 "diff --git" 起解析文件/hunk(与
+// GitDiffHead 同一套路). rev 去空白后为空时直接返回 error 快速失败; 未知 rev 时 git
+// 非零退出, runGit 原样返回带诊断的 error, 永远不 panic.
+func GitShowCommit(dir, rev string) (string, error) {
+	if strings.TrimSpace(rev) == "" {
+		return "", fmt.Errorf("git show: empty revision")
+	}
+	return runGit(dir, "show", "--no-color", rev)
+}
+
+// GitCommitSubjectBody 返回某次提交的标题和正文(`git show -s --format=%s%n%n%b <rev>`)
+// -s 抑制 diff 只出提交信息; %s 是标题(subject), %b 是正文(body), 中间用一个空行
+// (%n%n)分隔. 供在 GitShowCommit 的 diff 之上渲染一个提交头. 返回 (subject, body):
+// 按第一个换行切出 subject, 其余去掉分隔空行后为 body; 仅有标题的提交 body 为 "".
+// rev 空 → error; 未知 rev → runGit 的 error, 永远不 panic.
+func GitCommitSubjectBody(dir, rev string) (string, string, error) {
+	if strings.TrimSpace(rev) == "" {
+		return "", "", fmt.Errorf("git show: empty revision")
+	}
+	out, err := runGit(dir, "show", "-s", "--format=%s%n%n%b", rev)
+	if err != nil {
+		return "", "", err
+	}
+	// 输出形如 "<subject>\n\n<body...>\n"; 第一个换行切出 subject,
+	// 其余整段去首尾空白(含那条分隔空行与末尾换行)即 body.
+	subject, rest, _ := strings.Cut(out, "\n")
+	return strings.TrimSpace(subject), strings.TrimSpace(rest), nil
+}
+
 // GitRevParse 把一个 ref(如 "HEAD"、分支名)解析为完整 SHA(`git rev-parse <ref>`)
 // 返回去掉首尾空白的 40-hex SHA. 未知 ref 时 git 非零退出, 返回带诊断的 error.
 func GitRevParse(dir, ref string) (string, error) {

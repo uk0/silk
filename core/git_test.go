@@ -300,6 +300,99 @@ func TestGitShow(t *testing.T) {
 	}
 }
 
+func TestGitShowCommit(t *testing.T) {
+	if !GitAvailable() {
+		t.Skip("git not installed")
+	}
+	dir, file := setupRepo(t)
+
+	// 追加第二次提交并改动已跟踪文件, 好让该提交的 diff 里出现 +/- 行
+	writeFile(t, dir, file, "line one\nline two SHOWCOMMIT\nline three\n")
+	mustGit(t, dir, "add", file)
+	mustGit(t, dir, "commit", "-m", "second commit")
+
+	out, err := GitShowCommit(dir, "HEAD")
+	if err != nil {
+		t.Fatalf("GitShowCommit(HEAD): %v", err)
+	}
+	// 输出应包含被改文件名、被改内容, 以及至少一条 +/- 差异行
+	if !strings.Contains(out, file) {
+		t.Errorf("GitShowCommit output missing changed file %q; got:\n%s", file, out)
+	}
+	if !strings.Contains(out, "SHOWCOMMIT") {
+		t.Errorf("GitShowCommit output missing changed line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "\n+") && !strings.Contains(out, "\n-") {
+		t.Errorf("GitShowCommit output has no +/- diff line; got:\n%s", out)
+	}
+
+	// 集成 sanity: 完整输出(含提交头)可直接喂给 ParseUnifiedDiff ——
+	// 提交头噪声被跳过, 只解析 "diff --git" 起的文件/hunk 部分.
+	files, perr := ParseUnifiedDiff(out)
+	if perr != nil {
+		t.Fatalf("ParseUnifiedDiff(GitShowCommit): %v", perr)
+	}
+	if len(files) < 1 {
+		t.Fatalf("ParseUnifiedDiff returned %d files, want >=1", len(files))
+	}
+	if got := files[0].NewPath; got != file {
+		t.Errorf("parsed NewPath = %q, want %q", got, file)
+	}
+
+	// 不存在的 rev 应当报错(而非 panic)
+	if got, err := GitShowCommit(dir, "no-such-rev-xyz"); err == nil {
+		t.Errorf("GitShowCommit on bogus rev returned nil error; out=%q", got)
+	}
+
+	// 空 / 纯空白 rev 应快速失败
+	if got, err := GitShowCommit(dir, ""); err == nil {
+		t.Errorf("GitShowCommit with empty rev returned nil error; out=%q", got)
+	}
+	if _, err := GitShowCommit(dir, "   "); err == nil {
+		t.Error("GitShowCommit with whitespace rev returned nil error, want error")
+	}
+}
+
+func TestGitCommitSubjectBody(t *testing.T) {
+	if !GitAvailable() {
+		t.Skip("git not installed")
+	}
+	dir, file := setupRepo(t)
+
+	// 首提交只有标题, 没有正文
+	subject, body, err := GitCommitSubjectBody(dir, "HEAD")
+	if err != nil {
+		t.Fatalf("GitCommitSubjectBody(HEAD): %v", err)
+	}
+	if subject != "initial commit" {
+		t.Errorf("subject = %q, want %q", subject, "initial commit")
+	}
+	if body != "" {
+		t.Errorf("body = %q, want empty for a subject-only commit", body)
+	}
+
+	// 再来一条带正文的提交: subject 与 body 应分别切出
+	writeFile(t, dir, file, "changed\n")
+	mustGit(t, dir, "add", file)
+	mustGit(t, dir, "commit", "-m", "feat: title line", "-m", "body line one\nbody line two")
+
+	subject, body, err = GitCommitSubjectBody(dir, "HEAD")
+	if err != nil {
+		t.Fatalf("GitCommitSubjectBody(HEAD) with body: %v", err)
+	}
+	if subject != "feat: title line" {
+		t.Errorf("subject = %q, want %q", subject, "feat: title line")
+	}
+	if !strings.Contains(body, "body line one") || !strings.Contains(body, "body line two") {
+		t.Errorf("body = %q, want to contain both body lines", body)
+	}
+
+	// 空 rev 应快速失败(而非 panic)
+	if _, _, err := GitCommitSubjectBody(dir, ""); err == nil {
+		t.Error("GitCommitSubjectBody with empty rev returned nil error, want error")
+	}
+}
+
 func TestGitLogFile(t *testing.T) {
 	if !GitAvailable() {
 		t.Skip("git not installed")
