@@ -91,6 +91,7 @@ func main() {
 	// requests a redraw on the next tick).
 	refreshPackages(designCanvas)
 	refreshGitChanges(designCanvas)
+	refreshGitLog(designCanvas)
 	// Launch gopls in the background so subsequent .go file opens can
 	// push DidOpen notifications at it. Goroutine-bounded LookPath +
 	// initialize; failure is silent (core.Warn) so silkide works fine
@@ -806,6 +807,14 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		})
 		bottomDock.AddView(globalTodoPanel)
 
+		// Git history (git log). Row click toasts the commit; richer
+		// "show commit diff" is a follow-up. Fed by refreshGitLog.
+		globalGitLog = ged.NewGitLogPanel()
+		globalGitLog.SigCommitActivated(func(commit core.GitCommit) {
+			silkideToast(i18n.Tf("%s  %s", commit.Hash, commit.Subject), gui.ToastInfo)
+		})
+		bottomDock.AddView(globalGitLog)
+
 		globalBottomDock = bottomDock
 	}
 
@@ -1030,6 +1039,30 @@ func toggleBlame(tabs *gui.TabWidget, canvas *ged.GedView) {
 		gui.Post(func() {
 			if e, ok := openEditors[path]; ok && e == ed {
 				ed.SetBlameAnnotations(m)
+			}
+		})
+	}()
+}
+
+// refreshGitLog reloads recent commit history into the GitLogPanel off the
+// main thread. No-op outside a git repo / before the panel exists.
+func refreshGitLog(canvas *ged.GedView) {
+	if globalGitLog == nil {
+		return
+	}
+	dir := projectDir(canvas)
+	if dir == "" {
+		return
+	}
+	go func() {
+		commits, err := core.GitShortLog(dir, 100)
+		if err != nil {
+			core.Warn("git log: ", err)
+			return
+		}
+		gui.Post(func() {
+			if globalGitLog != nil {
+				globalGitLog.SetCommits(commits)
 			}
 		})
 	}()
@@ -3113,6 +3146,9 @@ var globalGitChanges *ged.GitChangesPanel
 
 // globalTodoPanel lists TODO/FIXME markers scanned from the project.
 var globalTodoPanel *ged.TodoPanel
+
+// globalGitLog shows recent commit history (git log) in the bottom dock.
+var globalGitLog *ged.GitLogPanel
 
 // globalFileExplorer is the left-dock file tree, held package-level so
 // "Open Project" can re-root it at runtime. globalProjectRoot, when set by

@@ -361,6 +361,7 @@ func registerSilkideTranslations() {
 		"Show Git Changes":                "显示 Git 更改",
 		"Refresh Git Changes":             "刷新 Git 更改",
 		"Scan TODOs":                      "扫描 TODO",
+		"Show Git History":                "显示 Git 历史",
 		"Toggle Blame":                    "切换 Blame 标注",
 		"Committed %s":                    "已提交 %s",
 		"No references found":             "未找到引用",

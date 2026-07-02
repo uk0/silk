@@ -265,6 +265,13 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Scan TODOs", "", func() {
 		scanTodos(designCanvas)
 	})
+	// Git history — flip to the log panel + reload git log.
+	add("Show Git History", "", func() {
+		if globalGitLog != nil {
+			dockSetActiveView(globalBottomDock, globalGitLog)
+		}
+		refreshGitLog(designCanvas)
+	})
 	// Toggle git-blame annotations on the active editor.
 	add("Toggle Blame", "Cmd+Shift+B", func() {
 		toggleBlame(editorTabs, designCanvas)
