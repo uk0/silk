@@ -261,6 +261,18 @@ type CodeEditor struct {
 	// when lines are inserted/deleted.
 	diffMarkers map[int]DiffMarkerKind
 
+	// --- Blame (Annotate) Layer ---
+	// blame maps line (0-based, matching breakpoints/diffMarkers) -> a host-fed
+	// annotation string, conventionally "shorthash author". The editor does NOT
+	// run git; the host computes blame and pushes the set via SetBlameAnnotations.
+	// When blameVisible is true the annotation is drawn dim and right-aligned in a
+	// fixed-width column pinned to the text area's right edge. It does NOT reserve
+	// space between the gutter and text, so gutterW / textOffX are byte-identical
+	// whether blame is on or off. Like breakpoints, this is a UI/state layer keyed
+	// 0-based and is NOT re-mapped when lines are inserted/deleted.
+	blame        map[int]string
+	blameVisible bool
+
 	// --- Multi-Cursor Editing ---
 	// Primary cursor is (cursorLine, cursorCol). additionalCursors stores
 	// extra caret positions that receive the same text input / edits.
@@ -2334,6 +2346,18 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	// textOffX is the base x for text content, accounting for horizontal scroll
 	textOffX := this.gutterW + 10 - this.scrollX
 
+	// Blame (annotate) column: dim, right-aligned annotations pinned to the text
+	// area's right edge. Width + rune budget are computed once per frame here so
+	// the loop only does a map lookup + truncate. blameW is 0 when the view is
+	// off, so this branch never shifts gutterW / textOffX (blame off is a no-op).
+	blameW := blameColumnWidth(this.blameVisible)
+	var blameMaxChars int
+	if blameW > 0 {
+		if cw := this.measureText("0"); cw > 0 { // Menlo is monospaced
+			blameMaxChars = int(blameW / cw)
+		}
+	}
+
 	// Clip the main editor area to avoid drawing into minimap/status bar
 	g.Save()
 	g.Rectangle(0, topOff, editorRight, editorBottom-topOff)
@@ -2557,6 +2581,20 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			}
 		}
 		inBlock = this.drawHighlightedLine(g, i, lineText, textOffX, y+fe.Ascent, inBlock)
+
+		// Blame annotation: dim + right-aligned in the reserved column at the text
+		// area's right edge. Drawn only for visible lines carrying an annotation.
+		// blameW is 0 when the view is off, so this whole block is skipped and no
+		// pixels move — layout is identical to a build without blame.
+		if blameW > 0 && blameMaxChars > 0 {
+			if ann, ok := this.blame[i]; ok && ann != "" {
+				shown := truncateBlame(ann, blameMaxChars)
+				bx := editorRight - 6 - this.measureText(shown)
+				g.SetFont(this.font)
+				g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 150})
+				g.DrawText1(bx, y+fe.Ascent, shown)
+			}
+		}
 
 		// Folded-region hint: on a collapsed start line, draw a subtle "⋯}" after
 		// the text so the user sees the block is collapsed and where it ends.
@@ -5318,6 +5356,81 @@ func (this *CodeEditor) SetDiffFromLines(added, modified, removed []int) {
 		m[line] = DiffMarkerRemoved
 	}
 	this.SetDiffMarkers(m)
+}
+
+// --- Blame (Annotate) Layer ---
+
+// blameBaseColumnW is the reserved width (px) of the blame annotation column. It
+// doubles as the truncation budget and the right-alignment span. Kept a package
+// const so blameColumnWidth stays GL-free and unit-testable.
+const blameBaseColumnW = 120.0
+
+// blameColumnWidth returns the blame column width in pixels: blameBaseColumnW
+// when the annotate view is visible, else 0. A 0 width means the column consumes
+// no space and the gutter / text layout (gutterW, textOffX) is byte-identical to
+// a build without blame — blame OFF never shifts anything.
+func blameColumnWidth(visible bool) float64 {
+	if !visible {
+		return 0
+	}
+	return blameBaseColumnW
+}
+
+// truncateBlame shortens a blame annotation to at most max runes, replacing the
+// tail with a single-rune ellipsis "…" when it would otherwise overflow. max<=0
+// yields "" (no column room); a string already within budget is returned as-is.
+// Operates on runes so multi-byte author names truncate cleanly.
+func truncateBlame(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(r[:max-1]) + "…"
+}
+
+// SetBlameAnnotations installs the per-line blame column and switches the
+// annotate view on. Keys are 0-based line numbers; values are the host-computed
+// annotation string (conventionally "shorthash author"). The map is copied so
+// the host may mutate its own copy afterwards. Passing nil installs an empty set
+// but still turns the view on (a blank column); use ClearBlame to hide it.
+// Triggers a repaint.
+func (this *CodeEditor) SetBlameAnnotations(m map[int]string) {
+	blame := make(map[int]string, len(m))
+	for line, ann := range m {
+		blame[line] = ann
+	}
+	this.blame = blame
+	this.blameVisible = true
+	this.Self().Update()
+}
+
+// ClearBlame drops all blame annotations and hides the annotate column. The
+// gutter / text layout returns to its blame-off geometry. Triggers a repaint.
+func (this *CodeEditor) ClearBlame() {
+	this.blame = nil
+	this.blameVisible = false
+	this.Self().Update()
+}
+
+// BlameVisible reports whether the annotate (blame) column is currently shown.
+func (this *CodeEditor) BlameVisible() bool {
+	return this.blameVisible
+}
+
+// BlameAnnotations returns a copy of the current blame set, so mutating the
+// result does not affect the editor's internal state.
+func (this *CodeEditor) BlameAnnotations() map[int]string {
+	m := make(map[int]string, len(this.blame))
+	for line, ann := range this.blame {
+		m[line] = ann
+	}
+	return m
 }
 
 // --- Code Folding ---
