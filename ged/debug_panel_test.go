@@ -2,6 +2,7 @@ package ged
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 
 	"silk/core"
@@ -288,5 +289,284 @@ func TestDebugStackBandHeightSplit(t *testing.T) {
 	// the stack header never disappears.
 	if h := p.stackBandHeight(30); h != debugHeaderH {
 		t.Errorf("stackBandHeight(30) = %v, want %v (one-header floor)", h, debugHeaderH)
+	}
+}
+
+// sampleWatches is a small watch set: one evaluated OK, one in error.
+func sampleWatches() []WatchEntry {
+	return []WatchEntry{
+		{Expr: "i + 1", Value: "43", Type: "int"},
+		{Expr: "bogus", Err: "could not find symbol"},
+	}
+}
+
+// TestDebugSetWatchesRoundTrip verifies SetWatches stores the entries and
+// Watches() returns an equal — but independent — copy.
+func TestDebugSetWatchesRoundTrip(t *testing.T) {
+	p := NewDebugPanel()
+	in := sampleWatches()
+	p.SetWatches(in)
+
+	got := p.Watches()
+	if !reflect.DeepEqual(got, in) {
+		t.Fatalf("Watches() = %+v\nwant %+v", got, in)
+	}
+
+	// Mutating the returned copy must not disturb the panel's state.
+	got[0].Value = "MUTATED"
+	if p.Watches()[0].Value != "43" {
+		t.Error("Watches() returned an aliasing slice, not a copy")
+	}
+	// And mutating the input after SetWatches must not leak in either.
+	in[0].Value = "LEAK"
+	if p.Watches()[0].Value != "43" {
+		t.Error("SetWatches aliased the caller's slice instead of copying")
+	}
+}
+
+// TestDebugWatchExprs verifies WatchExprs returns just the expressions in
+// display order.
+func TestDebugWatchExprs(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetWatches(sampleWatches())
+	got := p.WatchExprs()
+	want := []string{"i + 1", "bogus"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WatchExprs() = %v, want %v", got, want)
+	}
+}
+
+// TestDebugClearKeepsWatchExprs verifies Clear() empties call stack + locals
+// and blanks watch VALUES while KEEPING the expressions (persist-across-stops
+// semantics of a real debugger).
+func TestDebugClearKeepsWatchExprs(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetCallStack(sampleFrames())
+	p.SetVariables(sampleVars())
+	p.SetWatches(sampleWatches())
+
+	p.Clear()
+
+	if got := p.CallStack(); len(got) != 0 {
+		t.Errorf("after Clear, CallStack() = %+v, want empty", got)
+	}
+	if got := p.Variables(); len(got) != 0 {
+		t.Errorf("after Clear, Variables() = %+v, want empty", got)
+	}
+	ws := p.Watches()
+	if len(ws) != 2 {
+		t.Fatalf("after Clear, Watches() len = %d, want 2 (expressions kept)", len(ws))
+	}
+	if ws[0].Expr != "i + 1" || ws[1].Expr != "bogus" {
+		t.Errorf("after Clear, exprs = %q/%q, want kept", ws[0].Expr, ws[1].Expr)
+	}
+	for i, w := range ws {
+		if w.Value != "" || w.Type != "" || w.Err != "" {
+			t.Errorf("after Clear, watch %d still has values: %+v, want blanked", i, w)
+		}
+	}
+}
+
+// TestDebugClearAll verifies ClearAll drops the watch expressions and the
+// in-progress input as well.
+func TestDebugClearAll(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetWatches(sampleWatches())
+	p.focusWatchInput(true)
+	p.OnTextInput("half typed")
+
+	p.ClearAll()
+
+	if got := p.Watches(); len(got) != 0 {
+		t.Errorf("after ClearAll, Watches() = %+v, want empty", got)
+	}
+	if p.watchInput != "" {
+		t.Errorf("after ClearAll, watchInput = %q, want empty", p.watchInput)
+	}
+	if p.watchFocused {
+		t.Error("after ClearAll, watch input still focused")
+	}
+}
+
+// TestDebugWatchSubmitFiresAdded drives the input path: focus the line, type
+// an expression, press Enter. SigWatchAdded fires with the typed text and
+// the input clears afterward. The panel does not append to its own list —
+// the host owns that via SetWatches.
+func TestDebugWatchSubmitFiresAdded(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+
+	var got string
+	fired := false
+	p.SigWatchAdded(func(expr string) { got = expr; fired = true })
+
+	// Typing while unfocused is ignored (no other text field on the panel).
+	p.OnTextInput("ignored")
+	if p.watchInput != "" {
+		t.Fatalf("unfocused OnTextInput edited the input: %q", p.watchInput)
+	}
+
+	p.focusWatchInput(true)
+	p.OnTextInput("i")
+	p.OnTextInput(" + 1")
+	if p.watchInput != "i + 1" {
+		t.Fatalf("watchInput = %q, want %q", p.watchInput, "i + 1")
+	}
+	p.OnKeyDown(gui.KeyEnter, false)
+
+	if !fired {
+		t.Fatal("Enter did not fire SigWatchAdded")
+	}
+	if got != "i + 1" {
+		t.Errorf("SigWatchAdded expr = %q, want %q", got, "i + 1")
+	}
+	if p.watchInput != "" {
+		t.Errorf("after submit, watchInput = %q, want cleared", p.watchInput)
+	}
+
+	// A blank submit is ignored (no fire, input stays empty).
+	fired = false
+	p.focusWatchInput(true)
+	p.OnTextInput("   ")
+	p.OnKeyDown(gui.KeyEnter, false)
+	if fired {
+		t.Error("blank expression should not fire SigWatchAdded")
+	}
+}
+
+// TestDebugWatchBackspaceEsc verifies Backspace deletes a rune in the input
+// and Esc unfocuses it (leaving the text alone).
+func TestDebugWatchBackspaceEsc(t *testing.T) {
+	p := NewDebugPanel()
+	p.focusWatchInput(true)
+	p.OnTextInput("ab")
+	p.OnKeyDown(gui.KeyBackSpace, false)
+	if p.watchInput != "a" {
+		t.Errorf("after Backspace, watchInput = %q, want %q", p.watchInput, "a")
+	}
+	p.OnKeyDown(gui.KeyEsc, false)
+	if p.watchFocused {
+		t.Error("Esc did not unfocus the watch input")
+	}
+}
+
+// TestDebugWatchRemoveHelper verifies RemoveWatch drops the matching row and
+// fires SigWatchRemoved with its expression.
+func TestDebugWatchRemoveHelper(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetWatches(sampleWatches())
+
+	var got string
+	fired := false
+	p.SigWatchRemoved(func(expr string) { got = expr; fired = true })
+
+	p.RemoveWatch("i + 1")
+	if !fired {
+		t.Fatal("RemoveWatch did not fire SigWatchRemoved")
+	}
+	if got != "i + 1" {
+		t.Errorf("SigWatchRemoved expr = %q, want %q", got, "i + 1")
+	}
+	if left := p.WatchExprs(); !reflect.DeepEqual(left, []string{"bogus"}) {
+		t.Errorf("after remove, WatchExprs() = %v, want [bogus]", left)
+	}
+
+	// Removing a non-watched expression is a no-op.
+	fired = false
+	p.RemoveWatch("not there")
+	if fired {
+		t.Error("removing a non-watched expression fired SigWatchRemoved")
+	}
+}
+
+// TestDebugWatchRemoveClick drives the ✕ hot-zone: a click on the right edge
+// of a watch row removes it; a click elsewhere on the row does not.
+//
+// Geometry (300x400): watchTop=280, input line [302,322), row 0 [322,342).
+// The ✕ zone is x >= 300-watchRemoveW = 280.
+func TestDebugWatchRemoveClick(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	p.SetWatches(sampleWatches())
+
+	removed := ""
+	p.SigWatchRemoved(func(expr string) { removed = expr })
+
+	// Click on the row body (not the ✕ zone): no removal.
+	p.OnLeftDown(10, 332)
+	if removed != "" {
+		t.Fatalf("row-body click removed %q, want no removal", removed)
+	}
+	if len(p.WatchExprs()) != 2 {
+		t.Fatalf("row-body click changed the list: %v", p.WatchExprs())
+	}
+
+	// Click in the ✕ zone of row 0: removes "i + 1".
+	p.OnLeftDown(290, 332)
+	if removed != "i + 1" {
+		t.Errorf("✕ click removed %q, want %q", removed, "i + 1")
+	}
+	if left := p.WatchExprs(); !reflect.DeepEqual(left, []string{"bogus"}) {
+		t.Errorf("after ✕ click, WatchExprs() = %v, want [bogus]", left)
+	}
+}
+
+// TestDebugWatchHitTest exercises the watch-band hit-tests against the known
+// geometry at 300x400 (watchTop=280, input [302,322), rows start at 322).
+func TestDebugWatchHitTest(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	p.SetWatches([]WatchEntry{{Expr: "a"}, {Expr: "b"}, {Expr: "c"}})
+
+	// Input line detection.
+	if !p.watchInputAt(310) {
+		t.Error("watchInputAt(310) = false, want true (input line)")
+	}
+	if p.watchInputAt(290) {
+		t.Error("watchInputAt(290) = true, want false (that's the header)")
+	}
+	if p.watchInputAt(332) {
+		t.Error("watchInputAt(332) = true, want false (that's a row)")
+	}
+
+	// Row hit-test.
+	cases := []struct {
+		name string
+		y    float64
+		want int
+	}{
+		{"above watch band", 200, -1},
+		{"header", 290, -1},
+		{"input line", 310, -1},
+		{"row 0", 332, 0},
+		{"row 1", 352, 1},
+		{"row 2", 372, 2},
+	}
+	for _, c := range cases {
+		if got := p.watchRowAt(c.y); got != c.want {
+			t.Errorf("%s: watchRowAt(%v) = %d, want %d", c.name, c.y, got, c.want)
+		}
+	}
+}
+
+// TestDebugWatchWheelIsolation verifies the wheel routes to the watch band's
+// own scroll when the cursor is over it, leaving stack/var scroll untouched.
+func TestDebugWatchWheelIsolation(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	// Enough rows that the watch band can scroll.
+	ws := make([]WatchEntry, 40)
+	for i := range ws {
+		ws[i] = WatchEntry{Expr: "w" + strconv.Itoa(i)}
+	}
+	p.SetWatches(ws)
+
+	// Scroll up (z<0) with the cursor in the watch band (y past watchTop=280).
+	p.OnMouseWheel(150, 350, -1)
+	if p.watchScrollY <= 0 {
+		t.Errorf("watchScrollY = %v, want > 0 after wheel in watch band", p.watchScrollY)
+	}
+	if p.stackScrollY != 0 || p.varScrollY != 0 {
+		t.Errorf("wheel in watch band moved other sections: stack=%v var=%v", p.stackScrollY, p.varScrollY)
 	}
 }
