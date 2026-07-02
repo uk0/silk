@@ -172,3 +172,219 @@ func TestGitChangesClickActivates(t *testing.T) {
 		t.Errorf("activated entry = %+v, want %+v", got, in[2])
 	}
 }
+
+// TestGitChangesStageToggle checks SetStaged / StagedPaths: a fresh panel
+// has none staged, staging a path lists it, unstaging drops it.
+func TestGitChangesStageToggle(t *testing.T) {
+	p := NewGitChangesPanel()
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Fatalf("fresh panel StagedPaths() = %v, want empty", got)
+	}
+
+	p.SetStaged("a.go", true)
+	if got, want := p.StagedPaths(), []string{"a.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after stage StagedPaths() = %v, want %v", got, want)
+	}
+
+	// Idempotent re-stage keeps a single entry.
+	p.SetStaged("a.go", true)
+	if got, want := p.StagedPaths(), []string{"a.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after re-stage StagedPaths() = %v, want %v", got, want)
+	}
+
+	p.SetStaged("a.go", false)
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Fatalf("after unstage StagedPaths() = %v, want empty", got)
+	}
+}
+
+// TestGitChangesStagedPathsOrder verifies StagedPaths returns a stable
+// lexical order regardless of stage order, so a commit's file set is
+// deterministic.
+func TestGitChangesStagedPathsOrder(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetStaged("c.go", true)
+	p.SetStaged("a.go", true)
+	p.SetStaged("b.go", true)
+	if got, want := p.StagedPaths(), []string{"a.go", "b.go", "c.go"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("StagedPaths() = %v, want %v (lexical)", got, want)
+	}
+}
+
+// TestGitChangesClearStaged checks ClearStaged unchecks everything.
+func TestGitChangesClearStaged(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetStaged("a.go", true)
+	p.SetStaged("b.go", true)
+	p.ClearStaged()
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Errorf("after ClearStaged StagedPaths() = %v, want empty", got)
+	}
+}
+
+// TestCheckboxHitX exercises the pure checkbox-vs-body column split: the
+// drawn box column is a hit, the thin left margin and the path area are
+// not — and crucially the x the activation test clicks (5) is NOT a
+// checkbox hit, so that row-body click keeps working.
+func TestCheckboxHitX(t *testing.T) {
+	if !checkboxHitX(gitCheckboxX + 1) {
+		t.Errorf("checkboxHitX(%v) = false, want true (inside box column)", gitCheckboxX+1)
+	}
+	if checkboxHitX(gitCheckboxX - 1) {
+		t.Errorf("checkboxHitX(%v) = true, want false (left margin is row body)", gitCheckboxX-1)
+	}
+	if checkboxHitX(gitRowPathX + 10) {
+		t.Errorf("checkboxHitX(%v) = true, want false (path area is row body)", gitRowPathX+10)
+	}
+	if checkboxHitX(5) {
+		t.Error("checkboxHitX(5) = true; the existing SigFileActivated click would break")
+	}
+}
+
+// TestGitChangesCheckboxClickTogglesRow drives the click path: a click in
+// a row's checkbox column toggles that row's stage state (and does NOT
+// activate the row), while a click on the row body activates it without
+// changing stage state.
+func TestGitChangesCheckboxClickTogglesRow(t *testing.T) {
+	p := NewGitChangesPanel()
+	in := sampleEntries()
+	p.SetEntries(in)
+
+	// Row index 2 is scratch.txt. Confirm the shared hit-test agrees before
+	// clicking (unrealized widget: no commit band, rows run full height).
+	const top, rowH = int(gitChangesHeaderH), 20
+	y := float64(top + 2*rowH + 3)
+	if idx := p.rowAt(y); idx != 2 {
+		t.Fatalf("rowAt(%v) = %d, want 2", y, idx)
+	}
+
+	activated := false
+	p.SigFileActivated(func(core.GitStatusEntry) { activated = true })
+
+	// Checkbox-column click: toggles stage, no activation.
+	p.OnLeftDown(gitCheckboxX+2, y)
+	if activated {
+		t.Error("checkbox click fired SigFileActivated, want checkbox-only")
+	}
+	if got, want := p.StagedPaths(), []string{"scratch.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after checkbox click StagedPaths() = %v, want %v", got, want)
+	}
+
+	// Second checkbox click toggles it back off.
+	p.OnLeftDown(gitCheckboxX+2, y)
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Errorf("after second checkbox click StagedPaths() = %v, want empty", got)
+	}
+
+	// Row-body click (past the checkbox column): activates, no stage change.
+	p.OnLeftDown(gitRowPathX+4, y)
+	if !activated {
+		t.Error("row-body click did not fire SigFileActivated")
+	}
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Errorf("row-body click changed stage state: %v", got)
+	}
+}
+
+// TestGitChangesSetEntriesPrunesStaged checks a re-push drops staged paths
+// that are no longer present while keeping the ones that survive.
+func TestGitChangesSetEntriesPrunesStaged(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetEntries(sampleEntries())
+	p.SetStaged("gui/widget.go", true)
+	p.SetStaged("scratch.txt", true)
+	if got, want := p.StagedPaths(), []string{"gui/widget.go", "scratch.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("StagedPaths() = %v, want %v", got, want)
+	}
+
+	// Re-push without gui/widget.go: it is pruned; scratch.txt survives.
+	p.SetEntries([]core.GitStatusEntry{
+		{Staged: '?', Unstaged: '?', Path: "scratch.txt"},
+	})
+	if got, want := p.StagedPaths(), []string{"scratch.txt"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after prune StagedPaths() = %v, want %v", got, want)
+	}
+
+	// Minimal case from the spec: stage a path, re-push entries without it
+	// -> empty (even though it was never in the entry list).
+	p2 := NewGitChangesPanel()
+	p2.SetStaged("a.go", true)
+	p2.SetEntries([]core.GitStatusEntry{{Path: "other.go"}})
+	if got := p2.StagedPaths(); len(got) != 0 {
+		t.Errorf("staged path absent from new entries not pruned: %v", got)
+	}
+}
+
+// TestGitChangesClearResetsStaged checks Clear drops the stage selection.
+func TestGitChangesClearResetsStaged(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetEntries(sampleEntries())
+	p.SetStaged("gui/widget.go", true)
+	p.Clear()
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Errorf("after Clear StagedPaths() = %v, want empty", got)
+	}
+}
+
+// TestGitChangesSubmitCommit checks the submit handler fires SigCommit with
+// the trimmed message and the lexically ordered staged paths, then clears
+// the message but leaves the stage set for the host to prune via SetEntries.
+func TestGitChangesSubmitCommit(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetStaged("b.go", true)
+	p.SetStaged("a.go", true)
+	p.commitMsg = "  initial commit  " // trimmed on submit
+
+	var gotMsg string
+	var gotPaths []string
+	fired := 0
+	p.SigCommit(func(m string, paths []string) {
+		fired++
+		gotMsg = m
+		gotPaths = paths
+	})
+
+	p.submitCommit()
+	if fired != 1 {
+		t.Fatalf("SigCommit fired %d times, want 1", fired)
+	}
+	if gotMsg != "initial commit" {
+		t.Errorf("commit message = %q, want %q", gotMsg, "initial commit")
+	}
+	if want := []string{"a.go", "b.go"}; !reflect.DeepEqual(gotPaths, want) {
+		t.Errorf("staged paths = %v, want %v (lexical)", gotPaths, want)
+	}
+	if p.commitMsg != "" {
+		t.Errorf("commitMsg after submit = %q, want empty", p.commitMsg)
+	}
+	// The panel does not touch the stage set on submit — the host prunes it
+	// through the post-commit SetEntries refresh.
+	if got, want := p.StagedPaths(), []string{"a.go", "b.go"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("StagedPaths() after submit = %v, want %v", got, want)
+	}
+}
+
+// TestGitChangesSubmitCommitNoop checks submit is inert when the message is
+// blank OR nothing is staged — SigCommit must not fire in either case.
+func TestGitChangesSubmitCommitNoop(t *testing.T) {
+	// Whitespace-only message + a staged path -> no fire.
+	p := NewGitChangesPanel()
+	p.SetStaged("a.go", true)
+	p.commitMsg = "   "
+	fired := false
+	p.SigCommit(func(string, []string) { fired = true })
+	p.submitCommit()
+	if fired {
+		t.Error("SigCommit fired on empty message, want no-op")
+	}
+
+	// Non-empty message + zero staged -> no fire.
+	p2 := NewGitChangesPanel()
+	p2.commitMsg = "has a message"
+	fired2 := false
+	p2.SigCommit(func(string, []string) { fired2 = true })
+	p2.submitCommit()
+	if fired2 {
+		t.Error("SigCommit fired with zero staged paths, want no-op")
+	}
+}
