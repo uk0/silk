@@ -15,7 +15,7 @@ func init() {
 	})
 }
 
-//////////////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////////////
 type PrjView struct {
 	gui.TreeView
 	actNewProject gui.IAction
@@ -52,7 +52,7 @@ func (this *PrjView) onContextMenu(x, y float64) {
 }
 
 func (this *PrjView) PromptCreateProject() {
-	prjname, ok := gui.ShowInputBox(this, nil, "新建项目", "项目名称:", core.GenUuid().String())
+	prjname, ok := gui.ShowInputBox(this, nil, "新建项目", "项目名称:", core.NewUuid().String())
 	if !ok {
 		return
 	}

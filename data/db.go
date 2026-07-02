@@ -3,9 +3,9 @@ package data
 import (
 	"bytes"
 	"database/sql"
+	"runtime"
 	"silk/core"
 	_ "silk/sqlite3"
-	"runtime"
 	"strings"
 	"sync"
 )
@@ -125,7 +125,7 @@ func isTransactionCmd(s string) bool {
 }
 
 func (db *DB) Exec(s string) (sql.Result, error) {
-	if core.IsDebug() {
+	if core.IsDebugOn() {
 		core.Trace("DB.Exec : ", s)
 		r, err := db.p.Exec(s)
 		if err != nil {
