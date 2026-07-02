@@ -772,7 +772,39 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 			}
 			showDiffVsHEAD(editorTabs, designCanvas)
 		})
+		// Commit workflow: the panel emits staged paths + message; we stage
+		// then commit off the main thread and refresh the file list.
+		globalGitChanges.SigCommit(func(message string, stagedPaths []string) {
+			dir := projectDir(designCanvas)
+			if dir == "" {
+				return
+			}
+			go func() {
+				if err := core.GitStage(dir, stagedPaths); err != nil {
+					gui.Post(func() { silkideToast(i18n.Tf("Stage failed: %v", err), gui.ToastError) })
+					return
+				}
+				hash, err := core.GitCommitChanges(dir, message)
+				if err != nil {
+					gui.Post(func() { silkideToast(i18n.Tf("Commit failed: %v", err), gui.ToastError) })
+					return
+				}
+				gui.Post(func() {
+					silkideToast(i18n.Tf("Committed %s", hash), gui.ToastSuccess)
+					refreshGitChanges(designCanvas)
+				})
+			}()
+		})
 		bottomDock.AddView(globalGitChanges)
+
+		// TODO / FIXME markers found across the project. Fed by scanTodos
+		// (manual — the scan walks the tree, so it's command-driven not
+		// on every startup). Row click opens the marker's file:line.
+		globalTodoPanel = ged.NewTodoPanel()
+		globalTodoPanel.SigRowActivated(func(file string, line int) {
+			openFileInEditorAt(editorTabs, file, line, 0)
+		})
+		bottomDock.AddView(globalTodoPanel)
 
 		globalBottomDock = bottomDock
 	}
@@ -933,6 +965,76 @@ var globalPackages *ged.PackagesPanel
 // emits aren't actionable for the user. The panel itself is the only
 // thing that needs to know about the result; SetPackages handles its
 // own redraw.
+// scanTodos walks the project for TODO/FIXME markers and feeds the TodoPanel.
+// Command-driven (the walk touches the whole tree, so it doesn't run on every
+// startup). Runs off the main thread; results post back via gui.Post.
+func scanTodos(canvas *ged.GedView) {
+	if globalTodoPanel == nil {
+		return
+	}
+	dir := projectDir(canvas)
+	if dir == "" {
+		return
+	}
+	go func() {
+		items, err := core.ScanTodos(dir)
+		if err != nil {
+			core.Warn("todo scan: ", err)
+			return
+		}
+		rows := make([]ged.TodoRow, 0, len(items))
+		for _, it := range items {
+			rows = append(rows, ged.TodoRow{
+				File: it.File,
+				Line: it.Line,
+				Kind: string(it.Kind),
+				Text: it.Text,
+			})
+		}
+		gui.Post(func() {
+			if globalTodoPanel != nil {
+				globalTodoPanel.SetRows(rows)
+				dockSetActiveView(globalBottomDock, globalTodoPanel)
+			}
+		})
+	}()
+}
+
+// toggleBlame flips git-blame annotations on the active editor: off → fetch
+// via core.GitBlame (off-thread) and show; on → clear. Blame lines are
+// 1-based; the editor's annotation map is 0-based.
+func toggleBlame(tabs *gui.TabWidget, canvas *ged.GedView) {
+	ed := activeEditor(tabs)
+	path := activeEditorPath(tabs)
+	if ed == nil || path == "" {
+		return
+	}
+	if ed.BlameVisible() {
+		ed.ClearBlame()
+		return
+	}
+	dir := projectDir(canvas)
+	if dir == "" {
+		dir = filepath.Dir(path)
+	}
+	go func() {
+		lines, err := core.GitBlame(dir, path)
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("Blame failed: %v", err), gui.ToastError) })
+			return
+		}
+		m := make(map[int]string, len(lines))
+		for _, bl := range lines {
+			m[bl.Line-1] = bl.Hash + " " + bl.Author
+		}
+		gui.Post(func() {
+			if e, ok := openEditors[path]; ok && e == ed {
+				ed.SetBlameAnnotations(m)
+			}
+		})
+	}()
+}
+
 // refreshGitChanges reloads the git-status file list into the GitChangesPanel
 // off the main thread. No-op outside a git repo / before the panel exists.
 func refreshGitChanges(canvas *ged.GedView) {
@@ -3008,6 +3110,9 @@ var globalReferencesPanel *ged.ReferencesPanel
 
 // globalGitChanges lists uncommitted files (git status) in the bottom dock.
 var globalGitChanges *ged.GitChangesPanel
+
+// globalTodoPanel lists TODO/FIXME markers scanned from the project.
+var globalTodoPanel *ged.TodoPanel
 
 // globalFileExplorer is the left-dock file tree, held package-level so
 // "Open Project" can re-root it at runtime. globalProjectRoot, when set by

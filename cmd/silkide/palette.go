@@ -261,6 +261,14 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Go to Symbol in Workspace", "Cmd+T", func() {
 		showSymbolFinder(designCanvas, editorTabs)
 	})
+	// TODO/FIXME scan — walk the project + show the marker list.
+	add("Scan TODOs", "", func() {
+		scanTodos(designCanvas)
+	})
+	// Toggle git-blame annotations on the active editor.
+	add("Toggle Blame", "Cmd+Shift+B", func() {
+		toggleBlame(editorTabs, designCanvas)
+	})
 	// Add Bookmark — bookmark the active editor's cursor line. Cmd+F2
 	// because plain F2 is now Rename Symbol (JetBrains muscle memory).
 	// Same helper the shortcut calls so the entry point doesn't matter.

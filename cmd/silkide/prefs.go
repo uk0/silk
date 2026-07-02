@@ -360,6 +360,9 @@ func registerSilkideTranslations() {
 		"Go to Symbol in Workspace":       "跳转到工作区符号",
 		"Show Git Changes":                "显示 Git 更改",
 		"Refresh Git Changes":             "刷新 Git 更改",
+		"Scan TODOs":                      "扫描 TODO",
+		"Toggle Blame":                    "切换 Blame 标注",
+		"Committed %s":                    "已提交 %s",
 		"No references found":             "未找到引用",
 		"Code Actions":                    "代码操作",
 		"No code actions":                 "无可用操作",
@@ -549,6 +552,8 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
 	// Cmd+T — Go to Symbol in Workspace (gopls workspace/symbol search).
 	gui.RegisterShortcut(gui.ModAction, 'T', func() { showSymbolFinder(designCanvas, editorTabs) })
+	// Cmd+Shift+B — toggle git-blame annotations on the active editor.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'B', func() { toggleBlame(editorTabs, designCanvas) })
 	// Shift+F6 → go vet; Cmd+Shift+F7 → tests with coverage. Both slot
 	// in next to the existing F6/F7 build/test pair so the muscle memory
 	// generalises: "F6 family runs static analysis (build/vet), F7 family
