@@ -811,11 +811,12 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// "show commit diff" is a follow-up. Fed by refreshGitLog.
 		globalGitLog = ged.NewGitLogPanel()
 		globalGitLog.SigCommitActivated(func(commit core.GitCommit) {
-			silkideToast(i18n.Tf("%s  %s", commit.Hash, commit.Subject), gui.ToastInfo)
+			showCommitDiff(commit)
 		})
 		bottomDock.AddView(globalGitLog)
 
 		globalBottomDock = bottomDock
+		globalCanvas = designCanvas
 	}
 
 	// Wire build-error click navigation: when the user clicks a
@@ -925,6 +926,12 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) {
 func makeCodeEditor(text string) *gui.CodeEditor {
 	ed := gui.NewCodeEditor()
 	ed.SetText(text)
+	// Run-test gutter: clicking the ▶ next to a TestXxx/BenchmarkXxx/FuzzXxx
+	// in a _test.go file runs that single test. The editor only shows the
+	// marker for test files, so this is inert for ordinary source.
+	ed.SigTestRunRequested(func(name string) {
+		runSingleTest(globalCanvas, name)
+	})
 	return ed
 }
 
@@ -1040,6 +1047,42 @@ func toggleBlame(tabs *gui.TabWidget, canvas *ged.GedView) {
 			if e, ok := openEditors[path]; ok && e == ed {
 				ed.SetBlameAnnotations(m)
 			}
+		})
+	}()
+}
+
+// showCommitDiff fetches a commit's full diff (git show) off the main thread
+// and renders its first file's before/after in a DiffView dialog. Mirrors
+// showDiffVsHEAD's reconstruction; richer multi-file browsing is a follow-up.
+func showCommitDiff(commit core.GitCommit) {
+	dir := projectDir(globalCanvas)
+	if dir == "" || commit.Hash == "" {
+		return
+	}
+	go func() {
+		out, err := core.GitShowCommit(dir, commit.Hash)
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("git show failed: %v", err), gui.ToastError) })
+			return
+		}
+		files, perr := core.ParseUnifiedDiff(out)
+		if perr != nil || len(files) == 0 {
+			gui.Post(func() { silkideToast(i18n.T("No diff in commit"), gui.ToastInfo) })
+			return
+		}
+		oldLines, newLines := diffOldNewFromHunks(files[0].Hunks)
+		gui.Post(func() {
+			parent := gui.IWidget(globalFrame)
+			if parent == nil {
+				parent = gui.DefaultFrame()
+			}
+			dlg := gui.NewDialog(i18n.Tf("%s  %s", commit.Hash, commit.Subject), parent)
+			dv := gui.NewDiffView()
+			dv.SetTexts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"))
+			dlg.SetContent(dv)
+			dlg.AddButton(i18n.T("Close"), gui.DialogCancel)
+			dlg.SetSize(760, 560)
+			dlg.ShowModal()
 		})
 	}()
 }
@@ -3149,6 +3192,11 @@ var globalTodoPanel *ged.TodoPanel
 
 // globalGitLog shows recent commit history (git log) in the bottom dock.
 var globalGitLog *ged.GitLogPanel
+
+// globalCanvas is the active design canvas, held package-level so
+// makeCodeEditor's test-gutter callback can resolve projectDir without
+// threading the canvas through every editor constructor.
+var globalCanvas *ged.GedView
 
 // globalFileExplorer is the left-dock file tree, held package-level so
 // "Open Project" can re-root it at runtime. globalProjectRoot, when set by
