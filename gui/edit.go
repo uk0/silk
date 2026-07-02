@@ -1070,7 +1070,8 @@ func (this *Edit) IsReadOnly() bool {
 
 func (this *Edit) SizeHints() SizeHints {
 	f := this.Font()
-	h := f.FontExtents().Height + Theme().Margin
+	m := this.padding
+	h := f.FontExtents().Height + m.T + m.B
 	return SizeHints{
 		Width:  this.w,
 		Height: h,

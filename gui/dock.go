@@ -301,10 +301,11 @@ func (this *Dock) Draw(g paint.Painter) {
 		}
 	}
 
-	// Bottom hairline separating header from content.
+	// Bottom hairline separating header from content. BorderColor (not
+	// SeperatorColor, which is near-invisible against FormColor in light mode).
 	g.MoveTo(0, this.headH-0.5)
 	g.LineTo(this.Widget.w, this.headH-0.5)
-	g.SetPen1(t.SeperatorColor, 1)
+	g.SetPen1(t.BorderColor, 1)
 	g.Stroke()
 	//}
 }

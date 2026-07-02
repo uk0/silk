@@ -173,7 +173,7 @@ func Theme() *defaultTheme {
 		t.TabMargin = Margin{2, 4, 1, 2}
 
 		t.TabActiveTextColor = paint.Color{0, 0, 0, 255}
-		t.TabTextColor = paint.Color{255, 255, 255, 255}
+		t.TabTextColor = paint.Color{107, 114, 128, 255} // gray-500, readable on the light chrome fill
 		t.TabCloseIcon = LoadIcon("close-btn")
 		t.TabCloseSize = 12
 
@@ -449,16 +449,20 @@ func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
 		g.SetBrush1(t.HighLightColor)
 		g.Fill()
 	} else if hover {
-		// Hover: subtle fill leaning toward the active/content background at
-		// low alpha — a hint of elevation without the full active treatment.
-		hc := t.ViewBGColor
-		hc.A = 40
-		roundedRect(g, tx, ty, tw, th, radius)
+		// Hover: subtle text-colored tint at low alpha — a hint of elevation
+		// without the full active treatment. Derived from TextColor so it is
+		// visible in both modes (ViewBGColor equals FormColor in dark mode).
+		// The fill stops 2px short of the strip's bottom border line so the
+		// line stays intact under non-active tabs.
+		hc := t.TextColor
+		hc.A = 18
+		roundedRect(g, tx, ty, tw, th-2, radius)
 		g.SetBrush1(hc)
 		g.Fill()
 	} else {
-		// Inactive: flat chrome fill, no indicator.
-		g.Rectangle(tx, ty, tw, th)
+		// Inactive: flat chrome fill, no indicator. Like hover, the fill ends
+		// 2px above the cell bottom to leave the strip's border line visible.
+		g.Rectangle(tx, ty, tw, th-2)
 		g.SetBrush1(t.FormColor)
 		g.Fill()
 	}
@@ -723,12 +727,10 @@ func (t *defaultTheme) DrawSeperator(c paint.Painter, w, h float64, vertical boo
 func (t *defaultTheme) DrawMenu(g paint.Painter, m *Menu) {
 	w, h := m.Size()
 	if m.IsPopup() {
-		// Modern popup menu: rounded corners, real soft elevation shadow.
+		// Modern popup menu: rounded corners. No drop shadow here: the popup
+		// lives in a GLFW window sized exactly to the widget and all drawing
+		// is clipped to bounds, so an outset shadow would never be visible.
 		radius := 6.0
-
-		// Soft drop shadow under the body (drawn BEFORE the body fill so the
-		// menu sits on top). blur gives the elevation falloff.
-		paint.DrawShadowRect(g, 0, 0, w, h, radius, 6, paint.Color{0, 0, 0, 90})
 
 		// Main background
 		roundedRect(g, 0, 0, w, h, radius)
