@@ -372,6 +372,48 @@ func TestLSPClientFailAllPending(t *testing.T) {
 	}
 }
 
+// TestLSPClientNotifications_ClosedOnReadLoopExit: server 端关掉写 pipe ->
+// readLoop 收 EOF 退出 -> Notifications() 通道必须被 close, 上层的
+// `for range notifs` 才能终止. 修复前该通道永不 close, 宿主每重启一次 client
+// 就泄漏一个 drain goroutine (外加被换下的旧 client).
+func TestLSPClientNotifications_ClosedOnReadLoopExit(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() {
+		_ = srvIn.Close()
+		_ = c.Close()
+	}()
+
+	// 先推一条通知, 验证 close 之前已缓冲的消息仍能被读到 (close 不吞数据)
+	if err := WriteLSPMessage(srvOut, &LSPMessage{
+		JSONRPC: "2.0",
+		Method:  "window/logMessage",
+		Params:  json.RawMessage(`{"type":3,"message":"hi"}`),
+	}); err != nil {
+		t.Fatalf("write notification: %v", err)
+	}
+
+	// 关 server 写端 -> client.stdout EOF -> readLoop 退出并 close(notifications)
+	_ = srvOut.Close()
+
+	// 通道必须在超时内变成 closed: 先读到缓冲的那条, 随后 receive 返回 ok=false
+	deadline := time.After(2 * time.Second)
+	var got []*LSPMessage
+	for {
+		select {
+		case m, ok := <-c.Notifications():
+			if !ok {
+				if len(got) != 1 || got[0].Method != "window/logMessage" {
+					t.Errorf("buffered notifications before close = %+v, want the single logMessage", got)
+				}
+				return
+			}
+			got = append(got, m)
+		case <-deadline:
+			t.Fatal("Notifications() channel never closed after read loop exit")
+		}
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Round-trip via io.Pipe + 内嵌假服务器: 覆盖完整 readLoop + SendRequest 路径
 // -----------------------------------------------------------------------------

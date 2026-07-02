@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,12 +38,15 @@ type DebugSession struct {
 	cmd  *exec.Cmd
 	port int
 
+	// closed 独立于 mu (atomic): Close 必须能在不等 s.mu 的情况下打上标记 --
+	// 一个 rpcCall 可能正持着 s.mu 阻塞在 Decode 上 (debuggee 运行中), 等锁即死锁.
+	closed atomic.Bool
+
 	mu        sync.Mutex
 	conn      net.Conn
 	enc       *json.Encoder
 	dec       *json.Decoder
 	nextRPCID int
-	closed    bool
 }
 
 // Breakpoint 是用户/我们在源码某一行下的断点
@@ -114,25 +118,35 @@ func LaunchDebug(packageDir string, args []string) (*DebugSession, error) {
 	}, nil
 }
 
-// Close 优雅停掉 dlv: 先尝试 Detach (附带 kill=true), 再 kill 进程兜底
+// Close 停掉 dlv: 标记 closed -> 关连接 -> 尽力 Detach -> kill 进程兜底
+// 关键顺序: Close 不能一上来就等 s.mu -- 后台的 rpcCall (典型是 Continue 在等
+// stop state) 可能正持有 s.mu 阻塞在 Decode 上, 先等锁就是死锁 (IDE 里表现为
+// 点 Stop 冻住主线程). 因此:
+//  1. closed 用独立的 atomic 打标记, 不经过 s.mu;
+//  2. 先 conn.Close() -- net.Conn 并发安全, 会让阻塞中的 Decode 立即带错返回,
+//     对应的 rpcCall 看到 closed 后回 errSessionClosed 并释放 s.mu;
+//  3. 之后再拿 s.mu 做剩余清理. 此时 Detach 大概率失败 (conn 已关) -- 无妨,
+//     Process.Kill 兜底保证 dlv 子进程一定被终止.
+//
 // Detach 任意错误都忽略 -- 进程都要终止了, 没必要把 RPC 错误返给上层
 func (s *DebugSession) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	s.closed = true
-	s.mu.Unlock()
 
-	// Detach 的 params 是 {Kill: true}; 锁已经释放, rpcCall 自己会再上锁
-	// 但 closed 此时为 true, 所以我们走一条临时的内部路径: 直接 encode/decode
-	// 一次而不通过 rpcCall (rpcCall 在 closed 状态下会拒绝).
-	s.sendDetachBestEffort()
-
+	// 先断连接, 唤醒可能阻塞在 Decode 上的 rpcCall, 让它释放 s.mu.
+	// conn 在构造之后不再变更, 这里无锁读是安全的.
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Detach 的 params 是 {Kill: true}. 不通过 rpcCall (closed 状态下它会拒绝);
+	// conn 已关时这次读写会立刻失败, 属于预期内的 best-effort.
+	s.sendDetachBestEffort()
+
 	if s.cmd != nil && s.cmd.Process != nil {
 		// dlv 在 Detach(kill=true) 之后通常会自己退出, 这里再补一刀确保不漏
 		_ = s.cmd.Process.Kill()
@@ -600,14 +614,21 @@ func (s *DebugSession) Restart() error {
 	return nil
 }
 
+// errSessionClosed 是 session 已 Close 之后一切 RPC 的统一返回错误
+// Close 会先关 conn 把阻塞中的 Decode 唤醒 -- rpcCall 醒来看到 closed 时也回它,
+// 不把底层 "use of closed network connection" 之类的 read 错误抛给调用方.
+var errSessionClosed = errors.New("debug session closed")
+
 // rpcCall 是 JSON-RPC 1.0 在 TCP 上的单次 round-trip
 // 串行化由 s.mu 提供 -- net/rpc 的 JSON codec 不允许两个 goroutine 同时写一个 conn.
+// closed 在入口查一次, encode/decode 出错后再查一次: 后者对应 Close 并发关掉
+// conn 把本调用从阻塞 IO 里唤醒的场景, 统一回 errSessionClosed.
 // out 必须是非空指针; 调用方负责字段对应到 Delve 的应答结构.
 func (s *DebugSession) rpcCall(method string, params interface{}, out interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("debug session closed")
+	if s.closed.Load() {
+		return errSessionClosed
 	}
 	if s.conn == nil {
 		return errors.New("debug session has no conn")
@@ -623,11 +644,17 @@ func (s *DebugSession) rpcCall(method string, params interface{}, out interface{
 		Params:  []interface{}{params},
 	}
 	if err := s.enc.Encode(&req); err != nil {
+		if s.closed.Load() {
+			return errSessionClosed
+		}
 		return fmt.Errorf("rpc encode %s: %w", method, err)
 	}
 
 	var raw rpcRawResponse
 	if err := s.dec.Decode(&raw); err != nil {
+		if s.closed.Load() {
+			return errSessionClosed
+		}
 		if errors.Is(err, io.EOF) {
 			return fmt.Errorf("rpc decode %s: connection closed", method)
 		}

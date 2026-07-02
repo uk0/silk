@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -216,9 +217,17 @@ func TestDlvRPCCall_IDMismatch(t *testing.T) {
 	}
 }
 
+// closedSession 构造一个已打上 closed 标记的 session, 供各 RPC 的 closed 早退
+// 测试复用. closed 是 atomic.Bool, 没法用结构体字面量初始化, 统一走这个小工厂.
+func closedSession() *DebugSession {
+	sess := &DebugSession{}
+	sess.closed.Store(true)
+	return sess
+}
+
 // TestRPCCall_OnClosedSession: closed=true 时 rpcCall 早退
 func TestDlvRPCCall_OnClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	err := sess.rpcCall("X", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -251,11 +260,14 @@ func TestDlvRPCCall_ConnEOF(t *testing.T) {
 // fakeRPCServer 在 localhost 起一个最朴素的 newline-delimited JSON-RPC 服务器
 // 仅供 rpcCall 协议测试使用. handle(fn) 注册一个处理回调; 一次连接每条请求都
 // 走最近一次注册的回调. 写回 "" 表示不应答, 直接关闭连接 (模拟 dlv 崩溃).
+// conn 由 accept goroutine 在 Accept 之后才写入, 而 close()/handle() 在测试
+// goroutine 上并发读写 -- 共享字段统一用 mu 护住, 否则 -race 会抓到 hand-off 竞态.
 type fakeRPCServer struct {
-	ln      net.Listener
+	ln net.Listener
+	t  *testing.T
+
+	mu      sync.Mutex // guards conn + current (accept goroutine vs 测试 goroutine)
 	conn    net.Conn
-	br      *bufio.Reader
-	t       *testing.T
 	current func(map[string]interface{}) string
 }
 
@@ -272,11 +284,13 @@ func newFakeRPCServer(t *testing.T) (*fakeRPCServer, net.Conn) {
 		if err != nil {
 			return
 		}
+		srv.mu.Lock()
 		srv.conn = c
-		srv.br = bufio.NewReader(c)
+		srv.mu.Unlock()
+		br := bufio.NewReader(c)
 		// 服务循环: 每读一行就调当前 handler
 		for {
-			line, err := srv.br.ReadBytes('\n')
+			line, err := br.ReadBytes('\n')
 			if err != nil {
 				_ = c.Close()
 				return
@@ -285,7 +299,9 @@ func newFakeRPCServer(t *testing.T) (*fakeRPCServer, net.Conn) {
 			if err := json.Unmarshal(line, &req); err != nil {
 				continue
 			}
+			srv.mu.Lock()
 			h := srv.current
+			srv.mu.Unlock()
 			if h == nil {
 				continue
 			}
@@ -310,12 +326,17 @@ func newFakeRPCServer(t *testing.T) (*fakeRPCServer, net.Conn) {
 }
 
 func (s *fakeRPCServer) handle(fn func(map[string]interface{}) string) {
+	s.mu.Lock()
 	s.current = fn
+	s.mu.Unlock()
 }
 
 func (s *fakeRPCServer) close() {
-	if s.conn != nil {
-		_ = s.conn.Close()
+	s.mu.Lock()
+	conn := s.conn
+	s.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
 	}
 	if s.ln != nil {
 		_ = s.ln.Close()
@@ -567,7 +588,7 @@ func TestDlvStacktrace_ErrorPath(t *testing.T) {
 
 // TestStacktrace_ClosedSession: pre-call Close, Stacktrace 必须返回 closed 错误
 func TestDlvStacktrace_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	_, err := sess.Stacktrace(-1, 10)
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -767,7 +788,7 @@ func TestDlvEval_ErrorPath(t *testing.T) {
 
 // TestEval_ClosedSession: Close 后再 Eval 应该立刻返回 closed 错误
 func TestDlvEval_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	_, err := sess.Eval("x", -1, 0)
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -777,7 +798,7 @@ func TestDlvEval_ClosedSession(t *testing.T) {
 // TestListGoroutines_ClosedSession + TestListLocals_ClosedSession
 // 一并覆盖 closed 早退路径, 防止后续重构忘了某条
 func TestDlvListGoroutines_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	_, err := sess.ListGoroutines()
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -785,7 +806,7 @@ func TestDlvListGoroutines_ClosedSession(t *testing.T) {
 }
 
 func TestDlvListLocals_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	_, err := sess.ListLocals(-1, 0)
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -849,7 +870,7 @@ func TestDlvSetVariable_ErrorPath(t *testing.T) {
 
 // TestSetVariable_ClosedSession: Close 后再调必须返回 closed 错误, 不 panic
 func TestDlvSetVariable_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	err := sess.SetVariable("x", "1", -1, 0)
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -892,7 +913,7 @@ func TestDlvSetConditionalBreakpoint_Decode(t *testing.T) {
 
 // TestSetConditionalBreakpoint_ClosedSession
 func TestDlvSetConditionalBreakpoint_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	_, err := sess.SetConditionalBreakpoint("main.go", 12, "i == 3")
 	if err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
@@ -998,7 +1019,7 @@ func TestDlvRestart_ErrorPath(t *testing.T) {
 
 // TestRestart_ClosedSession
 func TestDlvRestart_ClosedSession(t *testing.T) {
-	sess := &DebugSession{closed: true}
+	sess := closedSession()
 	if err := sess.Restart(); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("want closed error, got %v", err)
 	}
@@ -1108,10 +1129,72 @@ func TestDlvStepActions_ClosedSession(t *testing.T) {
 		{"StepInto", (*DebugSession).StepInto},
 		{"StepOut", (*DebugSession).StepOut},
 	} {
-		sess := &DebugSession{closed: true}
+		sess := closedSession()
 		_, err := f.call(sess)
 		if err == nil || !strings.Contains(err.Error(), "closed") {
 			t.Fatalf("%s on closed session: want closed error, got %v", f.name, err)
 		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Close vs 阻塞中的 rpcCall -- 死锁回归测试
+// -----------------------------------------------------------------------------
+
+// TestDlvClose_WhileBlockedInContinue: 一个后台 goroutine 的 Continue 持着 s.mu
+// 阻塞在 Decode 上 (fake server 收下请求但永不应答, 模拟 debuggee 一直在跑),
+// 此时调 Close. 修复前 Close 一上来就等 s.mu, 永远拿不到 -> IDE 点 Stop 冻死;
+// 修复后 Close 先关 conn 唤醒 Decode, 必须立刻返回, Continue 侧拿到统一的
+// errSessionClosed (而不是底层 read 错误).
+func TestDlvClose_WhileBlockedInContinue(t *testing.T) {
+	srv, sess := newSessionWithFakeServer(t)
+	defer srv.close()
+
+	gotReq := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release) // 收尾时放行 handler, 让 accept goroutine 退出
+	srv.handle(func(req map[string]interface{}) string {
+		close(gotReq)
+		<-release // 扣住请求不应答
+		return ""
+	})
+
+	contErr := make(chan error, 1)
+	go func() {
+		_, err := sess.Continue()
+		contErr <- err
+	}()
+
+	// 等 fake server 真收到 Continue 请求, 确保 rpcCall 已持锁阻塞在 Decode 上
+	select {
+	case <-gotReq:
+	case <-time.After(3 * time.Second):
+		t.Fatal("fake server never received the Continue request")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- sess.Close() }()
+
+	// Close 必须立刻返回, 不许等 Continue 的应答 (修复前这里 3s 超时)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close deadlocked while Continue was blocked in Decode")
+	}
+
+	// Continue 侧必须被唤醒, 且拿到干净的 session closed 错误
+	select {
+	case err := <-contErr:
+		if err == nil {
+			t.Fatal("Continue returned nil after Close, want session closed error")
+		}
+		if !errors.Is(err, errSessionClosed) {
+			t.Errorf("Continue err = %v, want errSessionClosed", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Continue did not unblock after Close")
 	}
 }

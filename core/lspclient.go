@@ -149,7 +149,8 @@ func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 //   - 有 ID + (Result 或 Error)  -> 对应 pending chan
 //   - 无 ID + Method != ""       -> notifications chan
 //   - 其它                       -> drop + 日志
-// EOF / 读错误 时退出循环, 关闭 done, 让 Close 知道读端已停.
+// EOF / 读错误 时退出循环: fail 掉所有 pending, close notifications (本循环是
+// 它唯一的发送方), 最后关闭 done, 让 Close 知道读端已停.
 func (c *LSPClient) readLoop() {
 	defer close(c.done)
 	for {
@@ -161,6 +162,10 @@ func (c *LSPClient) readLoop() {
 			}
 			// 把所有 pending 全部 fail 掉, 让 SendRequest 的等待方早退
 			c.failAllPending()
+			// readLoop 是 notifications 的唯一发送方 (routeMessage 只在本循环
+			// 里被调用); 读侧终结后不会再有投递, 这里 close 掉, 让上层的
+			// `for range Notifications()` 随会话结束而退出, 不泄漏 drain goroutine.
+			close(c.notifications)
 			return
 		}
 
@@ -1048,6 +1053,9 @@ func (c *LSPClient) DidChange(uri string, version int, fullText string) error {
 // 典型消费者: publishDiagnostics, window/logMessage, window/showMessage.
 // 通道是 buffered=64; 上层不消费时会丢消息 (见 routeMessage), 这是有意的:
 // LSP 通知本质上 best-effort, 不应该让一个迟到的消费者把读循环堵死.
+// 读循环退出时 (server 退出 / Close) 该通道会被 close, 因此上层可以放心用
+// `for m := range c.Notifications()` 消费 -- 循环随会话结束而终止, 不会把
+// drain goroutine 泄漏在每次 client 重启之后.
 func (c *LSPClient) Notifications() <-chan *LSPMessage { return c.notifications }
 
 // Close 优雅关闭: shutdown 请求 -> exit 通知 -> 关 stdin -> 等子进程 / 兜底 Kill
