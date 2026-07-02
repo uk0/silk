@@ -181,22 +181,19 @@ func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	for _, v := range this.Children() {
 		v.Detach()
 	}
-	child := doc.ChildByKey("children", false)
-	if child != nil {
-		for _, v := range child.Childdren() {
-			var factoryName string
-			v.Value(&factoryName)
-			//core.Debug(class)
-			p, err := NewFakeWidgetFromFactory(factoryName)
-			if err != nil {
-				return err
-			}
-			p.SetParent(this)
-			p.LoadDesign(v)
-		}
+	// Reconstruct top-level widgets via the shared loader. A node whose
+	// factory is not registered (a widget renamed or removed across
+	// versions, or a plugin widget that isn't loaded) is skipped together
+	// with its subtree and counted, rather than aborting the whole load —
+	// so one unknown widget no longer stops the entire .silkui file from
+	// opening. A load that skipped some nodes still returns nil (partial
+	// success); an all-unknown file simply yields an empty scene.
+	var skipped int
+	loadChildWidgets(doc.ChildByKey("children", false), this, &skipped)
+	if skipped > 0 {
+		core.Warn("silkui load: skipped ", skipped, " widget(s) with unknown factories")
 	}
 	return nil
-
 }
 
 //func (this *GedScene) SizeHints() gui.SizeHints {

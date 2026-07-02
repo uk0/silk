@@ -464,7 +464,55 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 	return doc
 }
 
+// loadChildWidgets reconstructs child FakeWidgets from a "children" TDoc block
+// and reparents each under parent, recursing into nested containers. It is the
+// single load path shared by GedScene.LoadDesign and FakeWidget.LoadDesign, so
+// both behave identically.
+//
+// Skip-and-continue: when a node's factory name is not registered — a widget
+// renamed or removed across versions, or a plugin widget that simply isn't
+// loaded — the node is skipped together with its ENTIRE subtree (its children
+// cannot attach to a parent that was never created) and tallied into *skipped.
+// This never aborts the load, so one unknown widget can no longer take the
+// whole .silkui file down with it: the remaining valid siblings still load.
+// Each skip logs a warning naming the missing factory; the entry point emits a
+// single summary from the running count.
+func loadChildWidgets(childrenDoc *core.TDoc, parent graph.IItem, skipped *int) {
+	if childrenDoc == nil {
+		return
+	}
+	for _, v := range childrenDoc.Childdren() {
+		var factoryName string
+		v.Value(&factoryName)
+		child, err := NewFakeWidgetFromFactory(factoryName)
+		if err != nil {
+			shown := factoryName
+			if shown == "" {
+				shown = "(empty)"
+			}
+			core.Warn("silkui load: unknown widget factory ", shown, "; skipping node and its subtree")
+			*skipped++
+			continue
+		}
+		child.SetParent(parent)
+		child.loadDesign(v, skipped)
+	}
+}
+
 func (this *FakeWidget) LoadDesign(doc *core.TDoc) error {
+	var skipped int
+	this.loadDesign(doc, &skipped)
+	if skipped > 0 {
+		core.Warn("silkui load: skipped ", skipped, " widget(s) with unknown factories")
+	}
+	return nil
+}
+
+// loadDesign performs the actual load, threading the skipped-node accumulator
+// through the recursion so a single summary can be emitted by the entry point.
+// It never fails on an unknown child factory (see loadChildWidgets), so a
+// partially valid design still loads its valid widgets.
+func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *int) {
 	var rect geom.Rect
 	doc.ReadAttr("bounds", &rect)
 	this.SetBounds1(rect)
@@ -489,26 +537,10 @@ func (this *FakeWidget) LoadDesign(doc *core.TDoc) error {
 			}
 		}
 	}
-	// Reconstruct nested child widgets from the "children" block —
-	// mirrors GedScene.LoadDesign. Each child is created from its
-	// factory name and reparented under this FakeWidget, recursing for
-	// arbitrarily deep container nesting.
-	childrenDoc := doc.ChildByKey("children", false)
-	if childrenDoc != nil {
-		for _, v := range childrenDoc.Childdren() {
-			var factoryName string
-			v.Value(&factoryName)
-			child, err := NewFakeWidgetFromFactory(factoryName)
-			if err != nil {
-				return err
-			}
-			child.SetParent(this)
-			if err := child.LoadDesign(v); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	// Reconstruct nested child widgets from the "children" block via the
+	// shared loader, which skips unknown-factory subtrees instead of
+	// aborting and recurses for arbitrarily deep container nesting.
+	loadChildWidgets(doc.ChildByKey("children", false), this, skipped)
 }
 
 // corePropertyListAdapter wraps prop.IPropertyList to satisfy core.IPropertyList.
