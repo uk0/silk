@@ -342,31 +342,41 @@ func (this *ObjectInspector) reorderItems(fromIdx, toIdx int) {
 	if this.scene == nil {
 		return
 	}
-	// Only reorder depth-1 items (scene children)
-	// items[0] is the root (GedScene), items[1..] are children
-	childCount := len(this.items) - 1
+	// fromIdx/toIdx are inspector-row indices into the FLATTENED items list
+	// (root + children + grandchildren), so bound-check before dereferencing.
+	if fromIdx < 0 || fromIdx >= len(this.items) {
+		return
+	}
+	// A flattened row index is NOT a sibling index. Derive the real sibling
+	// position from the dragged item itself, and reject anything that is not a
+	// direct child of the scene (only top-level rows are draggable, but the
+	// item may sit after nested rows once containers exist).
+	it := this.items[fromIdx].item
+	if it == nil || it.Parent() != graph.IItem(this.scene) {
+		return
+	}
+	children := this.scene.Children()
+	childCount := len(children)
 	if childCount < 2 {
 		return
 	}
-	// Convert inspector indices to child indices (0-based within children)
-	fromChild := fromIdx - 1
-	toChild := toIdx - 1
+	fromChild := it.IndexInParent()
 	if fromChild < 0 || fromChild >= childCount {
 		return
 	}
-	if toChild < 0 {
-		toChild = 0
+	// Map the drop row to a sibling slot by counting the direct children whose
+	// flattened row precedes toIdx. For a non-nested tree this reduces to the
+	// old toIdx-1; with nesting it correctly skips grandchildren rows.
+	toChild := 0
+	for i := 0; i < len(this.items) && i < toIdx; i++ {
+		if this.items[i].depth == 1 {
+			toChild++
+		}
 	}
 	if toChild > childCount {
 		toChild = childCount
 	}
 	if fromChild == toChild {
-		return
-	}
-
-	// Get current children
-	children := this.scene.Children()
-	if len(children) < 2 {
 		return
 	}
 
