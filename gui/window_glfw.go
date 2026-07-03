@@ -1274,10 +1274,22 @@ func MainLoop() {
 		// and before the paint pass, so GUI state is mutated safely.
 		drainUITasks()
 
-		// When the perf overlay is visible we request a repaint every
-		// iteration so the FPS counter stays live even on an otherwise
-		// idle UI.
-		if GlobalPerfStats.IsVisible() {
+		// Advance the animation engine one frame. Progresses every active
+		// Animation/AnimationGroup off the wall clock and evicts finished
+		// ones, so HasActiveAnimations() drops back to false when nothing is
+		// running and the loop can return to the idle wait instead of
+		// spinning at 60fps.
+		AnimationTick()
+
+		// Request a repaint every iteration while the perf overlay is live or
+		// any animation is running. Animations need the forced dirty because
+		// several drive their visuals straight off elapsed time with a no-op
+		// onUpdate (spinner / progressbar heartbeat) or only mutate widget
+		// pos/size (SlideIn/ScaleUp/Shake) without self-invalidating — without
+		// this they would tick but never redraw. When idle (no overlay, no
+		// animations) nothing is dirtied and the loop parks on the 47ms wait,
+		// so this never busy-spins the CPU.
+		if GlobalPerfStats.IsVisible() || HasActiveAnimations() {
 			for _, win := range winMap {
 				if win != nil && win.IsVisible() {
 					win.dirty = true
@@ -2093,6 +2105,20 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 			glfw.WaitEventsTimeout(0.047)
 		}
 		processTimers()
+
+		// Keep the animation engine live inside the modal loop too — without
+		// this, any spinner/fade/slide freezes while a modal dialog is open.
+		// Same contract as MainLoop: tick advances + evicts, and we force a
+		// repaint only while animations run (an idle modal stays on the 47ms
+		// wait, so no CPU spin).
+		AnimationTick()
+		if HasActiveAnimations() {
+			for _, win := range winMap {
+				if win != nil && win.IsVisible() {
+					win.dirty = true
+				}
+			}
+		}
 
 		// Paint non-popup windows first, then popups on top
 		for _, win := range winMap {
