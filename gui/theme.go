@@ -55,6 +55,7 @@ type defaultTheme struct {
 	IconSize       float64
 	Font           paint.Font
 	HighLightColor paint.Color
+	Accent         paint.Color // centralized theme accent (active-tab bar, focus ring); mirrors HighLightColor
 	BorderColor    paint.Color
 	BorderPen      paint.Pen
 	TextColor      paint.Color
@@ -137,6 +138,7 @@ func Theme() *defaultTheme {
 
 		t.TextColor = paint.Color{33, 37, 41, 255}            // near-black, softer than pure black
 		t.HighLightColor = paint.Color{59, 130, 246, 255}     // modern blue (Tailwind blue-500)
+		t.Accent = t.HighLightColor                           // accent mirrors highlight (light mode)
 		t.BorderColor = paint.Color{209, 213, 219, 160}       // softer border (gray-300), hairline alpha
 		t.BorderPen = paint.NewPen(t.BorderColor, 1)
 		t.ViewBGColor = paint.Color{255, 255, 255, 255}
@@ -194,6 +196,7 @@ func Theme() *defaultTheme {
 			t.TextColor = paint.Color{228, 228, 231, 255}     // zinc-200
 			t.ViewBGColor = paint.Color{24, 24, 27, 255}      // zinc-900
 			t.HighLightColor = paint.Color{96, 165, 250, 255} // blue-400
+			t.Accent = t.HighLightColor                       // accent mirrors highlight (dark mode)
 			t.BorderColor = paint.Color{63, 63, 70, 160}      // zinc-700, hairline alpha
 			t.BorderPen = paint.NewPen(t.BorderColor, 1)
 			t.MenuBGColor = paint.Color{39, 39, 42, 255}      // zinc-800
@@ -269,6 +272,7 @@ func (t *defaultTheme) ResetStyleSheet() {
 	t.BorderColor = snap.BorderColor
 	t.BorderPen = paint.NewPen(t.BorderColor, 1)
 	t.HighLightColor = snap.HighLightColor
+	t.Accent = snap.Accent
 	t.ViewBGColor = snap.ViewBGColor
 	t.SeperatorColor = snap.SeperatorColor
 	t.MenuBGColor = snap.MenuBGColor
@@ -302,6 +306,7 @@ func (t *defaultTheme) applyStyleSheet(ss *StyleSheet) {
 	if !apply("Frame", "", "", "highlight", &t.HighLightColor) {
 		apply("*", "", "focus", "color", &t.HighLightColor)
 	}
+	t.Accent = t.HighLightColor // keep the centralized accent in sync with highlight overrides
 	apply("Frame", "", "", "view-background", &t.ViewBGColor)
 	apply("Frame", "", "", "separator", &t.SeperatorColor)
 
@@ -378,13 +383,13 @@ func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
 	radius := 4.0
 	if active {
 		// Active tab fills with the editor/content background so it visually
-		// connects to its pane, plus a bottom accent bar in HighLightColor.
+		// connects to its pane, plus a bottom accent bar in the theme Accent.
 		roundedRect(g, tx, ty, tw, th, radius)
 		g.SetBrush1(t.ViewBGColor)
 		g.Fill()
 		accent := 2.0
 		g.Rectangle(tx, ty+th-accent, tw, accent)
-		g.SetBrush1(t.HighLightColor)
+		g.SetBrush1(t.Accent)
 		g.Fill()
 	} else if hover {
 		// Hover: subtle text-colored tint at low alpha — a hint of elevation
@@ -620,7 +625,7 @@ func (t *defaultTheme) DrawEditFrame(c paint.Painter,
 	c.SetBrush1(paint.Color{255, 255, 255, 255})
 	c.FillPreserve()
 	if focus && !readonly {
-		c.SetPen1(t.HighLightColor, 2) // thicker blue border when focused
+		c.SetPen1(t.Accent, 2) // accent-colored focus ring
 	} else if hover && !readonly {
 		c.SetPen1(paint.Color{147, 197, 253, 255}, 1) // blue-300 on hover
 	} else {
