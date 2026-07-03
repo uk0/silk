@@ -65,6 +65,97 @@ var tokenColors = map[tokenType]paint.Color{
 	tokFunction: {R: 220, G: 220, B: 170, A: 255}, // light yellow
 }
 
+// lightTokenColors is the syntax palette used when CurrentThemeMode() is
+// ThemeLight — dark, saturated hues chosen to read on a white background
+// (VS Code "Light+" style). The dark palette above stays the default.
+var lightTokenColors = map[tokenType]paint.Color{
+	tokNormal:   {R: 40, G: 40, B: 44, A: 255},   // near-black body text
+	tokKeyword:  {R: 0, G: 0, B: 255, A: 255},    // blue
+	tokString:   {R: 163, G: 21, B: 21, A: 255},  // dark red
+	tokComment:  {R: 0, G: 128, B: 0, A: 255},    // green
+	tokNumber:   {R: 9, G: 134, B: 88, A: 255},   // green-teal
+	tokType:     {R: 38, G: 127, B: 153, A: 255}, // teal
+	tokFunction: {R: 121, G: 94, B: 38, A: 255},  // brown
+}
+
+// editorPalette bundles the theme-selected furniture colours (background,
+// gutter, caret, …) plus the syntax token hues for one theme mode. The editor
+// picks a palette per Draw via editorColorsFor(CurrentThemeMode()). Only the
+// always-visible surfaces are themed; semantic gutter/inline markers (error,
+// git, breakpoint, find-match, …) and the transient find/replace bar keep their
+// saturated hues, which read on either background.
+type editorPalette struct {
+	bg            paint.Color               // editor background
+	gutter        paint.Color               // gutter + status-bar background
+	gutterBorder  paint.Color               // gutter right edge + status-bar top border
+	currentLine   paint.Color               // current-line highlight
+	errorTint     paint.Color               // error-line background wash
+	selection     paint.Color               // selection highlight
+	lineNumber    paint.Color               // gutter line-number text
+	caret         paint.Color               // primary caret (dim caret reuses RGB at A:160)
+	indentGuide   paint.Color               // indent-guide dots
+	foldMarker    paint.Color               // fold ▸/▾ triangle
+	minimapBG     paint.Color               // minimap background
+	minimapBorder paint.Color               // minimap left border
+	minimapDim    paint.Color               // minimap normal/whitespace token bar
+	panelText     paint.Color               // status-bar primary text
+	panelDimText  paint.Color               // status-bar secondary text
+	tokens        map[tokenType]paint.Color // syntax token hues
+}
+
+// darkEditorPalette is the original hardcoded dark scheme. It is byte-identical
+// to the literals that previously lived inline in the Draw path — dark is the
+// default and must stay pixel-identical to the pre-theme render.
+var darkEditorPalette = editorPalette{
+	bg:            paint.Color{R: 30, G: 30, B: 35, A: 255},
+	gutter:        paint.Color{R: 40, G: 40, B: 48, A: 255},
+	gutterBorder:  paint.Color{R: 55, G: 55, B: 65, A: 255},
+	currentLine:   paint.Color{R: 44, G: 44, B: 54, A: 255},
+	errorTint:     paint.Color{R: 130, G: 50, B: 50, A: 60},
+	selection:     paint.Color{R: 70, G: 110, B: 190, A: 95},
+	lineNumber:    paint.Color{R: 100, G: 100, B: 120, A: 255},
+	caret:         paint.Color{R: 212, G: 212, B: 222, A: 255},
+	indentGuide:   paint.Color{R: 60, G: 60, B: 70, A: 100},
+	foldMarker:    paint.Color{R: 150, G: 150, B: 165, A: 230},
+	minimapBG:     paint.Color{R: 25, G: 25, B: 30, A: 255},
+	minimapBorder: paint.Color{R: 45, G: 45, B: 55, A: 255},
+	minimapDim:    paint.Color{R: 140, G: 140, B: 150, A: 100},
+	panelText:     paint.Color{R: 170, G: 170, B: 185, A: 255},
+	panelDimText:  paint.Color{R: 130, G: 130, B: 145, A: 255},
+	tokens:        tokenColors,
+}
+
+// lightEditorPalette is the light-mode counterpart: soft-white surfaces, faint
+// highlights, near-black text, and the lightTokenColors syntax hues.
+var lightEditorPalette = editorPalette{
+	bg:            paint.Color{R: 250, G: 250, B: 252, A: 255},
+	gutter:        paint.Color{R: 245, G: 245, B: 247, A: 255},
+	gutterBorder:  paint.Color{R: 225, G: 225, B: 230, A: 255},
+	currentLine:   paint.Color{R: 240, G: 240, B: 245, A: 255},
+	errorTint:     paint.Color{R: 255, G: 180, B: 180, A: 70},
+	selection:     paint.Color{R: 70, G: 110, B: 190, A: 60},
+	lineNumber:    paint.Color{R: 150, G: 150, B: 165, A: 255},
+	caret:         paint.Color{R: 40, G: 40, B: 44, A: 255},
+	indentGuide:   paint.Color{R: 210, G: 210, B: 218, A: 120},
+	foldMarker:    paint.Color{R: 120, G: 120, B: 135, A: 230},
+	minimapBG:     paint.Color{R: 245, G: 245, B: 247, A: 255},
+	minimapBorder: paint.Color{R: 225, G: 225, B: 230, A: 255},
+	minimapDim:    paint.Color{R: 120, G: 120, B: 135, A: 100},
+	panelText:     paint.Color{R: 60, G: 60, B: 70, A: 255},
+	panelDimText:  paint.Color{R: 110, G: 110, B: 125, A: 255},
+	tokens:        lightTokenColors,
+}
+
+// editorColorsFor returns the palette for the given theme mode. ThemeDark keeps
+// the original dark palette (byte-identical); every other mode uses the light
+// set. Pure and allocation-free — safe to call per Draw / per line.
+func editorColorsFor(mode ThemeMode) *editorPalette {
+	if mode == ThemeDark {
+		return &darkEditorPalette
+	}
+	return &lightEditorPalette
+}
+
 var goKeywords = map[string]bool{
 	"func": true, "if": true, "else": true, "for": true, "range": true,
 	"return": true, "switch": true, "case": true, "default": true,
@@ -2897,8 +2988,12 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	mmW := this.minimapWidth()
 	sbH := this.statusBarHeight
 
-	// Dark editor background
-	g.SetBrush1(paint.Color{R: 30, G: 30, B: 35, A: 255})
+	// Palette selected by the active theme. Dark is the default and stays
+	// byte-identical to the original hardcoded scheme; light is its counterpart.
+	pal := editorColorsFor(CurrentThemeMode())
+
+	// Editor background
+	g.SetBrush1(pal.bg)
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
 
@@ -2908,12 +3003,12 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	editorBottom := h - sbH
 
 	// Gutter background
-	g.SetBrush1(paint.Color{R: 40, G: 40, B: 48, A: 255})
+	g.SetBrush1(pal.gutter)
 	g.Rectangle(0, topOff, this.gutterW, editorBottom-topOff)
 	g.Fill()
 
 	// Gutter right border
-	g.SetPen1(paint.Color{R: 55, G: 55, B: 65, A: 255}, 1)
+	g.SetPen1(pal.gutterBorder, 1)
 	g.Line(this.gutterW, topOff, this.gutterW, editorBottom)
 	g.Stroke()
 
@@ -2990,14 +3085,14 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 		// Error line background tint (draw before current line highlight)
 		if _, hasErr := this.errorLines[i]; hasErr {
-			g.SetBrush1(paint.Color{R: 130, G: 50, B: 50, A: 60})
+			g.SetBrush1(pal.errorTint)
 			g.Rectangle(this.gutterW, y, editorRight-this.gutterW, lh)
 			g.Fill()
 		}
 
 		// Current line highlight
 		if i == this.cursorLine && !this.hasSelection {
-			g.SetBrush1(paint.Color{R: 44, G: 44, B: 54, A: 255})
+			g.SetBrush1(pal.currentLine)
 			g.Rectangle(this.gutterW, y, editorRight-this.gutterW, lh)
 			g.Fill()
 		}
@@ -3025,7 +3120,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 				selEndX = textOffX + this.measureText(string(lineRunes)) + 8
 			}
 			if selEndX > selStartX {
-				g.SetBrush1(paint.Color{R: 70, G: 110, B: 190, A: 95})
+				g.SetBrush1(pal.selection)
 				g.Rectangle(selStartX, y, selEndX-selStartX, lh)
 				g.Fill()
 			}
@@ -3113,7 +3208,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		// foldable region start. ▾ (down) when expanded, ▸ (right) when collapsed
 		// (Qt Creator / VS Code style). Clicking it is handled in OnLeftDown.
 		if _, foldable := foldStartEnd[i]; foldable {
-			g.SetBrush1(paint.Color{R: 150, G: 150, B: 165, A: 230})
+			g.SetBrush1(pal.foldMarker)
 			fx := this.gutterW - 4 // right edge of the marker, near the text area
 			s := 3.5               // half-size of the triangle
 			if this.foldedLines[i] {
@@ -3200,7 +3295,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 		// Line number
 		g.SetFont(this.font)
-		g.SetBrush1(paint.Color{R: 100, G: 100, B: 120, A: 255})
+		g.SetBrush1(pal.lineNumber)
 		numStr := fmt.Sprintf("%d", i+1)
 		numExt := this.font.TextExtents(numStr)
 		numX := this.gutterW - numExt.XAdvance - 8
@@ -3332,7 +3427,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			prefix := string(runes[:col])
 			cx := textOffX + this.measureText(prefix)
 			cy := float64(this.lineToVisualRow(this.cursorLine))*lh - this.scrollY + topOff
-			g.SetBrush1(paint.Color{R: 212, G: 212, B: 222, A: 255})
+			g.SetBrush1(pal.caret)
 			g.Rectangle(cx, cy, 1.5, lh)
 			g.Fill()
 		}
@@ -3348,7 +3443,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			cx := textOffX + this.measureText(prefix)
 			cy := float64(this.lineToVisualRow(cc.line))*lh - this.scrollY + topOff
 			// Dim color: same hue, half alpha.
-			g.SetBrush1(paint.Color{R: 212, G: 212, B: 222, A: 160})
+			g.SetBrush1(paint.Color{R: pal.caret.R, G: pal.caret.G, B: pal.caret.B, A: 160})
 			g.Rectangle(cx, cy, 1.5, lh)
 			g.Fill()
 		}
@@ -3521,7 +3616,7 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 	}
 	level += spaces / 4
 
-	guideColor := paint.Color{R: 60, G: 60, B: 70, A: 100}
+	guideColor := editorColorsFor(CurrentThemeMode()).indentGuide
 	for i := 1; i <= level; i++ {
 		gx := this.gutterW + 10 - this.scrollX + float64(i)*tabWidth
 		// Draw dotted vertical line (small segments every 3px)
@@ -3538,10 +3633,11 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 // idx is the line's index in this.lines and feeds the tokenization cache.
 func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line string, x, y float64, inBlock bool) bool {
 	tokens, newInBlock := this.tokenizeLineCached(idx, line, inBlock)
+	pal := editorColorsFor(CurrentThemeMode())
 	for _, tok := range tokens {
-		c, ok := tokenColors[tok.typ]
+		c, ok := pal.tokens[tok.typ]
 		if !ok {
-			c = tokenColors[tokNormal]
+			c = pal.tokens[tokNormal]
 		}
 		g.SetBrush1(c)
 		g.DrawText1(x, y, tok.text)
@@ -3553,13 +3649,14 @@ func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line strin
 
 // drawMinimap renders a scaled-down code overview on the right edge of the editor.
 func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64, startLine, visibleLines int) {
+	pal := editorColorsFor(CurrentThemeMode())
 	// Background
-	g.SetBrush1(paint.Color{R: 25, G: 25, B: 30, A: 255})
+	g.SetBrush1(pal.minimapBG)
 	g.Rectangle(x, y, mmW, mmH)
 	g.Fill()
 
 	// Left border
-	g.SetPen1(paint.Color{R: 45, G: 45, B: 55, A: 255}, 1)
+	g.SetPen1(pal.minimapBorder, 1)
 	g.Line(x, y, x, y+mmH)
 	g.Stroke()
 
@@ -3584,24 +3681,13 @@ func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64,
 		maxVisibleMinimap = totalLines
 	}
 
-	// Map token type to minimap color
+	// Map token type to minimap color: the active palette's token hue at reduced
+	// alpha, or the dim colour for normal/whitespace tokens.
 	mmTokenColor := func(typ tokenType) paint.Color {
-		switch typ {
-		case tokKeyword:
-			return paint.Color{R: 86, G: 156, B: 214, A: 200}
-		case tokString:
-			return paint.Color{R: 206, G: 145, B: 120, A: 200}
-		case tokComment:
-			return paint.Color{R: 106, G: 153, B: 85, A: 200}
-		case tokNumber:
-			return paint.Color{R: 181, G: 137, B: 214, A: 200}
-		case tokType:
-			return paint.Color{R: 78, G: 201, B: 176, A: 200}
-		case tokFunction:
-			return paint.Color{R: 220, G: 220, B: 170, A: 200}
-		default:
-			return paint.Color{R: 140, G: 140, B: 150, A: 100}
+		if c, ok := pal.tokens[typ]; ok && typ != tokNormal {
+			return paint.Color{R: c.R, G: c.G, B: c.B, A: 200}
 		}
+		return pal.minimapDim
 	}
 
 	mmScale := mmW - 6 // horizontal scale for line content
@@ -3655,14 +3741,15 @@ func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64,
 // drawStatusBar renders the editor status bar at the bottom.
 func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	y := h - sbH
+	pal := editorColorsFor(CurrentThemeMode())
 
 	// Background
-	g.SetBrush1(paint.Color{R: 40, G: 40, B: 48, A: 255})
+	g.SetBrush1(pal.gutter)
 	g.Rectangle(0, y, w, sbH)
 	g.Fill()
 
 	// Top border
-	g.SetPen1(paint.Color{R: 55, G: 55, B: 65, A: 255}, 1)
+	g.SetPen1(pal.gutterBorder, 1)
 	g.Line(0, y, w, y)
 	g.Stroke()
 
@@ -3672,7 +3759,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	textY := y + sfe.Ascent + (sbH-sfe.Height)/2
 
 	// Line:Column
-	g.SetBrush1(paint.Color{R: 170, G: 170, B: 185, A: 255})
+	g.SetBrush1(pal.panelText)
 	lnCol := fmt.Sprintf("Ln %d, Col %d", this.cursorLine+1, this.cursorCol+1)
 	g.DrawText1(10, textY, lnCol)
 
@@ -3681,7 +3768,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	lineCount := len(this.lines)
 	countStr := fmt.Sprintf("%d chars, %d lines", charCount, lineCount)
 	lnColExt := smallFont.TextExtents(lnCol)
-	g.SetBrush1(paint.Color{R: 130, G: 130, B: 145, A: 255})
+	g.SetBrush1(pal.panelDimText)
 	g.DrawText1(lnColExt.XAdvance+30, textY, countStr)
 
 	// Right-aligned items
@@ -3694,7 +3781,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	}
 	wrapExt := smallFont.TextExtents(wrapStr)
 	rightX -= wrapExt.XAdvance
-	g.SetBrush1(paint.Color{R: 130, G: 130, B: 145, A: 255})
+	g.SetBrush1(pal.panelDimText)
 	g.DrawText1(rightX, textY, wrapStr)
 
 	rightX -= 20
@@ -3703,7 +3790,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	langStr := "Go"
 	langExt := smallFont.TextExtents(langStr)
 	rightX -= langExt.XAdvance
-	g.SetBrush1(paint.Color{R: 130, G: 130, B: 145, A: 255})
+	g.SetBrush1(pal.panelDimText)
 	g.DrawText1(rightX, textY, langStr)
 
 	rightX -= 20
@@ -3712,7 +3799,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	encStr := "UTF-8"
 	encExt := smallFont.TextExtents(encStr)
 	rightX -= encExt.XAdvance
-	g.SetBrush1(paint.Color{R: 130, G: 130, B: 145, A: 255})
+	g.SetBrush1(pal.panelDimText)
 	g.DrawText1(rightX, textY, encStr)
 }
 
