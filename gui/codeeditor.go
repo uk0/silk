@@ -526,6 +526,71 @@ func (this *CodeEditor) CursorCol() int {
 	return this.cursorCol
 }
 
+// caretLocalXY returns the primary caret's position in LOCAL widget
+// coordinates: x is the caret's left edge, y is the BOTTOM of the caret's
+// line, so a popup anchored there sits just under the line instead of
+// covering it. The math mirrors the primary-cursor draw in Draw()
+// (cx = textOffX + measureText(prefix), cy = visualRow*lh - scrollY +
+// topOffset) — keep the two in sync. If the caret is scrolled out of view,
+// the result is clamped into the visible text viewport (right of the
+// gutter, left of the minimap, between the top bars and the status bar) so
+// a popup anchored to it never lands off-widget.
+func (this *CodeEditor) caretLocalXY() (float64, float64) {
+	fe := this.font.FontExtents()
+	lh := fe.Height + 2
+	topOff := this.topOffset()
+
+	// Clamp line/col locally — same bounds as the draw path's clampCursor,
+	// but without mutating cursor state from a read-only accessor.
+	line := this.cursorLine
+	if line < 0 {
+		line = 0
+	}
+	if line >= len(this.lines) {
+		line = len(this.lines) - 1
+	}
+	prefix := ""
+	if line >= 0 && line < len(this.lines) {
+		runes := []rune(this.lines[line])
+		col := this.cursorCol
+		if col < 0 {
+			col = 0
+		}
+		if col > len(runes) {
+			col = len(runes)
+		}
+		prefix = string(runes[:col])
+	}
+	x := this.gutterW + 10 - this.scrollX + this.measureText(prefix)
+	y := float64(this.lineToVisualRow(line))*lh - this.scrollY + topOff + lh // line bottom
+
+	// Viewport clamp: upper bound first so the lower bound wins on
+	// degenerate (tiny) editor sizes.
+	w, h := this.Size()
+	if right := w - this.minimapWidth(); x > right {
+		x = right
+	}
+	if left := this.gutterW + 10; x < left {
+		x = left
+	}
+	if bottom := h - this.statusBarHeight; y > bottom {
+		y = bottom
+	}
+	if top := topOff + lh; y < top {
+		y = top
+	}
+	return x, y
+}
+
+// CaretGlobalXY returns the primary caret's position in GLOBAL screen
+// coordinates: the caret's left x and the bottom of its line, ready to
+// anchor an LSP hover / signature-help popup just below the caret. The
+// local position is viewport-clamped (see caretLocalXY), so the anchor
+// stays inside the editor even when the caret is scrolled out of view.
+func (this *CodeEditor) CaretGlobalXY() (float64, float64) {
+	return this.MapToGlobal(this.caretLocalXY())
+}
+
 // Lines returns the current editor lines.
 func (this *CodeEditor) Lines() []string {
 	return this.lines
