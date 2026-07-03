@@ -694,6 +694,28 @@ func onExportCode() {
 // Run
 // ---------------------------------------------------------------------------
 
+// silkModuleRoot returns the silk module root: the nearest ancestor of the
+// working directory that contains a go.mod. It falls back to "." so the build
+// still runs from the process cwd when no go.mod is found. Used as the build
+// working directory so preview builds don't depend on where the designer
+// process was launched.
+func silkModuleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "."
+		}
+		dir = parent
+	}
+}
+
 func onRun() {
 	gv := currentGedView()
 	if gv == nil {
@@ -716,9 +738,12 @@ func onRun() {
 		return
 	}
 
-	// Compile
+	// Compile. Cairo resolves via pkg-config (the cairo package declares
+	// "#cgo pkg-config: cairo"), so no machine-specific include path is set.
+	// Run from the silk module root so silk/* imports resolve regardless of
+	// the designer process's cwd.
 	cmd := exec.Command("go", "build", "-o", tmpDir+"/app", goFile)
-	cmd.Env = append(os.Environ(), "CGO_CFLAGS=-I/opt/homebrew/Cellar/cairo/1.18.4/include")
+	cmd.Dir = silkModuleRoot()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Show output in BuildOutput panel if available
@@ -977,6 +1002,11 @@ var terminalPanel *ged.TerminalPanel
 // widgetHelp is the context-sensitive widget documentation panel.
 var widgetHelp *ged.WidgetHelp
 
+// propSheet is the property panel that shows and edits the selected widget's
+// properties (name/text/size/position/…). Bound to each canvas view's
+// selection via bindPropertySheetTo so selecting a widget populates it.
+var propSheet *prop.PropertySheet
+
 // centerDock holds the design canvas and code panel tabs.
 var centerDock *gui.Dock
 
@@ -1042,6 +1072,24 @@ func bindWidgetHelpTo(gv *ged.GedView) {
 			}
 		}
 		widgetHelp.SetWidget(nil)
+	})
+}
+
+// bindPropertySheetTo wires the property sheet to receive selection updates
+// from the given GedView, so selecting a widget on the canvas populates the
+// editable property panel (name/text/size/position/…). This is the wire the
+// GraphView auto-bind would perform if a property view were registered; here
+// we drive the docked sheet directly. Empty selection clears the sheet.
+func bindPropertySheetTo(gv *ged.GedView) {
+	if gv == nil || propSheet == nil {
+		return
+	}
+	gv.AddSelectionCallback(func(items []graph.IItem) {
+		objs := make([]interface{}, 0, len(items))
+		for _, it := range items {
+			objs = append(objs, it)
+		}
+		propSheet.Bind(objs, gv.PropertyConfigName(), gv.Scene())
 	})
 }
 
@@ -1153,7 +1201,7 @@ func createPanels(mainFrame *gui.Frame) {
 
 		// ─── Right dock: Properties + Code + Tree + Build Output ───
 		rightDockI := dock.SplitNewDock(false, false)
-		propSheet := prop.NewPropertySheet()
+		propSheet = prop.NewPropertySheet()
 		_ = mainFrame.ToolViewActions()
 		rightDockI.AddView(propSheet)
 
@@ -1198,6 +1246,7 @@ func createPanels(mainFrame *gui.Frame) {
 		if gv := currentGedView(); gv != nil {
 			codePanel.BindGedView(gv)
 			bindWidgetHelpTo(gv)
+			bindPropertySheetTo(gv)
 		}
 		refreshTreeForCurrentView(dbgTree)
 
@@ -1211,6 +1260,8 @@ func createPanels(mainFrame *gui.Frame) {
 				}
 				// Rebind widget-help selection listener
 				bindWidgetHelpTo(gv)
+				// Rebind property-sheet selection listener
+				bindPropertySheetTo(gv)
 				// Update object inspector tree
 				scene := gv.GedScene()
 				if scene != nil {
