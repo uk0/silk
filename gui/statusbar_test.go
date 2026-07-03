@@ -112,3 +112,72 @@ func TestStatusBarShowMessageFor(t *testing.T) {
 		t.Fatalf("Message() = %q after ShowMessage, want %q", got, "static")
 	}
 }
+
+// TestStatusIconLabelStored verifies an icon-label cell added via AddIconLabel is
+// stored as a permanent widget and that its icon + text round-trip through the
+// getters.
+func TestStatusIconLabelStored(t *testing.T) {
+	sb := NewStatusBar()
+	cell := sb.AddIconLabel("git-branch", "main")
+
+	if got := len(sb.PermanentWidgets()); got != 1 {
+		t.Fatalf("PermanentWidgets len = %d, want 1", got)
+	}
+	if sb.PermanentWidgets()[0] != cell {
+		t.Fatalf("stored widget is not the returned cell")
+	}
+	if cell.Icon() != "git-branch" {
+		t.Fatalf("Icon() = %q, want %q", cell.Icon(), "git-branch")
+	}
+	if cell.Text() != "main" {
+		t.Fatalf("Text() = %q, want %q", cell.Text(), "main")
+	}
+}
+
+// TestStatusIconLabelSetters verifies SetIcon / SetText update the model.
+func TestStatusIconLabelSetters(t *testing.T) {
+	cell := NewStatusIconLabel("warning", "2")
+	cell.SetIcon("error")
+	cell.SetText("3")
+	if cell.Icon() != "error" || cell.Text() != "3" {
+		t.Fatalf("after setters Icon/Text = %q/%q, want error/3", cell.Icon(), cell.Text())
+	}
+}
+
+// TestStatusIconLabelCoexistsWithPlainWidget verifies icon-label cells and plain
+// permanent widgets share the same list without disturbing each other.
+func TestStatusIconLabelCoexistsWithPlainWidget(t *testing.T) {
+	sb := NewStatusBar()
+	plain := newSBTestWidget(40, 16)
+	sb.AddPermanentWidget(plain)
+	cell := sb.AddIconLabel("error", "1")
+
+	pw := sb.PermanentWidgets()
+	if len(pw) != 2 {
+		t.Fatalf("PermanentWidgets len = %d, want 2", len(pw))
+	}
+	if pw[0] != plain || pw[1] != cell {
+		t.Fatalf("permanent widget order/identity wrong")
+	}
+}
+
+// TestStatusIconLabelWidth checks the pure width helper across the presence
+// combinations: the icon→text gap is added only when both parts are present.
+func TestStatusIconLabelWidth(t *testing.T) {
+	const iconW, gap, textW = 14.0, 4.0, 30.0
+	cases := []struct {
+		name             string
+		hasIcon, hasText bool
+		want             float64
+	}{
+		{"both", true, true, iconW + gap + textW},
+		{"text only", false, true, textW},
+		{"icon only", true, false, iconW},
+		{"neither", false, false, 0},
+	}
+	for _, c := range cases {
+		if got := statusIconLabelWidth(iconW, gap, textW, c.hasIcon, c.hasText); got != c.want {
+			t.Fatalf("%s: statusIconLabelWidth = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

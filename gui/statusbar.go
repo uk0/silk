@@ -192,3 +192,128 @@ func (this *StatusBar) OnIdle() {
 		}
 	}
 }
+
+// statusIconLabelIconSize is the compact glyph size used by StatusIconLabel
+// cells — a touch smaller than Theme().IconSize so the icon reads as an inline
+// prefix to the text rather than a full-size button glyph.
+const statusIconLabelIconSize = 14.0
+
+// StatusIconLabel is a compact status-bar cell that draws a small icon followed
+// by a short text, both vertically centered. It is a permanent widget like any
+// other (add it with AddPermanentWidget or the AddIconLabel helper), letting
+// callers show IDE-style indicators — a branch glyph + branch name, an error or
+// warning glyph + count — in place of a plain text label. An empty icon name
+// draws text only; empty text draws the icon only.
+type StatusIconLabel struct {
+	Widget
+	icon string // icon resource name for LoadIcon; "" means text-only
+	text string
+}
+
+// NewStatusIconLabel creates an icon+text status cell. icon is an icon resource
+// name (e.g. "git-branch", "error", "warning"); text is the label after it.
+func NewStatusIconLabel(icon string, text string) *StatusIconLabel {
+	p := new(StatusIconLabel)
+	p.Init(p)
+	p.icon = icon
+	p.text = text
+	return p
+}
+
+// Icon returns the cell's icon resource name.
+func (this *StatusIconLabel) Icon() string {
+	return this.icon
+}
+
+// Text returns the cell's text.
+func (this *StatusIconLabel) Text() string {
+	return this.text
+}
+
+// SetIcon changes the icon resource name and re-lays out the parent bar (the
+// cell's width depends on whether an icon is present).
+func (this *StatusIconLabel) SetIcon(name string) {
+	if this.icon == name {
+		return
+	}
+	this.icon = name
+	this.InvalidateParentLayout()
+}
+
+// SetText changes the label text and re-lays out the parent bar, since the
+// cell's width tracks the text width.
+func (this *StatusIconLabel) SetText(text string) {
+	if this.text == text {
+		return
+	}
+	this.text = text
+	this.InvalidateParentLayout()
+}
+
+// statusIconLabelWidth computes a StatusIconLabel's content width from its
+// parts: the icon box, the icon→text gap (counted only when both are present),
+// and the measured text width. Kept free of painter/Theme access so the layout
+// math stays unit-testable.
+func statusIconLabelWidth(iconW, gap, textW float64, hasIcon, hasText bool) float64 {
+	var w float64
+	if hasIcon {
+		w += iconW
+	}
+	if hasIcon && hasText {
+		w += gap
+	}
+	if hasText {
+		w += textW
+	}
+	return w
+}
+
+// SizeHints reports the cell's natural size: icon + gap + text wide, and tall
+// enough for the taller of the font line and the icon.
+func (this *StatusIconLabel) SizeHints() SizeHints {
+	t := Theme()
+	var textW float64
+	if this.text != "" {
+		textW = t.Font.TextExtents(this.text).Width
+	}
+	w := statusIconLabelWidth(statusIconLabelIconSize, t.Spacing, textW, this.icon != "", this.text != "")
+	fe := t.Font.FontExtents()
+	h := math.Max(fe.Height, statusIconLabelIconSize)
+	return SizeHints{Width: w, Height: h, Policy: 0}
+}
+
+// Draw renders the icon on the left and the text after it, both vertically
+// centered. Colors come from the theme so the cell tracks light/dark mode.
+func (this *StatusIconLabel) Draw(g paint.Painter) {
+	t := Theme()
+	_, h := this.Self().Size()
+
+	x := 0.0
+	if this.icon != "" {
+		yi := (h - statusIconLabelIconSize) * 0.5
+		g.DrawIcon1(LoadIcon(this.icon), x, yi, statusIconLabelIconSize, false)
+		x += statusIconLabelIconSize
+		if this.text != "" {
+			x += t.Spacing
+		}
+	}
+	if this.text != "" {
+		g.SetFont(t.Font)
+		g.SetBrush1(t.TextColor)
+		ext := t.Font.TextExtents(this.text)
+		xt := x - ext.XBearing
+		yt := 0.5*(h+ext.YBearing) - ext.YBearing
+		g.Translate(xt, yt)
+		g.DrawText(this.text)
+		g.Translate(-xt, -yt)
+	}
+}
+
+// AddIconLabel creates a StatusIconLabel (icon + text) and adds it as a
+// permanent widget on the right, returning it so the caller can update it later
+// via SetText / SetIcon. icon is an icon resource name (e.g. "git-branch").
+func (this *StatusBar) AddIconLabel(icon string, text string) *StatusIconLabel {
+	cell := NewStatusIconLabel(icon, text)
+	this.AddPermanentWidget(cell)
+	return cell
+}
