@@ -2107,6 +2107,236 @@ func (this *CodeEditor) moveLineDown() {
 	this.Self().Update()
 }
 
+// --- Auto-close, Join, Trim, Duplicate line operations ---
+
+// autoCloseFor maps an opening bracket or quote to the closing rune the editor
+// auto-inserts after it. ok is false for any rune with no auto-close pair.
+func autoCloseFor(open rune) (rune, bool) {
+	switch open {
+	case '(':
+		return ')', true
+	case '[':
+		return ']', true
+	case '{':
+		return '}', true
+	case '"':
+		return '"', true
+	case '`':
+		return '`', true
+	}
+	return 0, false
+}
+
+// autoCloseOpenerFor reports the (open, closer) pair when s is exactly one opener
+// rune; ok is false for multi-rune input or a non-opener.
+func autoCloseOpenerFor(s string) (open, closer rune, ok bool) {
+	r := []rune(s)
+	if len(r) != 1 {
+		return 0, 0, false
+	}
+	if cl, has := autoCloseFor(r[0]); has {
+		return r[0], cl, true
+	}
+	return 0, 0, false
+}
+
+// isAutoCloseCloser reports whether s is exactly one closing bracket/quote the
+// editor "types over" when the same char already sits under the caret.
+func isAutoCloseCloser(s string) bool {
+	switch s {
+	case ")", "]", "}", "\"", "`":
+		return true
+	}
+	return false
+}
+
+// wrapSelectionWith surrounds the current selection with the open/closer pair and
+// leaves the selection on the inner (original) text. Recorded as a single
+// undoable replace so one undo removes both delimiters, and routed through
+// rebuildText so onChanged/tokenize fire.
+func (this *CodeEditor) wrapSelectionWith(open, closer rune) {
+	sl, sc, _, _ := this.selectionRange()
+	selText := this.SelectedText()
+	newText := string(open) + selText + string(closer)
+	this.DeleteSelection()
+	this.pushUndo(editAction{kind: 2, line: sl, col: sc, text: newText, oldText: selText})
+	this.cursorLine = sl
+	this.cursorCol = sc
+	this.insertRawText(newText)
+	// Restore the selection over the inner text (between the delimiters).
+	this.hasSelection = true
+	this.selStartLine = sl
+	this.selStartCol = sc + 1
+	this.selEndLine = this.cursorLine
+	this.selEndCol = this.cursorCol - 1
+	this.cursorLine = this.selEndLine
+	this.cursorCol = this.selEndCol
+	this.rebuildText()
+}
+
+// joinTwoLines joins a and b with a single space, collapsing a's trailing and
+// b's leading whitespace. A blank side contributes no extra space.
+func joinTwoLines(a, b string) string {
+	a = strings.TrimRight(a, " \t")
+	b = strings.TrimLeft(b, " \t")
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + " " + b
+}
+
+// joinLinesInText joins the inclusive line range [from, to] into a single line,
+// collapsing each break to one space (joinTwoLines). from>=to (a single line or
+// past the end) is a no-op. The input slice is not mutated.
+func joinLinesInText(lines []string, from, to int) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	if from < 0 {
+		from = 0
+	}
+	if to >= len(lines) {
+		to = len(lines) - 1
+	}
+	if from >= to {
+		return lines
+	}
+	joined := lines[from]
+	for i := from + 1; i <= to; i++ {
+		joined = joinTwoLines(joined, lines[i])
+	}
+	out := make([]string, 0, len(lines)-(to-from))
+	out = append(out, lines[:from]...)
+	out = append(out, joined)
+	out = append(out, lines[to+1:]...)
+	return out
+}
+
+// JoinLines merges the current line with the next (or every line of a multi-line
+// selection) into one, collapsing each break to a single space. A no-op on the
+// last line. Recorded as one undoable full-text edit routed through rebuildText.
+func (this *CodeEditor) JoinLines() {
+	this.clampCursor()
+	from, to := this.cursorLine, this.cursorLine+1
+	if this.hasSelection {
+		sl, _, el, _ := this.selectionRange()
+		from, to = sl, el
+		if from == to {
+			to = from + 1
+		}
+	}
+	if to >= len(this.lines) {
+		return
+	}
+	oldFull := strings.Join(this.lines, "\n")
+	caretCol := len([]rune(strings.TrimRight(this.lines[from], " \t")))
+	newLines := joinLinesInText(this.lines, from, to)
+	newFull := strings.Join(newLines, "\n")
+	if newFull == oldFull {
+		return
+	}
+	this.pushUndo(editAction{kind: 3, line: this.cursorLine, col: this.cursorCol, text: newFull, oldText: oldFull})
+	this.lines = newLines
+	this.clearSelection()
+	this.cursorLine = from
+	this.cursorCol = caretCol
+	this.clampCursor()
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+}
+
+// trimTrailingInText removes trailing spaces and tabs from every line of text,
+// preserving interior whitespace and empty lines.
+func trimTrailingInText(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimRight(ln, " \t")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TrimTrailingWhitespace strips trailing spaces/tabs from every line. The caret
+// column is clamped to its (possibly shorter) line. Callable by the host and
+// recorded as one undoable full-text edit routed through rebuildText.
+func (this *CodeEditor) TrimTrailingWhitespace() {
+	oldFull := strings.Join(this.lines, "\n")
+	newFull := trimTrailingInText(oldFull)
+	if newFull == oldFull {
+		return
+	}
+	saveLine, saveCol := this.cursorLine, this.cursorCol
+	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: newFull, oldText: oldFull})
+	this.lines = strings.Split(newFull, "\n")
+	if len(this.lines) == 0 {
+		this.lines = []string{""}
+	}
+	this.clearSelection()
+	this.cursorLine = saveLine
+	this.cursorCol = saveCol
+	this.clampCursor()
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+}
+
+// duplicateLinesInText returns lines with the inclusive block [from, to] copied
+// immediately below itself. The input slice is not mutated.
+func duplicateLinesInText(lines []string, from, to int) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	if from < 0 {
+		from = 0
+	}
+	if to >= len(lines) {
+		to = len(lines) - 1
+	}
+	if from > to {
+		from, to = to, from
+	}
+	block := make([]string, to-from+1)
+	copy(block, lines[from:to+1])
+	out := make([]string, 0, len(lines)+len(block))
+	out = append(out, lines[:to+1]...)
+	out = append(out, block...)
+	out = append(out, lines[to+1:]...)
+	return out
+}
+
+// DuplicateLines copies the current line (or each line of a multi-line
+// selection) below itself. With no selection it reuses duplicateLine (the Cmd+D
+// empty-selection fallback); a selection duplicates the whole block as one
+// undoable full-text edit and re-selects the copy. Routed through rebuildText.
+func (this *CodeEditor) DuplicateLines() {
+	this.clampCursor()
+	if !this.hasSelection {
+		this.duplicateLine()
+		return
+	}
+	sl, sc, el, ec := this.selectionRange()
+	oldFull := strings.Join(this.lines, "\n")
+	newLines := duplicateLinesInText(this.lines, sl, el)
+	newFull := strings.Join(newLines, "\n")
+	this.pushUndo(editAction{kind: 3, line: this.cursorLine, col: this.cursorCol, text: newFull, oldText: oldFull})
+	this.lines = newLines
+	span := el - sl + 1
+	this.hasSelection = true
+	this.selStartLine = sl + span
+	this.selStartCol = sc
+	this.selEndLine = el + span
+	this.selEndCol = ec
+	this.cursorLine = this.selEndLine
+	this.cursorCol = ec
+	this.clampCursor()
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+}
+
 // --- Comment Toggling ---
 
 // commentPrefix is the line-comment token inserted/removed by ToggleLineComment.
@@ -4256,6 +4486,14 @@ func (this *CodeEditor) OnTextInput(s string) {
 
 	// Delete selection first if present
 	if this.hasSelection {
+		// Auto-close: typing an opener with an active selection wraps the
+		// selection in the matching pair instead of replacing it.
+		if open, closer, ok := autoCloseOpenerFor(s); ok {
+			this.wrapSelectionWith(open, closer)
+			this.ensureCursorVisible()
+			this.Self().Update()
+			return
+		}
 		selText := this.SelectedText()
 		sl, sc, _, _ := this.selectionRange()
 		this.DeleteSelection()
@@ -4264,6 +4502,42 @@ func (this *CodeEditor) OnTextInput(s string) {
 		this.rebuildText()
 		this.ensureCursorVisible()
 		this.Self().Update()
+		return
+	}
+
+	// Auto-close: type over an existing closing bracket/quote already under the
+	// caret rather than inserting a duplicate. No buffer mutation, so no undo.
+	if isAutoCloseCloser(s) {
+		curRunes := []rune(this.lines[this.cursorLine])
+		if this.cursorCol < len(curRunes) && string(curRunes[this.cursorCol]) == s {
+			this.cursorCol++
+			this.ensureCursorVisible()
+			this.Self().Update()
+			if s == ")" {
+				HideToolTip()
+			}
+			return
+		}
+	}
+
+	// Auto-close: typing an opener inserts the matching closer and parks the
+	// caret between the pair. Routed through rebuildText like every edit.
+	if open, closer, ok := autoCloseOpenerFor(s); ok {
+		this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: string(open) + string(closer)})
+		pairLine := []rune(this.lines[this.cursorLine])
+		newPair := make([]rune, 0, len(pairLine)+2)
+		newPair = append(newPair, pairLine[:this.cursorCol]...)
+		newPair = append(newPair, open, closer)
+		newPair = append(newPair, pairLine[this.cursorCol:]...)
+		this.lines[this.cursorLine] = string(newPair)
+		this.cursorCol++ // caret between the pair
+		this.rebuildText()
+		this.ensureCursorVisible()
+		this.Self().Update()
+		this.tryTriggerCompletion(s)
+		if isSignatureTrigger(s) && this.cbSignatureRequested != nil {
+			this.cbSignatureRequested(this.cursorLine, this.cursorCol)
+		}
 		return
 	}
 
@@ -5101,7 +5375,11 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 
 	case 'D':
-		if ctrl {
+		if (ctrl || isActionModifier()) && shift {
+			// Cmd+Shift+D (macOS) / Ctrl+Shift+D: duplicate the current line or
+			// every line of the selection below itself.
+			this.DuplicateLines()
+		} else if ctrl {
 			// Multi-cursor Ctrl+D (VS Code style): select current word and
 			// add a cursor at the next occurrence. When invoked on an empty
 			// or whitespace-only line with no existing selection or
@@ -5118,6 +5396,13 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 					this.duplicateLine()
 				}
 			}
+		}
+
+	case 'J':
+		if ctrl || isActionModifier() {
+			// Cmd+J (macOS) / Ctrl+J: join the current line (or the selected
+			// lines) with the next, collapsing the break to a single space.
+			this.JoinLines()
 		}
 
 	case 'K':
