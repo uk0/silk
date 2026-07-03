@@ -616,12 +616,22 @@ func (this *GedView) bindEvent(item graph.IItem, eventName string) {
 	}
 }
 
-// DeleteSelectedItems removes all currently selected items from the scene.
+// DeleteSelectedItems removes all currently selected items from the scene as a
+// single undoable DeleteCommand, so Ctrl+Z restores every widget at its
+// original parent and z-order slot. The old bare Detach() loop dropped the
+// items with no command on the stack, making deletion an unrecoverable
+// data-loss operation.
 func (this *GedView) DeleteSelectedItems() {
 	sel := this.Selection()
-	for _, item := range sel.ItemList() {
-		item.Detach()
+	items := sel.ItemList()
+	if len(items) == 0 {
+		return
 	}
+	cmd := graph.NewDeleteCommand("Delete")
+	for _, item := range items {
+		cmd.Add(item)
+	}
+	this.Scene().PushCommand(cmd) // Push() calls Redo() → detaches the items.
 	sel.Clear()
 	this.Self().Update()
 }
