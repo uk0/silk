@@ -123,11 +123,14 @@ func TestGenerateCodeWithEventHandler(t *testing.T) {
 	}
 }
 
-// TestGenerateCodeBindsCodeEditorChanged covers the new
-// gui.CodeEditor case in the codegen event-binding switch. Without
-// it the OnTextChanged handler dropped through the default branch
-// to a "// codegen: no binding" comment, leaving the editor's text
-// changes silently disconnected at runtime.
+// TestGenerateCodeBindsCodeEditorChanged pins the *compilable*
+// gui.CodeEditor codegen output: a concrete *gui.CodeEditor field
+// (from factoryMap) plus the OnTextChanged → SigChanged binding.
+// Before the factoryMap entry existed the field degraded to
+// gui.IWidget while the switch still emitted SigChanged — a method
+// gui.IWidget lacks — so the generated program failed to build. The
+// binding must also not fall through to the "// codegen: no binding"
+// guidance comment.
 func TestGenerateCodeBindsCodeEditorChanged(t *testing.T) {
 	scene := NewGedScene()
 	scene.SetFormTitle("Editor")
@@ -146,6 +149,19 @@ func TestGenerateCodeBindsCodeEditorChanged(t *testing.T) {
 
 	code := scene.GenerateCode(CodeGenOptions{})
 
+	// The field must be the concrete *gui.CodeEditor, not the gui.IWidget
+	// interface fallback — that is what makes the SigChanged binding below
+	// actually type-check. Asserting the concrete field pins the compilable
+	// output, not merely the presence of the binding text.
+	if !strings.Contains(code, "Editor *gui.CodeEditor") {
+		t.Errorf("CodeEditor field degraded to interface; want concrete *gui.CodeEditor\n----\n%s", code)
+	}
+	if !strings.Contains(code, "ui.Editor = gui.NewCodeEditor()") {
+		t.Errorf("CodeEditor not constructed via gui.NewCodeEditor()\n----\n%s", code)
+	}
+	if strings.Contains(code, `core.New("gui.CodeEditor")`) {
+		t.Errorf("CodeEditor still using core.New interface fallback\n----\n%s", code)
+	}
 	if !strings.Contains(code, "ui.Editor.SigChanged(onEditorTextChanged)") {
 		t.Errorf("missing CodeEditor.SigChanged binding\n----\n%s", code)
 	}

@@ -96,6 +96,7 @@ var factoryMap = map[string]widgetMapping{
 	"gui.Placeholder":       {goType: "*gui.Placeholder", importPath: "silk/gui", constructor: `gui.NewPlaceholder()`},
 	"gui.Timeline":          {goType: "*gui.Timeline", importPath: "silk/gui", constructor: `gui.NewTimeline()`},
 	"gui.NotificationPanel": {goType: "*gui.NotificationPanel", importPath: "silk/gui", constructor: `gui.NewNotificationPanel()`},
+	"gui.CodeEditor":        {goType: "*gui.CodeEditor", importPath: "silk/gui", constructor: `gui.NewCodeEditor()`},
 }
 
 // GenerateRunnable controls whether a complete runnable main() is generated.

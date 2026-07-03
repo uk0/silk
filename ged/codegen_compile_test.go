@@ -56,43 +56,52 @@ func TestCodeGenCompiles(t *testing.T) {
 		t.Error("missing constructor")
 	}
 
-	// Write to temp file and verify syntax via go vet
-	tmpDir := t.TempDir()
+	// Write to a throwaway module and type-check via go vet.
+	vetGeneratedCode(t, code)
+}
 
-	// Create a go.mod so the temp directory is a valid module
-	goMod := `module compiletest
-go 1.21
-require silk v0.0.0
-replace silk => ` + findModuleRoot(t) + `
-`
-	err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644)
+// TestCodeGenCodeEditorWithEventCompiles proves that a form containing a
+// gui.CodeEditor WITH a SigChanged (OnTextChanged) event binding produces
+// code that actually compiles. It is the regression guard for the class of
+// bug where a widget missing from factoryMap degrades its field to
+// gui.IWidget while the event switch still emits ui.<field>.SigChanged(...)
+// — a method gui.IWidget does not have — yielding output that fails to
+// build. go vet type-checks the generated module and catches exactly that.
+func TestCodeGenCodeEditorWithEventCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
+
+	scene := NewGedScene()
+	scene.SetFormTitle("EditorCompile")
+	scene.SetSize(120, 90)
+
+	ed, err := NewFakeWidgetFromFactory("gui.CodeEditor")
 	if err != nil {
-		t.Fatal("failed to write go.mod:", err)
+		t.Fatalf("create CodeEditor: %v", err)
+	}
+	ed.SetWidgetName("editor")
+	ed.SetBounds(5, 5, 100, 70)
+	// A real handler body makes the generated file self-contained: the
+	// codegen binds OnTextChanged → SigChanged and appends this func, so
+	// go vet checks the field type and the binding together.
+	ed.SetCode("func onEditorTextChanged(s string) { _ = s }")
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(ed, scene)
+	scene.PushCommand(cmd)
+
+	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "EditorCompileUI"})
+
+	// The field must be the concrete type so the SigChanged binding
+	// type-checks; the binding itself must be present.
+	if !strings.Contains(code, "Editor *gui.CodeEditor") {
+		t.Errorf("CodeEditor field not concrete *gui.CodeEditor\n----\n%s", code)
+	}
+	if !strings.Contains(code, "ui.Editor.SigChanged(onEditorTextChanged)") {
+		t.Errorf("missing CodeEditor.SigChanged binding\n----\n%s", code)
 	}
 
-	// Write the generated code
-	mainFile := filepath.Join(tmpDir, "main.go")
-	err = os.WriteFile(mainFile, []byte(code), 0644)
-	if err != nil {
-		t.Fatal("failed to write main.go:", err)
-	}
-
-	// Run go mod tidy to resolve dependencies
-	tidy := exec.Command("go", "mod", "tidy")
-	tidy.Dir = tmpDir
-	tidy.Env = append(os.Environ(), "CGO_ENABLED=1")
-	if output, err := tidy.CombinedOutput(); err != nil {
-		t.Fatalf("go mod tidy failed:\n%s", output)
-	}
-
-	// Run go vet for syntax validation (won't link, just checks AST)
-	cmd := exec.Command("go", "vet", "./...")
-	cmd.Dir = tmpDir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Errorf("generated code failed go vet:\n%s\n\nGenerated code:\n%s", output, code)
-	}
+	vetGeneratedCode(t, code)
 }
 
 func TestCodeGenAllFactoryWidgets(t *testing.T) {
@@ -148,6 +157,48 @@ func TestCodeGenAllFactoryWidgets(t *testing.T) {
 	addedCount := len(added)
 	if addedCount < 40 {
 		t.Errorf("only %d/%d factory widgets added successfully, expected at least 40", addedCount, len(factoryMap))
+	}
+}
+
+// vetGeneratedCode writes generated Go source into a throwaway module
+// (with a replace directive pointing at the silk source tree) and runs
+// go vet over it. go vet type-checks without linking, so it catches
+// codegen that calls a method the field's static type does not have —
+// e.g. a CodeEditor field degraded to gui.IWidget yet still emitting
+// SigChanged. Fatals on go mod tidy failure; errors (with the source) on
+// a vet failure.
+func vetGeneratedCode(t *testing.T, code string) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+
+	// A go.mod with a replace directive makes the temp dir a module that
+	// resolves silk from this working tree.
+	goMod := `module compiletest
+go 1.21
+require silk v0.0.0
+replace silk => ` + findModuleRoot(t) + `
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatal("failed to write go.mod:", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(code), 0644); err != nil {
+		t.Fatal("failed to write main.go:", err)
+	}
+
+	// Resolve dependencies, then vet. vet type-checks (won't link).
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = tmpDir
+	tidy.Env = append(os.Environ(), "CGO_ENABLED=1")
+	if output, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed:\n%s", output)
+	}
+
+	cmd := exec.Command("go", "vet", "./...")
+	cmd.Dir = tmpDir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("generated code failed go vet:\n%s\n\nGenerated code:\n%s", output, code)
 	}
 }
 
