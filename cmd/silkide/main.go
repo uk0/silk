@@ -3797,6 +3797,49 @@ func lspOnEditorChanged(path string, ed *gui.CodeEditor, text string) {
 			}
 		})
 	}()
+	// Also refresh same-symbol occurrence highlights for the caret. No pure
+	// caret-moved signal exists yet, so this piggybacks on edits (SigChanged);
+	// caret-only moves won't refresh until a gui signal lands.
+	documentHighlightViaLSP(ed, path, line, col)
+}
+
+// lspHighlightGen drops stale async document-highlight fetches.
+var lspHighlightGen = map[string]int{}
+
+// documentHighlightViaLSP fetches textDocument/documentHighlight for the caret
+// and washes every occurrence of the symbol in the current file. Off-thread
+// RPC; SetOccurrenceHighlights on the main thread behind a stale-guard. Empty
+// result clears the wash.
+func documentHighlightViaLSP(ed *gui.CodeEditor, path string, line, col int) {
+	if globalLSP == nil || ed == nil || !isGoFile(path) {
+		return
+	}
+	lspHighlightGen[path]++
+	gen := lspHighlightGen[path]
+	uri := fileURIOf(path)
+	lsp := globalLSP
+	go func() {
+		hls, err := lsp.DocumentHighlight(uri, line, col)
+		if err != nil {
+			return
+		}
+		ranges := make([]gui.HighlightRange, 0, len(hls))
+		for _, h := range hls {
+			ranges = append(ranges, gui.HighlightRange{
+				Line:     h.Range.Start.Line,
+				StartCol: h.Range.Start.Character,
+				EndCol:   h.Range.End.Character,
+			})
+		}
+		gui.Post(func() {
+			if lspHighlightGen[path] != gen {
+				return
+			}
+			if e, ok := openEditors[path]; ok && e == ed {
+				ed.SetOccurrenceHighlights(ranges)
+			}
+		})
+	}()
 }
 
 // goToDefinitionViaLSP resolves the symbol under the caret via gopls and

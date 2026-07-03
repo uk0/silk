@@ -265,6 +265,13 @@ type CodeEditor struct {
 	findMatches    []findMatch
 	findCurrentIdx int
 	findBarHeight  float64
+
+	// occurrences holds host-fed same-symbol highlight ranges (e.g. from LSP
+	// textDocument/documentHighlight). Kept SEPARATE from findMatches so it
+	// doesn't collide with the find bar (Esc / a new search would otherwise
+	// clobber it). Rendered as a subtle background wash, distinct from the
+	// find bar's yellow. Coordinates are 0-based line + rune columns.
+	occurrences []findMatch
 	// replaceVisible toggles the second (replace) input row. While it is true the
 	// bar is two rows tall (findBarHeight == codeEditorFindRowHeight*2) so the
 	// text area is pushed down accordingly. replaceFocused routes text input and
@@ -676,6 +683,73 @@ func utf16ColumnOf(line string, runeCol int) int {
 		}
 	}
 	return col
+}
+
+// runeColFromUTF16 is the inverse of utf16ColumnOf: given a UTF-16 code-unit
+// column (as LSP reports), return the rune index in line. Clamps to the line's
+// rune length. A UTF-16 column landing mid-surrogate rounds down to that rune.
+func runeColFromUTF16(line string, utf16Col int) int {
+	if utf16Col <= 0 {
+		return 0
+	}
+	runes := []rune(line)
+	units := 0
+	for i, r := range runes {
+		n := utf16.RuneLen(r)
+		if n <= 0 {
+			n = 1
+		}
+		if units+n > utf16Col {
+			return i
+		}
+		units += n
+		if units == utf16Col {
+			return i + 1
+		}
+	}
+	return len(runes)
+}
+
+// HighlightRange is a host-fed occurrence-highlight range in LSP coordinates:
+// 0-based Line, 0-based UTF-16 StartCol / EndCol (EndCol exclusive). The editor
+// converts the UTF-16 columns to rune columns internally.
+type HighlightRange struct {
+	Line     int
+	StartCol int // UTF-16 code-unit column, 0-based
+	EndCol   int // UTF-16 code-unit column, 0-based, exclusive
+}
+
+// SetOccurrenceHighlights renders the given ranges as a subtle same-symbol
+// background wash (e.g. from LSP textDocument/documentHighlight). Kept separate
+// from the find bar so the two don't clobber each other. nil / empty clears.
+func (this *CodeEditor) SetOccurrenceHighlights(ranges []HighlightRange) {
+	if len(ranges) == 0 {
+		this.ClearOccurrenceHighlights()
+		return
+	}
+	out := make([]findMatch, 0, len(ranges))
+	for _, r := range ranges {
+		if r.Line < 0 || r.Line >= len(this.lines) {
+			continue
+		}
+		line := this.lines[r.Line]
+		out = append(out, findMatch{
+			line: r.Line,
+			col:  runeColFromUTF16(line, r.StartCol),
+			end:  runeColFromUTF16(line, r.EndCol),
+		})
+	}
+	this.occurrences = out
+	this.Self().Update()
+}
+
+// ClearOccurrenceHighlights removes any host-fed occurrence highlights.
+func (this *CodeEditor) ClearOccurrenceHighlights() {
+	if this.occurrences == nil {
+		return
+	}
+	this.occurrences = nil
+	this.Self().Update()
 }
 
 // caretLocalXY returns the primary caret's position in LOCAL widget
@@ -3122,6 +3196,33 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			if selEndX > selStartX {
 				g.SetBrush1(pal.selection)
 				g.Rectangle(selStartX, y, selEndX-selStartX, lh)
+				g.Fill()
+			}
+		}
+
+		// Draw host-fed occurrence highlights (LSP document-highlight): a
+		// subtle background wash, drawn UNDER the find matches so an active
+		// search still stands out on top.
+		if len(this.occurrences) > 0 {
+			for _, m := range this.occurrences {
+				if m.line != i {
+					continue
+				}
+				lineRunes := []rune(this.lines[i])
+				mc, me := m.col, m.end
+				if mc > len(lineRunes) {
+					mc = len(lineRunes)
+				}
+				if me > len(lineRunes) {
+					me = len(lineRunes)
+				}
+				if me <= mc {
+					continue
+				}
+				ox := textOffX + this.measureText(string(lineRunes[:mc]))
+				ow := this.measureText(string(lineRunes[mc:me]))
+				g.SetBrush1(paint.Color{R: 120, G: 130, B: 150, A: 60})
+				g.Rectangle(ox, y, ow, lh)
 				g.Fill()
 			}
 		}
