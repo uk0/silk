@@ -488,6 +488,32 @@ func (this *CodeEditor) Text() string {
 	return strings.Join(this.lines, "\n")
 }
 
+// ReplaceAllText swaps the whole buffer for s while PRESERVING undo history,
+// the caret, and scroll — unlike SetText, which resets all three. Used by
+// LSP format / rename / code-action application so a single Cmd+Z reverts the
+// change. Records one kind-3 (full-text-replace) undo entry, fires SigChanged
+// so the host re-syncs gopls, and no-ops when s equals the current text.
+func (this *CodeEditor) ReplaceAllText(s string) {
+	oldFull := strings.Join(this.lines, "\n")
+	if s == oldFull {
+		return
+	}
+	saveLine, saveCol := this.cursorLine, this.cursorCol
+	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: s, oldText: oldFull})
+	this.lines = strings.Split(s, "\n")
+	if len(this.lines) == 0 {
+		this.lines = []string{""}
+	}
+	this.clampCursor()
+	this.clearSelection()
+	this.additionalCursors = nil
+	this.clearTokenCache()
+	this.tokenCacheLineCt = len(this.lines)
+	this.rebuildText()
+	this.ensureCursorVisible()
+	this.Self().Update()
+}
+
 // SetFont sets the editor's monospace font.
 func (this *CodeEditor) SetFont(f paint.Font) {
 	this.font = f
@@ -755,6 +781,28 @@ func (this *CodeEditor) ScrollToLine(line int) {
 	this.cursorLine = line
 	this.cursorCol = 0
 	this.Self().Update()
+}
+
+// ScrollToLineCol is ScrollToLine that also lands the caret on col (clamped to
+// the line). Used by LSP go-to-definition so F12 puts the cursor on the symbol,
+// not just its line. col < 0 behaves like ScrollToLine (col 0).
+func (this *CodeEditor) ScrollToLineCol(line, col int) {
+	this.ScrollToLine(line)
+	if col > 0 && this.cursorLine >= 0 && this.cursorLine < len(this.lines) {
+		if n := len([]rune(this.lines[this.cursorLine])); col > n {
+			col = n
+		}
+		this.cursorCol = col
+		this.Self().Update()
+	}
+}
+
+// CompletionVisible reports whether the completion popup is currently shown.
+// The LSP host uses it to decide whether to REFRESH an open popup with server
+// items vs. force-open one (which would hijack Enter/arrows after a newline,
+// paste, or programmatic edit).
+func (this *CodeEditor) CompletionVisible() bool {
+	return this.completion != nil && this.completion.visible
 }
 
 // FindLineContaining returns the first line number containing substr, or -1.
@@ -1234,9 +1282,9 @@ func (this *CodeEditor) backspaceAtAllCursors() {
 	// For each deletion, remember (line, col) of the deletion point so we
 	// can shift the surviving cursors afterwards.
 	type delOp struct {
-		line   int
-		col    int // column of the deleted character
-		joined bool
+		line    int
+		col     int // column of the deleted character
+		joined  bool
 		prevLen int // length of previous line BEFORE join (only if joined)
 	}
 	var ops []delOp

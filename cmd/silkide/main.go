@@ -30,6 +30,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -2016,8 +2017,10 @@ func applyWorkspaceEdit(we *core.LSPWorkspaceEdit) (int, error) {
 			if err != nil {
 				return changed, err
 			}
-			ed.SetText(newText)
-			lspNotifyDidChange(path, newText) // SetText doesn't fire SigChanged
+			// ReplaceAllText keeps undo history + caret (so one Cmd+Z reverts
+			// the whole rename) and fires SigChanged → gopls re-syncs; no
+			// explicit lspNotifyDidChange needed.
+			ed.ReplaceAllText(newText)
 		} else {
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -2760,7 +2763,10 @@ func saveActiveEditorToDisk(tabs *gui.TabWidget) bool {
 		if formatted, err := gofmtSource(text); err == nil {
 			out = formatted
 			if formatted != text {
-				ed.SetText(formatted)
+				// ReplaceAllText (not SetText) so gofmt-on-save keeps undo +
+				// caret and fires SigChanged → gopls sees the formatted text
+				// (else diagnostics/hover desync until the next keystroke).
+				ed.ReplaceAllText(formatted)
 			}
 		} else {
 			silkideToast(i18n.T("gofmt failed; saved unformatted"), gui.ToastWarning)
@@ -3119,7 +3125,9 @@ func openFileInEditorAt(tabs *gui.TabWidget, path string, line, col int) {
 	if target < 0 {
 		target = 0
 	}
-	ed.ScrollToLine(target)
+	// Honor col (0-based) when the caller has one — go-to-definition lands the
+	// caret on the symbol, not just its line. col <= 0 behaves like ScrollToLine.
+	ed.ScrollToLineCol(target, col)
 }
 
 // focusEditorTab walks the editor tabs to find the one whose stack
@@ -3368,37 +3376,55 @@ func runProjectInDebugger(canvas *ged.GedView) {
 	if globalPrefs != nil {
 		args = splitRunArgs(strings.TrimSpace(globalPrefs.RunArgs()))
 	}
-	sess, err := core.LaunchDebug(dir, args)
-	if err != nil {
-		silkideToast(i18n.Tf("Debugger failed: %v", err), gui.ToastError)
-		return
+	// Snapshot the breakpoints on the main thread (openEditors is main-thread
+	// state), then launch dlv OFF the UI thread: LaunchDebug runs `go build`
+	// (seconds for a cgo project) and each SetBreakpoint is a blocking RPC —
+	// doing them inline froze the toolbar until the build finished (or the old
+	// 3s dial budget expired and killed dlv). Publish globalDebug via gui.Post.
+	type bp struct {
+		path string
+		line int
 	}
-	globalDebug = sess
-
-	// Push every open editor's breakpoints onto the dlv session.
-	// Editor lines are 0-based; dlv expects 1-based, so shift here.
-	// Failures are non-fatal (a breakpoint on an unreachable line
-	// returns an error from dlv but shouldn't abort the run) -- we
-	// log via core.Warn and keep going.
+	var bps []bp
 	for path, ed := range openEditors {
 		if ed == nil {
 			continue
 		}
 		for _, line := range ed.Breakpoints() {
-			if _, bpErr := sess.SetBreakpoint(path, line+1); bpErr != nil {
-				core.Warn("dlv: SetBreakpoint ", path, ":", line+1, ": ", bpErr)
-			}
+			bps = append(bps, bp{path, line + 1}) // 0-based editor → 1-based dlv
 		}
 	}
-
-	silkideToast(i18n.T("Debugger started"), gui.ToastInfo)
-	logEvent(ged.LogInfo, "Debugger launched")
+	silkideToast(i18n.T("Debugger starting..."), gui.ToastInfo)
 	go func() {
+		sess, err := core.LaunchDebug(dir, args)
+		if err != nil {
+			gui.Post(func() {
+				silkideToast(i18n.Tf("Debugger failed: %v", err), gui.ToastError)
+			})
+			return
+		}
+		for _, b := range bps {
+			if _, bpErr := sess.SetBreakpoint(b.path, b.line); bpErr != nil {
+				core.Warn("dlv: SetBreakpoint ", b.path, ":", b.line, ": ", bpErr)
+			}
+		}
+		// Publish on the main thread, but bail if the user already hit Stop.
+		gui.Post(func() {
+			if globalDebug != nil {
+				_ = sess.Close() // a session started meanwhile; don't leak this one
+				return
+			}
+			globalDebug = sess
+			silkideToast(i18n.T("Debugger started"), gui.ToastInfo)
+			logEvent(ged.LogInfo, "Debugger launched")
+		})
 		st, contErr := sess.Continue()
 		if contErr != nil {
-			gui.Post(func() {
-				silkideToast(i18n.Tf("Debugger error: %v", contErr), gui.ToastError)
-			})
+			if !errors.Is(contErr, core.ErrSessionClosed) {
+				gui.Post(func() {
+					silkideToast(i18n.Tf("Debugger error: %v", contErr), gui.ToastError)
+				})
+			}
 			return
 		}
 		debugHandleStop(sess, st)
@@ -3453,6 +3479,13 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 	locals, _ := sess.ListLocals(-1, 0)
 	goroutines, _ := sess.ListGoroutines()
 	gui.Post(func() {
+		// The user may have hit Stop while we were fetching off-thread. If so
+		// this session is no longer current — drop the whole post so we don't
+		// re-fill the (just-cleared) panel, re-raise the pane, or yank the
+		// editor to a stale line after "Debugger stopped".
+		if globalDebug != sess {
+			return
+		}
 		if globalDebugPanel != nil {
 			globalDebugPanel.SetCallStack(frames)
 			globalDebugPanel.SetVariables(locals)
@@ -3515,9 +3548,13 @@ func debugContinue() {
 	go func() {
 		st, err := sess.Continue()
 		if err != nil {
-			gui.Post(func() {
-				silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError)
-			})
+			// A deliberate Stop wakes Continue with ErrSessionClosed — that's
+			// not an error the user needs to see.
+			if !errors.Is(err, core.ErrSessionClosed) {
+				gui.Post(func() {
+					silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError)
+				})
+			}
 			return
 		}
 		debugHandleStop(sess, st)
@@ -3545,9 +3582,11 @@ func debugStep(kind string) {
 			st, err = sess.Next()
 		}
 		if err != nil {
-			gui.Post(func() {
-				silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError)
-			})
+			if !errors.Is(err, core.ErrSessionClosed) {
+				gui.Post(func() {
+					silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError)
+				})
+			}
 			return
 		}
 		debugHandleStop(sess, st)
@@ -3746,7 +3785,14 @@ func lspOnEditorChanged(path string, ed *gui.CodeEditor, text string) {
 			}
 			if e, ok := openEditors[path]; ok && e == ed {
 				ed.SetExternalCompletions(conv)
-				ed.TriggerCompletion()
+				// Only REFRESH an already-open popup — never force-open one.
+				// The editor's own typing trigger opens completion for
+				// identifier chars; force-opening here would hijack Enter /
+				// arrows after a newline, paste, undo, or a programmatic
+				// format/rename (all of which fire SigChanged).
+				if ed.CompletionVisible() {
+					ed.TriggerCompletion()
+				}
 			}
 		})
 	}()
@@ -3771,7 +3817,12 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 	lsp := globalLSP
 	go func() {
 		locs, err := lsp.Definition(uri, line, col)
-		if err != nil || len(locs) == 0 {
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("Go to definition failed: %v", err), gui.ToastError) })
+			return
+		}
+		if len(locs) == 0 {
+			gui.Post(func() { silkideToast(i18n.T("No definition found"), gui.ToastInfo) })
 			return
 		}
 		target := uriToPath(locs[0].URI)
@@ -4002,7 +4053,11 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 	lsp := globalLSP
 	go func() {
 		edits, err := lsp.Formatting(uri)
-		if err != nil || len(edits) == 0 {
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("Format failed: %v", err), gui.ToastError) })
+			return
+		}
+		if len(edits) == 0 {
 			return
 		}
 		formatted, applyErr := core.ApplyTextEdits(original, edits)
@@ -4015,10 +4070,9 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 		gui.Post(func() {
 			// Only apply if the buffer hasn't changed out from under us.
 			if e, ok := openEditors[path]; ok && e == ed && ed.Text() == original {
-				line := ed.CursorLine()
-				ed.SetText(formatted)
-				ed.ScrollToLine(line)
-				lspNotifyDidChange(path, formatted) // SetText doesn't fire SigChanged
+				// ReplaceAllText preserves undo + caret/scroll and fires
+				// SigChanged → gopls re-syncs; no ScrollToLine / didChange dance.
+				ed.ReplaceAllText(formatted)
 			}
 		})
 	}()

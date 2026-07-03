@@ -102,7 +102,11 @@ func LaunchDebug(packageDir string, args []string) (*DebugSession, error) {
 		return nil, fmt.Errorf("start dlv: %w", err)
 	}
 
-	conn, err := waitForDial("127.0.0.1:"+strconv.Itoa(port), 3*time.Second)
+	// dlv debug runs `go build` BEFORE it opens the listen port; a cold
+	// cgo/cairo build easily exceeds a few seconds, so give it a generous
+	// budget. The caller runs LaunchDebug off the UI thread, so this wait
+	// never freezes the IDE.
+	conn, err := waitForDial("127.0.0.1:"+strconv.Itoa(port), 60*time.Second)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
@@ -614,10 +618,14 @@ func (s *DebugSession) Restart() error {
 	return nil
 }
 
-// errSessionClosed 是 session 已 Close 之后一切 RPC 的统一返回错误
+// ErrSessionClosed 是 session 已 Close 之后一切 RPC 的统一返回错误
 // Close 会先关 conn 把阻塞中的 Decode 唤醒 -- rpcCall 醒来看到 closed 时也回它,
 // 不把底层 "use of closed network connection" 之类的 read 错误抛给调用方.
-var errSessionClosed = errors.New("debug session closed")
+// 导出以便上层 (silkide) 用 errors.Is 区分"用户主动 Stop"和真实错误, 前者不弹错误提示.
+var ErrSessionClosed = errors.New("debug session closed")
+
+// errSessionClosed 是内部别名, 保持既有引用不变.
+var errSessionClosed = ErrSessionClosed
 
 // rpcCall 是 JSON-RPC 1.0 在 TCP 上的单次 round-trip
 // 串行化由 s.mu 提供 -- net/rpc 的 JSON codec 不允许两个 goroutine 同时写一个 conn.

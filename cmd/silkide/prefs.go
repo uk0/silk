@@ -397,16 +397,19 @@ func registerSilkideTranslations() {
 		// Debugger + LSP wiring strings. Shift+F5 / palette "Debug"
 		// share these via runProjectInDebugger; the LSP background
 		// launch only surfaces "Restart LSP" through the palette.
-		"Debugger started":         "调试器已启动",
-		"Debugger stopped":         "调试器已停止",
-		"Debugger already running": "调试器已在运行",
-		"Debuggee exited":          "被调试程序已退出",
-		"Stop Debugger":            "停止调试器",
-		"Restart LSP":              "重启 LSP",
-		"Restarting LSP...":        "正在重启 LSP...",
-		"Debugger failed: %v":      "调试器启动失败: %v",
-		"Debugger error: %v":       "调试器错误: %v",
-		"Stopped at %s:%d":         "已停在 %s:%d",
+		"Debugger started":            "调试器已启动",
+		"Debugger starting...":        "调试器启动中...",
+		"Debugger stopped":            "调试器已停止",
+		"Debugger already running":    "调试器已在运行",
+		"Debuggee exited":             "被调试程序已退出",
+		"Go to definition failed: %v": "跳转到定义失败: %v",
+		"No definition found":         "未找到定义",
+		"Stop Debugger":               "停止调试器",
+		"Restart LSP":                 "重启 LSP",
+		"Restarting LSP...":           "正在重启 LSP...",
+		"Debugger failed: %v":         "调试器启动失败: %v",
+		"Debugger error: %v":          "调试器错误: %v",
+		"Stopped at %s:%d":            "已停在 %s:%d",
 	})
 }
 
