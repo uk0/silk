@@ -1,10 +1,10 @@
 package ged
 
 import (
-	"silk/graph"
-	"silk/gui"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
 	"sort"
 )

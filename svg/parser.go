@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // Parse decodes SVG bytes into a Doc tree. Returns an error on malformed

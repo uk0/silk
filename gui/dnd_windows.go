@@ -1,10 +1,10 @@
 package gui
 
 import (
-	"silk/core"
-	//"silk/core"
-	"silk/paint"
-	"silk/win32"
+	"github.com/uk0/silk/core"
+	//"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/win32"
 	"runtime"
 	"unsafe"
 )

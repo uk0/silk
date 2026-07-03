@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestWrapField locks the pure stepping helper: a +1 off the top of the range

@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/gv"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gv"
+	"github.com/uk0/silk/paint"
 	"math"
 	"time"
 )

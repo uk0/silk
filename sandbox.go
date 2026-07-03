@@ -5,12 +5,12 @@ package main
 import (
 	"fmt"
 
-	"silk/core"
-	"silk/ged"
-	"silk/graph"
-	"silk/gui"
-	//	"silk/prop"
-	_ "silk/prop"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	//	"github.com/uk0/silk/prop"
+	_ "github.com/uk0/silk/prop"
 )
 
 const mainFrameUuid = "d5ffc927-fcd3-4fc2-b7bc-f6e081b88d1c"

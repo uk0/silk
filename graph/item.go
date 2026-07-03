@@ -1,12 +1,12 @@
 package graph
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/gui"
-	"silk/paint"
-	"silk/prop"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/prop"
 	"math"
 	"reflect"
 )

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -72,12 +72,12 @@ func (this *FormPresetsPanel) SetScene(scene *GedScene) {
 // ---------------------------------------------------------------------------
 
 const (
-	fpPadding   = 8.0
-	fpCardGapX  = 8.0
-	fpCardGapY  = 8.0
-	fpHeaderH   = 26.0
-	fpCardH     = 80.0
-	fpColumns   = 2
+	fpPadding  = 8.0
+	fpCardGapX = 8.0
+	fpCardGapY = 8.0
+	fpHeaderH  = 26.0
+	fpCardH    = 80.0
+	fpColumns  = 2
 )
 
 func (this *FormPresetsPanel) cardWidth() float64 {

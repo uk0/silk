@@ -1,9 +1,9 @@
 package ged
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"strconv"
 	"strings"
 )
@@ -43,7 +43,7 @@ const (
 // of it to render a useful preview.
 type TestResult struct {
 	Name     string     // e.g. "TestParseFoo" or "TestFoo/subtest"
-	Package  string     // e.g. "silk/ged" (may be empty for tabular subtests)
+	Package  string     // e.g. "github.com/uk0/silk/ged" (may be empty for tabular subtests)
 	Status   TestStatus // pass / fail / skip
 	Duration string     // raw, as printed by the runner, e.g. "0.02s"
 	File     string     // file path from the FAIL message, "" if not present

@@ -1,20 +1,20 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
 // Badge 徽标控件，显示数字或小红点
 type Badge struct {
 	Widget
-	count   int
+	count    int
 	maxCount int
-	dot     bool // 仅显示小红点，不显示数字
-	color   paint.Color
-	content IWidget
+	dot      bool // 仅显示小红点，不显示数字
+	color    paint.Color
+	content  IWidget
 }
 
 func init() {
@@ -29,9 +29,9 @@ func NewBadge() *Badge {
 	return p
 }
 
-func (this *Badge) Count() int     { return this.count }
-func (this *Badge) MaxCount() int  { return this.maxCount }
-func (this *Badge) IsDot() bool    { return this.dot }
+func (this *Badge) Count() int    { return this.count }
+func (this *Badge) MaxCount() int { return this.maxCount }
+func (this *Badge) IsDot() bool   { return this.dot }
 
 func (this *Badge) SetCount(n int) {
 	this.count = n

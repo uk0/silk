@@ -4,8 +4,8 @@ import (
 	"math"
 	"strconv"
 
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {

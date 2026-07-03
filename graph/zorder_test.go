@@ -96,7 +96,7 @@ func TestZOrderBringToFront(t *testing.T) {
 
 func TestZOrderBringToFrontAlreadyFront(t *testing.T) {
 	parent, kids, labels := buildZorderScene(3) // A B C
-	kids[2].BringToFront() // C already frontmost
+	kids[2].BringToFront()                      // C already frontmost
 	if got := orderOf(parent, labels); got != "ABC" {
 		t.Errorf("BringToFront on frontmost changed order to %q, want ABC", got)
 	}
@@ -118,7 +118,7 @@ func TestZOrderSendToBack(t *testing.T) {
 
 func TestZOrderSendToBackAlreadyBack(t *testing.T) {
 	parent, kids, labels := buildZorderScene(3) // A B C
-	kids[0].SendToBack() // A already backmost
+	kids[0].SendToBack()                        // A already backmost
 	if got := orderOf(parent, labels); got != "ABC" {
 		t.Errorf("SendToBack on backmost changed order to %q, want ABC", got)
 	}

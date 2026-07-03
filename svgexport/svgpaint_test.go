@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestImplementsPainter is a compile-time check that SVGPainter

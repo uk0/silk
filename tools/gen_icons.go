@@ -22,52 +22,52 @@ func main() {
 		os.MkdirAll(dir, 0755)
 
 		icons := map[string]func(int) *image.RGBA{
-			"minimize":            drawMinimize,
-			"maximize":            drawMaximize,
-			"close-btn":           drawCloseBtn,
-			"checkbox-checked":    drawCheckboxChecked,
-			"checkbox-unchecked":  drawCheckboxUnchecked,
-			"expander-collapsed":  drawExpanderCollapsed,
-			"expander-expanded":   drawExpanderExpanded,
-			"document":            drawDocument,
-			"folder":              drawFolder,
-			"demo":                drawDemo,
-			"exit":                drawExit,
-			"pencil":              drawPencil,
-			"globe":               drawGlobe,
-			"clipboard":           drawClipboard,
-			"form":                drawForm,
-			"window":              drawWindow,
-			"error":               drawError,
-			"apple":               drawApple,
-			"handle-0-normal":     drawHandle0,
-			"handle-1-normal":     drawHandle1,
-			"handle-2-normal":     drawHandle2,
-			"handle-0-active":     drawHandle0Active,
-			"handle-1-active":     drawHandle1Active,
-			"handle-2-active":     drawHandle2Active,
-			"image-missing":       drawMissing,
-			"radio-checked":       drawRadioChecked,
-			"radio-unchecked":     drawRadioUnchecked,
-			"combobox-arrow":      drawComboArrow,
-			"spinbox-up":          drawSpinUp,
-			"spinbox-down":        drawSpinDown,
-			"design":              drawDesign,
-			"save":                drawSave,
-			"close":               drawClose,
-			"preview":             drawPreview,
-			"edit-undo":           drawEditUndo,
-			"edit-redo":           drawEditRedo,
-			"edit":                drawEdit,
-			"propsheet":           drawPropsheet,
-			"rect-tool":           drawRectTool,
-			"arrow-tool":          drawArrowTool,
-			"tree-view":           drawTreeView,
-			"question":            drawQuestion,
-			"align-left":          drawAlignLeft,
-			"align-center":        drawAlignCenter,
-			"align-right":         drawAlignRight,
-			"run":                 drawRun,
+			"minimize":           drawMinimize,
+			"maximize":           drawMaximize,
+			"close-btn":          drawCloseBtn,
+			"checkbox-checked":   drawCheckboxChecked,
+			"checkbox-unchecked": drawCheckboxUnchecked,
+			"expander-collapsed": drawExpanderCollapsed,
+			"expander-expanded":  drawExpanderExpanded,
+			"document":           drawDocument,
+			"folder":             drawFolder,
+			"demo":               drawDemo,
+			"exit":               drawExit,
+			"pencil":             drawPencil,
+			"globe":              drawGlobe,
+			"clipboard":          drawClipboard,
+			"form":               drawForm,
+			"window":             drawWindow,
+			"error":              drawError,
+			"apple":              drawApple,
+			"handle-0-normal":    drawHandle0,
+			"handle-1-normal":    drawHandle1,
+			"handle-2-normal":    drawHandle2,
+			"handle-0-active":    drawHandle0Active,
+			"handle-1-active":    drawHandle1Active,
+			"handle-2-active":    drawHandle2Active,
+			"image-missing":      drawMissing,
+			"radio-checked":      drawRadioChecked,
+			"radio-unchecked":    drawRadioUnchecked,
+			"combobox-arrow":     drawComboArrow,
+			"spinbox-up":         drawSpinUp,
+			"spinbox-down":       drawSpinDown,
+			"design":             drawDesign,
+			"save":               drawSave,
+			"close":              drawClose,
+			"preview":            drawPreview,
+			"edit-undo":          drawEditUndo,
+			"edit-redo":          drawEditRedo,
+			"edit":               drawEdit,
+			"propsheet":          drawPropsheet,
+			"rect-tool":          drawRectTool,
+			"arrow-tool":         drawArrowTool,
+			"tree-view":          drawTreeView,
+			"question":           drawQuestion,
+			"align-left":         drawAlignLeft,
+			"align-center":       drawAlignCenter,
+			"align-right":        drawAlignRight,
+			"run":                drawRun,
 		}
 
 		for name, gen := range icons {
@@ -103,18 +103,30 @@ func drawLine(img *image.RGBA, x0, y0, x1, y1 int, c color.RGBA, thick int) {
 	dx := abs(x1 - x0)
 	dy := abs(y1 - y0)
 	sx, sy := 1, 1
-	if x0 > x1 { sx = -1 }
-	if y0 > y1 { sy = -1 }
+	if x0 > x1 {
+		sx = -1
+	}
+	if y0 > y1 {
+		sy = -1
+	}
 	err := dx - dy
 	for {
-		for t := -thick/2; t <= thick/2; t++ {
+		for t := -thick / 2; t <= thick/2; t++ {
 			setPixel(img, x0+t, y0, c)
 			setPixel(img, x0, y0+t, c)
 		}
-		if x0 == x1 && y0 == y1 { break }
+		if x0 == x1 && y0 == y1 {
+			break
+		}
 		e2 := 2 * err
-		if e2 > -dy { err -= dy; x0 += sx }
-		if e2 < dx { err += dx; y0 += sy }
+		if e2 > -dy {
+			err -= dy
+			x0 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y0 += sy
+		}
 	}
 }
 
@@ -158,7 +170,12 @@ func drawCircle(img *image.RGBA, cx, cy, r int, c color.RGBA) {
 	}
 }
 
-func abs(x int) int { if x < 0 { return -x }; return x }
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
 
 var (
 	dark  = color.RGBA{80, 80, 80, 255}
@@ -285,7 +302,7 @@ func drawFolder(sz int) *image.RGBA {
 func drawDemo(sz int) *image.RGBA {
 	img := newImg(sz)
 	cx, cy := sz/2, sz/2
-	r := sz/3
+	r := sz / 3
 	fillCircle(img, cx, cy, r, blue)
 	fillCircle(img, cx, cy, r/2, white)
 	return img
@@ -318,7 +335,7 @@ func drawPencil(sz int) *image.RGBA {
 func drawGlobe(sz int) *image.RGBA {
 	img := newImg(sz)
 	cx, cy := sz/2, sz/2
-	r := sz/3
+	r := sz / 3
 	drawCircle(img, cx, cy, r, blue)
 	// horizontal lines
 	drawLine(img, cx-r, cy, cx+r, cy, blue, 0)
@@ -383,15 +400,17 @@ func drawApple(sz int) *image.RGBA {
 func drawHandleBase(sz int, c color.RGBA) *image.RGBA {
 	img := newImg(sz)
 	r := sz / 3
-	if r < 2 { r = 2 }
+	if r < 2 {
+		r = 2
+	}
 	cx, cy := sz/2, sz/2
 	fillCircle(img, cx, cy, r, c)
 	return img
 }
 
-func drawHandle0(sz int) *image.RGBA { return drawHandleBase(sz, light) }
-func drawHandle1(sz int) *image.RGBA { return drawHandleBase(sz, light) }
-func drawHandle2(sz int) *image.RGBA { return drawHandleBase(sz, light) }
+func drawHandle0(sz int) *image.RGBA       { return drawHandleBase(sz, light) }
+func drawHandle1(sz int) *image.RGBA       { return drawHandleBase(sz, light) }
+func drawHandle2(sz int) *image.RGBA       { return drawHandleBase(sz, light) }
 func drawHandle0Active(sz int) *image.RGBA { return drawHandleBase(sz, blue) }
 func drawHandle1Active(sz int) *image.RGBA { return drawHandleBase(sz, blue) }
 func drawHandle2Active(sz int) *image.RGBA { return drawHandleBase(sz, blue) }
@@ -407,7 +426,7 @@ func drawMissing(sz int) *image.RGBA {
 func drawRadioChecked(sz int) *image.RGBA {
 	img := newImg(sz)
 	cx, cy := sz/2, sz/2
-	r := sz/3
+	r := sz / 3
 	drawCircle(img, cx, cy, r, mid)
 	fillCircle(img, cx, cy, r/2, blue)
 	return img
@@ -416,7 +435,7 @@ func drawRadioChecked(sz int) *image.RGBA {
 func drawRadioUnchecked(sz int) *image.RGBA {
 	img := newImg(sz)
 	cx, cy := sz/2, sz/2
-	r := sz/3
+	r := sz / 3
 	drawCircle(img, cx, cy, r, mid)
 	return img
 }
@@ -745,7 +764,7 @@ func drawAlignCenter(sz int) *image.RGBA {
 	// Center line
 	drawLine(img, cx, m, cx, sz-m, blue, 0)
 	// Three centered horizontal lines
-	widths := []int{sz - 2*m, sz/2, sz*2/3}
+	widths := []int{sz - 2*m, sz / 2, sz * 2 / 3}
 	for i, w := range widths {
 		y := m + 2 + i*(sz-2*m-4)/2
 		drawLine(img, cx-w/2, y, cx+w/2, y, dark, 1)

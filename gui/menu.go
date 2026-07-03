@@ -1,9 +1,9 @@
 package gui
 
 import (
-	//	"silk/diag"
-	"silk/core"
-	"silk/paint"
+	//	"github.com/uk0/silk/diag"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -600,6 +600,7 @@ func (this *Menu) setHighlight(idx int) {
 //   - Esc: 关闭整条弹出菜单链;
 //   - 右: 若高亮项有子菜单则打开并高亮其首个可选项;
 //   - 左: 关闭当前子菜单, 返回父菜单.
+//
 // 仅弹出菜单处理按键; 菜单栏(非 popup)不参与键盘导航.
 func (this *Menu) OnKeyDown(key int, repeat bool) {
 	if !this.IsPopup() {

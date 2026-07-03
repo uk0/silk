@@ -1,10 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/graph"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"silk/graph"
 	"strings"
 	"testing"
 )
@@ -176,8 +176,8 @@ func vetGeneratedCode(t *testing.T, code string) {
 	// resolves silk from this working tree.
 	goMod := `module compiletest
 go 1.21
-require silk v0.0.0
-replace silk => ` + findModuleRoot(t) + `
+require github.com/uk0/silk v0.0.0
+replace github.com/uk0/silk => ` + findModuleRoot(t) + `
 `
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		t.Fatal("failed to write go.mod:", err)

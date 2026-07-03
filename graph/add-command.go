@@ -1,7 +1,7 @@
 package graph
 
 import (
-	//	"silk/core"
+	//	"github.com/uk0/silk/core"
 	"fmt"
 )
 

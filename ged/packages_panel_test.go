@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // fixturePackages returns two GoListPackages covering the two shapes
@@ -15,7 +15,7 @@ func fixturePackages() []core.GoListPackage {
 	return []core.GoListPackage{
 		{
 			Dir:         "/repo/core",
-			ImportPath:  "silk/core",
+			ImportPath:  "github.com/uk0/silk/core",
 			Name:        "core",
 			GoFiles:     []string{"a.go", "b.go"},
 			TestGoFiles: []string{"a_test.go"},
@@ -23,7 +23,7 @@ func fixturePackages() []core.GoListPackage {
 		},
 		{
 			Dir:        "/repo/geom",
-			ImportPath: "silk/geom",
+			ImportPath: "github.com/uk0/silk/geom",
 			Name:       "geom",
 			GoFiles:    []string{"vec.go"},
 			Module:     mod,
@@ -65,7 +65,7 @@ func TestBuildPackagesRowsCollapsed(t *testing.T) {
 // with the next package's collapsed header.
 func TestBuildPackagesRowsExpanded(t *testing.T) {
 	fx := fixturePackages()
-	exp := map[string]bool{"silk/core": true}
+	exp := map[string]bool{"github.com/uk0/silk/core": true}
 	got := buildPackagesRows(fx, exp)
 
 	want := []packageRow{
@@ -97,15 +97,15 @@ func TestPackagesToggleExpanded(t *testing.T) {
 	p := NewPackagesPanel()
 	p.SetPackages(fixturePackages())
 
-	if p.IsExpanded("silk/core") {
+	if p.IsExpanded("github.com/uk0/silk/core") {
 		t.Fatal("new panel: silk/core should default to collapsed")
 	}
-	p.toggleExpanded("silk/core")
-	if !p.IsExpanded("silk/core") {
+	p.toggleExpanded("github.com/uk0/silk/core")
+	if !p.IsExpanded("github.com/uk0/silk/core") {
 		t.Fatal("after toggle: silk/core should be expanded")
 	}
-	p.toggleExpanded("silk/core")
-	if p.IsExpanded("silk/core") {
+	p.toggleExpanded("github.com/uk0/silk/core")
+	if p.IsExpanded("github.com/uk0/silk/core") {
 		t.Fatal("after second toggle: silk/core should be collapsed")
 	}
 }
@@ -115,12 +115,12 @@ func TestPackagesToggleExpanded(t *testing.T) {
 func TestSetPackagesResetsExpansion(t *testing.T) {
 	p := NewPackagesPanel()
 	p.SetPackages(fixturePackages())
-	p.toggleExpanded("silk/core")
-	if !p.IsExpanded("silk/core") {
+	p.toggleExpanded("github.com/uk0/silk/core")
+	if !p.IsExpanded("github.com/uk0/silk/core") {
 		t.Fatal("toggle did not take")
 	}
 	p.SetPackages(fixturePackages())
-	if p.IsExpanded("silk/core") {
+	if p.IsExpanded("github.com/uk0/silk/core") {
 		t.Fatal("SetPackages did not reset expansion state")
 	}
 }
@@ -148,10 +148,10 @@ func TestPackagesSigPackageActivated(t *testing.T) {
 	if !fired {
 		t.Fatal("OnLeftDown on header did not fire SigPackageActivated")
 	}
-	if gotPkg.ImportPath != "silk/core" {
-		t.Errorf("activated ImportPath = %q, want %q", gotPkg.ImportPath, "silk/core")
+	if gotPkg.ImportPath != "github.com/uk0/silk/core" {
+		t.Errorf("activated ImportPath = %q, want %q", gotPkg.ImportPath, "github.com/uk0/silk/core")
 	}
-	if !p.IsExpanded("silk/core") {
+	if !p.IsExpanded("github.com/uk0/silk/core") {
 		t.Error("header click did not toggle expansion")
 	}
 }
@@ -162,7 +162,7 @@ func TestPackagesSigPackageActivated(t *testing.T) {
 func TestPackagesSigFileActivated(t *testing.T) {
 	p := NewPackagesPanel()
 	p.SetPackages(fixturePackages())
-	p.toggleExpanded("silk/core") // expand so file rows appear
+	p.toggleExpanded("github.com/uk0/silk/core") // expand so file rows appear
 
 	var (
 		gotPkg  core.GoListPackage
@@ -182,8 +182,8 @@ func TestPackagesSigFileActivated(t *testing.T) {
 	if !fired {
 		t.Fatal("OnLeftDown on file row did not fire SigFileActivated")
 	}
-	if gotPkg.ImportPath != "silk/core" {
-		t.Errorf("activated pkg = %q, want %q", gotPkg.ImportPath, "silk/core")
+	if gotPkg.ImportPath != "github.com/uk0/silk/core" {
+		t.Errorf("activated pkg = %q, want %q", gotPkg.ImportPath, "github.com/uk0/silk/core")
 	}
 	if gotFile != "a.go" {
 		t.Errorf("activated file = %q, want %q", gotFile, "a.go")
@@ -196,7 +196,7 @@ func TestPackagesSigFileActivated(t *testing.T) {
 func TestPackagesHeaderClickNoFileCallback(t *testing.T) {
 	p := NewPackagesPanel()
 	p.SetPackages(fixturePackages())
-	p.toggleExpanded("silk/core")
+	p.toggleExpanded("github.com/uk0/silk/core")
 	// After expand, row 0 is still the silk/core header.
 
 	fileFired := false
@@ -221,7 +221,7 @@ func TestPackagesHeaderBandClickNoop(t *testing.T) {
 	if pkgFired {
 		t.Error("OnLeftDown in header band fired SigPackageActivated")
 	}
-	if p.IsExpanded("silk/core") {
+	if p.IsExpanded("github.com/uk0/silk/core") {
 		t.Error("OnLeftDown in header band toggled expansion")
 	}
 }

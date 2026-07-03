@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestNewAlertDefaults locks in the construction-time state: the level and
@@ -167,15 +167,15 @@ func TestAlertDrawDoesNotPanic(t *testing.T) {
 // Draw never reaches.
 type alertNopPainter struct{ paint.Painter }
 
-func (alertNopPainter) Save() int                                   { return 0 }
-func (alertNopPainter) Restore() int                                { return 0 }
-func (alertNopPainter) Arc(xc, yc, radius, angle1, angle2 float64)  {}
-func (alertNopPainter) Rectangle(x, y, w, h float64)                {}
-func (alertNopPainter) MoveTo(x, y float64)                         {}
-func (alertNopPainter) LineTo(x, y float64)                         {}
-func (alertNopPainter) Fill()                                       {}
-func (alertNopPainter) Stroke()                                     {}
-func (alertNopPainter) SetBrush1(c paint.Color)                     {}
-func (alertNopPainter) SetPen1(c paint.Color, width float64)        {}
-func (alertNopPainter) SetFont(f paint.Font)                        {}
-func (alertNopPainter) DrawText1(x, y float64, text string)         {}
+func (alertNopPainter) Save() int                                  { return 0 }
+func (alertNopPainter) Restore() int                               { return 0 }
+func (alertNopPainter) Arc(xc, yc, radius, angle1, angle2 float64) {}
+func (alertNopPainter) Rectangle(x, y, w, h float64)               {}
+func (alertNopPainter) MoveTo(x, y float64)                        {}
+func (alertNopPainter) LineTo(x, y float64)                        {}
+func (alertNopPainter) Fill()                                      {}
+func (alertNopPainter) Stroke()                                    {}
+func (alertNopPainter) SetBrush1(c paint.Color)                    {}
+func (alertNopPainter) SetPen1(c paint.Color, width float64)       {}
+func (alertNopPainter) SetFont(f paint.Font)                       {}
+func (alertNopPainter) DrawText1(x, y float64, text string)        {}

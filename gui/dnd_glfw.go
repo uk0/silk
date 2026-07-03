@@ -3,8 +3,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"time"
 
 	"github.com/go-gl/glfw/v3.3/glfw"

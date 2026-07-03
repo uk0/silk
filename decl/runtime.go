@@ -3,8 +3,8 @@ package decl
 import (
 	"fmt"
 
-	"silk/core"
-	"silk/i18n"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/i18n"
 )
 
 // Widget capability shapes used by applyProp's interface assertions.

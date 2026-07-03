@@ -1,10 +1,10 @@
 package main
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"strconv"
 	"strings"
 )

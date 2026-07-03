@@ -1,10 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
 )
 
 func init() {
@@ -55,8 +55,9 @@ func (this *KeymapPanel) Keymap() *KeyMap {
 }
 
 // Draw renders the panel. Layout:
-//   Header (title + reset hint) | rowHeight high
-//   For each binding: [command] ................... [Key chord] [Context]
+//
+//	Header (title + reset hint) | rowHeight high
+//	For each binding: [command] ................... [Key chord] [Context]
 func (this *KeymapPanel) Draw(g paint.Painter) {
 	t := gui.Theme()
 	w, h := this.Size()
@@ -100,9 +101,9 @@ func (this *KeymapPanel) Draw(g paint.Painter) {
 	bindings := this.keymap.Bindings()
 	y := headerH - this.scrollY
 	const (
-		leftPad    = 12.0
-		keyColPad  = 140.0 // right-edge pad for the key badge column
-		ctxColPad  = 50.0  // right-edge pad for context column
+		leftPad   = 12.0
+		keyColPad = 140.0 // right-edge pad for the key badge column
+		ctxColPad = 50.0  // right-edge pad for context column
 	)
 
 	for i, b := range bindings {

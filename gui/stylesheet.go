@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // ─── QSS-lite Stylesheet ───
@@ -258,12 +258,12 @@ func parseDeclarations(body string) (map[string]string, []string) {
 // Lookup merges every rule matching (widgetType, id, state) into a single
 // property map, ordered by ascending specificity so more specific rules win:
 //
-//	0. universal type, stateless    ("*")
-//	1. concrete type, stateless     (Type)
-//	2. universal type + state       ("*:state")
-//	3. concrete type + state        (Type:state)
-//	4. id, stateless                (#id / Type#id)
-//	5. id + state                   (#id:state / Type#id:state)
+//  0. universal type, stateless    ("*")
+//  1. concrete type, stateless     (Type)
+//  2. universal type + state       ("*:state")
+//  3. concrete type + state        (Type:state)
+//  4. id, stateless                (#id / Type#id)
+//  5. id + state                   (#id:state / Type#id:state)
 //
 // Within the same specificity tier, later rules in source order override
 // earlier ones. Passing "" for id or state simply means those tiers do not

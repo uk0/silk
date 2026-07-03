@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // TDoc layout produced/consumed by this codec

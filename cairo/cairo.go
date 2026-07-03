@@ -11,9 +11,9 @@ package cairo
 import "C"
 
 import (
-	//"silk/diag"
-	"silk/geom"
+	//"github.com/uk0/silk/diag"
 	"errors"
+	"github.com/uk0/silk/geom"
 	"image"
 	"image/draw"
 	"io"

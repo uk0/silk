@@ -1,7 +1,7 @@
 package ged
 
 import (
-	"silk/gui"
+	"github.com/uk0/silk/gui"
 )
 
 // ModeConfig holds references to dock panels for each mode.

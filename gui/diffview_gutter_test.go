@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestGutterLineNumbers exercises the pure helper that maps a DiffRow

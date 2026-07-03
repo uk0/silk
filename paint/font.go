@@ -1,9 +1,9 @@
 package paint
 
 import (
-	"silk/cairo"
-	"silk/geom"
-	"silk/hashmap"
+	"github.com/uk0/silk/cairo"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/hashmap"
 	"runtime"
 	"strconv"
 	"unsafe"

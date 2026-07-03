@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // --- Parser tests ----------------------------------------------------
@@ -204,26 +204,26 @@ type recPainter struct {
 	calls []string
 }
 
-func (r *recPainter) Save() int                 { r.calls = append(r.calls, "Save"); return 0 }
-func (r *recPainter) Restore() int              { r.calls = append(r.calls, "Restore"); return 0 }
-func (r *recPainter) Translate(x, y float64)    { r.calls = append(r.calls, "Translate") }
-func (r *recPainter) Scale(x, y float64)        { r.calls = append(r.calls, "Scale") }
-func (r *recPainter) Rotate(rad float64)        { r.calls = append(r.calls, "Rotate") }
+func (r *recPainter) Save() int              { r.calls = append(r.calls, "Save"); return 0 }
+func (r *recPainter) Restore() int           { r.calls = append(r.calls, "Restore"); return 0 }
+func (r *recPainter) Translate(x, y float64) { r.calls = append(r.calls, "Translate") }
+func (r *recPainter) Scale(x, y float64)     { r.calls = append(r.calls, "Scale") }
+func (r *recPainter) Rotate(rad float64)     { r.calls = append(r.calls, "Rotate") }
 func (r *recPainter) Rectangle(x, y, w, h float64) {
 	r.calls = append(r.calls, "Rectangle")
 }
 func (r *recPainter) Arc(cx, cy, rad, a0, a1 float64) { r.calls = append(r.calls, "Arc") }
-func (r *recPainter) MoveTo(x, y float64)              { r.calls = append(r.calls, "MoveTo") }
-func (r *recPainter) LineTo(x, y float64)              { r.calls = append(r.calls, "LineTo") }
+func (r *recPainter) MoveTo(x, y float64)             { r.calls = append(r.calls, "MoveTo") }
+func (r *recPainter) LineTo(x, y float64)             { r.calls = append(r.calls, "LineTo") }
 func (r *recPainter) CurveTo(x1, y1, x2, y2, x, y float64) {
 	r.calls = append(r.calls, "CurveTo")
 }
-func (r *recPainter) Fill()                                { r.calls = append(r.calls, "Fill") }
-func (r *recPainter) FillPreserve()                        { r.calls = append(r.calls, "FillPreserve") }
-func (r *recPainter) Stroke()                              { r.calls = append(r.calls, "Stroke") }
-func (r *recPainter) SetBrush1(c paint.Color)              { r.calls = append(r.calls, "SetBrush1") }
-func (r *recPainter) SetPen1(c paint.Color, w float64)     { r.calls = append(r.calls, "SetPen1") }
-func (r *recPainter) CurrentPoint() (x, y float64)         { return 0, 0 }
+func (r *recPainter) Fill()                            { r.calls = append(r.calls, "Fill") }
+func (r *recPainter) FillPreserve()                    { r.calls = append(r.calls, "FillPreserve") }
+func (r *recPainter) Stroke()                          { r.calls = append(r.calls, "Stroke") }
+func (r *recPainter) SetBrush1(c paint.Color)          { r.calls = append(r.calls, "SetBrush1") }
+func (r *recPainter) SetPen1(c paint.Color, w float64) { r.calls = append(r.calls, "SetPen1") }
+func (r *recPainter) CurrentPoint() (x, y float64)     { return 0, 0 }
 
 // TestRenderRectEmitsExpectedCalls: the simplest end-to-end check.
 // A rect with fill should produce: Save+ ... Rectangle SetBrush1 Fill ... Restore.

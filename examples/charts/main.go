@@ -13,9 +13,9 @@
 package main
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
 	"math/rand"
 )
@@ -84,9 +84,9 @@ func main() {
 	ga.SetTitle("CPU Usage")
 	ga.SetUnit("%")
 	ga.SetRange(0, 100)
-	ga.AddZone(0, 60, paint.Color{R: 90, G: 185, B: 102, A: 255})   // green
-	ga.AddZone(60, 80, paint.Color{R: 249, G: 168, B: 37, A: 255})  // yellow
-	ga.AddZone(80, 100, paint.Color{R: 228, G: 77, B: 66, A: 255})  // red
+	ga.AddZone(0, 60, paint.Color{R: 90, G: 185, B: 102, A: 255})  // green
+	ga.AddZone(60, 80, paint.Color{R: 249, G: 168, B: 37, A: 255}) // yellow
+	ga.AddZone(80, 100, paint.Color{R: 228, G: 77, B: 66, A: 255}) // red
 	ga.SetValue(67)
 
 	ga.SetParent(form)

@@ -1,7 +1,7 @@
 package gui
 
 import (
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 func init() {

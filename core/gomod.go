@@ -228,8 +228,9 @@ func parseGoModRequire(s string) (GoModRequire, error) {
 
 // parseGoModReplace 解析一行replace的内容(不含 "replace" 关键字)
 // 形如:
-//   "github.com/foo/bar => ../local/bar"
-//   "github.com/foo/bar v1.0.0 => github.com/baz/qux v1.0.1"
+//
+//	"github.com/foo/bar => ../local/bar"
+//	"github.com/foo/bar v1.0.0 => github.com/baz/qux v1.0.1"
 func parseGoModReplace(s string) (GoModReplace, error) {
 	body, _ := stripGoModComment(s)
 	body = strings.TrimSpace(body)

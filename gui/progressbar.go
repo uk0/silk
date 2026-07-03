@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 	"time"
 )
@@ -39,8 +39,8 @@ func init() {
 func NewProgressBar() *ProgressBar {
 	p := new(ProgressBar)
 	p.Init(p)
-	p.barColor = paint.Color{66, 133, 244, 255}  // blue
-	p.bgColor = paint.Color{220, 220, 220, 255}   // light gray
+	p.barColor = paint.Color{66, 133, 244, 255} // blue
+	p.bgColor = paint.Color{220, 220, 220, 255} // light gray
 	p.showText = true
 	return p
 }

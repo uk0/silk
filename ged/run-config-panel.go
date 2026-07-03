@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {

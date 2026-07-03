@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"silk/core"
-	"silk/ged"
-	"silk/graph"
-	"silk/gui"
-	"silk/i18n"
-	"silk/settings"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
+	"github.com/uk0/silk/settings"
 )
 
 // preferences keeps the user-visible IDE state that should survive

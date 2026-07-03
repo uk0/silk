@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // A representative multi-rule sheet exercising comments, type / state / id
@@ -279,18 +279,18 @@ func TestStyleSheetColorRoundTripsToScheme(t *testing.T) {
 
 func TestStyleSheetMalformedDoesNotPanic(t *testing.T) {
 	bad := []string{
-		"Button { color: #fff",            // missing closing brace
-		"Button color: #fff; }",           // missing opening brace -> trailing tokens
-		"{ color: #fff; }",                // empty selector
-		"123Bad { color: #fff; }",         // invalid type
-		"Button { : #fff; }",              // missing property name
-		"Button { color; }",               // declaration missing ':'
-		"Button:1bad { color: #fff; }",    // invalid state
-		"Button#1bad { color: #fff; }",    // invalid id
-		"",                                // empty input
-		"   \n\t  ",                       // whitespace only
-		"/* just a comment */",            // comment only
-		"/* unterminated comment",         // unterminated comment
+		"Button { color: #fff",         // missing closing brace
+		"Button color: #fff; }",        // missing opening brace -> trailing tokens
+		"{ color: #fff; }",             // empty selector
+		"123Bad { color: #fff; }",      // invalid type
+		"Button { : #fff; }",           // missing property name
+		"Button { color; }",            // declaration missing ':'
+		"Button:1bad { color: #fff; }", // invalid state
+		"Button#1bad { color: #fff; }", // invalid id
+		"",                             // empty input
+		"   \n\t  ",                    // whitespace only
+		"/* just a comment */",         // comment only
+		"/* unterminated comment",      // unterminated comment
 	}
 	for _, src := range bad {
 		// Must not panic; result sheet is always non-nil.

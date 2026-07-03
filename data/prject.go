@@ -2,11 +2,11 @@ package data
 
 import (
 	//	"database/sql"
-	"silk/core"
-	//	"silk/gui"
-	//	"silk/gui"
-	_ "silk/sqlite3"
+	"github.com/uk0/silk/core"
+	//	"github.com/uk0/silk/gui"
+	//	"github.com/uk0/silk/gui"
 	"errors"
+	_ "github.com/uk0/silk/sqlite3"
 	"os"
 	"path"
 	//	"sort"

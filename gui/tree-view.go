@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
 	//	"math"
 	"math"
 	"sort"
@@ -615,11 +615,12 @@ func (this *TreeView) OnLeftDown(x, y float64) {
 }
 
 // 键盘导航 (仿Qt QTreeView):
-//   上/下   : 在可见行间上移/下移当前行, 到头/到尾时夹住
-//   右       : 折叠且有子节点 -> 展开; 已展开 -> 移到第一个子节点; 无子节点 -> 无操作
-//   左       : 已展开 -> 折叠; 否则 -> 移到父节点(若有)
-//   回车/空格: 激活当前行
-//   Home/End : 跳到第一/最后一个可见行
+//
+//	上/下   : 在可见行间上移/下移当前行, 到头/到尾时夹住
+//	右       : 折叠且有子节点 -> 展开; 已展开 -> 移到第一个子节点; 无子节点 -> 无操作
+//	左       : 已展开 -> 折叠; 否则 -> 移到父节点(若有)
+//	回车/空格: 激活当前行
+//	Home/End : 跳到第一/最后一个可见行
 func (this *TreeView) OnKeyDown(key int, repeat bool) {
 	if len(this.rows) == 0 {
 		return

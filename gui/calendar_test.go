@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // date is a tiny local helper so the table tests read as plain calendar

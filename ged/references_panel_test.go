@@ -147,9 +147,9 @@ func TestReferencesRowClickActivates(t *testing.T) {
 	p.SetLocations(locs)
 
 	var (
-		gotFile       string
+		gotFile         string
 		gotLine, gotCol int
-		fired         bool
+		fired           bool
 	)
 	p.SigLocationActivated(func(file string, line, col int) {
 		gotFile = file

@@ -52,7 +52,7 @@ import (
 	"math"
 	"unsafe"
 
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
@@ -78,11 +78,11 @@ const (
 type Format int
 
 const (
-	FORMAT_INVALID  Format = -1
-	FORMAT_ARGB32   Format = 0
-	FORMAT_RGB24    Format = 1
-	FORMAT_A8       Format = 2
-	FORMAT_A1       Format = 3
+	FORMAT_INVALID   Format = -1
+	FORMAT_ARGB32    Format = 0
+	FORMAT_RGB24     Format = 1
+	FORMAT_A8        Format = 2
+	FORMAT_A1        Format = 3
 	FORMAT_RGB16_565 Format = 4
 )
 
@@ -218,10 +218,10 @@ type PathDataType int
 // pathSeg is one path command. Coordinates are in path-local space;
 // the CTM is applied at rasterisation time.
 type pathSeg struct {
-	op        byte // 'M' move, 'L' line, 'C' curve3, 'Z' close
-	x1, y1    float64
-	x2, y2    float64 // CurveTo control 2
-	x3, y3    float64 // CurveTo end
+	op     byte // 'M' move, 'L' line, 'C' curve3, 'Z' close
+	x1, y1 float64
+	x2, y2 float64 // CurveTo control 2
+	x3, y3 float64 // CurveTo end
 }
 
 // state captures one Save/Restore frame.
@@ -240,15 +240,15 @@ type ctxState struct {
 	// gradient). If non-nil, it overrides both sourceSurf and the solid
 	// state.source on the rasteriser path.
 	sourceImage image.Image
-	lineWidth  float64
-	lineCap    LineCap
-	lineJoin   LineJoin
-	miter      float64
-	operator   Operator
-	dash       Dash
-	font       *ScaledFont
-	clipRect   geom.Rect // AABB approximation
-	hasClip    bool
+	lineWidth   float64
+	lineCap     LineCap
+	lineJoin    LineJoin
+	miter       float64
+	operator    Operator
+	dash        Dash
+	font        *ScaledFont
+	clipRect    geom.Rect // AABB approximation
+	hasClip     bool
 }
 
 // Surface, MappedImage, Image, and the surface constructors live in
@@ -369,7 +369,7 @@ func (this *Pattern) RGBA() (r, g, b, a float64) {
 	cr, cg, cb, ca := this.col.RGBA()
 	return float64(cr) / 0xffff, float64(cg) / 0xffff, float64(cb) / 0xffff, float64(ca) / 0xffff
 }
-func (this *Pattern) Surface() *Surface     { return this.surf }
+func (this *Pattern) Surface() *Surface { return this.surf }
 func (this *Pattern) SetMatrix(m *geom.Mat3x2) {
 	if m != nil {
 		this.matrix = *m
@@ -398,11 +398,11 @@ func NewToyFontFace(family string, slant FontSlant, weight FontWeight) *FontFace
 	return &FontFace{family: family, slant: slant, weight: weight}
 }
 
-func (this *FontFace) Destroy()       {}
-func (this *FontFace) Status() Status { return STATUS_SUCCESS }
-func (this *FontFace) Type() int      { return 0 }
-func (this *FontFace) ToyFamily() string { return this.family }
-func (this *FontFace) ToySlant() FontSlant { return this.slant }
+func (this *FontFace) Destroy()              {}
+func (this *FontFace) Status() Status        { return STATUS_SUCCESS }
+func (this *FontFace) Type() int             { return 0 }
+func (this *FontFace) ToyFamily() string     { return this.family }
+func (this *FontFace) ToySlant() FontSlant   { return this.slant }
 func (this *FontFace) ToyWeight() FontWeight { return this.weight }
 
 type ScaledFont struct {
@@ -643,21 +643,21 @@ func (this *ScaledFont) Type() int                 { return 0 }
 
 type FontOptions struct{}
 
-func NewFontOptions() *FontOptions               { return &FontOptions{} }
-func (this *FontOptions) Destroy()               {}
-func (this *FontOptions) Copy() *FontOptions     { return &FontOptions{} }
-func (this *FontOptions) Status() Status         { return STATUS_SUCCESS }
-func (this *FontOptions) Merge(other *FontOptions) {}
+func NewFontOptions() *FontOptions                      { return &FontOptions{} }
+func (this *FontOptions) Destroy()                      {}
+func (this *FontOptions) Copy() *FontOptions            { return &FontOptions{} }
+func (this *FontOptions) Status() Status                { return STATUS_SUCCESS }
+func (this *FontOptions) Merge(other *FontOptions)      {}
 func (this *FontOptions) Equal(other *FontOptions) bool { return true }
-func (this *FontOptions) Hash() uint32           { return 0 }
-func (this *FontOptions) SetAntialias(a Antialias)  {}
-func (this *FontOptions) Antialias() Antialias      { return ANTIALIAS_DEFAULT }
-func (this *FontOptions) SetSubpixelOrder(int)      {}
-func (this *FontOptions) SubpixelOrder() int        { return 0 }
-func (this *FontOptions) SetHintStyle(int)          {}
-func (this *FontOptions) HintStyle() int            { return 0 }
-func (this *FontOptions) SetHintMetrics(int)        {}
-func (this *FontOptions) HintMetrics() int          { return 0 }
+func (this *FontOptions) Hash() uint32                  { return 0 }
+func (this *FontOptions) SetAntialias(a Antialias)      {}
+func (this *FontOptions) Antialias() Antialias          { return ANTIALIAS_DEFAULT }
+func (this *FontOptions) SetSubpixelOrder(int)          {}
+func (this *FontOptions) SubpixelOrder() int            { return 0 }
+func (this *FontOptions) SetHintStyle(int)              {}
+func (this *FontOptions) HintStyle() int                { return 0 }
+func (this *FontOptions) SetHintMetrics(int)            {}
+func (this *FontOptions) HintMetrics() int              { return 0 }
 
 type FontExtents struct {
 	Ascent      float64
@@ -727,8 +727,8 @@ type Context struct {
 	hasCur  bool
 }
 
-func (this *Context) Destroy()        {}
-func (this *Context) Status() Status  { return STATUS_SUCCESS }
+func (this *Context) Destroy()         {}
+func (this *Context) Status() Status   { return STATUS_SUCCESS }
 func (this *Context) Target() *Surface { return this.surface }
 
 // --- Save / Restore ---
@@ -802,24 +802,24 @@ func (this *Context) Source() *Pattern {
 
 // --- Pen / line attrs ---
 
-func (this *Context) SetLineWidth(w float64) { this.state.lineWidth = w }
-func (this *Context) LineWidth() float64     { return this.state.lineWidth }
-func (this *Context) SetLineCap(c LineCap)   { this.state.lineCap = c }
-func (this *Context) LineCap() LineCap       { return this.state.lineCap }
-func (this *Context) SetLineJoin(j LineJoin) { this.state.lineJoin = j }
-func (this *Context) LineJoin() LineJoin     { return this.state.lineJoin }
-func (this *Context) SetMiterLimit(m float64) { this.state.miter = m }
-func (this *Context) MiterLimit() float64    { return this.state.miter }
-func (this *Context) SetDash(d Dash)         { this.state.dash = d }
-func (this *Context) Dash() Dash             { return this.state.dash }
-func (this *Context) SetTolerance(v float64) {}
-func (this *Context) Tolerance() float64     { return 0.1 }
+func (this *Context) SetLineWidth(w float64)   { this.state.lineWidth = w }
+func (this *Context) LineWidth() float64       { return this.state.lineWidth }
+func (this *Context) SetLineCap(c LineCap)     { this.state.lineCap = c }
+func (this *Context) LineCap() LineCap         { return this.state.lineCap }
+func (this *Context) SetLineJoin(j LineJoin)   { this.state.lineJoin = j }
+func (this *Context) LineJoin() LineJoin       { return this.state.lineJoin }
+func (this *Context) SetMiterLimit(m float64)  { this.state.miter = m }
+func (this *Context) MiterLimit() float64      { return this.state.miter }
+func (this *Context) SetDash(d Dash)           { this.state.dash = d }
+func (this *Context) Dash() Dash               { return this.state.dash }
+func (this *Context) SetTolerance(v float64)   {}
+func (this *Context) Tolerance() float64       { return 0.1 }
 func (this *Context) SetAntialias(a Antialias) {}
-func (this *Context) Antialias() Antialias   { return ANTIALIAS_DEFAULT }
-func (this *Context) SetFillRule(r FillRule) {}
-func (this *Context) FillRule() FillRule     { return FILL_RULE_WINDING }
-func (this *Context) SetOperator(o Operator) { this.state.operator = o }
-func (this *Context) Operator() Operator     { return this.state.operator }
+func (this *Context) Antialias() Antialias     { return ANTIALIAS_DEFAULT }
+func (this *Context) SetFillRule(r FillRule)   {}
+func (this *Context) FillRule() FillRule       { return FILL_RULE_WINDING }
+func (this *Context) SetOperator(o Operator)   { this.state.operator = o }
+func (this *Context) Operator() Operator       { return this.state.operator }
 
 // --- Transform stack ---
 //
@@ -906,6 +906,7 @@ func (this *Context) UserToDeviceDistance(x, y *float64) {
 		*x, *y = nx, ny
 	}
 }
+
 // DeviceToUser inverts the CTM at (*x, *y). Mirrors cairo's
 // cairo_device_to_user.
 func (this *Context) DeviceToUser(x, y *float64) {
@@ -938,9 +939,9 @@ func (this *Context) DeviceToUserDistance(x, y *float64) {
 
 // --- Path construction ---
 
-func (this *Context) NewPath()      { this.path = this.path[:0] }
-func (this *Context) NewSubPath()   {}
-func (this *Context) ClosePath()    { this.path = append(this.path, pathSeg{op: 'Z'}) }
+func (this *Context) NewPath()              { this.path = this.path[:0] }
+func (this *Context) NewSubPath()           {}
+func (this *Context) ClosePath()            { this.path = append(this.path, pathSeg{op: 'Z'}) }
 func (this *Context) HasCurrentPoint() bool { return this.hasCur }
 
 func (this *Context) MoveTo(x, y float64) {
@@ -1032,8 +1033,8 @@ func (this *Context) appendArc(xc, yc, r, a0, a1 float64, sign float64) {
 	}
 }
 
-func (this *Context) RelMoveTo(dx, dy float64)             { this.MoveTo(this.curX+dx, this.curY+dy) }
-func (this *Context) RelLineTo(dx, dy float64)             { this.LineTo(this.curX+dx, this.curY+dy) }
+func (this *Context) RelMoveTo(dx, dy float64) { this.MoveTo(this.curX+dx, this.curY+dy) }
+func (this *Context) RelLineTo(dx, dy float64) { this.LineTo(this.curX+dx, this.curY+dy) }
 func (this *Context) RelCurveTo(x1, y1, x2, y2, x3, y3 float64) {
 	this.CurveTo(this.curX+x1, this.curY+y1, this.curX+x2, this.curY+y2, this.curX+x3, this.curY+y3)
 }
@@ -1070,7 +1071,7 @@ func (this *Context) CurrentPoint() (x, y float64) { return this.curX, this.curY
 
 func (this *Context) CopyPath() *Path     { return &Path{segs: append([]pathSeg{}, this.path...)} }
 func (this *Context) CopyPathFlat() *Path { return this.CopyPath() }
-func (this *Context) AppendPath(p *Path)  {
+func (this *Context) AppendPath(p *Path) {
 	if p != nil {
 		this.path = append(this.path, p.segs...)
 	}
@@ -1087,7 +1088,6 @@ func (this *Context) Fill() {
 	this.fillPath()
 	this.path = this.path[:0]
 }
-
 
 func (this *Context) FillPreserve() { this.fillPath() }
 
@@ -1158,7 +1158,7 @@ func (this *Context) rasterizeWithSource(r *vector.Rasterizer, dr image.Rectangl
 // Gradient implementations live in gradient.go.
 
 func (this *Context) FillExtens() (x1, y1, x2, y2 float64) { return this.PathExtens() }
-func (this *Context) InFill(x, y float64) bool              { return false }
+func (this *Context) InFill(x, y float64) bool             { return false }
 
 func (this *Context) Stroke() {
 	this.strokePath()
@@ -1171,15 +1171,15 @@ func (this *Context) StrokePreserve() { this.strokePath() }
 // configured pen width, line cap, and line join. The implementation
 // follows cairo's offsetting strategy from cairo-path-stroke.c:
 //
-//   1. Walk each subpath flattening curves into line segments (cubic →
-//      16 chord approximation, same as cairo's default tolerance for
-//      small curves).
-//   2. Each line segment becomes a thin quad oriented perpendicular
-//      to the segment direction, half-width on each side.
-//   3. At joins between adjacent segments and at subpath endpoints,
-//      add round-cap / round-join discs of radius half-width — simple
-//      union geometry that the rasteriser's non-zero winding rule
-//      composes correctly with the per-segment quads.
+//  1. Walk each subpath flattening curves into line segments (cubic →
+//     16 chord approximation, same as cairo's default tolerance for
+//     small curves).
+//  2. Each line segment becomes a thin quad oriented perpendicular
+//     to the segment direction, half-width on each side.
+//  3. At joins between adjacent segments and at subpath endpoints,
+//     add round-cap / round-join discs of radius half-width — simple
+//     union geometry that the rasteriser's non-zero winding rule
+//     composes correctly with the per-segment quads.
 //
 // Cap / join attribute support:
 //   - LINE_CAP_BUTT (default), LINE_CAP_SQUARE: caps stay flat; the
@@ -1580,27 +1580,27 @@ func (this *Context) InClip(x, y float64) bool { return true }
 
 // --- Group / mask ---
 
-func (this *Context) PushGroup()                          {}
-func (this *Context) PushGroupWidthContent(c Content)     {}
-func (this *Context) PopGroup() *Pattern                  { return &Pattern{} }
-func (this *Context) PopGroupToSource()                   {}
-func (this *Context) GroupTarget() *Surface               { return this.surface }
-func (this *Context) Mask(p *Pattern)                     {}
+func (this *Context) PushGroup()                           {}
+func (this *Context) PushGroupWidthContent(c Content)      {}
+func (this *Context) PopGroup() *Pattern                   { return &Pattern{} }
+func (this *Context) PopGroupToSource()                    {}
+func (this *Context) GroupTarget() *Surface                { return this.surface }
+func (this *Context) Mask(p *Pattern)                      {}
 func (this *Context) MaskSurface(s *Surface, x, y float64) {}
-func (this *Context) CopyPage()                           {}
-func (this *Context) ShowPage()                           {}
+func (this *Context) CopyPage()                            {}
+func (this *Context) ShowPage()                            {}
 
 // --- Font ---
 
-func (this *Context) SetFontFace(f *FontFace)         {}
-func (this *Context) FontFace() *FontFace             { return nil }
-func (this *Context) SetFontSize(s float64)           {}
-func (this *Context) SetFontMatrix(m *geom.Mat3x2)    {}
-func (this *Context) FontMatrix(m *geom.Mat3x2)       {}
-func (this *Context) SetFontOptions(o *FontOptions)   {}
-func (this *Context) FontOptions(o *FontOptions)      {}
-func (this *Context) SetScaledFont(sf *ScaledFont)    { this.state.font = sf }
-func (this *Context) ScaledFont() *ScaledFont         { return this.state.font }
+func (this *Context) SetFontFace(f *FontFace)       {}
+func (this *Context) FontFace() *FontFace           { return nil }
+func (this *Context) SetFontSize(s float64)         {}
+func (this *Context) SetFontMatrix(m *geom.Mat3x2)  {}
+func (this *Context) FontMatrix(m *geom.Mat3x2)     {}
+func (this *Context) SetFontOptions(o *FontOptions) {}
+func (this *Context) FontOptions(o *FontOptions)    {}
+func (this *Context) SetScaledFont(sf *ScaledFont)  { this.state.font = sf }
+func (this *Context) ScaledFont() *ScaledFont       { return this.state.font }
 func (this *Context) SelectFontFace(family string, slant FontSlant, weight FontWeight) {
 	face := NewToyFontFace(family, slant, weight)
 	var m geom.Mat3x2

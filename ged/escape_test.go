@@ -3,7 +3,7 @@ package ged
 import (
 	"testing"
 
-	"silk/gui"
+	"github.com/uk0/silk/gui"
 )
 
 // TestEscapeClearsSelection: pressing ESC on a non-empty selection

@@ -1,9 +1,9 @@
 package ged
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -124,11 +124,11 @@ func (this *ShortcutsPanel) Draw(g paint.Painter) {
 
 	y := 8.0 - this.scrollY
 	const (
-		leftPad      = 12.0
-		keyColWidth  = 130.0
-		rowH         = 20.0
-		catGap       = 10.0
-		catHeaderH   = 24.0
+		leftPad     = 12.0
+		keyColWidth = 130.0
+		rowH        = 20.0
+		catGap      = 10.0
+		catHeaderH  = 24.0
 	)
 
 	for _, cat := range this.categories {

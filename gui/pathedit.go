@@ -3,8 +3,8 @@ package gui
 import (
 	"path/filepath"
 
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -282,7 +282,7 @@ func (this *PathEdit) Draw(g paint.Painter) {
 	m := t.EditPadding
 	g.SetFont(t.Font)
 	fe := t.Font.FontExtents()
-	textY := (h+fe.Ascent-fe.Descent)/2
+	textY := (h + fe.Ascent - fe.Descent) / 2
 	if this.text != "" {
 		g.SetBrush1(t.TextColor)
 		g.DrawText1(m.L, textY, this.text)
@@ -304,7 +304,7 @@ func (this *PathEdit) Draw(g paint.Painter) {
 	// Centered "..." label on the button.
 	ext := t.Font.TextExtents(pathEditButtonLabel)
 	tx := bx + (btnW-ext.Width)/2 - ext.XBearing
-	ty := (h+fe.Ascent-fe.Descent)/2
+	ty := (h + fe.Ascent - fe.Descent) / 2
 	g.SetBrush1(t.TextColor)
 	g.DrawText1(tx, ty, pathEditButtonLabel)
 }

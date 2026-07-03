@@ -11,11 +11,11 @@ import "strconv"
 // readName returns the widget's primary user-facing label. Priority
 // (matches QAccessible's name resolution order):
 //
-//   1. AccessibleName() if Accessible
-//   2. Text() string — Buttons, Labels, Edits
-//   3. Title() string — GroupBox, Card, Dialog, Form
-//   4. Caption() string — older widget convention
-//   5. Empty string
+//  1. AccessibleName() if Accessible
+//  2. Text() string — Buttons, Labels, Edits
+//  3. Title() string — GroupBox, Card, Dialog, Form
+//  4. Caption() string — older widget convention
+//  5. Empty string
 func readName(w interface{}) string {
 	if a, ok := w.(Accessible); ok {
 		return a.AccessibleName()

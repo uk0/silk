@@ -13,7 +13,7 @@ import (
 // - 第三个对象既没有测试文件也没有 Module(模拟 stdlib 或 GOPATH 包)
 const sampleGoListJSON = `{
     "Dir": "/Users/dev/silk/core",
-    "ImportPath": "silk/core",
+    "ImportPath": "github.com/uk0/silk/core",
     "Name": "core",
     "GoFiles": [
         "core.go",
@@ -27,7 +27,7 @@ const sampleGoListJSON = `{
 }
 {
     "Dir": "/Users/dev/silk/gui",
-    "ImportPath": "silk/gui",
+    "ImportPath": "github.com/uk0/silk/gui",
     "Name": "gui",
     "GoFiles": [
         "accordion.go",
@@ -67,8 +67,8 @@ func TestParseGoListJSON_Sample(t *testing.T) {
 
 	// pkg 0: silk/core, 有 Module, 没有测试文件
 	p0 := pkgs[0]
-	if p0.ImportPath != "silk/core" {
-		t.Errorf("pkg0 ImportPath = %q, want %q", p0.ImportPath, "silk/core")
+	if p0.ImportPath != "github.com/uk0/silk/core" {
+		t.Errorf("pkg0 ImportPath = %q, want %q", p0.ImportPath, "github.com/uk0/silk/core")
 	}
 	if p0.Name != "core" {
 		t.Errorf("pkg0 Name = %q, want %q", p0.Name, "core")
@@ -93,8 +93,8 @@ func TestParseGoListJSON_Sample(t *testing.T) {
 
 	// pkg 1: silk/gui, 有 TestGoFiles 和 XTestGoFiles
 	p1 := pkgs[1]
-	if p1.ImportPath != "silk/gui" {
-		t.Errorf("pkg1 ImportPath = %q, want %q", p1.ImportPath, "silk/gui")
+	if p1.ImportPath != "github.com/uk0/silk/gui" {
+		t.Errorf("pkg1 ImportPath = %q, want %q", p1.ImportPath, "github.com/uk0/silk/gui")
 	}
 	wantTest1 := []string{"accordion_test.go"}
 	if !reflect.DeepEqual(p1.TestGoFiles, wantTest1) {
@@ -140,12 +140,12 @@ func TestParseGoListJSON_Empty(t *testing.T) {
 func TestParseGoListJSON_Malformed(t *testing.T) {
 	// 第一个对象完整, 第二个对象缺了收尾的 "}" -> 应拿到 pkg[0] 并报错
 	malformed := `{
-    "ImportPath": "silk/core",
+    "ImportPath": "github.com/uk0/silk/core",
     "Name": "core",
     "GoFiles": ["core.go"]
 }
 {
-    "ImportPath": "silk/gui",
+    "ImportPath": "github.com/uk0/silk/gui",
     "Name": "gui",
     "GoFiles": ["accordion.go"
 `
@@ -156,8 +156,8 @@ func TestParseGoListJSON_Malformed(t *testing.T) {
 	if len(pkgs) < 1 {
 		t.Fatalf("expected at least 1 valid package before the broken one, got %d", len(pkgs))
 	}
-	if pkgs[0].ImportPath != "silk/core" {
-		t.Errorf("pkgs[0] ImportPath = %q, want %q", pkgs[0].ImportPath, "silk/core")
+	if pkgs[0].ImportPath != "github.com/uk0/silk/core" {
+		t.Errorf("pkgs[0] ImportPath = %q, want %q", pkgs[0].ImportPath, "github.com/uk0/silk/core")
 	}
 }
 

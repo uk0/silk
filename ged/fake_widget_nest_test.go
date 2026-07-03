@@ -3,7 +3,7 @@ package ged
 import (
 	"testing"
 
-	"silk/graph"
+	"github.com/uk0/silk/graph"
 )
 
 // TestFakeWidgetNestedSaveLoadRoundTrip builds a scene with a VBox

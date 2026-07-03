@@ -1,4 +1,4 @@
-module silk
+module github.com/uk0/silk
 
 go 1.25.0
 

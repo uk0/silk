@@ -6,10 +6,10 @@ import "testing"
 // and clamping at both ends of the range.
 func TestSteppedValue(t *testing.T) {
 	cases := []struct {
-		name             string
-		cur, delta       float64
-		min, max         float64
-		want             float64
+		name       string
+		cur, delta float64
+		min, max   float64
+		want       float64
 	}{
 		{"increment", 50, 10, 0, 100, 60},
 		{"decrement", 50, -10, 0, 100, 40},

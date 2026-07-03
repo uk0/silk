@@ -1,7 +1,7 @@
 package paint
 
 import (
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 )
 
 // PainterTestingT is the trim TestingT subset RunPainterBattery uses,

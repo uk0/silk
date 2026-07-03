@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"silk/core"
-	"silk/geom"
-	"silk/graph"
-	"silk/gui"
-	"silk/paint"
-	"silk/prop"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/prop"
 )
 
 // DefaultDesignExt is the preferred file extension for SilkUI design files.

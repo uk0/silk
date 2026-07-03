@@ -2,9 +2,9 @@ package ged
 
 import (
 	"encoding/json"
+	"github.com/uk0/silk/core"
 	"os"
 	"path/filepath"
-	"silk/core"
 	"sync"
 )
 

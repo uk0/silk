@@ -40,20 +40,20 @@ import (
 // faceKey is the lookup key for the face cache.
 type faceKey struct {
 	family string
-	size   int  // pixel size, rounded
+	size   int // pixel size, rounded
 	bold   bool
 	italic bool
 }
 
 var (
-	faceCache    = make(map[faceKey]font.Face)
-	faceCacheMu  sync.Mutex
-	cjkFallback  font.Face
-	cjkOnce      sync.Once
-	systemFonts  = make(map[string]string) // family-key → path
-	sysOnce      sync.Once
-	sfntCache    = make(map[string]*sfnt.Font) // path → parsed font
-	sfntCacheMu  sync.Mutex
+	faceCache   = make(map[faceKey]font.Face)
+	faceCacheMu sync.Mutex
+	cjkFallback font.Face
+	cjkOnce     sync.Once
+	systemFonts = make(map[string]string) // family-key → path
+	sysOnce     sync.Once
+	sfntCache   = make(map[string]*sfnt.Font) // path → parsed font
+	sfntCacheMu sync.Mutex
 )
 
 // loadFace returns a font.Face for (family, size, bold, italic). Never
@@ -177,13 +177,13 @@ func systemPathsFor(family string, bold, italic bool) []string {
 
 	famLow := strings.ToLower(family)
 	monoFamilies := map[string]bool{
-		"monaco":          true,
-		"menlo":           true,
-		"consolas":        true,
-		"courier":         true,
-		"courier new":     true,
-		"sf mono":         true,
-		"sfnsmono":        true,
+		"monaco":           true,
+		"menlo":            true,
+		"consolas":         true,
+		"courier":          true,
+		"courier new":      true,
+		"sf mono":          true,
+		"sfnsmono":         true,
 		"dejavu sans mono": true,
 	}
 

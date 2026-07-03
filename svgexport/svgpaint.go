@@ -34,8 +34,8 @@ import (
 	"math"
 	"strings"
 
-	"silk/geom"
-	"silk/paint"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
 )
 
 // SVGPainter implements paint.Painter and emits SVG XML.
@@ -404,14 +404,14 @@ func writePenExtensionAttrs(b *strings.Builder, pen paint.Pen) {
 			b.WriteString(` stroke-linecap="round"`)
 		case paint.LineCapSquare:
 			b.WriteString(` stroke-linecap="square"`)
-		// LineCapButt is the SVG default — no attribute needed.
+			// LineCapButt is the SVG default — no attribute needed.
 		}
 		switch cp.LineJoin() {
 		case paint.LineJoinRound:
 			b.WriteString(` stroke-linejoin="round"`)
 		case paint.LineJoinBevel:
 			b.WriteString(` stroke-linejoin="bevel"`)
-		// LineJoinMiter is the SVG default.
+			// LineJoinMiter is the SVG default.
 		}
 		if cp.LineJoin() == paint.LineJoinMiter {
 			if ml := cp.MiterLimit(); ml > 0 && ml != 10 {
@@ -505,7 +505,9 @@ func (p *SVGPainter) openClipGroup() {
 	fmt.Fprintf(&p.body, `<g clip-path="url(#c%d)">`+"\n", id)
 	p.openGroups++
 }
-func (p *SVGPainter) ClipBounds() (float64, float64, float64, float64) { return 0, 0, p.width, p.height }
+func (p *SVGPainter) ClipBounds() (float64, float64, float64, float64) {
+	return 0, 0, p.width, p.height
+}
 func (p *SVGPainter) ClipBounds1() geom.Rect {
 	return geom.Rect{X: 0, Y: 0, Width: p.width, Height: p.height}
 }
@@ -564,23 +566,23 @@ func blendModeForOp(op paint.Operator) string {
 
 // --- paint.Painter: transform stack -----------------------------------
 
-func (p *SVGPainter) ResetMatrix()              { p.ctm.InitIdentity() }
-func (p *SVGPainter) Translate(tx, ty float64)  { p.ctm.Translate(tx, ty) }
-func (p *SVGPainter) Scale(sx, sy float64)      { p.ctm.Scale(sx, sy) }
-func (p *SVGPainter) Rotate(radians float64)    { p.ctm.Rotate(radians) }
-func (p *SVGPainter) Transform(m *geom.Mat3x2)  { p.ctm.MultiplyWidth(m) }
-func (p *SVGPainter) SetMatrix(m *geom.Mat3x2)  { p.ctm = *m }
-func (p *SVGPainter) GetMatrix(m *geom.Mat3x2)  { *m = p.ctm }
+func (p *SVGPainter) ResetMatrix()             { p.ctm.InitIdentity() }
+func (p *SVGPainter) Translate(tx, ty float64) { p.ctm.Translate(tx, ty) }
+func (p *SVGPainter) Scale(sx, sy float64)     { p.ctm.Scale(sx, sy) }
+func (p *SVGPainter) Rotate(radians float64)   { p.ctm.Rotate(radians) }
+func (p *SVGPainter) Transform(m *geom.Mat3x2) { p.ctm.MultiplyWidth(m) }
+func (p *SVGPainter) SetMatrix(m *geom.Mat3x2) { p.ctm = *m }
+func (p *SVGPainter) GetMatrix(m *geom.Mat3x2) { *m = p.ctm }
 
 // --- paint.Painter: pen / brush / font --------------------------------
 
-func (p *SVGPainter) SetPen(pen paint.Pen)               { p.pen = pen }
-func (p *SVGPainter) SetPen1(cr paint.Color, w float64)  { p.pen = paint.NewPen(cr, w) }
-func (p *SVGPainter) SetBrush(br paint.Brush)            { p.brush = br }
-func (p *SVGPainter) SetBrush1(cr paint.Color)           { p.brush = &paint.SolidBrush{Color: cr} }
-func (p *SVGPainter) SetFont(f paint.Font)               { p.font = f }
-func (p *SVGPainter) Font() paint.Font                   { return p.font }
-func (p *SVGPainter) ScaledFont() paint.ScaledFont       { return nil }
+func (p *SVGPainter) SetPen(pen paint.Pen)              { p.pen = pen }
+func (p *SVGPainter) SetPen1(cr paint.Color, w float64) { p.pen = paint.NewPen(cr, w) }
+func (p *SVGPainter) SetBrush(br paint.Brush)           { p.brush = br }
+func (p *SVGPainter) SetBrush1(cr paint.Color)          { p.brush = &paint.SolidBrush{Color: cr} }
+func (p *SVGPainter) SetFont(f paint.Font)              { p.font = f }
+func (p *SVGPainter) Font() paint.Font                  { return p.font }
+func (p *SVGPainter) ScaledFont() paint.ScaledFont      { return nil }
 
 // --- paint.Painter: text ---------------------------------------------
 

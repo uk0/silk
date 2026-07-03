@@ -2373,4 +2373,3 @@ func TestLSPClientSmoke_GoplsInitialize(t *testing.T) {
 		t.Errorf("DidOpen: %v", err)
 	}
 }
-

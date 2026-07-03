@@ -1,8 +1,8 @@
 package wmap
 
 import (
-	"silk/graph"
-	//	"silk/gui"
+	"github.com/uk0/silk/graph"
+	//	"github.com/uk0/silk/gui"
 )
 
 func NewMapView() *MapView {

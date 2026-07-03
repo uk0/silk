@@ -1,7 +1,7 @@
 package graph
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // 图元树的遍历条件.

@@ -5,7 +5,7 @@ import (
 	"image/png"
 	"testing"
 
-	"silk/purecairo"
+	"github.com/uk0/silk/purecairo"
 )
 
 // TestStandaloneRender shows that purecairo can be exercised without

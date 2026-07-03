@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // SessionState captures the designer's persistent working state across runs,

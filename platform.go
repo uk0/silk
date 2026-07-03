@@ -3,10 +3,10 @@
 package main
 
 import (
-	"silk/core"
-	//	"silk/graph"
-	"silk/gui"
-	_ "silk/prop"
+	"github.com/uk0/silk/core"
+	//	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	_ "github.com/uk0/silk/prop"
 )
 
 func createFrame() *gui.Frame {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"go/format"
 
-	"silk/decl"
+	"github.com/uk0/silk/decl"
 )
 
 // GenerateDeclCode produces a complete .silk.go file using the silk/decl
@@ -14,19 +14,19 @@ import (
 //   - GenerateCode produces an imperative struct + constructor:
 //
 //     type MyAppUI struct {
-//         Form *gui.Form
-//         BtnOK *gui.Button
+//     Form *gui.Form
+//     BtnOK *gui.Button
 //     }
 //     func NewMyAppUI() *MyAppUI { ... }
 //
 //   - GenerateDeclCode produces a declarative builder expression:
 //
 //     func BuildMyApp() *decl.Node {
-//         return decl.Form(decl.P("title", "MyApp"),
-//             decl.Children(
-//                 decl.Button(decl.ID("btnOK"), decl.P("text", "OK")),
-//             ),
-//         )
+//     return decl.Form(decl.P("title", "MyApp"),
+//     decl.Children(
+//     decl.Button(decl.ID("btnOK"), decl.P("text", "OK")),
+//     ),
+//     )
 //     }
 //
 // The decl form pairs with (*decl.Node).Build() at runtime to materialise
@@ -64,7 +64,7 @@ func (scene *GedScene) GenerateDeclCode(opts CodeGenOptions) string {
 
 package %s
 
-import "silk/decl"
+import "github.com/uk0/silk/decl"
 
 // %s constructs the widget tree designed in the editor. Pair with
 // (*decl.Node).Build() at runtime to materialise the actual widgets.

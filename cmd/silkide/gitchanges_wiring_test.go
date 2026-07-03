@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"silk/core"
-	"silk/ged"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/ged"
 )
 
 // TestCoreLevelToGed pins the core→ged level mapping the

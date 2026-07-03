@@ -1,13 +1,13 @@
 package ged
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/graph"
-	"silk/gui"
-	"silk/paint"
-	"silk/prop"
 	"errors"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/prop"
 	"strings"
 )
 
@@ -18,21 +18,38 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 	}
 	switch strings.ToLower(short) {
 	case "button":
-		if b, ok := w.(*gui.Button); ok { b.SetText("Button") }
+		if b, ok := w.(*gui.Button); ok {
+			b.SetText("Button")
+		}
 	case "label":
-		if l, ok := w.(*gui.Label); ok { l.SetText("Label") }
+		if l, ok := w.(*gui.Label); ok {
+			l.SetText("Label")
+		}
 	case "edit":
-		if e, ok := w.(*gui.Edit); ok { e.SetText("Text Input") }
+		if e, ok := w.(*gui.Edit); ok {
+			e.SetText("Text Input")
+		}
 	case "checkbox":
-		if c, ok := w.(*gui.CheckBox); ok { c.SetText("CheckBox") }
+		if c, ok := w.(*gui.CheckBox); ok {
+			c.SetText("CheckBox")
+		}
 	case "radiobutton":
-		if r, ok := w.(*gui.RadioButton); ok { r.SetText("Radio") }
+		if r, ok := w.(*gui.RadioButton); ok {
+			r.SetText("Radio")
+		}
 	case "progressbar":
-		if p, ok := w.(*gui.ProgressBar); ok { p.SetValue(0.5); p.SetShowText(true) }
+		if p, ok := w.(*gui.ProgressBar); ok {
+			p.SetValue(0.5)
+			p.SetShowText(true)
+		}
 	case "slider":
-		if s, ok := w.(*gui.Slider); ok { s.SetValue(50) }
+		if s, ok := w.(*gui.Slider); ok {
+			s.SetValue(50)
+		}
 	case "groupbox":
-		if g, ok := w.(*gui.GroupBox); ok { g.SetTitle("Group") }
+		if g, ok := w.(*gui.GroupBox); ok {
+			g.SetTitle("Group")
+		}
 	case "combobox":
 		if c, ok := w.(*gui.ComboBox); ok {
 			c.Append(gui.ListItem{Text: "Item 1"})
@@ -75,17 +92,32 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 		}
 	// ── New widgets ──
 	case "toggleswitch":
-		if t, ok := w.(*gui.ToggleSwitch); ok { t.SetText("Switch"); t.SetChecked(true) }
+		if t, ok := w.(*gui.ToggleSwitch); ok {
+			t.SetText("Switch")
+			t.SetChecked(true)
+		}
 	case "searchbox":
-		if s, ok := w.(*gui.SearchBox); ok { s.SetPlaceholder("Search...") }
+		if s, ok := w.(*gui.SearchBox); ok {
+			s.SetPlaceholder("Search...")
+		}
 	case "numberinput":
-		if n, ok := w.(*gui.NumberInput); ok { n.SetValue(42); n.SetRange(0, 100); n.SetStep(1) }
+		if n, ok := w.(*gui.NumberInput); ok {
+			n.SetValue(42)
+			n.SetRange(0, 100)
+			n.SetStep(1)
+		}
 	case "datepicker":
-		if d, ok := w.(*gui.DatePicker); ok { d.SetDate(2026, 4, 12) }
+		if d, ok := w.(*gui.DatePicker); ok {
+			d.SetDate(2026, 4, 12)
+		}
 	case "colorpicker":
-		if c, ok := w.(*gui.ColorPicker); ok { c.SetColor(paint.Color{R: 66, G: 133, B: 244, A: 255}) }
+		if c, ok := w.(*gui.ColorPicker); ok {
+			c.SetColor(paint.Color{R: 66, G: 133, B: 244, A: 255})
+		}
 	case "rating":
-		if r, ok := w.(*gui.Rating); ok { r.SetValue(3) }
+		if r, ok := w.(*gui.Rating); ok {
+			r.SetValue(3)
+		}
 	case "dropdownbutton":
 		if d, ok := w.(*gui.DropdownButton); ok {
 			d.SetText("Select")
@@ -94,15 +126,24 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 			d.AddItem("Option 3", nil, nil)
 		}
 	case "switchgroup":
-		if s, ok := w.(*gui.SwitchGroup); ok { s.SetItems([]string{"Tab 1", "Tab 2", "Tab 3"}) }
+		if s, ok := w.(*gui.SwitchGroup); ok {
+			s.SetItems([]string{"Tab 1", "Tab 2", "Tab 3"})
+		}
 	case "imageview":
 		// Empty by default — shows "No Image" placeholder
 	case "tag":
-		if t, ok := w.(*gui.Tag); ok { t.SetText("Tag"); t.SetCloseable(true) }
+		if t, ok := w.(*gui.Tag); ok {
+			t.SetText("Tag")
+			t.SetCloseable(true)
+		}
 	case "badge":
-		if b, ok := w.(*gui.Badge); ok { b.SetCount(5) }
+		if b, ok := w.(*gui.Badge); ok {
+			b.SetCount(5)
+		}
 	case "avatar":
-		if a, ok := w.(*gui.Avatar); ok { a.SetText("User") }
+		if a, ok := w.(*gui.Avatar); ok {
+			a.SetText("User")
+		}
 	case "breadcrumb":
 		if b, ok := w.(*gui.Breadcrumb); ok {
 			b.AddItem("Home", nil)
@@ -110,11 +151,19 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 			b.AddItem("Detail", nil)
 		}
 	case "link":
-		if l, ok := w.(*gui.Link); ok { l.SetText("Click here"); l.SetURL("https://example.com") }
+		if l, ok := w.(*gui.Link); ok {
+			l.SetText("Click here")
+			l.SetURL("https://example.com")
+		}
 	case "labelseparator":
-		if l, ok := w.(*gui.LabelSeparator); ok { l.SetText("OR") }
+		if l, ok := w.(*gui.LabelSeparator); ok {
+			l.SetText("OR")
+		}
 	case "placeholder":
-		if p, ok := w.(*gui.Placeholder); ok { p.SetTitle("No Data"); p.SetSubtitle("Nothing to show yet") }
+		if p, ok := w.(*gui.Placeholder); ok {
+			p.SetTitle("No Data")
+			p.SetSubtitle("Nothing to show yet")
+		}
 	case "timeline":
 		if t, ok := w.(*gui.Timeline); ok {
 			t.AddItem("Step 1", "Done", 2)
@@ -127,7 +176,9 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 			n.AddNotification(gui.NotificationItem{Title: "Success", Message: "Done", Level: gui.NotifySuccess})
 		}
 	case "card":
-		if c, ok := w.(*gui.Card); ok { c.SetTitle("Card Title") }
+		if c, ok := w.(*gui.Card); ok {
+			c.SetTitle("Card Title")
+		}
 	case "accordion":
 		// Empty by default — user adds sections
 	case "scrollarea":
@@ -261,14 +312,16 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		w, h := this.Width(), this.Height()
 
 		// Draw dashed blue border using short line segments
-		dashLen := 1.5  // mm per dash
-		gapLen := 1.0   // mm per gap
+		dashLen := 1.5 // mm per dash
+		gapLen := 1.0  // mm per gap
 		g.SetPen1(paint.Color{66, 133, 244, 140}, 0.15)
 
 		// Top edge
 		for cx := 0.0; cx < w; cx += dashLen + gapLen {
 			end := cx + dashLen
-			if end > w { end = w }
+			if end > w {
+				end = w
+			}
 			g.MoveTo(cx, 0)
 			g.LineTo(end, 0)
 			g.Stroke()
@@ -276,7 +329,9 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		// Bottom edge
 		for cx := 0.0; cx < w; cx += dashLen + gapLen {
 			end := cx + dashLen
-			if end > w { end = w }
+			if end > w {
+				end = w
+			}
 			g.MoveTo(cx, h)
 			g.LineTo(end, h)
 			g.Stroke()
@@ -284,7 +339,9 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		// Left edge
 		for cy := 0.0; cy < h; cy += dashLen + gapLen {
 			end := cy + dashLen
-			if end > h { end = h }
+			if end > h {
+				end = h
+			}
 			g.MoveTo(0, cy)
 			g.LineTo(0, end)
 			g.Stroke()
@@ -292,7 +349,9 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		// Right edge
 		for cy := 0.0; cy < h; cy += dashLen + gapLen {
 			end := cy + dashLen
-			if end > h { end = h }
+			if end > h {
+				end = h
+			}
 			g.MoveTo(w, cy)
 			g.LineTo(w, end)
 			g.Stroke()

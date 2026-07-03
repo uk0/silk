@@ -15,9 +15,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"silk/core"
-	"silk/decl"
-	"silk/gui"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/decl"
+	"github.com/uk0/silk/gui"
 )
 
 // TestSilkuiOnDiskRoundTrip writes a decl tree to a real .silkui file

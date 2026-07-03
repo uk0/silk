@@ -3,7 +3,7 @@
 package gui
 
 import (
-	"silk/core"
+	"github.com/uk0/silk/core"
 	"unsafe"
 
 	"github.com/go-gl/gl/v2.1/gl"

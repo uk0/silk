@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	timerMu    sync.Mutex
-	timerMap   = make(map[uintptr]*timerEntry)
+	timerMu     sync.Mutex
+	timerMap    = make(map[uintptr]*timerEntry)
 	timerNextId uintptr
 )
 

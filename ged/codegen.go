@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"silk/core"
-	"silk/graph"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/graph"
 )
 
 // simpleAddContainers are factory names whose Go type exposes a
@@ -41,62 +41,62 @@ type CodeGenOptions struct {
 // constructor expression used during code generation.
 type widgetMapping struct {
 	goType      string // e.g. "*gui.Button"
-	importPath  string // e.g. "silk/gui"
+	importPath  string // e.g. "github.com/uk0/silk/gui"
 	constructor string // e.g. `gui.NewButton1("", nil)`
 }
 
 var factoryMap = map[string]widgetMapping{
-	"gui.Button":        {goType: "*gui.Button", importPath: "silk/gui", constructor: `gui.NewButton1("", nil)`},
-	"gui.Edit":          {goType: "*gui.Edit", importPath: "silk/gui", constructor: `gui.NewEdit()`},
-	"gui.Label":         {goType: "*gui.Label", importPath: "silk/gui", constructor: `gui.NewLabel("")`},
-	"gui.CheckBox":      {goType: "*gui.CheckBox", importPath: "silk/gui", constructor: `gui.NewCheckBox()`},
-	"gui.RadioButton":   {goType: "*gui.RadioButton", importPath: "silk/gui", constructor: `gui.NewRadioButton("", nil)`},
-	"gui.ProgressBar":   {goType: "*gui.ProgressBar", importPath: "silk/gui", constructor: `gui.NewProgressBar()`},
-	"gui.Slider":        {goType: "*gui.Slider", importPath: "silk/gui", constructor: `gui.NewSlider(0, 100)`},
-	"gui.ComboBox":      {goType: "*gui.ComboBox", importPath: "silk/gui", constructor: `gui.NewComboBox()`},
-	"gui.ListWidget":    {goType: "*gui.ListWidget", importPath: "silk/gui", constructor: `gui.NewListWidget()`},
-	"gui.TreeView":      {goType: "*gui.TreeView", importPath: "silk/gui", constructor: `gui.NewTreeView()`},
-	"gui.VBox":          {goType: "*gui.VBox", importPath: "silk/gui", constructor: `gui.NewVBox()`},
-	"gui.HBox":          {goType: "*gui.HBox", importPath: "silk/gui", constructor: `gui.NewHBox()`},
-	"gui.Table":         {goType: "*gui.Table", importPath: "silk/gui", constructor: `gui.NewTable()`},
-	"gui.ScrollArea":    {goType: "*gui.ScrollArea", importPath: "silk/gui", constructor: `gui.NewScrollArea()`},
-	"gui.Form":          {goType: "*gui.Form", importPath: "silk/gui", constructor: `gui.NewForm()`},
-	"gui.SpinBox":       {goType: "*gui.SpinBox", importPath: "silk/gui", constructor: `gui.NewSpinBox()`},
-	"gui.GroupBox":      {goType: "*gui.GroupBox", importPath: "silk/gui", constructor: `gui.NewGroupBox("")`},
-	"gui.StackedWidget": {goType: "*gui.StackedWidget", importPath: "silk/gui", constructor: `gui.NewStackedWidget()`},
-	"gui.TabWidget":     {goType: "*gui.TabWidget", importPath: "silk/gui", constructor: `gui.NewTabWidget()`},
-	"gui.GridLayout":    {goType: "*gui.GridLayout", importPath: "silk/gui", constructor: `gui.NewGridLayout()`},
-	"gui.FormLayout":    {goType: "*gui.FormLayout", importPath: "silk/gui", constructor: `gui.NewFormLayout()`},
-	"gui.Splitter":      {goType: "*gui.Splitter", importPath: "silk/gui", constructor: `gui.NewSplitter(false)`},
-	"gui.ToolBar":       {goType: "*gui.ToolBar", importPath: "silk/gui", constructor: `gui.NewToolBar()`},
-	"gui.StatusBar":     {goType: "*gui.StatusBar", importPath: "silk/gui", constructor: `gui.NewStatusBar()`},
-	"gui.Dialog":        {goType: "*gui.Dialog", importPath: "silk/gui", constructor: `gui.NewDialog("", nil)`},
-	"gui.LineChart":     {goType: "*gui.LineChart", importPath: "silk/gui", constructor: `gui.NewLineChart()`},
-	"gui.BarChart":      {goType: "*gui.BarChart", importPath: "silk/gui", constructor: `gui.NewBarChart()`},
-	"gui.PieChart":      {goType: "*gui.PieChart", importPath: "silk/gui", constructor: `gui.NewPieChart()`},
-	"gui.Gauge":         {goType: "*gui.Gauge", importPath: "silk/gui", constructor: `gui.NewGauge()`},
-	"gui.ScatterPlot":   {goType: "*gui.ScatterPlot", importPath: "silk/gui", constructor: `gui.NewScatterPlot()`},
-	"gui.ToggleSwitch":  {goType: "*gui.ToggleSwitch", importPath: "silk/gui", constructor: `gui.NewToggleSwitch()`},
-	"gui.SearchBox":     {goType: "*gui.SearchBox", importPath: "silk/gui", constructor: `gui.NewSearchBox()`},
-	"gui.NumberInput":   {goType: "*gui.NumberInput", importPath: "silk/gui", constructor: `gui.NewNumberInput()`},
-	"gui.ImageView":     {goType: "*gui.ImageView", importPath: "silk/gui", constructor: `gui.NewImageView()`},
-	"gui.Tag":           {goType: "*gui.Tag", importPath: "silk/gui", constructor: `gui.NewTag("")`},
-	"gui.Card":          {goType: "*gui.Card", importPath: "silk/gui", constructor: `gui.NewCard("")`},
-	"gui.Badge":         {goType: "*gui.Badge", importPath: "silk/gui", constructor: `gui.NewBadge()`},
-	"gui.Avatar":        {goType: "*gui.Avatar", importPath: "silk/gui", constructor: `gui.NewAvatar()`},
-	"gui.Breadcrumb":    {goType: "*gui.Breadcrumb", importPath: "silk/gui", constructor: `gui.NewBreadcrumb()`},
-	"gui.Accordion":     {goType: "*gui.Accordion", importPath: "silk/gui", constructor: `gui.NewAccordion()`},
-	"gui.DatePicker":    {goType: "*gui.DatePicker", importPath: "silk/gui", constructor: `gui.NewDatePicker()`},
-	"gui.ColorPicker":   {goType: "*gui.ColorPicker", importPath: "silk/gui", constructor: `gui.NewColorPicker()`},
-	"gui.Rating":            {goType: "*gui.Rating", importPath: "silk/gui", constructor: `gui.NewRating()`},
-	"gui.DropdownButton":    {goType: "*gui.DropdownButton", importPath: "silk/gui", constructor: `gui.NewDropdownButton()`},
-	"gui.SwitchGroup":       {goType: "*gui.SwitchGroup", importPath: "silk/gui", constructor: `gui.NewSwitchGroup()`},
-	"gui.Link":              {goType: "*gui.Link", importPath: "silk/gui", constructor: `gui.NewLink()`},
-	"gui.LabelSeparator":    {goType: "*gui.LabelSeparator", importPath: "silk/gui", constructor: `gui.NewLabelSeparator()`},
-	"gui.Placeholder":       {goType: "*gui.Placeholder", importPath: "silk/gui", constructor: `gui.NewPlaceholder()`},
-	"gui.Timeline":          {goType: "*gui.Timeline", importPath: "silk/gui", constructor: `gui.NewTimeline()`},
-	"gui.NotificationPanel": {goType: "*gui.NotificationPanel", importPath: "silk/gui", constructor: `gui.NewNotificationPanel()`},
-	"gui.CodeEditor":        {goType: "*gui.CodeEditor", importPath: "silk/gui", constructor: `gui.NewCodeEditor()`},
+	"gui.Button":            {goType: "*gui.Button", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewButton1("", nil)`},
+	"gui.Edit":              {goType: "*gui.Edit", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewEdit()`},
+	"gui.Label":             {goType: "*gui.Label", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLabel("")`},
+	"gui.CheckBox":          {goType: "*gui.CheckBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCheckBox()`},
+	"gui.RadioButton":       {goType: "*gui.RadioButton", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewRadioButton("", nil)`},
+	"gui.ProgressBar":       {goType: "*gui.ProgressBar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewProgressBar()`},
+	"gui.Slider":            {goType: "*gui.Slider", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSlider(0, 100)`},
+	"gui.ComboBox":          {goType: "*gui.ComboBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewComboBox()`},
+	"gui.ListWidget":        {goType: "*gui.ListWidget", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewListWidget()`},
+	"gui.TreeView":          {goType: "*gui.TreeView", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTreeView()`},
+	"gui.VBox":              {goType: "*gui.VBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewVBox()`},
+	"gui.HBox":              {goType: "*gui.HBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewHBox()`},
+	"gui.Table":             {goType: "*gui.Table", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTable()`},
+	"gui.ScrollArea":        {goType: "*gui.ScrollArea", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewScrollArea()`},
+	"gui.Form":              {goType: "*gui.Form", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewForm()`},
+	"gui.SpinBox":           {goType: "*gui.SpinBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSpinBox()`},
+	"gui.GroupBox":          {goType: "*gui.GroupBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewGroupBox("")`},
+	"gui.StackedWidget":     {goType: "*gui.StackedWidget", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewStackedWidget()`},
+	"gui.TabWidget":         {goType: "*gui.TabWidget", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTabWidget()`},
+	"gui.GridLayout":        {goType: "*gui.GridLayout", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewGridLayout()`},
+	"gui.FormLayout":        {goType: "*gui.FormLayout", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewFormLayout()`},
+	"gui.Splitter":          {goType: "*gui.Splitter", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSplitter(false)`},
+	"gui.ToolBar":           {goType: "*gui.ToolBar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewToolBar()`},
+	"gui.StatusBar":         {goType: "*gui.StatusBar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewStatusBar()`},
+	"gui.Dialog":            {goType: "*gui.Dialog", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDialog("", nil)`},
+	"gui.LineChart":         {goType: "*gui.LineChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLineChart()`},
+	"gui.BarChart":          {goType: "*gui.BarChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewBarChart()`},
+	"gui.PieChart":          {goType: "*gui.PieChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPieChart()`},
+	"gui.Gauge":             {goType: "*gui.Gauge", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewGauge()`},
+	"gui.ScatterPlot":       {goType: "*gui.ScatterPlot", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewScatterPlot()`},
+	"gui.ToggleSwitch":      {goType: "*gui.ToggleSwitch", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewToggleSwitch()`},
+	"gui.SearchBox":         {goType: "*gui.SearchBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSearchBox()`},
+	"gui.NumberInput":       {goType: "*gui.NumberInput", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewNumberInput()`},
+	"gui.ImageView":         {goType: "*gui.ImageView", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewImageView()`},
+	"gui.Tag":               {goType: "*gui.Tag", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTag("")`},
+	"gui.Card":              {goType: "*gui.Card", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCard("")`},
+	"gui.Badge":             {goType: "*gui.Badge", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewBadge()`},
+	"gui.Avatar":            {goType: "*gui.Avatar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewAvatar()`},
+	"gui.Breadcrumb":        {goType: "*gui.Breadcrumb", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewBreadcrumb()`},
+	"gui.Accordion":         {goType: "*gui.Accordion", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewAccordion()`},
+	"gui.DatePicker":        {goType: "*gui.DatePicker", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDatePicker()`},
+	"gui.ColorPicker":       {goType: "*gui.ColorPicker", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewColorPicker()`},
+	"gui.Rating":            {goType: "*gui.Rating", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewRating()`},
+	"gui.DropdownButton":    {goType: "*gui.DropdownButton", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDropdownButton()`},
+	"gui.SwitchGroup":       {goType: "*gui.SwitchGroup", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSwitchGroup()`},
+	"gui.Link":              {goType: "*gui.Link", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLink()`},
+	"gui.LabelSeparator":    {goType: "*gui.LabelSeparator", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLabelSeparator()`},
+	"gui.Placeholder":       {goType: "*gui.Placeholder", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPlaceholder()`},
+	"gui.Timeline":          {goType: "*gui.Timeline", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTimeline()`},
+	"gui.NotificationPanel": {goType: "*gui.NotificationPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewNotificationPanel()`},
+	"gui.CodeEditor":        {goType: "*gui.CodeEditor", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCodeEditor()`},
 }
 
 // GenerateRunnable controls whether a complete runnable main() is generated.
@@ -113,8 +113,8 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	}
 
 	imports := make(map[string]bool)
-	imports["silk/gui"] = true  // always needed for Form
-	imports["silk/core"] = true // needed for EventLoop in main()
+	imports["github.com/uk0/silk/gui"] = true  // always needed for Form
+	imports["github.com/uk0/silk/core"] = true // needed for EventLoop in main()
 
 	type fieldInfo struct {
 		name          string
@@ -181,8 +181,8 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 			} else {
 				goType = "gui.IWidget"
 				constructor = fmt.Sprintf(`core.New("%s").(gui.IWidget)`, factoryName)
-				imports["silk/gui"] = true
-				imports["silk/core"] = true
+				imports["github.com/uk0/silk/gui"] = true
+				imports["github.com/uk0/silk/core"] = true
 			}
 
 			x := roundPx(fake.X())
@@ -336,7 +336,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 
 	// Generate main() function for runnable program
 	if opts.PackageName == "main" {
-		imports["silk/core"] = true
+		imports["github.com/uk0/silk/core"] = true
 		buf.WriteString(fmt.Sprintf(`
 func main() {
 	ui := %s()
@@ -619,7 +619,7 @@ func emitEventBinding(buf *strings.Builder, imports map[string]bool, factoryName
 		}
 	case "gui.ColorPicker":
 		if evtName == "OnColorChanged" {
-			imports["silk/paint"] = true
+			imports["github.com/uk0/silk/paint"] = true
 			fmt.Fprintf(buf, "\tui.%s.SigColorChanged(func(c paint.Color) { %s(c) })\n", f.name, handler)
 			return true
 		}

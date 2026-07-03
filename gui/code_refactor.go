@@ -2,10 +2,10 @@ package gui
 
 import (
 	"errors"
+	"github.com/uk0/silk/paint"
 	"go/ast"
 	"go/parser"
 	gotoken "go/token"
-	"silk/paint"
 	"sort"
 	"strings"
 	"unicode"

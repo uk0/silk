@@ -40,17 +40,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"silk/a11y"
-	"silk/core"
-	"silk/decl"
-	"silk/ged"
-	"silk/graph"
-	"silk/gui"
-	"silk/hotreload"
-	"silk/i18n"
-	"silk/paint"
-	"silk/pdfexport"
-	"silk/svgexport"
+	"github.com/uk0/silk/a11y"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/decl"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/hotreload"
+	"github.com/uk0/silk/i18n"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/pdfexport"
+	"github.com/uk0/silk/svgexport"
 )
 
 func main() {
@@ -1729,7 +1729,7 @@ func regenerateGoForSilkui(silkuiPath string) {
 
 package ui
 
-import "silk/decl"
+import "github.com/uk0/silk/decl"
 
 // %s constructs the widget tree decoded from %s. Pair with
 // (*decl.Node).Build() at runtime to materialise the actual widgets.
@@ -2260,7 +2260,7 @@ func testResultCounts() (passed, failed, skipped int) {
 // line→covered maps into every editor tab whose tracked path matches a
 // covered file. Path matching is exact-first then suffix-fallback (the
 // cover profile records module-relative paths while openEditors keys are
-// absolute), so "silk/foo/bar.go" and "/abs/.../silk/foo/bar.go" line up.
+// absolute), so "github.com/uk0/silk/foo/bar.go" and "/abs/.../silk/foo/bar.go" line up.
 //
 // The cover profile lives in os.TempDir and is overwritten on each run;
 // the previous file is deleted at the start of the next run so the temp

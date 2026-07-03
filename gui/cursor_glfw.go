@@ -3,9 +3,9 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
 	"errors"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"os"
 	"strconv"
 	"strings"

@@ -182,8 +182,8 @@ type composite struct {
 	children []interface{}
 }
 
-func (c *composite) Title() string                 { return c.name }
-func (c *composite) IsVisible() bool               { return !c.hidden }
+func (c *composite) Title() string                     { return c.name }
+func (c *composite) IsVisible() bool                   { return !c.hidden }
 func (c *composite) AccessibleChildren() []interface{} { return c.children }
 
 func TestWalkRecursesIntoChildren(t *testing.T) {

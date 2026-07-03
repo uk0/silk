@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -10,7 +10,7 @@ import (
 type NotificationLevel int
 
 const (
-	NotifyInfo    NotificationLevel = iota
+	NotifyInfo NotificationLevel = iota
 	NotifySuccess
 	NotifyWarning
 	NotifyError
@@ -28,10 +28,10 @@ type NotificationItem struct {
 // NotificationPanel displays a scrollable list of notification cards.
 type NotificationPanel struct {
 	Widget
-	items   []NotificationItem
-	scrollY float64
+	items    []NotificationItem
+	scrollY  float64
 	hoverIdx int
-	cbClick func(int)
+	cbClick  func(int)
 }
 
 func init() {

@@ -1,11 +1,11 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/gv"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/gv"
+	"github.com/uk0/silk/paint"
 	//"reflect"
 	//	"runtime"
 	//"sync"

@@ -57,11 +57,11 @@ func TestComputeFoldRegionsNested(t *testing.T) {
 func TestComputeFoldRegionsBraceElseBrace(t *testing.T) {
 	// A "} else {" line both closes one block and opens the next.
 	lines := []string{
-		"if a {",        // 0 opens A
-		"\tx()",         // 1
-		"} else {",      // 2 closes A (0..2), opens B at depth 0
-		"\ty()",         // 3
-		"}",             // 4 closes B -> 2..4
+		"if a {",   // 0 opens A
+		"\tx()",    // 1
+		"} else {", // 2 closes A (0..2), opens B at depth 0
+		"\ty()",    // 3
+		"}",        // 4 closes B -> 2..4
 	}
 	got := computeFoldRegions(lines)
 	want := regions([2]int{0, 2}, [2]int{2, 4})
@@ -86,12 +86,12 @@ func TestComputeFoldRegionsUnbalancedNoPanic(t *testing.T) {
 	// Unbalanced braces must be handled without panic and without inventing a
 	// region that never closes.
 	cases := [][]string{
-		{"func f() {", "\tx()"},               // opener, no closer
-		{"\t}", "}", "}"},                     // only closers
-		{"a {", "b {", "c {"},                 // three openers, no closers
-		{"}", "a {", "\tx", "}"},              // stray closer then a real region
-		{},                                    // empty input
-		{""},                                  // single blank line
+		{"func f() {", "\tx()"},  // opener, no closer
+		{"\t}", "}", "}"},        // only closers
+		{"a {", "b {", "c {"},    // three openers, no closers
+		{"}", "a {", "\tx", "}"}, // stray closer then a real region
+		{},                       // empty input
+		{""},                     // single blank line
 	}
 	for i, lines := range cases {
 		func() {

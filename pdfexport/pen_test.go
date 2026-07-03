@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestPlainPenProducesNoExtensionOps locks backwards compat: a basic
@@ -180,7 +180,7 @@ func TestPenExtensionsPrecedeStrokeOperator(t *testing.T) {
 
 	out := p.String()
 	dIdx := strings.Index(out, " d\n")
-	jIdx := strings.Index(out, " J\n") // line cap
+	jIdx := strings.Index(out, " J\n")  // line cap
 	jjIdx := strings.Index(out, " j\n") // line join
 	sIdx := strings.LastIndex(out, "\nS\n")
 	if dIdx < 0 || jIdx < 0 || jjIdx < 0 || sIdx < 0 {

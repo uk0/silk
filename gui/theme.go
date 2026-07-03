@@ -1,9 +1,9 @@
 package gui
 
 import (
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
-	"silk/core"
-	"silk/paint"
 	"runtime"
 )
 
@@ -127,19 +127,19 @@ func Theme() *defaultTheme {
 	if defaultThemeSingleton == nil {
 		t := new(defaultTheme)
 		// Modern light theme palette
-		t.FormColor = paint.Color{245, 245, 248, 255}        // slightly blue-gray
+		t.FormColor = paint.Color{245, 245, 248, 255} // slightly blue-gray
 		t.FormLightColor = paint.Color{255, 255, 255, 255}
-		t.FormDarkColor = paint.Color{107, 114, 128, 255}     // gray-500
+		t.FormDarkColor = paint.Color{107, 114, 128, 255} // gray-500
 		defaultThemeSingleton = t
 		t.IconSize = 16
 		t.Margin = 4
 		t.Spacing = 4
 		t.Font = paint.NewFont(defaultFontFamily(), 14, false, false)
 
-		t.TextColor = paint.Color{33, 37, 41, 255}            // near-black, softer than pure black
-		t.HighLightColor = paint.Color{59, 130, 246, 255}     // modern blue (Tailwind blue-500)
-		t.Accent = t.HighLightColor                           // accent mirrors highlight (light mode)
-		t.BorderColor = paint.Color{209, 213, 219, 160}       // softer border (gray-300), hairline alpha
+		t.TextColor = paint.Color{33, 37, 41, 255}        // near-black, softer than pure black
+		t.HighLightColor = paint.Color{59, 130, 246, 255} // modern blue (Tailwind blue-500)
+		t.Accent = t.HighLightColor                       // accent mirrors highlight (light mode)
+		t.BorderColor = paint.Color{209, 213, 219, 160}   // softer border (gray-300), hairline alpha
 		t.BorderPen = paint.NewPen(t.BorderColor, 1)
 		t.ViewBGColor = paint.Color{255, 255, 255, 255}
 		t.ScrollWidth = 10
@@ -147,13 +147,13 @@ func Theme() *defaultTheme {
 		t.SeparatorSize = 1
 
 		// Modern menu colors
-		t.MenuBorderColor = paint.Color{229, 231, 235, 255}   // subtle border (gray-200)
+		t.MenuBorderColor = paint.Color{229, 231, 235, 255} // subtle border (gray-200)
 		t.MenuBGColor = paint.Color{255, 255, 255, 255}
-		t.MenuTextColor = paint.Color{55, 65, 81, 255}         // dark gray text (gray-700)
-		t.MenuActiveBGColor = paint.Color{59, 130, 246, 255}   // blue highlight
+		t.MenuTextColor = paint.Color{55, 65, 81, 255}       // dark gray text (gray-700)
+		t.MenuActiveBGColor = paint.Color{59, 130, 246, 255} // blue highlight
 		t.MenuActiveTextColor = paint.Color{255, 255, 255, 255}
-		t.MenuGrayTextColor = paint.Color{156, 163, 175, 255}  // gray-400
-		t.SeperatorColor = paint.Color{243, 244, 246, 160}     // very light separator (gray-100), hairline alpha
+		t.MenuGrayTextColor = paint.Color{156, 163, 175, 255} // gray-400
+		t.SeperatorColor = paint.Color{243, 244, 246, 160}    // very light separator (gray-100), hairline alpha
 		//t.MenuItemHeight = 24
 		//t.MenuTextIndent = 32
 		t.MenuSubMarkWidth = 8
@@ -199,15 +199,15 @@ func Theme() *defaultTheme {
 			t.Accent = t.HighLightColor                       // accent mirrors highlight (dark mode)
 			t.BorderColor = paint.Color{63, 63, 70, 160}      // zinc-700, hairline alpha
 			t.BorderPen = paint.NewPen(t.BorderColor, 1)
-			t.MenuBGColor = paint.Color{39, 39, 42, 255}      // zinc-800
-			t.MenuBorderColor = paint.Color{63, 63, 70, 255}  // zinc-700
-			t.MenuTextColor = paint.Color{228, 228, 231, 255} // zinc-200
+			t.MenuBGColor = paint.Color{39, 39, 42, 255}         // zinc-800
+			t.MenuBorderColor = paint.Color{63, 63, 70, 255}     // zinc-700
+			t.MenuTextColor = paint.Color{228, 228, 231, 255}    // zinc-200
 			t.MenuActiveBGColor = paint.Color{59, 130, 246, 255} // blue-500
 			t.MenuActiveTextColor = paint.Color{255, 255, 255, 255}
 			t.MenuGrayTextColor = paint.Color{113, 113, 122, 255} // zinc-500
-			t.SeperatorColor = paint.Color{63, 63, 70, 160}   // zinc-700, hairline alpha
+			t.SeperatorColor = paint.Color{63, 63, 70, 160}       // zinc-700, hairline alpha
 			t.TabActiveTextColor = paint.Color{255, 255, 255, 255}
-			t.TabTextColor = paint.Color{161, 161, 170, 255}  // zinc-400
+			t.TabTextColor = paint.Color{161, 161, 170, 255} // zinc-400
 		}
 	}
 	return defaultThemeSingleton

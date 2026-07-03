@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // resetThemeForTest forces Theme() to rebuild and clears any snapshot left by

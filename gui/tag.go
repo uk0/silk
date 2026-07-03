@@ -1,20 +1,20 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
 // Tag 标签控件，用于显示标签/状态/分类
 type Tag struct {
 	Widget
-	text      string
-	color     paint.Color
-	textColor paint.Color
-	closeable bool
+	text       string
+	color      paint.Color
+	textColor  paint.Color
+	closeable  bool
 	hoverClose bool
-	cbClose   func()
+	cbClose    func()
 }
 
 func init() {
@@ -25,13 +25,13 @@ func NewTag(text string) *Tag {
 	p := new(Tag)
 	p.Init(p)
 	p.text = text
-	p.color = paint.Color{66, 133, 244, 255}     // blue
+	p.color = paint.Color{66, 133, 244, 255}      // blue
 	p.textColor = paint.Color{255, 255, 255, 255} // white
 	return p
 }
 
-func (this *Tag) Text() string         { return this.text }
-func (this *Tag) Color() paint.Color   { return this.color }
+func (this *Tag) Text() string       { return this.text }
+func (this *Tag) Color() paint.Color { return this.color }
 
 func (this *Tag) SetText(s string) {
 	this.text = s

@@ -40,8 +40,8 @@ func TestMainPackageImports(t *testing.T) {
 
 	// Verify the main packages listed in go.mod resolve their imports
 	packages := []string{
-		"silk/core", "silk/geom", "silk/paint", "silk/gui",
-		"silk/graph", "silk/prop", "silk/ged",
+		"github.com/uk0/silk/core", "github.com/uk0/silk/geom", "github.com/uk0/silk/paint", "github.com/uk0/silk/gui",
+		"github.com/uk0/silk/graph", "github.com/uk0/silk/prop", "github.com/uk0/silk/ged",
 	}
 
 	for _, pkg := range packages {

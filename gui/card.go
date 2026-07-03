@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -30,10 +30,10 @@ func NewCard(title string) *Card {
 	return p
 }
 
-func (this *Card) Title() string       { return this.title }
-func (this *Card) Padding() float64    { return this.padding }
-func (this *Card) Radius() float64     { return this.radius }
-func (this *Card) HasShadow() bool     { return this.shadow }
+func (this *Card) Title() string    { return this.title }
+func (this *Card) Padding() float64 { return this.padding }
+func (this *Card) Radius() float64  { return this.radius }
+func (this *Card) HasShadow() bool  { return this.shadow }
 
 func (this *Card) SetTitle(s string) {
 	this.title = s

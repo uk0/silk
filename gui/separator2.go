@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 // LabelSeparator is an enhanced separator with optional label text (e.g. "-- OR --").
@@ -78,7 +78,7 @@ func (this *LabelSeparator) Draw(g paint.Painter) {
 		g.Stroke()
 
 		// text centered
-		tx := (w - ext.Width) / 2 - ext.XBearing
+		tx := (w-ext.Width)/2 - ext.XBearing
 		ty := 0.5*(h+ext.YBearing) - ext.YBearing
 		g.SetBrush1(paint.Color{150, 150, 150, 255})
 		g.Translate(tx, ty)

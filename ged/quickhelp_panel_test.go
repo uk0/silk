@@ -1,8 +1,8 @@
 package ged
 
 import (
+	"github.com/uk0/silk/core"
 	"os/exec"
-	"silk/core"
 	"strings"
 	"testing"
 )

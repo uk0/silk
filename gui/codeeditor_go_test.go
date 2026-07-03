@@ -33,9 +33,9 @@ func TestCodeEditorSetCoverage(t *testing.T) {
 	}
 
 	cases := []struct {
-		line          int
-		wantCovered   bool
-		wantHasEntry  bool
+		line         int
+		wantCovered  bool
+		wantHasEntry bool
 	}{
 		{0, true, true},
 		{1, false, true},

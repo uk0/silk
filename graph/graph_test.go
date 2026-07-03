@@ -1,7 +1,7 @@
 package graph
 
 import (
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 	"testing"
 )
 
@@ -686,10 +686,10 @@ func TestTraversalCondSelectableAndMoveable(t *testing.T) {
 
 func TestIntersectRect(t *testing.T) {
 	tests := []struct {
-		name                         string
-		x0, y0, w0, h0              float64
-		x1, y1, w1, h1              float64
-		wantX, wantY, wantW, wantH  float64
+		name                       string
+		x0, y0, w0, h0             float64
+		x1, y1, w1, h1             float64
+		wantX, wantY, wantW, wantH float64
 	}{
 		{
 			"overlapping",

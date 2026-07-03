@@ -1,11 +1,11 @@
 package gui
 
 import (
-	//	"silk/diag"
-	"silk/win32"
+	//	"github.com/uk0/silk/diag"
 	"errors"
+	"github.com/uk0/silk/win32"
 	//	"reflect"
-	"silk/core"
+	"github.com/uk0/silk/core"
 	"syscall"
 	"unsafe"
 )

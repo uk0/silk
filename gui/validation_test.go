@@ -80,11 +80,11 @@ func TestLengthValidator(t *testing.T) {
 		in   string
 		want State
 	}{
-		{"", Intermediate},     // below Min, keep typing
-		{"a", Intermediate},    // below Min
-		{"ab", Acceptable},     // == Min
-		{"abcde", Acceptable},  // == Max
-		{"abcdef", Invalid},    // above Max, hard-drop
+		{"", Intermediate},    // below Min, keep typing
+		{"a", Intermediate},   // below Min
+		{"ab", Acceptable},    // == Min
+		{"abcde", Acceptable}, // == Max
+		{"abcdef", Invalid},   // above Max, hard-drop
 	}
 	for _, c := range cases {
 		if got := v.Validate(c.in); got != c.want {

@@ -3,7 +3,7 @@ package ged
 import (
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // sampleCommits is a representative history: three commits with short

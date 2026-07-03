@@ -1,7 +1,7 @@
 package core
 
 import (
-	//	"silk/core"
+	//	"github.com/uk0/silk/core"
 	//	"silk/factory"
 	//	"io/ioutil"
 	"os"

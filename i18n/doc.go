@@ -8,7 +8,7 @@
 //
 // Typical usage:
 //
-//	import "silk/i18n"
+//	import "github.com/uk0/silk/i18n"
 //
 //	func init() {
 //	    i18n.LoadFromFile("translations/zh-CN.json")

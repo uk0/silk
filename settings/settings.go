@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // Settings holds an in-memory TDoc-backed key/value store. Reads and

@@ -42,8 +42,8 @@ import (
 	"math"
 	"strings"
 
-	"silk/geom"
-	"silk/paint"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
 )
 
 // PDFPainter implements paint.Painter and emits PDF 1.4.
@@ -690,11 +690,11 @@ func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool)
 // encodePixmapToFlatedRGBAndSMask converts an image.Image into:
 //
 //   - rgb:    zlib-compressed straight (un-premultiplied) RGB bytes
-//             for the main /XObject /Subtype /Image stream
+//     for the main /XObject /Subtype /Image stream
 //   - smask:  zlib-compressed grayscale alpha bytes for the SMask
-//             companion XObject. Returned nil when every source
-//             pixel is fully opaque, so opaque-only documents still
-//             produce single-XObject images.
+//     companion XObject. Returned nil when every source
+//     pixel is fully opaque, so opaque-only documents still
+//     produce single-XObject images.
 //
 // Switching from "composite onto white" to "RGB + SMask" costs one
 // extra XObject per non-opaque image (doubling object count for that

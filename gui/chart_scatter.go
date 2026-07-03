@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -23,15 +23,15 @@ type ScatterSeries struct {
 // ScatterPlot renders one or more series as scattered dots.
 type ScatterPlot struct {
 	Widget
-	title                      string
-	series                     []ScatterSeries
-	minX, maxX, minY, maxY     float64
-	autoScale                  bool
-	showGrid                   bool
-	showLegend                 bool
-	bgColor                    paint.Color
-	gridColor                  paint.Color
-	axisColor                  paint.Color
+	title                  string
+	series                 []ScatterSeries
+	minX, maxX, minY, maxY float64
+	autoScale              bool
+	showGrid               bool
+	showLegend             bool
+	bgColor                paint.Color
+	gridColor              paint.Color
+	axisColor              paint.Color
 }
 
 func init() {

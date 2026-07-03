@@ -1,10 +1,10 @@
 package paint
 
 import (
-	"silk/cairo"
-	"silk/core"
-	//	"silk/geom"
-	//"silk/shell"
+	"github.com/uk0/silk/cairo"
+	"github.com/uk0/silk/core"
+	//	"github.com/uk0/silk/geom"
+	//"github.com/uk0/silk/shell"
 	"os"
 	"path/filepath"
 	"strconv"

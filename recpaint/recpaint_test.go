@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"silk/geom"
-	"silk/paint"
-	"silk/svgexport"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/svgexport"
 )
 
 // TestImplementsPainter is the compile-time guarantee.
@@ -25,13 +25,13 @@ func newCountPainter() *countPainter { return &countPainter{calls: map[string]in
 
 func (c *countPainter) note(name string) { c.calls[name]++ }
 
-func (c *countPainter) Target() paint.Surface         { c.note("Target"); return nil }
-func (c *countPainter) Save() int                     { c.note("Save"); return 0 }
-func (c *countPainter) Restore() int                  { c.note("Restore"); return 0 }
-func (c *countPainter) RestoreTo(int) bool            { c.note("RestoreTo"); return true }
-func (c *countPainter) CurrentState() int             { c.note("CurrentState"); return 0 }
-func (c *countPainter) CurrentPoint() (float64, float64) { c.note("CurrentPoint"); return 0, 0 }
-func (c *countPainter) Arc(xc, yc, r, a, b float64)   { c.note("Arc") }
+func (c *countPainter) Target() paint.Surface               { c.note("Target"); return nil }
+func (c *countPainter) Save() int                           { c.note("Save"); return 0 }
+func (c *countPainter) Restore() int                        { c.note("Restore"); return 0 }
+func (c *countPainter) RestoreTo(int) bool                  { c.note("RestoreTo"); return true }
+func (c *countPainter) CurrentState() int                   { c.note("CurrentState"); return 0 }
+func (c *countPainter) CurrentPoint() (float64, float64)    { c.note("CurrentPoint"); return 0, 0 }
+func (c *countPainter) Arc(xc, yc, r, a, b float64)         { c.note("Arc") }
 func (c *countPainter) ArcNegative(xc, yc, r, a, b float64) { c.note("ArcNegative") }
 func (c *countPainter) CurveTo(a, b, d, e, f, g float64)    { c.note("CurveTo") }
 func (c *countPainter) Line(a, b, d, e float64)             { c.note("Line") }
@@ -52,27 +52,27 @@ func (c *countPainter) ClipBounds() (float64, float64, float64, float64) {
 	c.note("ClipBounds")
 	return 0, 0, 0, 0
 }
-func (c *countPainter) ClipBounds1() geom.Rect            { c.note("ClipBounds1"); return geom.Rect{} }
-func (c *countPainter) SetOperator(paint.Operator)        { c.note("SetOperator") }
-func (c *countPainter) ResetMatrix()                      { c.note("ResetMatrix") }
-func (c *countPainter) Translate(tx, ty float64)          { c.note("Translate") }
-func (c *countPainter) Scale(sx, sy float64)              { c.note("Scale") }
-func (c *countPainter) Rotate(radians float64)            { c.note("Rotate") }
-func (c *countPainter) Transform(m *geom.Mat3x2)          { c.note("Transform") }
-func (c *countPainter) SetMatrix(m *geom.Mat3x2)          { c.note("SetMatrix") }
-func (c *countPainter) GetMatrix(m *geom.Mat3x2)          { c.note("GetMatrix") }
-func (c *countPainter) SetPen(p paint.Pen)                { c.note("SetPen") }
-func (c *countPainter) SetPen1(cr paint.Color, w float64) { c.note("SetPen1") }
-func (c *countPainter) SetBrush(br paint.Brush)           { c.note("SetBrush") }
-func (c *countPainter) SetBrush1(cr paint.Color)          { c.note("SetBrush1") }
-func (c *countPainter) SetFont(f paint.Font)              { c.note("SetFont") }
-func (c *countPainter) Font() paint.Font                  { c.note("Font"); return nil }
-func (c *countPainter) ScaledFont() paint.ScaledFont      { c.note("ScaledFont"); return nil }
-func (c *countPainter) DrawText(text string)              { c.note("DrawText") }
+func (c *countPainter) ClipBounds1() geom.Rect              { c.note("ClipBounds1"); return geom.Rect{} }
+func (c *countPainter) SetOperator(paint.Operator)          { c.note("SetOperator") }
+func (c *countPainter) ResetMatrix()                        { c.note("ResetMatrix") }
+func (c *countPainter) Translate(tx, ty float64)            { c.note("Translate") }
+func (c *countPainter) Scale(sx, sy float64)                { c.note("Scale") }
+func (c *countPainter) Rotate(radians float64)              { c.note("Rotate") }
+func (c *countPainter) Transform(m *geom.Mat3x2)            { c.note("Transform") }
+func (c *countPainter) SetMatrix(m *geom.Mat3x2)            { c.note("SetMatrix") }
+func (c *countPainter) GetMatrix(m *geom.Mat3x2)            { c.note("GetMatrix") }
+func (c *countPainter) SetPen(p paint.Pen)                  { c.note("SetPen") }
+func (c *countPainter) SetPen1(cr paint.Color, w float64)   { c.note("SetPen1") }
+func (c *countPainter) SetBrush(br paint.Brush)             { c.note("SetBrush") }
+func (c *countPainter) SetBrush1(cr paint.Color)            { c.note("SetBrush1") }
+func (c *countPainter) SetFont(f paint.Font)                { c.note("SetFont") }
+func (c *countPainter) Font() paint.Font                    { c.note("Font"); return nil }
+func (c *countPainter) ScaledFont() paint.ScaledFont        { c.note("ScaledFont"); return nil }
+func (c *countPainter) DrawText(text string)                { c.note("DrawText") }
 func (c *countPainter) DrawText1(x, y float64, text string) { c.note("DrawText1") }
-func (c *countPainter) DrawGlyphs(glyphs []paint.Glyph)   { c.note("DrawGlyphs") }
-func (c *countPainter) DrawGlyph(glyph *paint.Glyph)      { c.note("DrawGlyph") }
-func (c *countPainter) DrawPixmap(pixmap paint.Pixmap)    { c.note("DrawPixmap") }
+func (c *countPainter) DrawGlyphs(glyphs []paint.Glyph)     { c.note("DrawGlyphs") }
+func (c *countPainter) DrawGlyph(glyph *paint.Glyph)        { c.note("DrawGlyph") }
+func (c *countPainter) DrawPixmap(pixmap paint.Pixmap)      { c.note("DrawPixmap") }
 func (c *countPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
 	c.note("DrawPixmap1")
 }

@@ -19,9 +19,9 @@ func newKbList(n int) *ListWidget {
 // (-1) entry behavior.
 func TestListWidgetPageStepIndex(t *testing.T) {
 	cases := []struct {
-		name                 string
-		cur, n, page, dir    int
-		want                 int
+		name              string
+		cur, n, page, dir int
+		want              int
 	}{
 		{"down one page", 0, 100, 10, +1, 10},
 		{"up one page", 50, 100, 10, -1, 40},

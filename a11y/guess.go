@@ -44,23 +44,23 @@ var typeRoleMap = map[string]Role{
 	"Timeline":       RoleList,
 
 	// Layout
-	"VBox":        RoleGroup,
-	"HBox":        RoleGroup,
-	"GridLayout":  RoleGroup,
-	"FormLayout":  RoleGroup,
-	"GroupBox":    RoleGroup,
-	"Card":        RoleCard,
-	"Splitter":    RoleSplitter,
+	"VBox":          RoleGroup,
+	"HBox":          RoleGroup,
+	"GridLayout":    RoleGroup,
+	"FormLayout":    RoleGroup,
+	"GroupBox":      RoleGroup,
+	"Card":          RoleCard,
+	"Splitter":      RoleSplitter,
 	"StackedWidget": RoleGroup,
-	"TabWidget":   RoleTabPanel,
-	"ScrollArea":  RoleGroup,
-	"Accordion":   RoleAccordion,
+	"TabWidget":     RoleTabPanel,
+	"ScrollArea":    RoleGroup,
+	"Accordion":     RoleAccordion,
 
 	// Data
-	"ListWidget":         RoleList,
-	"TreeView":           RoleTree,
-	"Table":              RoleTable,
-	"NotificationPanel":  RoleNotification,
+	"ListWidget":        RoleList,
+	"TreeView":          RoleTree,
+	"Table":             RoleTable,
+	"NotificationPanel": RoleNotification,
 
 	// Charts (semantically images for a11y)
 	"LineChart":   RoleImage,

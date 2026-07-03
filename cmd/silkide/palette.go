@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"silk/ged"
-	"silk/gui"
-	"silk/i18n"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
 
 // paletteCommand is one entry in the Command Palette. Name is the

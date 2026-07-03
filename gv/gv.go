@@ -2,8 +2,8 @@ package gv
 
 import (
 	//	"reflect"
-	"silk/core"
 	"fmt"
+	"github.com/uk0/silk/core"
 	"io"
 	"os"
 	"os/exec"

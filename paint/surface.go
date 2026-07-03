@@ -1,8 +1,8 @@
 package paint
 
 import (
-	"silk/cairo"
-	"silk/core"
+	"github.com/uk0/silk/cairo"
+	"github.com/uk0/silk/core"
 	//	"fmt"
 	"runtime"
 )

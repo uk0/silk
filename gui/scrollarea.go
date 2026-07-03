@@ -1,8 +1,8 @@
 package gui
 
 import (
-	//	"silk/diag"
-	"silk/core"
+	//	"github.com/uk0/silk/diag"
+	"github.com/uk0/silk/core"
 )
 
 func init() {

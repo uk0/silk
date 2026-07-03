@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestClipEmitsWAndN verifies the basic clip path: build a path,

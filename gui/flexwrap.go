@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -30,10 +30,10 @@ func NewFlexWrap() *FlexWrap {
 	return p
 }
 
-func (this *FlexWrap) Spacing() float64    { return this.spacing }
+func (this *FlexWrap) Spacing() float64     { return this.spacing }
 func (this *FlexWrap) SetSpacing(s float64) { this.spacing = s; this.relayout() }
 
-func (this *FlexWrap) RowGap() float64    { return this.rowGap }
+func (this *FlexWrap) RowGap() float64     { return this.rowGap }
 func (this *FlexWrap) SetRowGap(g float64) { this.rowGap = g; this.relayout() }
 
 func (this *FlexWrap) SetPadding(p Padding) { this.padding = p; this.relayout() }

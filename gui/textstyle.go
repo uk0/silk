@@ -1,9 +1,9 @@
 package gui
 
 import (
-	//	"silk/diag"
-	//	"silk/factory"
-	"silk/paint"
+	//	"github.com/uk0/silk/diag"
+	//	"github.com/uk0/silk/factory"
+	"github.com/uk0/silk/paint"
 	"time"
 )
 

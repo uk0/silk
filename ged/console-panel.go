@@ -2,9 +2,9 @@ package ged
 
 import (
 	"fmt"
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"strings"
 	"time"
 )
@@ -22,7 +22,7 @@ func init() {
 // ConsoleLine represents a single line of console output.
 type ConsoleLine struct {
 	Text      string
-	Level     int    // 0=stdout, 1=stderr, 2=system
+	Level     int // 0=stdout, 1=stderr, 2=system
 	Timestamp string
 }
 

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -46,8 +46,8 @@ type TimePicker struct {
 
 	showSeconds bool
 
-	focusField int // 0=hour, 1=minute, 2=second
-	hoverField int // field under the cursor, -1 when none
+	focusField int  // 0=hour, 1=minute, 2=second
+	hoverField int  // field under the cursor, -1 when none
 	hoverUp    bool // the hovered stepper half (true=up arrow, false=down arrow)
 
 	cbTimeChanged func(h, m, s int)

@@ -4,7 +4,7 @@ import (
 	"image/color"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestDashedPenRoundTripsThroughReplay: record a dashed-pen stroke

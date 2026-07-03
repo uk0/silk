@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"silk/core"
-	"silk/geom"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 )
 
 // TestLoadFormFromDoc_LegacyFormat exercises the loader against the exact TDoc

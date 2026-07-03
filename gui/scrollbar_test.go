@@ -59,9 +59,9 @@ func newTestScrollBar() *ScrollBar {
 	sb := NewScrollBar()
 	sb.SetVertical(true)
 	sb.SetSize(Theme().ScrollWidth, 300) // ScrollWidth wide, tall enough for visible trough
-	sb.SetRange(0, 100) // min..max
-	sb.SetDelta(2, 10)  // small (line) = 2, large (page) = 10
-	sb.SetValue(50)     // park the thumb in the middle
+	sb.SetRange(0, 100)                  // min..max
+	sb.SetDelta(2, 10)                   // small (line) = 2, large (page) = 10
+	sb.SetValue(50)                      // park the thumb in the middle
 	return sb
 }
 

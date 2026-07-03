@@ -112,7 +112,7 @@ func EaseInOutBack(t float64) float64 {
 type AnimationState int
 
 const (
-	AnimIdle    AnimationState = iota
+	AnimIdle AnimationState = iota
 	AnimRunning
 	AnimPaused
 	AnimDone

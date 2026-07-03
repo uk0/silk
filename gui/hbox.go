@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -25,10 +25,10 @@ func NewHBox() *HBox {
 	return p
 }
 
-func (this *HBox) Spacing() float64    { return this.spacing }
-func (this *HBox) SetSpacing(s float64) { this.spacing = s; this.relayout() }
-func (this *HBox) SetPadding(p Padding) { this.padding = p; this.relayout() }
-func (this *HBox) VAlign() VertAlign    { return this.valign }
+func (this *HBox) Spacing() float64      { return this.spacing }
+func (this *HBox) SetSpacing(s float64)  { this.spacing = s; this.relayout() }
+func (this *HBox) SetPadding(p Padding)  { this.padding = p; this.relayout() }
+func (this *HBox) VAlign() VertAlign     { return this.valign }
 func (this *HBox) SetVAlign(a VertAlign) { this.valign = a; this.relayout() }
 
 func (this *HBox) relayout() {

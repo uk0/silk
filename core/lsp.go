@@ -31,9 +31,11 @@ import (
 //   - request:      JSONRPC + ID(string|number) + Method + Params
 //   - response:     JSONRPC + ID(string|number) + (Result XOR Error)
 //   - notification: JSONRPC + Method + Params, ID 为 nil
+//
 // ID 之所以是 *json.RawMessage 而不是 interface{}/string/int, 是为了:
 //   - 准确区分 "ID 缺失" 和 "ID 为 0/空字符串"
 //   - 透明 round-trip: server 给的 ID 是字符串还是数字, 原样还给上层
+//
 // Params/Result 同样保留为 RawMessage, 让具体 LSP method 的反序列化由更
 // 高一层来做(通过 DecodeParams), 这里不耦合任何 method-specific 类型.
 type LSPMessage struct {
@@ -56,10 +58,11 @@ type LSPError struct {
 
 // ReadLSPMessage 从 bufio.Reader 中读取一条完整的 LSP 消息
 // 流程:
-//   1. 按行读 header, 行结束符必须是 "\r\n"; 空行(只剩 "\r\n")标志 header 结束
-//   2. header 中必须含有 "Content-Length: N", 大小写不敏感
-//   3. 用 io.ReadFull 严格读 N 字节作为 body, 短读直接报错
-//   4. 用 encoding/json 把 body 反序列化成 LSPMessage
+//  1. 按行读 header, 行结束符必须是 "\r\n"; 空行(只剩 "\r\n")标志 header 结束
+//  2. header 中必须含有 "Content-Length: N", 大小写不敏感
+//  3. 用 io.ReadFull 严格读 N 字节作为 body, 短读直接报错
+//  4. 用 encoding/json 把 body 反序列化成 LSPMessage
+//
 // 任何畸形输入都通过 error 返回; 不会 panic
 func ReadLSPMessage(r *bufio.Reader) (*LSPMessage, error) {
 	if r == nil {
@@ -121,9 +124,10 @@ func ReadLSPMessage(r *bufio.Reader) (*LSPMessage, error) {
 
 // WriteLSPMessage 把一条 LSPMessage 序列化为 JSON 并按 LSP framing 写出
 // 写出顺序:
-//   1. 序列化 body 以便准确算 Content-Length
-//   2. 写 "Content-Length: N\r\n\r\n"
-//   3. 写 body
+//  1. 序列化 body 以便准确算 Content-Length
+//  2. 写 "Content-Length: N\r\n\r\n"
+//  3. 写 body
+//
 // JSONRPC 字段为空时默认填 "2.0", 让调用方可以省事地只填 Method/Params
 func WriteLSPMessage(w io.Writer, m *LSPMessage) error {
 	if w == nil {

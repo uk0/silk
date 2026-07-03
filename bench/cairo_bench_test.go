@@ -5,7 +5,7 @@ package bench
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // Cairo benchmarks measure the full per-call work — the painter is

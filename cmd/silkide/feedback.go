@@ -3,9 +3,9 @@ package main
 import (
 	"path/filepath"
 
-	"silk/ged"
-	"silk/gui"
-	"silk/i18n"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
 
 // globalFrame is the topmost silkide window. Toast notifications anchor

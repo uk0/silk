@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 // Placeholder is an empty state widget showing an icon, title, and subtitle.
@@ -24,9 +24,9 @@ func NewPlaceholder(title string) *Placeholder {
 	return p
 }
 
-func (this *Placeholder) Title() string       { return this.title }
-func (this *Placeholder) Subtitle() string    { return this.subtitle }
-func (this *Placeholder) Icon() paint.Icon    { return this.icon }
+func (this *Placeholder) Title() string    { return this.title }
+func (this *Placeholder) Subtitle() string { return this.subtitle }
+func (this *Placeholder) Icon() paint.Icon { return this.icon }
 
 func (this *Placeholder) SetTitle(s string) {
 	this.title = s
@@ -90,7 +90,7 @@ func (this *Placeholder) Draw(g paint.Painter) {
 		g.SetFont(boldFont)
 		ext := boldFont.TextExtents(this.title)
 		fe := boldFont.FontExtents()
-		tx := (w - ext.Width) / 2 - ext.XBearing
+		tx := (w-ext.Width)/2 - ext.XBearing
 		ty := cy + fe.Ascent
 		g.SetBrush1(paint.Color{60, 60, 60, 255})
 		g.Translate(tx, ty)
@@ -104,7 +104,7 @@ func (this *Placeholder) Draw(g paint.Painter) {
 		g.SetFont(f)
 		ext := f.TextExtents(this.subtitle)
 		fe := f.FontExtents()
-		tx := (w - ext.Width) / 2 - ext.XBearing
+		tx := (w-ext.Width)/2 - ext.XBearing
 		ty := cy + fe.Ascent
 		g.SetBrush1(paint.Color{160, 160, 160, 255})
 		g.Translate(tx, ty)

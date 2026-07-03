@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // These tests cover the skip-unknown-factory load path: a .silkui saved when a

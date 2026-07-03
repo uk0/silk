@@ -1,9 +1,9 @@
 package ged
 
 import (
+	"github.com/uk0/silk/graph"
 	"go/parser"
 	"go/token"
-	"silk/graph"
 	"strings"
 	"testing"
 )
@@ -20,7 +20,7 @@ func TestGenerateDeclCodeEmpty(t *testing.T) {
 
 	for _, want := range []string{
 		"package ui",
-		`import "silk/decl"`,
+		`import "github.com/uk0/silk/decl"`,
 		"func BuildTest() *decl.Node",
 		"decl.Form(",
 		`decl.P("title", "Test")`,

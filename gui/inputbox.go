@@ -1,7 +1,7 @@
 package gui
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // InputBox is a styled dialog for text input with a prompt label.

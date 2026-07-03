@@ -1,7 +1,7 @@
 package gui
 
 import (
-	"silk/win32"
+	"github.com/uk0/silk/win32"
 )
 
 var timerMap = make(map[uintptr]func())

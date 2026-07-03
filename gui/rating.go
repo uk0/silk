@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -97,9 +97,9 @@ func (this *Rating) Draw(g paint.Painter) {
 		displayValue = this.hoverValue
 	}
 
-	filledColor := paint.Color{255, 193, 7, 255}   // amber/gold
-	emptyColor := paint.Color{200, 200, 200, 255}   // light gray
-	hoverColor := paint.Color{255, 215, 0, 180}     // gold with alpha
+	filledColor := paint.Color{255, 193, 7, 255}  // amber/gold
+	emptyColor := paint.Color{200, 200, 200, 255} // light gray
+	hoverColor := paint.Color{255, 215, 0, 180}   // gold with alpha
 
 	// Dynamic radius based on widget bounds so stars fit
 	dynRadius := ratingRadius

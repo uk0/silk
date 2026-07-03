@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"silk/decl"
+	"github.com/uk0/silk/decl"
 )
 
 // writeSilkUI persists a tiny decl tree as a TDoc-format .silkui file

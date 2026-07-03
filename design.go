@@ -1,17 +1,17 @@
 package main
 
 import (
-	"silk/core"
-	"silk/ged"
-	"silk/graph"
-	"silk/gui"
-	"silk/prop"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/prop"
 	"math"
 	"os"
-	"sort"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -1295,9 +1295,9 @@ func createPanels(mainFrame *gui.Frame) {
 		// Design mode: show widget palette tab, hide file explorer tab
 		// Code mode: show file explorer tab, hide widget palette tab
 		ged.GlobalModeConfig = ged.ModeConfig{
-			WidgetListDock:   leftDockRef,
-			DesignDock:       centerDock,
-			PropertyDock:     rightDockRef,
+			WidgetListDock: leftDockRef,
+			DesignDock:     centerDock,
+			PropertyDock:   rightDockRef,
 		}
 
 		// Wire mode switching to control left dock tabs + center dock tabs

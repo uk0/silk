@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // makeTestPixmap returns a 4×4 paint.Pixmap with a chequerboard

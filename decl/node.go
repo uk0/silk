@@ -8,16 +8,16 @@ package decl
 // Field semantics:
 //
 //   - Type    factory name (e.g. "gui.Button"). Required. Must match a
-//             core.RegisterFactory registration before Build() will succeed.
+//     core.RegisterFactory registration before Build() will succeed.
 //   - ID      optional designer index key. When set, written to the TDoc
-//             "name" attribute so designer overlays can locate the widget.
-//             Empty string means "anonymous".
+//     "name" attribute so designer overlays can locate the widget.
+//     Empty string means "anonymous".
 //   - Props   ordered list of (name, value) pairs. We use a slice instead
-//             of a map so the author's writing order is preserved across
-//             round-trips — the designer's diff view reads better when
-//             properties aren't reshuffled by hash iteration.
+//     of a map so the author's writing order is preserved across
+//     round-trips — the designer's diff view reads better when
+//     properties aren't reshuffled by hash iteration.
 //   - Children child nodes whose widgets become sub-widgets of this node's
-//             widget at Build time.
+//     widget at Build time.
 //
 // Loc is intentionally *not* a field today. When the Go-source parser
 // arrives in a follow-up, it will populate a separate parallel structure

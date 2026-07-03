@@ -4,14 +4,14 @@
 //
 // Architecture:
 //
-//   1. Caller registers a path via Reloader.Watch(path).
-//   2. fswatch.Watcher polls the path and emits Modified events.
-//   3. The reload loop reads the event, re-parses the file via
-//      core.LoadTDocFile + decl.FromTDoc, and dispatches a Reload
-//      callback carrying the fresh *decl.Node tree.
-//   4. The host application's callback is responsible for the actual
-//      widget swap — typically via (*decl.Node).Build() and an
-//      app-specific Replace() that rewires parent/children.
+//  1. Caller registers a path via Reloader.Watch(path).
+//  2. fswatch.Watcher polls the path and emits Modified events.
+//  3. The reload loop reads the event, re-parses the file via
+//     core.LoadTDocFile + decl.FromTDoc, and dispatches a Reload
+//     callback carrying the fresh *decl.Node tree.
+//  4. The host application's callback is responsible for the actual
+//     widget swap — typically via (*decl.Node).Build() and an
+//     app-specific Replace() that rewires parent/children.
 //
 // The package deliberately stops at "produce the new AST" — performing
 // the widget tree swap is host policy (some apps want a full re-Build,
@@ -38,9 +38,9 @@ import (
 	"sync"
 	"time"
 
-	"silk/core"
-	"silk/decl"
-	"silk/fswatch"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/decl"
+	"github.com/uk0/silk/fswatch"
 )
 
 // ReloadFunc is the host callback invoked when a watched file

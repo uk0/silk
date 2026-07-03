@@ -200,17 +200,17 @@ var parseCoverageSeeds = []string{
 	// 完全乱码
 	"hello world\n",
 	// 缺 count 字段
-	"silk/x.go:1.1,2.2 1\n",
+	"github.com/uk0/silk/x.go:1.1,2.2 1\n",
 	// 数字字段坏掉
-	"silk/x.go:1.1,2.2 abc 1\n",
-	"silk/x.go:1.1,2.2 1 def\n",
+	"github.com/uk0/silk/x.go:1.1,2.2 abc 1\n",
+	"github.com/uk0/silk/x.go:1.1,2.2 1 def\n",
 	// 行号倒置 / 负数
-	"silk/x.go:5.1,2.2 1 1\n",
+	"github.com/uk0/silk/x.go:5.1,2.2 1 1\n",
 	// Windows 风格盘符路径 (头部含 ':')
 	`C:\src\foo.go:1.1,2.2 1 1` + "\n",
 	// 缺 ',' / 缺 '.'
-	"silk/x.go:1.1 2.2 1 1\n",
-	"silk/x.go:11,22 1 1\n",
+	"github.com/uk0/silk/x.go:1.1 2.2 1 1\n",
+	"github.com/uk0/silk/x.go:11,22 1 1\n",
 }
 
 func runParseCoverage(t *testing.T, src string) {

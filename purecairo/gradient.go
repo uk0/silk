@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"math"
 
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 )
 
 // Gradient implementations — linear and radial.

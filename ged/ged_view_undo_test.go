@@ -1,7 +1,7 @@
 package ged
 
 import (
-	"silk/graph"
+	"github.com/uk0/silk/graph"
 	"testing"
 )
 

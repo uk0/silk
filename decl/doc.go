@@ -29,7 +29,7 @@
 //   - codec_tdoc.go — ToTDoc / FromTDoc round-trip
 //   - runtime.go — Node.Build() instantiates IWidget tree via core/factory
 //
-// What is NOT in this package
+// # What is NOT in this package
 //
 // A bidirectional Go-source parser/emitter is intentionally deferred.
 // First we prove the AST shape round-trips losslessly with TDoc and the

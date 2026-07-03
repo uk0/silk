@@ -15,9 +15,9 @@ func TestTerminalPanelRunDispatchesCommand(t *testing.T) {
 	tp := NewTerminalPanel()
 
 	var (
-		mu      sync.Mutex
-		got     string
-		fired   bool
+		mu    sync.Mutex
+		got   string
+		fired bool
 	)
 	tp.SigSubmit(func(cmd string) {
 		mu.Lock()

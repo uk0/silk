@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // TestPackagesActivatedToastMessage locks in the user-facing string
@@ -19,8 +19,8 @@ func TestPackagesActivatedToastMessage(t *testing.T) {
 	}{
 		{
 			name: "import path wins",
-			pkg:  core.GoListPackage{ImportPath: "silk/ged", Dir: "/repo/ged"},
-			want: "silk/ged",
+			pkg:  core.GoListPackage{ImportPath: "github.com/uk0/silk/ged", Dir: "/repo/ged"},
+			want: "github.com/uk0/silk/ged",
 		},
 		{
 			name: "dir fallback when import path empty",

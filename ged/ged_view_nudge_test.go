@@ -3,7 +3,7 @@ package ged
 import (
 	"testing"
 
-	"silk/gui"
+	"github.com/uk0/silk/gui"
 )
 
 // TestNudgeDelta checks the pure (key,shift)→(dx,dy) mapping for all four

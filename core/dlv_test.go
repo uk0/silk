@@ -89,9 +89,10 @@ func TestDlvDecodeRPCError_Fallback(t *testing.T) {
 }
 
 // TestRPCCall_RoundTrip 用一个本地 fake server 验证:
-//   1. encode 出去的请求是 {"jsonrpc":"2.0","id":N,"method":"RPCServer.X","params":[<params>]}
-//   2. 收到 {"id":N,"result":{...}} 后 result 能解到调用方提供的 out 指针
-//   3. id 单调递增
+//  1. encode 出去的请求是 {"jsonrpc":"2.0","id":N,"method":"RPCServer.X","params":[<params>]}
+//  2. 收到 {"id":N,"result":{...}} 后 result 能解到调用方提供的 out 指针
+//  3. id 单调递增
+//
 // 这等价于一次 RPCServer.CreateBreakpoint 的协议形态, 但不依赖 dlv.
 func TestDlvRPCCall_RoundTrip(t *testing.T) {
 	srv, clientConn := newFakeRPCServer(t)

@@ -1,9 +1,9 @@
 package gui
 
 import (
-	//	"silk/geom"
-	"silk/geom"
-	"silk/paint"
+	//	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
 )
 
 type titleProp struct {
@@ -83,9 +83,9 @@ const (
 
 type SizeHints struct {
 	Width, Height       float64
-	MinWidth, MinHeight float64     // 最小尺寸约束
-	MaxWidth, MaxHeight float64     // 最大尺寸约束 (0=无限制)
-	Stretch             int         // 拉伸权重 (0=不拉伸/使用固定尺寸, >0=按权重分配剩余空间)
+	MinWidth, MinHeight float64 // 最小尺寸约束
+	MaxWidth, MaxHeight float64 // 最大尺寸约束 (0=无限制)
+	Stretch             int     // 拉伸权重 (0=不拉伸/使用固定尺寸, >0=按权重分配剩余空间)
 	Policy              SizePolicy
 }
 

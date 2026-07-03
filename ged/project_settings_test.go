@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // TestGoModSummaryString_Populated covers the exact one-line format the

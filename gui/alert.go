@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -81,17 +81,17 @@ func (this *Alert) SigClose(fn func()) {
 func alertColors(level AlertLevel) (fill paint.Color, accent paint.Color) {
 	switch level {
 	case AlertInfo:
-		fill = paint.Color{232, 244, 253, 255}   // light blue
-		accent = paint.Color{33, 150, 243, 255}  // blue
+		fill = paint.Color{232, 244, 253, 255}  // light blue
+		accent = paint.Color{33, 150, 243, 255} // blue
 	case AlertSuccess:
-		fill = paint.Color{232, 245, 233, 255}   // light green
-		accent = paint.Color{76, 175, 80, 255}   // green
+		fill = paint.Color{232, 245, 233, 255} // light green
+		accent = paint.Color{76, 175, 80, 255} // green
 	case AlertWarning:
-		fill = paint.Color{255, 243, 224, 255}   // light amber
-		accent = paint.Color{255, 152, 0, 255}   // amber
+		fill = paint.Color{255, 243, 224, 255} // light amber
+		accent = paint.Color{255, 152, 0, 255} // amber
 	case AlertError:
-		fill = paint.Color{253, 235, 234, 255}   // light red
-		accent = paint.Color{244, 67, 54, 255}   // red
+		fill = paint.Color{253, 235, 234, 255} // light red
+		accent = paint.Color{244, 67, 54, 255} // red
 	default:
 		fill = paint.Color{240, 240, 240, 255}
 		accent = paint.Color{120, 120, 120, 255}

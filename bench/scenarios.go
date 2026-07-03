@@ -12,7 +12,7 @@
 package bench
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // RectFill paints n axis-aligned rects in a grid, with alternating

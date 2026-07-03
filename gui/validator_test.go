@@ -17,9 +17,9 @@ func TestIntValidatorAccepts(t *testing.T) {
 		{"50", Acceptable},
 		{"100", Acceptable},
 		{"abc", Invalid},
-		{"-1", Intermediate},  // -1 below range but |1| < 100, could keep typing
-		{"500", Invalid},      // 500 > 100 and |500| > 100, can't get back in range
-		{"1000000", Invalid},  // way out of range
+		{"-1", Intermediate}, // -1 below range but |1| < 100, could keep typing
+		{"500", Invalid},     // 500 > 100 and |500| > 100, can't get back in range
+		{"1000000", Invalid}, // way out of range
 	}
 	for _, c := range cases {
 		if got := v.Validate(c.in); got != c.want {

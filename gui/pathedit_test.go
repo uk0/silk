@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // TestPathEditTextRoundTrip: SetText writes the value and Text reads

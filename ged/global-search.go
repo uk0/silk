@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -36,13 +36,13 @@ type SearchMatch struct {
 type GlobalSearchPanel struct {
 	gui.Widget
 
-	query     string
-	queryRunes []rune
+	query       string
+	queryRunes  []rune
 	queryCursor int
-	results   []SearchMatch
-	grouped   map[string][]SearchMatch // grouped by file
-	fileOrder []string                 // ordered file keys
-	collapsed map[string]bool          // collapsed file groups
+	results     []SearchMatch
+	grouped     map[string][]SearchMatch // grouped by file
+	fileOrder   []string                 // ordered file keys
+	collapsed   map[string]bool          // collapsed file groups
 
 	replaceRunes  []rune // replace-with text
 	replaceCursor int
@@ -56,7 +56,7 @@ type GlobalSearchPanel struct {
 	cbOpen    func(path string, line int)
 
 	// flattened visible rows for rendering
-	flatRows  []searchRow
+	flatRows []searchRow
 }
 
 type searchRowKind int
@@ -598,7 +598,7 @@ func (this *GlobalSearchPanel) isInReplaceButton(x, y float64) bool {
 	replaceY := headerH + 4 + inputH + 4
 	replaceH := 24.0
 	w := this.Width()
-	btnX := 8 + (w-16)-64-4 + 4 // inputX + replaceW + gap
+	btnX := 8 + (w - 16) - 64 - 4 + 4 // inputX + replaceW + gap
 	return y >= replaceY && y <= replaceY+replaceH && x >= btnX && x <= btnX+64
 }
 

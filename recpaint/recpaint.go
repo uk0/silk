@@ -26,8 +26,8 @@
 package recpaint
 
 import (
-	"silk/geom"
-	"silk/paint"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
 )
 
 // RecordingPainter is the recorder. Construct with New(); drive it
@@ -192,9 +192,9 @@ func (r *RecordingPainter) PaintWithAlpha(alpha uint8) {
 
 // --- paint.Painter: clipping ------------------------------------------
 
-func (r *RecordingPainter) ResetClip()      { r.record(func(t paint.Painter) { t.ResetClip() }) }
-func (r *RecordingPainter) Clip()           { r.record(func(t paint.Painter) { t.Clip() }) }
-func (r *RecordingPainter) ClipPreserve()   { r.record(func(t paint.Painter) { t.ClipPreserve() }) }
+func (r *RecordingPainter) ResetClip()    { r.record(func(t paint.Painter) { t.ResetClip() }) }
+func (r *RecordingPainter) Clip()         { r.record(func(t paint.Painter) { t.Clip() }) }
+func (r *RecordingPainter) ClipPreserve() { r.record(func(t paint.Painter) { t.ClipPreserve() }) }
 func (r *RecordingPainter) ClipBounds() (float64, float64, float64, float64) {
 	return 0, 0, 0, 0
 }
@@ -277,7 +277,7 @@ func (r *RecordingPainter) SetFont(f paint.Font) {
 	r.record(func(t paint.Painter) { t.SetFont(f) })
 }
 
-func (r *RecordingPainter) Font() paint.Font            { return r.font }
+func (r *RecordingPainter) Font() paint.Font             { return r.font }
 func (r *RecordingPainter) ScaledFont() paint.ScaledFont { return nil }
 
 // --- paint.Painter: text ----------------------------------------------

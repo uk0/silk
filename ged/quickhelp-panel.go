@@ -1,10 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"os/exec"
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
 	"strings"
 )
 

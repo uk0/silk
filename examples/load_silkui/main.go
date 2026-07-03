@@ -13,8 +13,8 @@ import (
 	"log"
 	"os"
 
-	"silk/core"
-	"silk/gui"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
 )
 
 func main() {

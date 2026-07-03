@@ -3,9 +3,9 @@ package data
 import (
 	"bytes"
 	"database/sql"
+	"github.com/uk0/silk/core"
+	_ "github.com/uk0/silk/sqlite3"
 	"runtime"
-	"silk/core"
-	_ "silk/sqlite3"
 	"strings"
 	"sync"
 )

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestNewSpinnerDefaults locks in the construction-time settings so a

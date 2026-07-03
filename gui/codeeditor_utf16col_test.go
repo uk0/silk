@@ -17,12 +17,12 @@ func TestUTF16ColumnOf(t *testing.T) {
 		runeCol int
 		want    int
 	}{
-		{"hello", 3, 3},  // ASCII: rune index == UTF-16 offset
-		{"café", 4, 4},   // é is BMP -> 1 code unit
-		{"x😀y", 2, 3},    // "x😀" = 1 + 2 UTF-16 units
-		{"x😀y", 1, 1},    // only "x" precedes the caret
-		{"", 0, 0},       // empty line
-		{"x😀y", 10, 4},   // runeCol past end clamps to full width (1+2+1)
+		{"hello", 3, 3}, // ASCII: rune index == UTF-16 offset
+		{"café", 4, 4},  // é is BMP -> 1 code unit
+		{"x😀y", 2, 3},   // "x😀" = 1 + 2 UTF-16 units
+		{"x😀y", 1, 1},   // only "x" precedes the caret
+		{"", 0, 0},      // empty line
+		{"x😀y", 10, 4},  // runeCol past end clamps to full width (1+2+1)
 	}
 	for _, c := range cases {
 		if got := utf16ColumnOf(c.line, c.runeCol); got != c.want {

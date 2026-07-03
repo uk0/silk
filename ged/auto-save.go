@@ -1,9 +1,9 @@
 package ged
 
 import (
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
 	"os"
-	"silk/core"
-	"silk/gui"
 	"time"
 )
 

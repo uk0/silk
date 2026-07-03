@@ -1,9 +1,9 @@
 package main
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/i18n"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
 
 // showSymbolFinder pops a "Go to Symbol in Workspace" modal (Cmd+T): the user

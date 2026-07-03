@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestImplementsPainter is the compile-time guarantee that PDFPainter

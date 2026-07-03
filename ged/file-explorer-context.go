@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"silk/gui"
+	"github.com/uk0/silk/gui"
 )
 
 // This file adds the right-click context-menu workflow to FileExplorer:

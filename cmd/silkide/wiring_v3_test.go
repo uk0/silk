@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // TestFormatProjectStatusVariants pins the status-bar project-cell label

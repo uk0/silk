@@ -3,11 +3,11 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/gv"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/gv"
+	"github.com/uk0/silk/paint"
 	"math"
 	"reflect"
 	"runtime"
@@ -83,14 +83,14 @@ type Window struct {
 	// allocation + cairo_create cost every frame. It must be invalidated
 	// whenever backBuffer is reallocated (e.g. on resize) — see paint().
 	backPainter paint.Painter
-	backWidth  int
-	backHeight int
+	backWidth   int
+	backHeight  int
 	widget      IWidget
 	wt          WindowType
 	title       string
 	glTexture   uint32
-	dirty   bool
-	enabled bool
+	dirty       bool
+	enabled     bool
 
 	// Dirty region tracking. fullDirty=true (the default) means the next
 	// paint redraws the whole window. dirtyRegion accumulates partial

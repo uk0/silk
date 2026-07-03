@@ -255,7 +255,7 @@ func TestTreeViewKeyboardRightExpands(t *testing.T) {
 // the layout.
 func TestTreeViewKeyboardRightDescendsWhenExpanded(t *testing.T) {
 	tv := newKbTree()
-	tv.SetCurrentRow(1) // A0
+	tv.SetCurrentRow(1)           // A0
 	tv.OnKeyDown(KeyRight, false) // expand
 	rows := len(tv.rows)
 

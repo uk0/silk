@@ -24,10 +24,10 @@ func TestFilterCommandsSubsequence(t *testing.T) {
 		{"", []string{"Build", "Run", "Find in Files", "Refresh"}}, // empty query passes all
 		{"build", []string{"Build"}},
 		{"run", []string{"Run"}},
-		{"fnf", []string{"Find in Files"}},  // f→n→f subsequence in "find in files"
-		{"rfh", []string{"Refresh"}},        // r→f→h subsequence in "refresh"
-		{"un", []string{"Run"}},             // shorter first when both Run+Find match? Run only
-		{"xyz", nil},                        // no match
+		{"fnf", []string{"Find in Files"}}, // f→n→f subsequence in "find in files"
+		{"rfh", []string{"Refresh"}},       // r→f→h subsequence in "refresh"
+		{"un", []string{"Run"}},            // shorter first when both Run+Find match? Run only
+		{"xyz", nil},                       // no match
 	}
 	for _, c := range cases {
 		got := filterCommands(cmds, c.query)

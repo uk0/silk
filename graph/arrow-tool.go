@@ -1,7 +1,7 @@
 package graph
 
 import (
-//	"silk/gui"
+//	"github.com/uk0/silk/gui"
 )
 
 func NewArrowTool() ITool {

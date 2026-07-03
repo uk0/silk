@@ -1,9 +1,9 @@
 package graph
 
 import (
-	"silk/geom"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 

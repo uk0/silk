@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/graph"
+	"github.com/uk0/silk/graph"
 )
 
 // helper: make a scene-level fake widget.

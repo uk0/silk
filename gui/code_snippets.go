@@ -7,8 +7,9 @@ import (
 
 // goSnippets maps abbreviation strings to snippet templates.
 // Template placeholders:
-//   ${N:text} - replaced with "text" (the default value)
-//   ${0}      - replaced with empty string (cursor position marker)
+//
+//	${N:text} - replaced with "text" (the default value)
+//	${0}      - replaced with empty string (cursor position marker)
 var goSnippets = map[string]string{
 	"fn":    "func ${1:name}(${2:params}) ${3:returnType} {\n\t${0}\n}",
 	"fne":   "func (${1:err} error) {\n\t${0}\n}",

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"strings"
 
-	"silk/core"
-	"silk/geom"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 )
 
 // LoadForm loads a UI design from a .silkui file (or any legacy design file

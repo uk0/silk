@@ -2,7 +2,7 @@ package core
 
 import (
 	//	"bytes"
-	//	"silk/core"
+	//	"github.com/uk0/silk/core"
 	//	"fmt"
 	//	"log"
 	"os"

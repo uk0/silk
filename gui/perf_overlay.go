@@ -2,7 +2,7 @@ package gui
 
 import (
 	"fmt"
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 	"sync"
 	"time"
 )

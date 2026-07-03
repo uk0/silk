@@ -9,9 +9,9 @@ package decl_test
 import (
 	"testing"
 
-	"silk/decl"
-	"silk/gui"
-	"silk/i18n"
+	"github.com/uk0/silk/decl"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
 
 // withLocale runs fn with the i18n.Default translator swapped to a

@@ -9,8 +9,8 @@ package decl_test
 import (
 	"testing"
 
-	"silk/decl"
-	"silk/gui"
+	"github.com/uk0/silk/decl"
+	"github.com/uk0/silk/gui"
 )
 
 // TestBuildFormHasTitle exercises the full pipeline: DSL → AST →

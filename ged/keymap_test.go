@@ -11,10 +11,10 @@ import (
 func TestKeymapDefaultsGet(t *testing.T) {
 	km := LoadKeymap()
 	wantPairs := map[string]string{
-		"file.new":            "Ctrl+N",
-		"editor.find":         "Ctrl+F",
+		"file.new":              "Ctrl+N",
+		"editor.find":           "Ctrl+F",
 		"editor.addCursorAbove": "Ctrl+Alt+Up",
-		"debug.perfOverlay":   "F12",
+		"debug.perfOverlay":     "F12",
 	}
 	for cmd, wantKey := range wantPairs {
 		got := km.Get(cmd)

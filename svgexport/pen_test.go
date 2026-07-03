@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestPlainPenProducesNoExtensionAttrs locks in backwards compat:

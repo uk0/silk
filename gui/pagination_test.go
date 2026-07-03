@@ -111,10 +111,10 @@ func TestSetCurrentPageClampsAndFires(t *testing.T) {
 	p.SigChange(func(page int) { fired = append(fired, page) })
 
 	p.SetCurrentPage(5)
-	p.SetCurrentPage(5)   // no-op, must not refire
-	p.SetCurrentPage(99)  // clamp to 10
-	p.SetCurrentPage(-3)  // clamp to 1
-	p.SetCurrentPage(1)   // already 1 after the -3 clamp → no-op
+	p.SetCurrentPage(5)  // no-op, must not refire
+	p.SetCurrentPage(99) // clamp to 10
+	p.SetCurrentPage(-3) // clamp to 1
+	p.SetCurrentPage(1)  // already 1 after the -3 clamp → no-op
 
 	want := []int{5, 10, 1}
 	if !reflect.DeepEqual(fired, want) {

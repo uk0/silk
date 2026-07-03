@@ -1,7 +1,7 @@
 package gui
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 	"sort"
 	"strings"
 )
@@ -227,12 +227,12 @@ func (this *CompletionPopup) filter() {
 //   - case-sensitive prefix           →   100_000 - len(candidate)
 //   - case-insensitive prefix         →    50_000 - len(candidate)
 //   - subsequence (in order)          → sum of per-char bonuses:
-//       +12 per matched rune
-//       +20 extra when the match is on a consecutive run with the previous one
-//       +25 extra when the matched rune sits at a word boundary
-//             (start of string, after '.' / '_' / '/', or camelCase transition)
-//       +15 extra when the case matches exactly
-//       -2 per skipped (gap) rune in candidate
+//     +12 per matched rune
+//     +20 extra when the match is on a consecutive run with the previous one
+//     +25 extra when the matched rune sits at a word boundary
+//     (start of string, after '.' / '_' / '/', or camelCase transition)
+//     +15 extra when the case matches exactly
+//     -2 per skipped (gap) rune in candidate
 //     plus a small -len(candidate)/4 penalty so shorter candidates rank higher
 //     on otherwise-equal scores.
 //

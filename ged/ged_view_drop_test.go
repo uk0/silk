@@ -3,7 +3,7 @@ package ged
 import (
 	"testing"
 
-	"silk/graph"
+	"github.com/uk0/silk/graph"
 )
 
 // TestIsContainerItem verifies the drop-into-container predicate: every

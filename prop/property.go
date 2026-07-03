@@ -1,11 +1,11 @@
 package prop
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/gui"
-	"silk/paint"
-	//	"silk/core"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
+	//	"github.com/uk0/silk/core"
 	//	"encoding/json"
 	"fmt"
 	//	"io/ioutil"
@@ -653,11 +653,11 @@ var categoryOrder = []string{"layout", "appearance", "behavior", "events", "gene
 
 // categoryNames maps internal keys to display names.
 var categoryNames = map[string]string{
-	"layout":     "\u5e03\u5c40",     // 布局
-	"appearance": "\u5916\u89c2",     // 外观
-	"behavior":   "\u884c\u4e3a",     // 行为
-	"events":     "\u4e8b\u4ef6",     // 事件
-	"general":    "\u5e38\u89c4",     // 常规
+	"layout":     "\u5e03\u5c40", // 布局
+	"appearance": "\u5916\u89c2", // 外观
+	"behavior":   "\u884c\u4e3a", // 行为
+	"events":     "\u4e8b\u4ef6", // 事件
+	"general":    "\u5e38\u89c4", // 常规
 }
 
 // categoryOfPropID classifies a property by its lowercase ID.

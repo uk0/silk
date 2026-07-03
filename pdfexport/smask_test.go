@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // makeAlphaPixmap builds a 4×4 paint.Pixmap with 50% alpha throughout.

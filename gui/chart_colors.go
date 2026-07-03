@@ -1,6 +1,6 @@
 package gui
 
-import "silk/paint"
+import "github.com/uk0/silk/paint"
 
 // chartColors is the default color palette used by chart widgets when
 // the caller does not supply an explicit color.

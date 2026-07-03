@@ -3,7 +3,7 @@
 package gui
 
 import (
-	"silk/core"
+	"github.com/uk0/silk/core"
 	"sync"
 
 	"github.com/go-gl/glfw/v3.3/glfw"

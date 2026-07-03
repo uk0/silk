@@ -3,7 +3,7 @@ package ged
 import (
 	"testing"
 
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 )
 
 // TestBoundingBoxOf checks the pure enclosing-rect helper.

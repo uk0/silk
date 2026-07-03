@@ -3,9 +3,9 @@ package ged
 import (
 	"math"
 
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -42,7 +42,7 @@ type CodeOutlinePanel struct {
 	cbNavigate  func(line int)
 
 	// cache: last known text hash to avoid re-parsing when content hasn't changed
-	lastTextLen int
+	lastTextLen   int
 	lastLineCount int
 }
 

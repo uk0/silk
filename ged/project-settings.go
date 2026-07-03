@@ -5,9 +5,9 @@ import (
 	"math"
 	"os"
 
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -156,12 +156,12 @@ func (this *ProjectSettingsPanel) Refresh() {
 // ---------------------------------------------------------------------------
 
 const (
-	psHeaderH    = 26.0
-	psRowH       = 36.0
-	psLabelW     = 120.0
-	psPadLeft    = 10.0
-	psPadRight   = 10.0
-	psRowPadY    = 4.0
+	psHeaderH  = 26.0
+	psRowH     = 36.0
+	psLabelW   = 120.0
+	psPadLeft  = 10.0
+	psPadRight = 10.0
+	psRowPadY  = 4.0
 )
 
 // ---------------------------------------------------------------------------

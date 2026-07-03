@@ -40,9 +40,11 @@ type FileCoverage struct {
 
 // ParseCoverage 解析 go cover 文本格式
 // 返回:
-//   mode   - "set"/"count"/"atomic", 缺省 header 时按 "set" 处理
-//   blocks - 所有成功解析的块 (跳错收集策略, 即使有坏行也会返回到目前为止解析成功的块)
-//   err    - 非 nil 表示有畸形行, 错误信息包含全部坏行的行号
+//
+//	mode   - "set"/"count"/"atomic", 缺省 header 时按 "set" 处理
+//	blocks - 所有成功解析的块 (跳错收集策略, 即使有坏行也会返回到目前为止解析成功的块)
+//	err    - 非 nil 表示有畸形行, 错误信息包含全部坏行的行号
+//
 // 解析器对空行宽容. 永远不 panic.
 func ParseCoverage(profile string) (mode string, blocks []CoverageBlock, err error) {
 	mode = "set"

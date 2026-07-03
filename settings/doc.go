@@ -18,7 +18,7 @@
 //
 // Typical usage:
 //
-//	import "silk/settings"
+//	import "github.com/uk0/silk/settings"
 //
 //	s := settings.Default("MyOrg", "MyApp")
 //	s.SetValue("editor/fontSize", 14)

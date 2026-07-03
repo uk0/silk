@@ -1,6 +1,6 @@
 package svg
 
-import "silk/paint"
+import "github.com/uk0/silk/paint"
 
 // Doc is the parsed SVG tree. ViewBox defines the coordinate system the
 // shapes are drawn in; Width/Height are the document's intrinsic size.
@@ -50,13 +50,13 @@ type Common struct {
 // state stack walks the parent chain to fill them in. A non-nil value
 // is what the SVG actually specified.
 type Style struct {
-	Fill        *Color  // nil = inherit; (*Color)(nil) value with .None=true means fill="none"
-	Stroke      *Color
-	StrokeWidth *float64
-	Opacity     *float64
-	FillOpacity *float64
+	Fill          *Color // nil = inherit; (*Color)(nil) value with .None=true means fill="none"
+	Stroke        *Color
+	StrokeWidth   *float64
+	Opacity       *float64
+	FillOpacity   *float64
 	StrokeOpacity *float64
-	FillRule    FillRule // 0 = inherit; explicit values follow
+	FillRule      FillRule // 0 = inherit; explicit values follow
 }
 
 // Color is a wrapper carrying the explicit-vs-none distinction. SVG's

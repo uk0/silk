@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"silk/core"
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/core"
 )
 
 // 工具视图定义

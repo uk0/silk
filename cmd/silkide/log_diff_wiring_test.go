@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"silk/core"
-	"silk/ged"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/ged"
 )
 
 // TestBuildEventLevel pins the classifier the "Build finished" log event

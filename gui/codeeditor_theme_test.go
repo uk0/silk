@@ -1,7 +1,7 @@
 package gui
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 	"testing"
 )
 

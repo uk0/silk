@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 const floatTol = 1e-9

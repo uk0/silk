@@ -1,9 +1,9 @@
 package graph
 
 import (
-	//	"silk/geom"
-	"silk/core"
-	"silk/gui"
+	//	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
 )
 
 type IScene interface {

@@ -1,7 +1,7 @@
 package svg
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // Render draws doc onto painter, scaled into the target rectangle
@@ -81,10 +81,10 @@ func defaultStyle() Style {
 	black := Color{Val: paint.Color{R: 0, G: 0, B: 0, A: 255}}
 	one := 1.0
 	return Style{
-		Fill:        &black,
-		StrokeWidth: &one,
-		Opacity:     &one,
-		FillOpacity: &one,
+		Fill:          &black,
+		StrokeWidth:   &one,
+		Opacity:       &one,
+		FillOpacity:   &one,
 		StrokeOpacity: &one,
 	}
 }

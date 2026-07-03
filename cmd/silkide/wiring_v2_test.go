@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"silk/core"
+	"github.com/uk0/silk/core"
 )
 
 // TestCoverageForPathExactMatch locks in the exact-match branch of the

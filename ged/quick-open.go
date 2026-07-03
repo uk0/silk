@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // QuickOpenPopup provides a Ctrl+P file finder popup like VS Code.

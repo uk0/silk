@@ -1,9 +1,9 @@
 package ged
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
 	"strings"
 )
@@ -80,10 +80,10 @@ func (this *WidgetList) Init(self gui.IWidget) {
 		"gui.TabBar": true, "gui.ScrollBar": true, "gui.Space": true,
 		"gui.Action": true, "gui.Separator": true, "gui.ButtonBox": true,
 		"gui.tooltipWindow": true, "gui.HeaderView": true,
-		"gui.ScrollArea": true,
+		"gui.ScrollArea":     true,
 		"prop.PropertySheet": true, "prop.control.CheckBox": true,
 		"prop.control.TextEdit": true,
-		"graph.DbgTreeView": true, "graph.GraphView": true,
+		"graph.DbgTreeView":     true, "graph.GraphView": true,
 	}
 
 	// Build a set of available widget factory names

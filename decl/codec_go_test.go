@@ -53,7 +53,7 @@ func TestToGoIsValidGoSyntax(t *testing.T) {
 	)
 	src := ToGo(tree)
 	wrapped := `package main
-import "silk/decl"
+import "github.com/uk0/silk/decl"
 var _ = ` + src
 
 	fset := token.NewFileSet()
@@ -137,7 +137,7 @@ func TestToGoEscapesQuotedStrings(t *testing.T) {
 	n := Label(P("text", `Say "hi" and 'bye'`))
 	got := ToGo(n)
 	wrapped := `package main
-import "silk/decl"
+import "github.com/uk0/silk/decl"
 var _ = ` + got
 	fset := token.NewFileSet()
 	if _, err := parser.ParseFile(fset, "out.go", wrapped, 0); err != nil {

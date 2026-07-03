@@ -1,7 +1,7 @@
 package data
 
 import (
-//"silk/core"
+//"github.com/uk0/silk/core"
 )
 
 // 抽象的数据接口

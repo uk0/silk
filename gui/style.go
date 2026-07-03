@@ -1,7 +1,7 @@
 package gui
 
 import (
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // ─── Style System ───
@@ -10,13 +10,13 @@ import (
 type StyleVariant int
 
 const (
-	StyleDefault  StyleVariant = iota
-	StyleLight                 // 浅色主题
-	StyleDark                  // 深色主题
-	StyleBlue                  // 蓝色主题
-	StyleGreen                 // 绿色主题
-	StylePurple                // 紫色主题
-	StyleCustom                // 自定义
+	StyleDefault StyleVariant = iota
+	StyleLight                // 浅色主题
+	StyleDark                 // 深色主题
+	StyleBlue                 // 蓝色主题
+	StyleGreen                // 绿色主题
+	StylePurple               // 紫色主题
+	StyleCustom               // 自定义
 )
 
 // ColorScheme 配色方案
@@ -29,9 +29,9 @@ type ColorScheme struct {
 	Accent       paint.Color // 强调色
 
 	// 背景色
-	Background   paint.Color // 主背景
-	Surface      paint.Color // 表面/卡片背景
-	SurfaceAlt   paint.Color // 交替表面色
+	Background paint.Color // 主背景
+	Surface    paint.Color // 表面/卡片背景
+	SurfaceAlt paint.Color // 交替表面色
 
 	// 文字色
 	TextPrimary   paint.Color // 主要文字
@@ -45,10 +45,10 @@ type ColorScheme struct {
 	BorderFocus paint.Color // 获焦边框
 
 	// 功能色
-	Success  paint.Color // 成功/正确
-	Warning  paint.Color // 警告
-	Error    paint.Color // 错误/危险
-	Info     paint.Color // 信息
+	Success paint.Color // 成功/正确
+	Warning paint.Color // 警告
+	Error   paint.Color // 错误/危险
+	Info    paint.Color // 信息
 
 	// 交互状态
 	Hover    paint.Color // 悬停
@@ -57,8 +57,8 @@ type ColorScheme struct {
 	Disabled paint.Color // 禁用背景
 
 	// 特殊
-	Shadow   paint.Color // 阴影色
-	Overlay  paint.Color // 遮罩层
+	Shadow  paint.Color // 阴影色
+	Overlay paint.Color // 遮罩层
 }
 
 // WidgetStyle 控件级别的样式覆盖
@@ -92,15 +92,15 @@ type WidgetStyle struct {
 // LightColorScheme 浅色主题配色
 func LightColorScheme() ColorScheme {
 	return ColorScheme{
-		Primary:       paint.Color{66, 133, 244, 255},
-		PrimaryLight:  paint.Color{144, 186, 255, 255},
-		PrimaryDark:   paint.Color{25, 103, 210, 255},
-		Secondary:     paint.Color{95, 99, 104, 255},
-		Accent:        paint.Color{251, 188, 4, 255},
+		Primary:      paint.Color{66, 133, 244, 255},
+		PrimaryLight: paint.Color{144, 186, 255, 255},
+		PrimaryDark:  paint.Color{25, 103, 210, 255},
+		Secondary:    paint.Color{95, 99, 104, 255},
+		Accent:       paint.Color{251, 188, 4, 255},
 
-		Background:   paint.Color{255, 255, 255, 255},
-		Surface:      paint.Color{255, 255, 255, 255},
-		SurfaceAlt:   paint.Color{248, 249, 250, 255},
+		Background: paint.Color{255, 255, 255, 255},
+		Surface:    paint.Color{255, 255, 255, 255},
+		SurfaceAlt: paint.Color{248, 249, 250, 255},
 
 		TextPrimary:   paint.Color{32, 33, 36, 255},
 		TextSecondary: paint.Color{95, 99, 104, 255},
@@ -129,15 +129,15 @@ func LightColorScheme() ColorScheme {
 // DarkColorScheme 深色主题配色
 func DarkColorScheme() ColorScheme {
 	return ColorScheme{
-		Primary:       paint.Color{138, 180, 248, 255},
-		PrimaryLight:  paint.Color{174, 203, 250, 255},
-		PrimaryDark:   paint.Color{93, 146, 229, 255},
-		Secondary:     paint.Color{154, 160, 166, 255},
-		Accent:        paint.Color{253, 214, 99, 255},
+		Primary:      paint.Color{138, 180, 248, 255},
+		PrimaryLight: paint.Color{174, 203, 250, 255},
+		PrimaryDark:  paint.Color{93, 146, 229, 255},
+		Secondary:    paint.Color{154, 160, 166, 255},
+		Accent:       paint.Color{253, 214, 99, 255},
 
-		Background:   paint.Color{32, 33, 36, 255},
-		Surface:      paint.Color{48, 49, 52, 255},
-		SurfaceAlt:   paint.Color{41, 42, 45, 255},
+		Background: paint.Color{32, 33, 36, 255},
+		Surface:    paint.Color{48, 49, 52, 255},
+		SurfaceAlt: paint.Color{41, 42, 45, 255},
 
 		TextPrimary:   paint.Color{232, 234, 237, 255},
 		TextSecondary: paint.Color{154, 160, 166, 255},
@@ -166,15 +166,15 @@ func DarkColorScheme() ColorScheme {
 // BlueColorScheme 蓝色主题配色
 func BlueColorScheme() ColorScheme {
 	return ColorScheme{
-		Primary:       paint.Color{37, 99, 235, 255},
-		PrimaryLight:  paint.Color{96, 165, 250, 255},
-		PrimaryDark:   paint.Color{29, 78, 216, 255},
-		Secondary:     paint.Color{71, 85, 105, 255},
-		Accent:        paint.Color{251, 146, 60, 255},
+		Primary:      paint.Color{37, 99, 235, 255},
+		PrimaryLight: paint.Color{96, 165, 250, 255},
+		PrimaryDark:  paint.Color{29, 78, 216, 255},
+		Secondary:    paint.Color{71, 85, 105, 255},
+		Accent:       paint.Color{251, 146, 60, 255},
 
-		Background:   paint.Color{248, 250, 252, 255},
-		Surface:      paint.Color{255, 255, 255, 255},
-		SurfaceAlt:   paint.Color{241, 245, 249, 255},
+		Background: paint.Color{248, 250, 252, 255},
+		Surface:    paint.Color{255, 255, 255, 255},
+		SurfaceAlt: paint.Color{241, 245, 249, 255},
 
 		TextPrimary:   paint.Color{15, 23, 42, 255},
 		TextSecondary: paint.Color{100, 116, 139, 255},
@@ -203,15 +203,15 @@ func BlueColorScheme() ColorScheme {
 // GreenColorScheme 绿色主题配色
 func GreenColorScheme() ColorScheme {
 	return ColorScheme{
-		Primary:       paint.Color{22, 163, 74, 255},
-		PrimaryLight:  paint.Color{74, 222, 128, 255},
-		PrimaryDark:   paint.Color{21, 128, 61, 255},
-		Secondary:     paint.Color{82, 82, 91, 255},
-		Accent:        paint.Color{234, 179, 8, 255},
+		Primary:      paint.Color{22, 163, 74, 255},
+		PrimaryLight: paint.Color{74, 222, 128, 255},
+		PrimaryDark:  paint.Color{21, 128, 61, 255},
+		Secondary:    paint.Color{82, 82, 91, 255},
+		Accent:       paint.Color{234, 179, 8, 255},
 
-		Background:   paint.Color{250, 253, 250, 255},
-		Surface:      paint.Color{255, 255, 255, 255},
-		SurfaceAlt:   paint.Color{240, 253, 244, 255},
+		Background: paint.Color{250, 253, 250, 255},
+		Surface:    paint.Color{255, 255, 255, 255},
+		SurfaceAlt: paint.Color{240, 253, 244, 255},
 
 		TextPrimary:   paint.Color{20, 30, 20, 255},
 		TextSecondary: paint.Color{82, 100, 82, 255},
@@ -240,15 +240,15 @@ func GreenColorScheme() ColorScheme {
 // PurpleColorScheme 紫色主题配色
 func PurpleColorScheme() ColorScheme {
 	return ColorScheme{
-		Primary:       paint.Color{124, 58, 237, 255},
-		PrimaryLight:  paint.Color{167, 139, 250, 255},
-		PrimaryDark:   paint.Color{109, 40, 217, 255},
-		Secondary:     paint.Color{100, 100, 115, 255},
-		Accent:        paint.Color{244, 114, 182, 255},
+		Primary:      paint.Color{124, 58, 237, 255},
+		PrimaryLight: paint.Color{167, 139, 250, 255},
+		PrimaryDark:  paint.Color{109, 40, 217, 255},
+		Secondary:    paint.Color{100, 100, 115, 255},
+		Accent:       paint.Color{244, 114, 182, 255},
 
-		Background:   paint.Color{250, 249, 254, 255},
-		Surface:      paint.Color{255, 255, 255, 255},
-		SurfaceAlt:   paint.Color{245, 243, 255, 255},
+		Background: paint.Color{250, 249, 254, 255},
+		Surface:    paint.Color{255, 255, 255, 255},
+		SurfaceAlt: paint.Color{245, 243, 255, 255},
 
 		TextPrimary:   paint.Color{30, 20, 45, 255},
 		TextSecondary: paint.Color{100, 90, 120, 255},

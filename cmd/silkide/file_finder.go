@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"silk/core"
-	"silk/gui"
-	"silk/i18n"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
 
 // fileEntry is one row in the quick-file-open list. Path is absolute
@@ -41,26 +41,26 @@ var fileFinderSkipDirs = map[string]bool{
 // against thousands of binary asset names. Keep this list short —
 // being over-aggressive here means the user can't find a real file.
 var fileFinderSkipExts = map[string]bool{
-	".png":     true,
-	".jpg":     true,
-	".jpeg":    true,
-	".gif":     true,
-	".ico":     true,
-	".bmp":     true,
-	".webp":    true,
-	".pdf":     true,
-	".zip":     true,
-	".tar":     true,
-	".tgz":     true,
-	".gz":      true,
-	".bz2":     true,
-	".exe":     true,
-	".dll":     true,
-	".so":      true,
-	".dylib":   true,
-	".a":       true,
-	".o":       true,
-	".class":   true,
+	".png":   true,
+	".jpg":   true,
+	".jpeg":  true,
+	".gif":   true,
+	".ico":   true,
+	".bmp":   true,
+	".webp":  true,
+	".pdf":   true,
+	".zip":   true,
+	".tar":   true,
+	".tgz":   true,
+	".gz":    true,
+	".bz2":   true,
+	".exe":   true,
+	".dll":   true,
+	".so":    true,
+	".dylib": true,
+	".a":     true,
+	".o":     true,
+	".class": true,
 }
 
 // walkProjectFiles returns every regular file under root (recursively)

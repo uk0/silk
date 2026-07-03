@@ -1,12 +1,12 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/gv"
-	"silk/paint"
-	"silk/win32"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/gv"
+	"github.com/uk0/silk/paint"
+	"github.com/uk0/silk/win32"
 	"log"
 	"math"
 	"reflect"

@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 	"strconv"
 )
@@ -53,15 +53,15 @@ func (this *NumberInput) SetValue(v float64) {
 	}
 }
 
-func (this *NumberInput) Min() float64     { return this.min }
-func (this *NumberInput) Max() float64     { return this.max }
-func (this *NumberInput) Step() float64    { return this.step }
-func (this *NumberInput) Decimals() int    { return this.decimals }
+func (this *NumberInput) Min() float64  { return this.min }
+func (this *NumberInput) Max() float64  { return this.max }
+func (this *NumberInput) Step() float64 { return this.step }
+func (this *NumberInput) Decimals() int { return this.decimals }
 
-func (this *NumberInput) SetMin(v float64)     { this.min = v; this.SetValue(this.value) }
-func (this *NumberInput) SetMax(v float64)     { this.max = v; this.SetValue(this.value) }
-func (this *NumberInput) SetStep(v float64)    { this.step = v }
-func (this *NumberInput) SetDecimals(n int)    { this.decimals = n; this.Self().Update() }
+func (this *NumberInput) SetMin(v float64)  { this.min = v; this.SetValue(this.value) }
+func (this *NumberInput) SetMax(v float64)  { this.max = v; this.SetValue(this.value) }
+func (this *NumberInput) SetStep(v float64) { this.step = v }
+func (this *NumberInput) SetDecimals(n int) { this.decimals = n; this.Self().Update() }
 
 func (this *NumberInput) SetRange(min, max float64) {
 	this.min = min

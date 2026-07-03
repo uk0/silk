@@ -1,7 +1,7 @@
 package core
 
 import (
-	"silk/win32"
+	"github.com/uk0/silk/win32"
 	"io"
 	"os"
 	"strings"

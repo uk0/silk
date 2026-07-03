@@ -1,9 +1,9 @@
 package ged
 
 import (
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"strconv"
 	"time"
 )
@@ -52,14 +52,14 @@ type LogEntry struct {
 type LogPanel struct {
 	gui.Widget
 
-	entries     []LogEntry
-	maxEntries  int
-	minLevel    LogLevel // floor for visibleEntries(); does not drop entries
-	scrollY     float64
-	hoverIdx    int
-	rowHeight   float64
-	cbClicked   func(LogEntry)
-	nowFn       func() time.Time // injectable for tests; defaults to time.Now
+	entries    []LogEntry
+	maxEntries int
+	minLevel   LogLevel // floor for visibleEntries(); does not drop entries
+	scrollY    float64
+	hoverIdx   int
+	rowHeight  float64
+	cbClicked  func(LogEntry)
+	nowFn      func() time.Time // injectable for tests; defaults to time.Now
 }
 
 // NewLogPanel creates an empty log pane with the default 1000-entry cap.

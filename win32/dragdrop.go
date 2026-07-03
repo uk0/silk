@@ -24,7 +24,7 @@ import "C"
 */
 
 import (
-	//"silk/core"
+	//"github.com/uk0/silk/core"
 	"errors"
 	"runtime"
 	"sync"

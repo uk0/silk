@@ -1,7 +1,7 @@
 package paint
 
 import (
-	"silk/cairo"
+	"github.com/uk0/silk/cairo"
 	"image"
 	"io"
 	"math"

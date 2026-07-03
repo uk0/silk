@@ -1,10 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"path/filepath"
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
 	"strings"
 )
 
@@ -61,7 +61,7 @@ func (this *WelcomeScreen) SetOpenRecentCallback(cb func(string)) {
 	this.cbOpenRecent = cb
 }
 
-func (this *WelcomeScreen) Title() string    { return "Welcome" }
+func (this *WelcomeScreen) Title() string     { return "Welcome" }
 func (this *WelcomeScreen) SetTitle(s string) {}
 
 // SizeHints returns the size hints for the welcome screen.
@@ -103,13 +103,13 @@ func currentWelcomePalette() welcomePalette {
 		accent:     t.HighLightColor,
 	}
 	if dark {
-		p.muted = paint.Color{R: 156, G: 163, B: 175, A: 255}   // gray-400
+		p.muted = paint.Color{R: 156, G: 163, B: 175, A: 255}    // gray-400
 		p.accentHi = paint.Color{R: 147, G: 197, B: 253, A: 255} // blue-300
 		p.hoverBG = paint.Color{R: 63, G: 63, B: 70, A: 255}     // zinc-700
 	} else {
 		p.muted = paint.Color{R: 107, G: 114, B: 128, A: 255}   // gray-500
-		p.accentHi = paint.Color{R: 29, G: 78, B: 216, A: 255}   // blue-700
-		p.hoverBG = paint.Color{R: 219, G: 234, B: 254, A: 255}  // blue-100
+		p.accentHi = paint.Color{R: 29, G: 78, B: 216, A: 255}  // blue-700
+		p.hoverBG = paint.Color{R: 219, G: 234, B: 254, A: 255} // blue-100
 	}
 	return p
 }
@@ -200,10 +200,10 @@ func (this *WelcomeScreen) Draw(g paint.Painter) {
 	g.SetFont(tipsFont)
 	g.SetBrush1(pal.muted)
 	shortcuts := []string{
-		"Ctrl+N  \u00b7  \u65b0\u5efa",           // 新建
-		"Ctrl+S  \u00b7  \u4fdd\u5b58",           // 保存
-		"Ctrl+R  \u00b7  \u9884\u89c8",           // 预览
-		"F5     \u00b7  \u8fd0\u884c",            // 运行
+		"Ctrl+N  \u00b7  \u65b0\u5efa", // 新建
+		"Ctrl+S  \u00b7  \u4fdd\u5b58", // 保存
+		"Ctrl+R  \u00b7  \u9884\u89c8", // 预览
+		"F5     \u00b7  \u8fd0\u884c",  // 运行
 	}
 	for i, s := range shortcuts {
 		g.DrawText1(leftX, tipsY+18+float64(i)*15, s)

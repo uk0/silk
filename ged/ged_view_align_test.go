@@ -1,7 +1,7 @@
 package ged
 
 import (
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 	"testing"
 )
 

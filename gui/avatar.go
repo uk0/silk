@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 	"strings"
 )
@@ -130,7 +130,7 @@ func (this *Avatar) Draw(g paint.Painter) {
 			g.SetFont(t.Font)
 			g.SetBrush1(paint.Color{255, 255, 255, 255})
 			ext := t.Font.TextExtents(initials)
-			tx := (s - ext.Width) / 2 - ext.XBearing
+			tx := (s-ext.Width)/2 - ext.XBearing
 			ty := 0.5*(s+ext.YBearing) - ext.YBearing
 			g.Translate(tx, ty)
 			g.DrawText(initials)

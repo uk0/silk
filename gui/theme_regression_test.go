@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // colorChannelDelta sums the per-channel RGB distance between two colors.

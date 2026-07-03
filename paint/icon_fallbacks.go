@@ -1,6 +1,6 @@
 package paint
 
-import "silk/cairo"
+import "github.com/uk0/silk/cairo"
 
 // proceduralIconDrawer draws the fallback for a known icon name into
 // a square cairoSurface of side `size`. Implementations work in
@@ -12,37 +12,37 @@ type proceduralIconDrawer func(size int, cc *cairo.Context)
 // glyphs instead of the red-X placeholder. Names match the strings
 // LoadIcon is called with elsewhere in the tree.
 var proceduralFallbacks = map[string]proceduralIconDrawer{
-	"edit-undo":           drawUndoArrow,
-	"edit-redo":           drawRedoArrow,
-	"close-btn":           drawCloseX,
-	"checkbox-checked":    drawCheckboxChecked,
-	"checkbox-unchecked":  drawCheckboxUnchecked,
-	"expander-collapsed":  drawExpanderCollapsed,
-	"expander-expanded":   drawExpanderExpanded,
-	"arrow-tool":          drawArrowTool,
-	"rect-tool":           drawRectTool,
-	"menu":                drawMenuBars,
-	"refresh":             drawRefreshArrow,
-	"plus":                drawPlus,
-	"search":              drawSearchGlass,
-	"build":               drawBuildWrench,
-	"debug":               drawDebugBug,
-	"stop":                drawStopSquare,
-	"continue":            drawPlayTriangle,
-	"play":                drawPlayTriangle, // alias of continue
-	"step-over":           drawStepOver,
-	"step-into":           drawStepInto,
-	"step-out":            drawStepOut,
-	"warning":             drawWarningTriangle,
-	"git-branch":          drawGitBranch,
-	"git":                 drawGitBranch, // alias of git-branch
-	"terminal":            drawTerminal,
-	"go-file":             drawGoFile,
-	"file":                drawGoFile, // alias of go-file
-	"function":            drawFunctionBraces,
-	"gear":                drawGearCog,
-	"settings":            drawGearCog, // alias of gear
-	"folder-open":         drawFolderOpen,
+	"edit-undo":          drawUndoArrow,
+	"edit-redo":          drawRedoArrow,
+	"close-btn":          drawCloseX,
+	"checkbox-checked":   drawCheckboxChecked,
+	"checkbox-unchecked": drawCheckboxUnchecked,
+	"expander-collapsed": drawExpanderCollapsed,
+	"expander-expanded":  drawExpanderExpanded,
+	"arrow-tool":         drawArrowTool,
+	"rect-tool":          drawRectTool,
+	"menu":               drawMenuBars,
+	"refresh":            drawRefreshArrow,
+	"plus":               drawPlus,
+	"search":             drawSearchGlass,
+	"build":              drawBuildWrench,
+	"debug":              drawDebugBug,
+	"stop":               drawStopSquare,
+	"continue":           drawPlayTriangle,
+	"play":               drawPlayTriangle, // alias of continue
+	"step-over":          drawStepOver,
+	"step-into":          drawStepInto,
+	"step-out":           drawStepOut,
+	"warning":            drawWarningTriangle,
+	"git-branch":         drawGitBranch,
+	"git":                drawGitBranch, // alias of git-branch
+	"terminal":           drawTerminal,
+	"go-file":            drawGoFile,
+	"file":               drawGoFile, // alias of go-file
+	"function":           drawFunctionBraces,
+	"gear":               drawGearCog,
+	"settings":           drawGearCog, // alias of gear
+	"folder-open":        drawFolderOpen,
 }
 
 // genProceduralIcon constructs an icon whose subs come from running

@@ -32,12 +32,12 @@ import (
 func parsePathData(d string) ([]PathCmd, error) {
 	p := &pathLexer{src: d}
 	var (
-		cmds                       []PathCmd
-		curX, curY                 float64 // current pen position (absolute)
-		startX, startY             float64 // last moveto target — closepath returns here
+		cmds                         []PathCmd
+		curX, curY                   float64 // current pen position (absolute)
+		startX, startY               float64 // last moveto target — closepath returns here
 		lastCubicCtlX, lastCubicCtlY float64 // for smooth-cubic reflection
 		lastQuadCtlX, lastQuadCtlY   float64 // for smooth-quadratic reflection
-		hadCubic, hadQuad          bool
+		hadCubic, hadQuad            bool
 	)
 
 	for {
@@ -358,9 +358,9 @@ type pathLexer struct {
 	pos int
 }
 
-func (l *pathLexer) eof() bool       { return l.pos >= len(l.src) }
-func (l *pathLexer) peek() byte      { return l.src[l.pos] }
-func (l *pathLexer) readByte() byte  { c := l.src[l.pos]; l.pos++; return c }
+func (l *pathLexer) eof() bool      { return l.pos >= len(l.src) }
+func (l *pathLexer) peek() byte     { return l.src[l.pos] }
+func (l *pathLexer) readByte() byte { c := l.src[l.pos]; l.pos++; return c }
 func (l *pathLexer) skipSeparators() {
 	for !l.eof() {
 		switch l.src[l.pos] {

@@ -2,7 +2,7 @@
 
 // Package cairo (silk_pure_go build) is a thin re-export of silk's
 // purecairo package. The real implementation lives at silk/purecairo
-// — this file exists only so silk's existing `import "silk/cairo"`
+// — this file exists only so silk's existing `import "github.com/uk0/silk/cairo"`
 // statements keep compiling under `-tags silk_pure_go`. Without the
 // tag, the libcairo CGO files (cairo.go, cairo_windows.go,
 // cgo_unix.go, cgo_windows.go) take over.
@@ -15,24 +15,24 @@
 
 package cairo
 
-import "silk/purecairo"
+import "github.com/uk0/silk/purecairo"
 
 // ===== Constants (re-export) =====
 
 type (
-	Status      = purecairo.Status
-	Format      = purecairo.Format
-	Operator    = purecairo.Operator
-	Content     = purecairo.Content
-	SurfaceType = purecairo.SurfaceType
-	FontSlant   = purecairo.FontSlant
-	FontWeight  = purecairo.FontWeight
-	Antialias   = purecairo.Antialias
-	FillRule    = purecairo.FillRule
-	LineCap     = purecairo.LineCap
-	LineJoin    = purecairo.LineJoin
-	Extend      = purecairo.Extend
-	Filter      = purecairo.Filter
+	Status       = purecairo.Status
+	Format       = purecairo.Format
+	Operator     = purecairo.Operator
+	Content      = purecairo.Content
+	SurfaceType  = purecairo.SurfaceType
+	FontSlant    = purecairo.FontSlant
+	FontWeight   = purecairo.FontWeight
+	Antialias    = purecairo.Antialias
+	FillRule     = purecairo.FillRule
+	LineCap      = purecairo.LineCap
+	LineJoin     = purecairo.LineJoin
+	Extend       = purecairo.Extend
+	Filter       = purecairo.Filter
 	PathDataType = purecairo.PathDataType
 )
 
@@ -151,17 +151,17 @@ type (
 // ===== Constructors and free functions (re-export) =====
 
 var (
-	NewImageSurface             = purecairo.NewImageSurface
-	NewImageSurfaceFromPNG      = purecairo.NewImageSurfaceFromPNG
+	NewImageSurface              = purecairo.NewImageSurface
+	NewImageSurfaceFromPNG       = purecairo.NewImageSurfaceFromPNG
 	NewImageSurfaceFromPNGStream = purecairo.NewImageSurfaceFromPNGStream
-	NewWin                      = purecairo.NewWin
-	NewRGBPattern               = purecairo.NewRGBPattern
-	NewRGBAPattern              = purecairo.NewRGBAPattern
-	NewPatternForSurface        = purecairo.NewPatternForSurface
-	NewLinearPattern            = purecairo.NewLinearPattern
-	NewRadialPattern            = purecairo.NewRadialPattern
-	NewToyFontFace              = purecairo.NewToyFontFace
-	NewScaledFont               = purecairo.NewScaledFont
-	NewFontOptions              = purecairo.NewFontOptions
-	Multiplygeom_Mat3x2         = purecairo.Multiplygeom_Mat3x2
+	NewWin                       = purecairo.NewWin
+	NewRGBPattern                = purecairo.NewRGBPattern
+	NewRGBAPattern               = purecairo.NewRGBAPattern
+	NewPatternForSurface         = purecairo.NewPatternForSurface
+	NewLinearPattern             = purecairo.NewLinearPattern
+	NewRadialPattern             = purecairo.NewRadialPattern
+	NewToyFontFace               = purecairo.NewToyFontFace
+	NewScaledFont                = purecairo.NewScaledFont
+	NewFontOptions               = purecairo.NewFontOptions
+	Multiplygeom_Mat3x2          = purecairo.Multiplygeom_Mat3x2
 )

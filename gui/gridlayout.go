@@ -1,8 +1,8 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
 )
 
@@ -12,9 +12,9 @@ func init() {
 
 // GridCell represents a widget placed in the grid at a specific row/column with optional span.
 type GridCell struct {
-	widget             IWidget
-	row, col           int
-	rowSpan, colSpan   int
+	widget           IWidget
+	row, col         int
+	rowSpan, colSpan int
 }
 
 // GridLayout is a layout container that arranges children in a grid (similar to QGridLayout).

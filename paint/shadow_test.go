@@ -3,7 +3,7 @@ package paint
 import (
 	"testing"
 
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 )
 
 // recordingPainter is a minimal Painter mock that counts Fill calls
@@ -15,54 +15,54 @@ type recordingPainter struct {
 	brushes   []Color
 }
 
-func (p *recordingPainter) Target() Surface                            { return nil }
-func (p *recordingPainter) Save() int                                  { return 0 }
-func (p *recordingPainter) Restore() int                               { return 0 }
-func (p *recordingPainter) RestoreTo(int) bool                         { return true }
-func (p *recordingPainter) CurrentState() int                          { return 0 }
-func (p *recordingPainter) CurrentPoint() (float64, float64)           { return 0, 0 }
+func (p *recordingPainter) Target() Surface                                         { return nil }
+func (p *recordingPainter) Save() int                                               { return 0 }
+func (p *recordingPainter) Restore() int                                            { return 0 }
+func (p *recordingPainter) RestoreTo(int) bool                                      { return true }
+func (p *recordingPainter) CurrentState() int                                       { return 0 }
+func (p *recordingPainter) CurrentPoint() (float64, float64)                        { return 0, 0 }
 func (p *recordingPainter) Arc(float64, float64, float64, float64, float64)         {}
 func (p *recordingPainter) ArcNegative(float64, float64, float64, float64, float64) {}
 func (p *recordingPainter) CurveTo(float64, float64, float64, float64, float64, float64) {
 }
-func (p *recordingPainter) Line(float64, float64, float64, float64) {}
-func (p *recordingPainter) LineTo(float64, float64)                {}
-func (p *recordingPainter) MoveTo(float64, float64)                {}
+func (p *recordingPainter) Line(float64, float64, float64, float64)      {}
+func (p *recordingPainter) LineTo(float64, float64)                      {}
+func (p *recordingPainter) MoveTo(float64, float64)                      {}
 func (p *recordingPainter) Rectangle(float64, float64, float64, float64) {}
-func (p *recordingPainter) Rectangle1(geom.Rect)                          {}
-func (p *recordingPainter) Stroke()                                       {}
-func (p *recordingPainter) StrokePreserve()                               {}
-func (p *recordingPainter) Fill()                                         { p.fillCount++ }
-func (p *recordingPainter) FillPreserve()                                 {}
-func (p *recordingPainter) Paint()                                        {}
-func (p *recordingPainter) PaintWithAlpha(uint8)                          {}
-func (p *recordingPainter) ResetClip()                                    {}
-func (p *recordingPainter) Clip()                                         {}
-func (p *recordingPainter) ClipPreserve()                                 {}
+func (p *recordingPainter) Rectangle1(geom.Rect)                         {}
+func (p *recordingPainter) Stroke()                                      {}
+func (p *recordingPainter) StrokePreserve()                              {}
+func (p *recordingPainter) Fill()                                        { p.fillCount++ }
+func (p *recordingPainter) FillPreserve()                                {}
+func (p *recordingPainter) Paint()                                       {}
+func (p *recordingPainter) PaintWithAlpha(uint8)                         {}
+func (p *recordingPainter) ResetClip()                                   {}
+func (p *recordingPainter) Clip()                                        {}
+func (p *recordingPainter) ClipPreserve()                                {}
 func (p *recordingPainter) ClipBounds() (float64, float64, float64, float64) {
 	return 0, 0, 0, 0
 }
-func (p *recordingPainter) ClipBounds1() geom.Rect       { return geom.Rect{} }
-func (p *recordingPainter) SetOperator(Operator)         {}
-func (p *recordingPainter) ResetMatrix()                 {}
-func (p *recordingPainter) Translate(float64, float64)   {}
-func (p *recordingPainter) Scale(float64, float64)       {}
-func (p *recordingPainter) Rotate(float64)               {}
-func (p *recordingPainter) Transform(*geom.Mat3x2)       {}
-func (p *recordingPainter) SetMatrix(*geom.Mat3x2)       {}
-func (p *recordingPainter) GetMatrix(*geom.Mat3x2)       {}
-func (p *recordingPainter) SetPen(Pen)                   {}
-func (p *recordingPainter) SetPen1(Color, float64)       {}
-func (p *recordingPainter) SetBrush(Brush)               {}
-func (p *recordingPainter) SetBrush1(c Color)            { p.brushes = append(p.brushes, c) }
-func (p *recordingPainter) SetFont(Font)                 {}
-func (p *recordingPainter) Font() Font                   { return nil }
-func (p *recordingPainter) ScaledFont() ScaledFont       { return nil }
-func (p *recordingPainter) DrawText(string)              {}
-func (p *recordingPainter) DrawText1(float64, float64, string) {}
-func (p *recordingPainter) DrawGlyphs([]Glyph)           {}
-func (p *recordingPainter) DrawGlyph(*Glyph)             {}
-func (p *recordingPainter) DrawPixmap(Pixmap)            {}
+func (p *recordingPainter) ClipBounds1() geom.Rect               { return geom.Rect{} }
+func (p *recordingPainter) SetOperator(Operator)                 {}
+func (p *recordingPainter) ResetMatrix()                         {}
+func (p *recordingPainter) Translate(float64, float64)           {}
+func (p *recordingPainter) Scale(float64, float64)               {}
+func (p *recordingPainter) Rotate(float64)                       {}
+func (p *recordingPainter) Transform(*geom.Mat3x2)               {}
+func (p *recordingPainter) SetMatrix(*geom.Mat3x2)               {}
+func (p *recordingPainter) GetMatrix(*geom.Mat3x2)               {}
+func (p *recordingPainter) SetPen(Pen)                           {}
+func (p *recordingPainter) SetPen1(Color, float64)               {}
+func (p *recordingPainter) SetBrush(Brush)                       {}
+func (p *recordingPainter) SetBrush1(c Color)                    { p.brushes = append(p.brushes, c) }
+func (p *recordingPainter) SetFont(Font)                         {}
+func (p *recordingPainter) Font() Font                           { return nil }
+func (p *recordingPainter) ScaledFont() ScaledFont               { return nil }
+func (p *recordingPainter) DrawText(string)                      {}
+func (p *recordingPainter) DrawText1(float64, float64, string)   {}
+func (p *recordingPainter) DrawGlyphs([]Glyph)                   {}
+func (p *recordingPainter) DrawGlyph(*Glyph)                     {}
+func (p *recordingPainter) DrawPixmap(Pixmap)                    {}
 func (p *recordingPainter) DrawPixmap1(float64, float64, Pixmap) {}
 func (p *recordingPainter) DrawPixmap2(float64, float64, Pixmap, float64, float64) {
 }
@@ -105,9 +105,9 @@ func TestDrawShadowRectAlphaFalloff(t *testing.T) {
 // "ghost" layer when called from a host with stale parameters.
 func TestDrawShadowRectDegenerateInputs(t *testing.T) {
 	cases := []struct {
-		name                       string
+		name                     string
 		x, y, w, h, radius, blur float64
-		color                      Color
+		color                    Color
 	}{
 		{"zero blur", 0, 0, 100, 50, 4, 0, Color{0, 0, 0, 200}},
 		{"zero width", 0, 0, 0, 50, 4, 4, Color{0, 0, 0, 200}},

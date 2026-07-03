@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"silk/ged"
-	"silk/gui"
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/gui"
 )
 
 // TestSilkideToastNilFrameNoOp: silkideToast must not panic when
@@ -68,10 +68,10 @@ func TestPerformSaveNilCanvasReturnsFalse(t *testing.T) {
 
 // TestPerformSaveSuccessFiresToast: a fresh GedView with a temp
 // .silkui filename should:
-//   1. scene.Save returns true (writes the TDoc).
-//   2. performSave returns true.
-//   3. silkideToast records a Success-level call mentioning the
-//      basename in the message.
+//  1. scene.Save returns true (writes the TDoc).
+//  2. performSave returns true.
+//  3. silkideToast records a Success-level call mentioning the
+//     basename in the message.
 //
 // This is the single end-to-end happy path that protects every
 // explicit Save action from regressing the toast wiring at once.

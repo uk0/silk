@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"silk/graph"
+	"github.com/uk0/silk/graph"
 )
 
 // newSceneWithButton builds a scene containing a single named button

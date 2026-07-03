@@ -1,8 +1,8 @@
 package gui
 
 import (
-	//	"silk/diag"
-	"silk/paint"
+	//	"github.com/uk0/silk/diag"
+	"github.com/uk0/silk/paint"
 	//"strings"
 	"unicode"
 )

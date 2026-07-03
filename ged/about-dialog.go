@@ -2,9 +2,9 @@ package ged
 
 import (
 	"fmt"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"runtime"
-	"silk/gui"
-	"silk/paint"
 )
 
 // Version metadata for the About dialog.

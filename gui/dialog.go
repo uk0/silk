@@ -1,9 +1,9 @@
 package gui
 
 import (
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 	"math"
-	"silk/core"
-	"silk/paint"
 )
 
 func init() {
@@ -14,7 +14,7 @@ func init() {
 type DialogResult int
 
 const (
-	DialogOK     DialogResult = iota
+	DialogOK DialogResult = iota
 	DialogCancel
 	DialogYes
 	DialogNo

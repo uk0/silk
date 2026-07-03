@@ -3,7 +3,7 @@ package gui
 import (
 	"testing"
 
-	"silk/paint"
+	"github.com/uk0/silk/paint"
 )
 
 // TestLineDiffEmpty locks the "no input → no rows" base case so the
@@ -205,12 +205,12 @@ func TestDiffViewDrawNoPanic(t *testing.T) {
 // rest, which Draw never reaches.
 type diffViewNopPainter struct{ paint.Painter }
 
-func (diffViewNopPainter) Rectangle(x, y, w, h float64)            {}
-func (diffViewNopPainter) MoveTo(x, y float64)                     {}
-func (diffViewNopPainter) LineTo(x, y float64)                     {}
-func (diffViewNopPainter) Fill()                                   {}
-func (diffViewNopPainter) Stroke()                                 {}
-func (diffViewNopPainter) SetBrush1(c paint.Color)                 {}
-func (diffViewNopPainter) SetPen1(c paint.Color, width float64)    {}
-func (diffViewNopPainter) SetFont(f paint.Font)                    {}
-func (diffViewNopPainter) DrawText1(x, y float64, text string)     {}
+func (diffViewNopPainter) Rectangle(x, y, w, h float64)         {}
+func (diffViewNopPainter) MoveTo(x, y float64)                  {}
+func (diffViewNopPainter) LineTo(x, y float64)                  {}
+func (diffViewNopPainter) Fill()                                {}
+func (diffViewNopPainter) Stroke()                              {}
+func (diffViewNopPainter) SetBrush1(c paint.Color)              {}
+func (diffViewNopPainter) SetPen1(c paint.Color, width float64) {}
+func (diffViewNopPainter) SetFont(f paint.Font)                 {}
+func (diffViewNopPainter) DrawText1(x, y float64, text string)  {}

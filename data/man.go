@@ -1,7 +1,7 @@
 package data
 
 import (
-	"silk/core"
+	"github.com/uk0/silk/core"
 	"io/ioutil"
 	"runtime"
 )

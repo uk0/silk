@@ -1,12 +1,12 @@
 package ged
 
 import (
-	"silk/core"
-	"silk/geom"
-	"silk/graph"
-	"silk/gui"
-	"silk/paint"
 	"fmt"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"math"
 	"sort"
 	"strings"
@@ -16,7 +16,7 @@ import (
 // clipItem stores copied widget info for paste operations.
 type clipItem struct {
 	factoryName string
-	x, y, w, h float64
+	x, y, w, h  float64
 	name        string
 }
 
@@ -46,7 +46,7 @@ var ShowCodePanelCallback func()
 // alignGuide represents a single alignment guide line shown during drag.
 type alignGuide struct {
 	x1, y1, x2, y2 float64
-	snap            bool // true if the dragged widget snapped to this guide
+	snap           bool // true if the dragged widget snapped to this guide
 }
 
 // Alignment callbacks — set by the host application (design.go) so the
@@ -73,10 +73,10 @@ type GedView struct {
 	showGrid     bool // paint the faint background grid overlay
 
 	// Alignment guide state for drag operations
-	alignGuides  []alignGuide
-	isDragging   bool
-	dragOriginX  float64
-	dragOriginY  float64
+	alignGuides []alignGuide
+	isDragging  bool
+	dragOriginX float64
+	dragOriginY float64
 
 	// Space+Drag pan state
 	spacePanReady bool

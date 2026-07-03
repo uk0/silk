@@ -1,8 +1,8 @@
 package graph
 
 import (
-	"silk/geom"
 	"fmt"
+	"github.com/uk0/silk/geom"
 )
 
 type resizeRecord struct {

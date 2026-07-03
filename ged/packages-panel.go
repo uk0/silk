@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"silk/core"
-	"silk/gui"
-	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func init() {
@@ -29,10 +29,10 @@ func init() {
 // PkgIdx points back into the parent packages slice so the panel can
 // resolve the click target without re-walking the tree.
 type packageRow struct {
-	Kind    packageRowKind
-	PkgIdx  int    // index into PackagesPanel.packages
-	File    string // empty for header rows
-	IsTest  bool   // file rows: true for entries from TestGoFiles
+	Kind   packageRowKind
+	PkgIdx int    // index into PackagesPanel.packages
+	File   string // empty for header rows
+	IsTest bool   // file rows: true for entries from TestGoFiles
 }
 
 type packageRowKind int
@@ -90,13 +90,13 @@ func totalFileCount(pkgs []core.GoListPackage) int {
 type PackagesPanel struct {
 	gui.Widget
 
-	packages   []core.GoListPackage
-	expanded   map[string]bool
-	scrollY    float64
-	hoverIdx   int
-	rowHeight  float64
-	cbPkgAct   func(pkg core.GoListPackage)
-	cbFileAct  func(pkg core.GoListPackage, file string)
+	packages  []core.GoListPackage
+	expanded  map[string]bool
+	scrollY   float64
+	hoverIdx  int
+	rowHeight float64
+	cbPkgAct  func(pkg core.GoListPackage)
+	cbFileAct func(pkg core.GoListPackage, file string)
 }
 
 // NewPackagesPanel creates an empty packages panel.

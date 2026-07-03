@@ -1,9 +1,9 @@
 package gui
 
 import (
-	"silk/core"
-	"silk/paint"
-	//	"silk/paint"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
+	//	"github.com/uk0/silk/paint"
 )
 
 func init() {

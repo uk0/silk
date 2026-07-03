@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"silk/geom"
+	"github.com/uk0/silk/geom"
 )
 
 // coveragePainter is a minimal Painter that records the names of every
@@ -23,14 +23,16 @@ func newCoveragePainter() *coveragePainter {
 
 func (c *coveragePainter) note(name string) { c.called[name] = true }
 
-func (c *coveragePainter) Target() Surface                              { c.note("Target"); return nil }
-func (c *coveragePainter) Save() int                                    { c.note("Save"); return 0 }
-func (c *coveragePainter) Restore() int                                 { c.note("Restore"); return 0 }
-func (c *coveragePainter) RestoreTo(int) bool                           { c.note("RestoreTo"); return true }
-func (c *coveragePainter) CurrentState() int                            { c.note("CurrentState"); return 0 }
-func (c *coveragePainter) CurrentPoint() (float64, float64)             { c.note("CurrentPoint"); return 0, 0 }
-func (c *coveragePainter) Arc(float64, float64, float64, float64, float64)         { c.note("Arc") }
-func (c *coveragePainter) ArcNegative(float64, float64, float64, float64, float64) { c.note("ArcNegative") }
+func (c *coveragePainter) Target() Surface                                 { c.note("Target"); return nil }
+func (c *coveragePainter) Save() int                                       { c.note("Save"); return 0 }
+func (c *coveragePainter) Restore() int                                    { c.note("Restore"); return 0 }
+func (c *coveragePainter) RestoreTo(int) bool                              { c.note("RestoreTo"); return true }
+func (c *coveragePainter) CurrentState() int                               { c.note("CurrentState"); return 0 }
+func (c *coveragePainter) CurrentPoint() (float64, float64)                { c.note("CurrentPoint"); return 0, 0 }
+func (c *coveragePainter) Arc(float64, float64, float64, float64, float64) { c.note("Arc") }
+func (c *coveragePainter) ArcNegative(float64, float64, float64, float64, float64) {
+	c.note("ArcNegative")
+}
 func (c *coveragePainter) CurveTo(float64, float64, float64, float64, float64, float64) {
 	c.note("CurveTo")
 }
@@ -40,43 +42,43 @@ func (c *coveragePainter) MoveTo(float64, float64)                 { c.note("Mov
 func (c *coveragePainter) Rectangle(float64, float64, float64, float64) {
 	c.note("Rectangle")
 }
-func (c *coveragePainter) Rectangle1(geom.Rect)         { c.note("Rectangle1") }
-func (c *coveragePainter) Stroke()                      { c.note("Stroke") }
-func (c *coveragePainter) StrokePreserve()              { c.note("StrokePreserve") }
-func (c *coveragePainter) Fill()                        { c.note("Fill") }
-func (c *coveragePainter) FillPreserve()                { c.note("FillPreserve") }
-func (c *coveragePainter) Paint()                       { c.note("Paint") }
-func (c *coveragePainter) PaintWithAlpha(uint8)         { c.note("PaintWithAlpha") }
-func (c *coveragePainter) ResetClip()                   { c.note("ResetClip") }
-func (c *coveragePainter) Clip()                        { c.note("Clip") }
-func (c *coveragePainter) ClipPreserve()                { c.note("ClipPreserve") }
+func (c *coveragePainter) Rectangle1(geom.Rect) { c.note("Rectangle1") }
+func (c *coveragePainter) Stroke()              { c.note("Stroke") }
+func (c *coveragePainter) StrokePreserve()      { c.note("StrokePreserve") }
+func (c *coveragePainter) Fill()                { c.note("Fill") }
+func (c *coveragePainter) FillPreserve()        { c.note("FillPreserve") }
+func (c *coveragePainter) Paint()               { c.note("Paint") }
+func (c *coveragePainter) PaintWithAlpha(uint8) { c.note("PaintWithAlpha") }
+func (c *coveragePainter) ResetClip()           { c.note("ResetClip") }
+func (c *coveragePainter) Clip()                { c.note("Clip") }
+func (c *coveragePainter) ClipPreserve()        { c.note("ClipPreserve") }
 func (c *coveragePainter) ClipBounds() (float64, float64, float64, float64) {
 	c.note("ClipBounds")
 	return 0, 0, 0, 0
 }
-func (c *coveragePainter) ClipBounds1() geom.Rect       { c.note("ClipBounds1"); return geom.Rect{} }
-func (c *coveragePainter) SetOperator(Operator)         { c.note("SetOperator") }
-func (c *coveragePainter) ResetMatrix()                 { c.note("ResetMatrix") }
-func (c *coveragePainter) Translate(float64, float64)   { c.note("Translate") }
-func (c *coveragePainter) Scale(float64, float64)       { c.note("Scale") }
-func (c *coveragePainter) Rotate(float64)               { c.note("Rotate") }
-func (c *coveragePainter) Transform(*geom.Mat3x2)       { c.note("Transform") }
-func (c *coveragePainter) SetMatrix(*geom.Mat3x2)       { c.note("SetMatrix") }
-func (c *coveragePainter) GetMatrix(*geom.Mat3x2)       { c.note("GetMatrix") }
-func (c *coveragePainter) SetPen(Pen)                   { c.note("SetPen") }
-func (c *coveragePainter) SetPen1(Color, float64)       { c.note("SetPen1") }
-func (c *coveragePainter) SetBrush(Brush)               { c.note("SetBrush") }
-func (c *coveragePainter) SetBrush1(Color)              { c.note("SetBrush1") }
-func (c *coveragePainter) SetFont(Font)                 { c.note("SetFont") }
-func (c *coveragePainter) Font() Font                   { c.note("Font"); return nil }
-func (c *coveragePainter) ScaledFont() ScaledFont       { c.note("ScaledFont"); return nil }
-func (c *coveragePainter) DrawText(string)              { c.note("DrawText") }
+func (c *coveragePainter) ClipBounds1() geom.Rect     { c.note("ClipBounds1"); return geom.Rect{} }
+func (c *coveragePainter) SetOperator(Operator)       { c.note("SetOperator") }
+func (c *coveragePainter) ResetMatrix()               { c.note("ResetMatrix") }
+func (c *coveragePainter) Translate(float64, float64) { c.note("Translate") }
+func (c *coveragePainter) Scale(float64, float64)     { c.note("Scale") }
+func (c *coveragePainter) Rotate(float64)             { c.note("Rotate") }
+func (c *coveragePainter) Transform(*geom.Mat3x2)     { c.note("Transform") }
+func (c *coveragePainter) SetMatrix(*geom.Mat3x2)     { c.note("SetMatrix") }
+func (c *coveragePainter) GetMatrix(*geom.Mat3x2)     { c.note("GetMatrix") }
+func (c *coveragePainter) SetPen(Pen)                 { c.note("SetPen") }
+func (c *coveragePainter) SetPen1(Color, float64)     { c.note("SetPen1") }
+func (c *coveragePainter) SetBrush(Brush)             { c.note("SetBrush") }
+func (c *coveragePainter) SetBrush1(Color)            { c.note("SetBrush1") }
+func (c *coveragePainter) SetFont(Font)               { c.note("SetFont") }
+func (c *coveragePainter) Font() Font                 { c.note("Font"); return nil }
+func (c *coveragePainter) ScaledFont() ScaledFont     { c.note("ScaledFont"); return nil }
+func (c *coveragePainter) DrawText(string)            { c.note("DrawText") }
 func (c *coveragePainter) DrawText1(float64, float64, string) {
 	c.note("DrawText1")
 }
-func (c *coveragePainter) DrawGlyphs([]Glyph)           { c.note("DrawGlyphs") }
-func (c *coveragePainter) DrawGlyph(*Glyph)             { c.note("DrawGlyph") }
-func (c *coveragePainter) DrawPixmap(Pixmap)            { c.note("DrawPixmap") }
+func (c *coveragePainter) DrawGlyphs([]Glyph) { c.note("DrawGlyphs") }
+func (c *coveragePainter) DrawGlyph(*Glyph)   { c.note("DrawGlyph") }
+func (c *coveragePainter) DrawPixmap(Pixmap)  { c.note("DrawPixmap") }
 func (c *coveragePainter) DrawPixmap1(float64, float64, Pixmap) {
 	c.note("DrawPixmap1")
 }
