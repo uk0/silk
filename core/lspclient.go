@@ -1114,6 +1114,69 @@ func decodeCommandField(rawCmd json.RawMessage, topTitle string, topArgs json.Ra
 	return &LSPCommand{Title: topTitle, Command: id, Arguments: topArgs}
 }
 
+// ExecuteCommand 请求 workspace/executeCommand, 真正执行一条 command-form 的动作
+// CodeAction 返回的项分两类: 一类自带内联 edit (直接 ApplyTextEdits 就生效),
+// 另一类只给一个 command + arguments (gopls 的 "organize imports" /
+// "extract function" 等 refactor), 必须回抛给服务器执行 -- 那就是这个 RPC.
+// 上层从 LSPCodeAction.Command 里取出 Command / Arguments 原样喂进来.
+//
+// params 形状是 {command, arguments}. arguments 是一组已经序列化好的原始 JSON
+// (每条 command 的参数形态各异, 不在这层解释); nil 时补成空数组 [] 而不是 null --
+// gopls 对 arguments 缺省/为 null 会报错, 空数组是最安全的取值.
+//
+// 返回服务器的原始 Result: 大多数 gopls 命令的副作用是反过来发一个
+// workspace/applyEdit 请求, result 本身回 null, 这种情况归一成 (nil, nil);
+// 个别命令会回一个 JSON 结果, 原样透出给上层解释. server 端错误经 SendRequest
+// 包好后原样透出. 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) ExecuteCommand(command string, arguments []json.RawMessage) (json.RawMessage, error) {
+	if arguments == nil {
+		// nil 切片会被 encoding/json 编成 null; gopls 期望 arguments 是数组,
+		// 补成空切片让它序列化成 [].
+		arguments = []json.RawMessage{}
+	}
+	params := map[string]interface{}{
+		"command":   command,
+		"arguments": arguments,
+	}
+	resp, err := c.SendRequest("workspace/executeCommand", params)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return nil, nil
+	}
+	return resp.Result, nil
+}
+
+// LSPDocumentHighlight 是 textDocument/documentHighlight 的一条命中: 光标下符号在
+// 当前文件里的一处出现. Kind 标出这处是读还是写 (1=Text 通用, 2=Read, 3=Write),
+// 现代编辑器据此把"读"和"写"用不同底色区分; server 可省略 kind, omitempty 收零值.
+type LSPDocumentHighlight struct {
+	Range LSPRange `json:"range"`
+	Kind  int      `json:"kind,omitempty"` // 1=Text, 2=Read, 3=Write (可选)
+}
+
+// DocumentHighlight 请求 textDocument/documentHighlight 并返回光标下符号在*当前文件*
+// 内的所有出现处 (编辑器里"选中一个标识符, 同文件内所有同名引用泛起淡色底"的效果).
+// 跟 References 的区别: 只在本文件里找, 不跨文件, 也不带 context. params 是共用的
+// TextDocumentPositionParams. 响应固定是 []DocumentHighlight (没有 definition 那种
+// 多态), null (光标不在符号上) 归一成空切片, 不当错误.
+// 受默认 10s SendRequest 超时约束.
+func (c *LSPClient) DocumentHighlight(uri string, line, character int) ([]LSPDocumentHighlight, error) {
+	resp, err := c.SendRequest("textDocument/documentHighlight", textDocumentPositionParams(uri, line, character))
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Result) == 0 || string(resp.Result) == "null" {
+		return []LSPDocumentHighlight{}, nil
+	}
+	var highlights []LSPDocumentHighlight
+	if err := json.Unmarshal(resp.Result, &highlights); err != nil {
+		return nil, fmt.Errorf("lspclient: decode documentHighlight result: %w", err)
+	}
+	return highlights, nil
+}
+
 // DidChange 发 textDocument/didChange 通知, 把整个文件最新内容推给 server
 // LSP 支持 incremental sync (按 range 发 diff), 这里走最简单的 *full document
 // sync*: 一次性把整篇 fullText 重新塞过去. 对一个文件大小一般 < 1MB 的 Go

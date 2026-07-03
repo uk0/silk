@@ -2054,6 +2054,243 @@ func TestLSPClientCodeAction_TitleOnly(t *testing.T) {
 	<-done
 }
 
+// -----------------------------------------------------------------------------
+// ExecuteCommand: workspace/executeCommand -- 执行 command-form 的 code action.
+// command + arguments 透传, null result -> (nil,nil), JSON result 原样透出,
+// nil arguments 必须序列化成 [] 而不是 null, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientExecuteCommand_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "workspace/executeCommand" {
+			t.Errorf("method = %q, want workspace/executeCommand", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		// gopls 的多数命令回 null (副作用走 workspace/applyEdit).
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	args := []json.RawMessage{json.RawMessage(`"file:///a.go"`), json.RawMessage(`{"all":true}`)}
+	res, err := c.ExecuteCommand("gopls.organize_imports", args)
+	if err != nil {
+		t.Fatalf("ExecuteCommand: %v", err)
+	}
+	if res != nil {
+		t.Errorf("res = %s, want nil on null result", string(res))
+	}
+	// command + arguments 真序列化进了 params
+	var got struct {
+		Command   string            `json:"command"`
+		Arguments []json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(capturedParams, &got); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if got.Command != "gopls.organize_imports" {
+		t.Errorf("command = %q, want gopls.organize_imports", got.Command)
+	}
+	if len(got.Arguments) != 2 ||
+		string(got.Arguments[0]) != `"file:///a.go"` ||
+		string(got.Arguments[1]) != `{"all":true}` {
+		t.Errorf("arguments = %v, want the two passed args verbatim", got.Arguments)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientExecuteCommand_JSONResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	// 个别命令 (查询类) 会回一个 JSON 结果, ExecuteCommand 应原样透出.
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`{"applied":true,"count":3}`)}
+	})
+
+	res, err := c.ExecuteCommand("gopls.run_tests", []json.RawMessage{json.RawMessage(`{"URI":"file:///a_test.go"}`)})
+	if err != nil {
+		t.Fatalf("ExecuteCommand: %v", err)
+	}
+	var got struct {
+		Applied bool `json:"applied"`
+		Count   int  `json:"count"`
+	}
+	if err := json.Unmarshal(res, &got); err != nil {
+		t.Fatalf("decode result: %v (%s)", err, string(res))
+	}
+	if !got.Applied || got.Count != 3 {
+		t.Errorf("result = %+v, want {applied:true count:3}", got)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientExecuteCommand_NilArgumentsBecomesEmptyArray(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		capturedParams = append(capturedParams[:0:0], params...)
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	if _, err := c.ExecuteCommand("gopls.tidy", nil); err != nil {
+		t.Fatalf("ExecuteCommand: %v", err)
+	}
+	// nil arguments 必须序列化成 [] 而不是 null (gopls 对 null 会报错).
+	var got struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(capturedParams, &got); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if string(got.Arguments) != "[]" {
+		t.Errorf("arguments = %s, want [] for nil input", string(got.Arguments))
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientExecuteCommand_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32602, Message: "unknown command"}}
+	})
+
+	res, err := c.ExecuteCommand("gopls.does_not_exist", nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if res != nil {
+		t.Errorf("res = %s, want nil on error", string(res))
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+// -----------------------------------------------------------------------------
+// DocumentHighlight: 同文件同符号高亮. 3 处命中带 Range/Kind, null -> 空切片, error
+// -----------------------------------------------------------------------------
+
+func TestLSPClientDocumentHighlight_Highlights(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	var capturedParams json.RawMessage
+	done := runFakeServer(t, srvIn, srvOut, func(method string, _ *json.RawMessage, params json.RawMessage) *fakeReply {
+		if method != "textDocument/documentHighlight" {
+			t.Errorf("method = %q, want textDocument/documentHighlight", method)
+		}
+		capturedParams = append(capturedParams[:0:0], params...)
+		// 三处出现: Text(1) / Read(2) / Write(3).
+		return &fakeReply{Result: json.RawMessage(`[
+{"range":{"start":{"line":1,"character":5},"end":{"line":1,"character":8}},"kind":1},
+{"range":{"start":{"line":3,"character":0},"end":{"line":3,"character":3}},"kind":2},
+{"range":{"start":{"line":7,"character":2},"end":{"line":7,"character":5}},"kind":3}
+]`)}
+	})
+
+	hls, err := c.DocumentHighlight("file:///a.go", 1, 6)
+	if err != nil {
+		t.Fatalf("DocumentHighlight: %v", err)
+	}
+	if len(hls) != 3 {
+		t.Fatalf("len = %d, want 3: %+v", len(hls), hls)
+	}
+	if hls[0].Kind != 1 || hls[0].Range.Start.Line != 1 || hls[0].Range.Start.Character != 5 || hls[0].Range.End.Character != 8 {
+		t.Errorf("hls[0] = %+v", hls[0])
+	}
+	if hls[1].Kind != 2 || hls[1].Range.Start.Line != 3 {
+		t.Errorf("hls[1] = %+v", hls[1])
+	}
+	if hls[2].Kind != 3 || hls[2].Range.Start.Line != 7 || hls[2].Range.End.Character != 5 {
+		t.Errorf("hls[2] = %+v", hls[2])
+	}
+	// params 跟 hover 同形: 带 position + textDocument.
+	var gotParams struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Position LSPPosition `json:"position"`
+	}
+	if err := json.Unmarshal(capturedParams, &gotParams); err != nil {
+		t.Fatalf("decode captured params: %v", err)
+	}
+	if gotParams.TextDocument.URI != "file:///a.go" {
+		t.Errorf("params uri = %q", gotParams.TextDocument.URI)
+	}
+	if gotParams.Position.Line != 1 || gotParams.Position.Character != 6 {
+		t.Errorf("position = %+v", gotParams.Position)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDocumentHighlight_NullResult(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Result: json.RawMessage(`null`)}
+	})
+
+	hls, err := c.DocumentHighlight("file:///a.go", 0, 0)
+	if err != nil {
+		t.Fatalf("DocumentHighlight: %v", err)
+	}
+	if hls == nil || len(hls) != 0 {
+		t.Errorf("hls = %+v, want empty non-nil slice", hls)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
+func TestLSPClientDocumentHighlight_ServerError(t *testing.T) {
+	c, srvIn, srvOut := newPipedClient(t)
+	defer func() { _ = c.Close() }()
+
+	done := runFakeServer(t, srvIn, srvOut, func(_ string, _ *json.RawMessage, _ json.RawMessage) *fakeReply {
+		return &fakeReply{Err: &LSPError{Code: -32603, Message: "highlight provider failed"}}
+	})
+
+	hls, err := c.DocumentHighlight("file:///a.go", 1, 2)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if hls != nil {
+		t.Errorf("hls = %+v, want nil on error", hls)
+	}
+	if !strings.Contains(err.Error(), "highlight provider failed") {
+		t.Errorf("err = %v, want server message", err)
+	}
+
+	_ = srvIn.Close()
+	_ = srvOut.Close()
+	<-done
+}
+
 // newPipedClient 构造一个 *LSPClient 把它的 stdin/stdout 接到 io.Pipe 上
 // 返回:
 //   - c     已经跑着 readLoop 的客户端
