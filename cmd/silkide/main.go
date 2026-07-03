@@ -30,6 +30,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1971,8 +1972,8 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 func renameSymbolViaLSP(ed *gui.CodeEditor, path, newName string) {
 	uri := fileURIOf(path)
 	line := ed.CursorLine()
-	col := ed.CursorCol()
-	origin := ed.Text() // stale-guard: abort if the trigger buffer changes mid-RPC
+	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
+	origin := ed.Text()        // stale-guard: abort if the trigger buffer changes mid-RPC
 	lsp := globalLSP
 	go func() {
 		we, err := lsp.Rename(uri, line, col, newName)
@@ -3751,7 +3752,7 @@ func lspOnEditorChanged(path string, ed *gui.CodeEditor, text string) {
 		return
 	}
 	line := ed.CursorLine()
-	col := ed.CursorCol()
+	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	lspVersions[path]++
 	ver := lspVersions[path]
 	lspCompletionGen[path]++
@@ -3812,7 +3813,7 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 		return
 	}
 	line := ed.CursorLine()
-	col := ed.CursorCol()
+	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	uri := fileURIOf(path)
 	lsp := globalLSP
 	go func() {
@@ -3851,7 +3852,7 @@ func findReferencesViaLSP(tabs *gui.TabWidget) {
 		return
 	}
 	line := ed.CursorLine()
-	col := ed.CursorCol()
+	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	uri := fileURIOf(path)
 	lsp := globalLSP
 	go func() {
@@ -3941,6 +3942,10 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 	gen := lspSigGen
 	uri := fileURIOf(path)
 	lsp := globalLSP
+	// Signature help fires on the caret (after typing '(' / ','); use the
+	// UTF-16 column so non-BMP text on the line doesn't skew the position.
+	line = ed.CursorLine()
+	col = ed.CursorUTF16Col()
 	go func() {
 		sh, err := lsp.SignatureHelp(uri, line, col)
 		if err != nil || sh == nil || len(sh.Signatures) == 0 {
@@ -3954,7 +3959,9 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 			if lspSigGen != gen {
 				return
 			}
-			gx, gy := ed.MapToGlobal(60, 40)
+			// Anchor the hint just under the caret (CaretGlobalXY returns the
+			// line's bottom), not the crude editor top-left.
+			gx, gy := ed.CaretGlobalXY()
 			gui.ShowToolTip(gx, gy, text)
 		})
 	}()
@@ -3985,7 +3992,7 @@ func codeActionsViaLSP(tabs *gui.TabWidget) {
 		return
 	}
 	line := ed.CursorLine()
-	col := ed.CursorCol()
+	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	uri := fileURIOf(path)
 	gx, gy := ed.MapToGlobal(80, 60)
 	lsp := globalLSP
@@ -4026,7 +4033,27 @@ func applyCodeAction(a core.LSPCodeAction) {
 		return
 	}
 	if a.Command != nil {
-		silkideToast(i18n.Tf("Command action not yet supported: %s", a.Title), gui.ToastWarning)
+		// Command-form action (e.g. gopls "organize imports"): run it via
+		// workspace/executeCommand. gopls applies the resulting edit itself
+		// through workspace/applyEdit, which our didChange sync picks up.
+		// Arguments is a raw JSON array; split it into per-arg raws.
+		var args []json.RawMessage
+		if len(a.Command.Arguments) > 0 {
+			_ = json.Unmarshal(a.Command.Arguments, &args)
+		}
+		cmd := a.Command.Command
+		title := a.Title
+		lsp := globalLSP
+		if lsp == nil {
+			return
+		}
+		go func() {
+			if _, err := lsp.ExecuteCommand(cmd, args); err != nil {
+				gui.Post(func() { silkideToast(i18n.Tf("Code action failed: %v", err), gui.ToastError) })
+				return
+			}
+			gui.Post(func() { silkideToast(i18n.Tf("Applied: %s", title), gui.ToastSuccess) })
+		}()
 		return
 	}
 	silkideToast(i18n.T("Code action has no edit"), gui.ToastInfo)
