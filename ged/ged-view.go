@@ -255,8 +255,8 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 		gui.ShowMessageBox(this, gui.LoadIcon("error"), "failed", err.Error(), []string{"@ok"})
 		return
 	}
-	x1, y1 := this.MapToScene(x, y)
-	x1, y1 = this.snapToGrid(x1, y1)
+	sx, sy := this.MapToScene(x, y)
+	x1, y1 := this.snapToGrid(sx, sy)
 
 	// Use type-specific default sizes instead of a fixed 30x8 mm
 	w, h := defaultSizeForWidget(factoryName)
@@ -265,12 +265,64 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	// Call Layout so the embedded widget gets the correct pixel size
 	item.Layout()
 
-	//item.SetParent(this.Scene())
+	// Nest the new widget into the container under the cursor, so layouts can
+	// be built by drag-drop; fall back to the scene root when the drop is not
+	// over a container. AddCommand attaches the fresh (parentless) item to any
+	// parent — Redo does SetParent(parent), Undo does SetParent(nil) — so the
+	// drop is one undoable action whether it lands in a container or at root.
+	parent := graph.IItem(this.Scene())
+	if c := this.containerUnder(sx, sy); c != nil {
+		parent = c
+	}
 	cmd := graph.NewAddCommand()
-	cmd.AddItem(item, this.Scene())
+	cmd.AddItem(item, parent)
 	this.Scene().PushCommand(cmd)
 
 	this.Self().Update()
+}
+
+// containerUnder returns the nearest container FakeWidget at the scene point
+// (x, y), or nil when nothing container-like is under it. It reuses the same
+// FindItemAt hit-test the canvas uses for click-selection (OnRightUp,
+// onDoubleClick), then walks up from the topmost hit item to its closest
+// container ancestor, so a drop onto a leaf that already sits inside a
+// container still nests into that container.
+func (this *GedView) containerUnder(x, y float64) graph.IItem {
+	return nearestContainerAncestor(this.Scene().FindItemAt(x, y, nil))
+}
+
+// nearestContainerAncestor walks up the parent chain from hit (inclusive) and
+// returns the first container FakeWidget, or nil if it reaches the root
+// without finding one. Split out from containerUnder so the walk-up is
+// unit-testable without a live view.
+func nearestContainerAncestor(hit graph.IItem) graph.IItem {
+	for it := hit; it != nil; it = it.Parent() {
+		if isContainerItem(it) {
+			return it
+		}
+	}
+	return nil
+}
+
+// isContainerItem reports whether item is a FakeWidget wrapping a container
+// widget that accepts dropped children. It reuses the framework's two existing
+// container signals — the visual layout containers (layoutTypeLabel: VBox/HBox/
+// GridLayout/FormLayout/Card/Accordion/StackedWidget/TabWidget/Splitter/
+// ScrollArea) and the AddWidget containers (isSimpleAddContainer, which
+// contributes GroupBox) — plus the Form/Dialog window containers. Leaf widgets
+// (Button/Label/Edit/...) return false, so a drop over them falls back to the
+// scene root in OnDrop.
+func isContainerItem(item graph.IItem) bool {
+	fw, ok := item.(*FakeWidget)
+	if !ok {
+		return false
+	}
+	name := fw.WidgetFactoryName()
+	switch name {
+	case "gui.Form", "gui.Dialog":
+		return true
+	}
+	return layoutTypeLabel(name) != "" || isSimpleAddContainer(name)
 }
 
 // defaultSizeForWidget returns sensible default sizes (in mm) for dropped widgets.
