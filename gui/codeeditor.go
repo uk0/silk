@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -550,6 +551,40 @@ func (this *CodeEditor) CursorLine() int {
 // completion / go-to-definition requests.
 func (this *CodeEditor) CursorCol() int {
 	return this.cursorCol
+}
+
+// CursorUTF16Col returns the caret column as a UTF-16 code-unit offset within
+// its line — the encoding LSP mandates for a Position's `character` field.
+// It parallels CursorCol, which stays a rune index for internal editing: the
+// two agree for ASCII / BMP text but diverge once a non-BMP rune (emoji, a
+// CJK-extension glyph) precedes the caret, where each such rune counts as two
+// UTF-16 units. LSP callers MUST send this, not CursorCol, as the character
+// offset or completion / hover / definition / rename resolve at the wrong column.
+func (this *CodeEditor) CursorUTF16Col() int {
+	if this.cursorLine < 0 || this.cursorLine >= len(this.lines) {
+		return 0
+	}
+	return utf16ColumnOf(this.lines[this.cursorLine], this.cursorCol)
+}
+
+// utf16ColumnOf counts the UTF-16 code units in the first runeCol runes of
+// line. runeCol is clamped to the line's rune length, so a caret past the end
+// maps to the full line width. utf16.RuneLen reports 2 for a non-BMP rune and
+// 1 for a BMP one; an invalid rune (RuneLen == -1) is counted as 1.
+func utf16ColumnOf(line string, runeCol int) int {
+	runes := []rune(line)
+	if runeCol > len(runes) {
+		runeCol = len(runes)
+	}
+	col := 0
+	for _, r := range runes[:runeCol] {
+		if n := utf16.RuneLen(r); n > 0 {
+			col += n
+		} else {
+			col++
+		}
+	}
+	return col
 }
 
 // caretLocalXY returns the primary caret's position in LOCAL widget
