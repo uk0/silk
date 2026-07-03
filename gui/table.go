@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"silk/core"
 	"silk/paint"
@@ -28,6 +29,14 @@ type TableModel interface {
 type SortableTableModel interface {
 	SortByColumn(col int, ascending bool)
 	RestoreOrder()
+}
+
+// EditableTableModel is an optional capability for models that accept cell
+// writes. Table's in-place editor commits through SetCellText, so a model
+// that does not implement this interface stays read-only even when cell
+// editing is enabled on the widget.
+type EditableTableModel interface {
+	SetCellText(row, col int, text string)
 }
 
 // columnIsNumeric reports whether every non-empty cell in the given column
@@ -197,6 +206,20 @@ func (m *SimpleTableModel) SetRow(row int, cells ...string) {
 	}
 }
 
+// SetCellText writes a single cell, ignoring out-of-range indices. It makes
+// SimpleTableModel satisfy EditableTableModel so Table's inline editor can
+// commit into it.
+func (m *SimpleTableModel) SetCellText(row, col int, text string) {
+	if row < 0 || row >= len(m.rows) {
+		return
+	}
+	r := m.rows[row]
+	if col < 0 || col >= len(r) {
+		return
+	}
+	r[col] = text
+}
+
 // RemoveRow removes the row at the given index.
 func (m *SimpleTableModel) RemoveRow(row int) {
 	if row < 0 || row >= len(m.rows) {
@@ -273,6 +296,27 @@ type Table struct {
 	cbSelectionChanged func(interface{}, int)
 	cbSortChanged      func(col int, ascending bool)
 	cbRowActivated     func(interface{}, int) // fired when the current row is activated (Enter/Space)
+
+	// In-place cell editing. Off by default so existing read-only tables
+	// are unaffected; enable with SetCellsEditable.
+	cellsEditable bool
+	editor        *tableCellEditor // lazily created inline editor, reused across cells
+	editing       bool             // an edit is currently active
+	editRow       int              // cell being edited while editing
+	editCol       int              // cell being edited while editing
+	cbCellEdited  func(row, col int, newText string)
+
+	// Double-click detection for opening the editor (the table has no
+	// framework-level double-click, so it is timed here like file-explorer.go).
+	lastClickTime time.Time
+	lastClickRow  int
+	lastClickCol  int
+
+	// Multi-row selection driven by Ctrl/Shift clicks. selectedRow stays the
+	// current row / range anchor; selectedRows holds the extra rows, nil when
+	// only a single row is selected (the default).
+	selectedRows map[int]bool
+	selectAnchor int
 }
 
 // columnResizeGrab is the half-width, in pixels, of the grab zone around a
@@ -282,6 +326,11 @@ const columnResizeGrab = 4.0
 // columnMinWidth is the smallest width a column may be dragged down to.
 const columnMinWidth = 20.0
 
+// tableDoubleClickInterval is the window within which two clicks on the same
+// cell count as a double-click that opens the inline editor. Matches the
+// 400ms used by the file explorer's double-click detection.
+const tableDoubleClickInterval = 400 * time.Millisecond
+
 // NewTable creates a new Table widget.
 func NewTable() *Table {
 	p := new(Table)
@@ -290,6 +339,11 @@ func NewTable() *Table {
 	p.sortColumn = -1
 	p.resizeCol = -1
 	p.hoverBoundary = -1
+	p.editRow = -1
+	p.editCol = -1
+	p.lastClickRow = -1
+	p.lastClickCol = -1
+	p.selectAnchor = -1
 	p.scrollArea = NewScrollArea()
 	p.scrollArea.SetParent(p)
 	return p
@@ -297,6 +351,7 @@ func NewTable() *Table {
 
 // SetModel sets the TableModel that provides data for this table.
 func (this *Table) SetModel(m TableModel) {
+	this.cancelEdit()
 	this.model = m
 	this.sortColumn = -1
 	this.colWidths = nil // reseed widths from the new model on next use
@@ -438,8 +493,11 @@ func (this *Table) OnKeyDown(key int, repeat bool) {
 }
 
 // moveCurrentRow selects row r and scrolls it into view; the entry point for
-// every keyboard navigation key.
+// every keyboard navigation key. Keyboard navigation collapses any multi-row
+// selection back to a single row and re-anchors the range there.
 func (this *Table) moveCurrentRow(r int) {
+	this.selectedRows = nil
+	this.selectAnchor = r
 	this.SetSelectedRow(r)
 	this.scrollRowIntoView(r)
 }
@@ -746,7 +804,7 @@ func (this *Table) Draw(g paint.Painter) {
 		}
 
 		// Selection highlight
-		if r == this.selectedRow {
+		if this.isRowSelected(r) {
 			g.SetBrush1(t.HighLightColor)
 			g.Rectangle(0, y, this.totalColumnWidth(), rh)
 			g.Fill()
@@ -887,9 +945,39 @@ func (this *Table) OnLeftDown(x, y float64) {
 	rh := this.RowHeight()
 	sy := this.scrollArea.ScrollY()
 	row := int((y-hh)/rh + sy)
-	if row >= 0 && row < this.model.RowCount() {
-		this.SetSelectedRow(row)
+	if row < 0 || row >= this.model.RowCount() {
+		return
 	}
+	col := this.headerColumnAt(x)
+
+	// Ctrl / Shift extend the selection to multiple rows; a plain click keeps
+	// the original single-row behaviour and (on a second click) opens the
+	// inline editor.
+	switch {
+	case IsKeyDown(KeyCtrl):
+		this.toggleRowSelection(row)
+		return
+	case IsKeyDown(KeyShift):
+		this.selectRowRange(this.selectAnchor, row)
+		return
+	}
+
+	this.selectedRows = nil
+	this.selectAnchor = row
+	this.SetSelectedRow(row)
+
+	// Double-click on the same cell opens the inline editor (a no-op unless
+	// editing is enabled).
+	now := time.Now()
+	if row == this.lastClickRow && col == this.lastClickCol &&
+		now.Sub(this.lastClickTime) < tableDoubleClickInterval {
+		this.lastClickTime = time.Time{} // reset so a third click is a fresh single
+		this.tryBeginEdit(row, col)
+		return
+	}
+	this.lastClickTime = now
+	this.lastClickRow = row
+	this.lastClickCol = col
 }
 
 // OnMouseMove drives an in-progress column resize and, when idle, shows a
@@ -936,6 +1024,7 @@ func (this *Table) OnMouseLeave() {
 
 // OnMouseWheel handles mouse wheel scrolling.
 func (this *Table) OnMouseWheel(x, y, z float64) {
+	this.commitEdit() // an open inline editor would otherwise float off its cell
 	vs := this.scrollArea.VertScrollBar()
 	if vs != nil && vs.IsVisible() {
 		if z > 0 {
@@ -945,6 +1034,278 @@ func (this *Table) OnMouseWheel(x, y, z float64) {
 		}
 		this.Update()
 	}
+}
+
+// --- In-place cell editing -------------------------------------------------
+
+// tableCellEditor is the inline cell editor: a gui.Edit that reports Enter,
+// Esc and focus-loss back to its owning Table, which drives commit / cancel.
+// Embedding Edit reuses the whole text-input widget rather than building a new
+// one.
+type tableCellEditor struct {
+	Edit
+	table *Table
+}
+
+// newTableCellEditor builds a borderless single-line editor bound to a table.
+func newTableCellEditor(t *Table) *tableCellEditor {
+	e := new(tableCellEditor)
+	e.Init(e)
+	e.table = t
+	e.SetNoFrame(true) // inline overlay: no separate frame around the cell
+	return e
+}
+
+// OnKeyDown commits on Enter and cancels on Esc; every other key falls through
+// to the embedded Edit's normal handling.
+func (this *tableCellEditor) OnKeyDown(key int, repeat bool) {
+	switch key {
+	case KeyEnter:
+		this.table.commitEdit()
+		return
+	case KeyEsc:
+		this.table.cancelEdit()
+		return
+	}
+	this.Edit.OnKeyDown(key, repeat)
+}
+
+// OnFocusChanged commits when focus leaves the editor for another widget
+// (click-away / blur), matching the Enter behaviour.
+func (this *tableCellEditor) OnFocusChanged(newFocus, oldFocus IWidget) {
+	this.Edit.OnFocusChanged(newFocus, oldFocus)
+	if oldFocus == this.Self() && newFocus != this.Self() {
+		this.table.commitEdit()
+	}
+}
+
+// SetCellsEditable toggles in-place cell editing. It defaults to false, so a
+// table stays read-only (and byte-for-byte unchanged) unless a host opts in.
+// Turning editing off cancels any editor currently open.
+func (this *Table) SetCellsEditable(b bool) {
+	if this.cellsEditable == b {
+		return
+	}
+	this.cellsEditable = b
+	if !b {
+		this.cancelEdit()
+	}
+}
+
+// IsCellsEditable reports whether in-place cell editing is enabled.
+func (this *Table) IsCellsEditable() bool {
+	return this.cellsEditable
+}
+
+// SigCellEdited sets the callback fired after a cell edit commits, with the
+// edited row, column and the new text. Fires even when the model does not
+// implement EditableTableModel, so a host can persist the value itself.
+func (this *Table) SigCellEdited(fn func(row, col int, newText string)) {
+	this.cbCellEdited = fn
+}
+
+// cellAtXY maps a widget-space point to the data cell under it, or (-1, -1)
+// for the header row or an empty area past the data. It mirrors the draw
+// path's scroll handling and reuses headerColumnAt for the column hit-test.
+func (this *Table) cellAtXY(x, y float64) (row, col int) {
+	if this.model == nil {
+		return -1, -1
+	}
+	hh := this.HeaderHeight()
+	if y < hh {
+		return -1, -1
+	}
+	rh := this.RowHeight()
+	sy := this.scrollArea.ScrollY()
+	row = int((y-hh)/rh + sy)
+	if row < 0 || row >= this.model.RowCount() {
+		return -1, -1
+	}
+	col = this.headerColumnAt(x)
+	if col < 0 {
+		return -1, -1
+	}
+	return row, col
+}
+
+// cellRect returns the widget-space rectangle of a data cell, matching the
+// draw path: columns offset by the horizontal scroll, rows by the (fractional)
+// vertical scroll. Used to position the inline editor over the cell.
+func (this *Table) cellRect(row, col int) (x, y, w, h float64) {
+	hh := this.HeaderHeight()
+	rh := this.RowHeight()
+	sx := this.scrollArea.ScrollX()
+	sy := this.scrollArea.ScrollY()
+	left := 0.0
+	for c := 0; c < col; c++ {
+		left += this.columnWidth(c)
+	}
+	x = left - sx
+	y = hh + (float64(row)-sy)*rh
+	w = this.columnWidth(col)
+	h = rh
+	return
+}
+
+// tryBeginEdit opens the editor on (row, col) when editing is enabled and the
+// cell is a real data cell. It is the gated entry from the double-click
+// handler; a read-only table (or an out-of-range cell) is a no-op, keeping the
+// default behaviour unchanged.
+func (this *Table) tryBeginEdit(row, col int) {
+	if !this.cellsEditable || this.model == nil {
+		return
+	}
+	if row < 0 || row >= this.model.RowCount() {
+		return
+	}
+	if col < 0 || col >= this.model.ColumnCount() {
+		return
+	}
+	this.beginEdit(row, col)
+}
+
+// beginEdit overlays the inline editor on a cell, seeds it with the cell text,
+// selects all of it and gives it focus. Any editor already open is committed
+// first, so only one editor is ever active.
+func (this *Table) beginEdit(row, col int) {
+	this.commitEdit()
+	if this.editor == nil {
+		this.editor = newTableCellEditor(this)
+		this.editor.SetParent(this)
+	}
+	this.editRow = row
+	this.editCol = col
+	this.editing = true
+	x, y, w, h := this.cellRect(row, col)
+	this.editor.SetBounds(x, y, w, h)
+	this.editor.SetText(this.model.CellText(row, col))
+	this.editor.SelectAll()
+	this.editor.SetVisible(true)
+	this.editor.SetFocus()
+	this.Update()
+}
+
+// commitEdit writes the editor's text back through EditableTableModel (a no-op
+// when the model is read-only), fires SigCellEdited, and hides the editor. It
+// is safe to call when no edit is active. The editing flag is cleared first so
+// the focus change from hiding the editor cannot re-enter this method.
+func (this *Table) commitEdit() {
+	if !this.editing || this.editor == nil {
+		return
+	}
+	this.editing = false
+	row, col := this.editRow, this.editCol
+	text := this.editor.Text()
+	hadFocus := this.editor.HasFocus()
+	this.editor.SetVisible(false)
+	if em, ok := this.model.(EditableTableModel); ok {
+		em.SetCellText(row, col, text)
+	}
+	if this.cbCellEdited != nil {
+		this.cbCellEdited(row, col, text)
+	}
+	// Return focus to the table only when the commit was driven from the
+	// editor itself (Enter / programmatic). On a blur to another widget the
+	// editor has already lost focus, so we must not steal it back.
+	if hadFocus {
+		this.SetFocus()
+	}
+	this.Update()
+}
+
+// cancelEdit discards the active editor without writing to the model.
+func (this *Table) cancelEdit() {
+	if !this.editing || this.editor == nil {
+		return
+	}
+	this.editing = false
+	hadFocus := this.editor.HasFocus()
+	this.editor.SetVisible(false)
+	if hadFocus {
+		this.SetFocus()
+	}
+	this.Update()
+}
+
+// --- Multi-row selection ---------------------------------------------------
+
+// isRowSelected reports whether a row is part of the current selection. When a
+// multi-selection is active the set is authoritative; otherwise the single
+// current row is the selection.
+func (this *Table) isRowSelected(row int) bool {
+	if this.selectedRows != nil {
+		return this.selectedRows[row]
+	}
+	return row == this.selectedRow
+}
+
+// SelectedRows returns every selected row index in ascending order. With no
+// multi-selection active it returns just the current row (or an empty slice
+// when nothing is selected), so single-select callers get a sensible result.
+func (this *Table) SelectedRows() []int {
+	if this.selectedRows != nil {
+		ret := make([]int, 0, len(this.selectedRows))
+		for r := range this.selectedRows {
+			ret = append(ret, r)
+		}
+		sort.Ints(ret)
+		return ret
+	}
+	if this.selectedRow >= 0 {
+		return []int{this.selectedRow}
+	}
+	return []int{}
+}
+
+// ensureSelectionSet lazily creates the multi-selection set, seeding it with
+// the current single selection so the first Ctrl-click extends rather than
+// replaces it.
+func (this *Table) ensureSelectionSet() {
+	if this.selectedRows == nil {
+		this.selectedRows = make(map[int]bool)
+		if this.selectedRow >= 0 {
+			this.selectedRows[this.selectedRow] = true
+		}
+	}
+}
+
+// toggleRowSelection flips row's membership in the multi-selection (Ctrl-click)
+// and makes it the current row and range anchor.
+func (this *Table) toggleRowSelection(row int) {
+	if this.model == nil || row < 0 || row >= this.model.RowCount() {
+		return
+	}
+	this.ensureSelectionSet()
+	if this.selectedRows[row] {
+		delete(this.selectedRows, row)
+	} else {
+		this.selectedRows[row] = true
+	}
+	this.selectedRow = row
+	this.selectAnchor = row
+	this.Update()
+}
+
+// selectRowRange selects the inclusive range of rows between anchor and row
+// (Shift-click), replacing any prior multi-selection. A negative anchor falls
+// back to a single-row selection.
+func (this *Table) selectRowRange(anchor, row int) {
+	if this.model == nil || row < 0 || row >= this.model.RowCount() {
+		return
+	}
+	if anchor < 0 {
+		anchor = row
+	}
+	lo, hi := anchor, row
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	this.selectedRows = make(map[int]bool)
+	for r := lo; r <= hi; r++ {
+		this.selectedRows[r] = true
+	}
+	this.selectedRow = row
+	this.Update()
 }
 
 func (this *Table) EnumProperties(list core.IPropertyList) {
