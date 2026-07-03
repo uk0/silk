@@ -38,6 +38,17 @@ const (
 	partArrowInc                          // 末端箭头按钮(下/右)
 )
 
+// scrollArrowSize is the length reserved at each rail end for the legacy
+// step-arrow buttons. The modern bar draws no arrows, so the zone is 0: the
+// whole rail is trough + thumb, end clicks page like any trough click, and
+// the arrow parts (1/5) are unreachable from hit-testing. Wheel/keyboard
+// line-stepping still goes through SmallBakward/SmallForward directly.
+const scrollArrowSize = 0.0
+
+// scrollMinThumb is the minimum thumb length along the scroll axis, so huge
+// documents still get a grabbable pill instead of a sliver.
+const scrollMinThumb = 24.0
+
 // scrollPart 把轴向坐标 pos(竖直取 y, 水平取 x)映射为 scrollPartKind.
 // thumbStart/thumbLen 为滑块在该轴上的绝对偏移与长度(thumbStart 已含起始箭头内缩);
 // trackLen 为控件在该轴上的总长度, arrowSize 为单个端部箭头按钮长度(若不绘制则传 0).
@@ -239,32 +250,37 @@ func (this *ScrollBar) IsVertical() bool {
 }
 
 func (this *ScrollBar) TrackRect() (x, y, w, h float64) {
-	ss := Theme().ScrollWidth
 	if this.IsVertical() {
-		h1 := this.h - ss*2
+		h1 := this.h - scrollArrowSize*2
 		if !this.IsValid() {
-			x, y, w, h = 0, ss, this.w, h1
+			x, y, w, h = 0, scrollArrowSize, this.w, h1
 			return
 		}
 		ts := h1 * this.large / (this.large + this.max - this.min)
-		if ts < ss {
-			ts = ss
+		if ts < scrollMinThumb {
+			ts = scrollMinThumb
 		}
-		y = ss + (h1-ts)*this.value/(this.max-this.min)
+		if ts > h1 {
+			ts = h1
+		}
+		y = scrollArrowSize + (h1-ts)*this.value/(this.max-this.min)
 		x = 0
 		w = this.w
 		h = ts
 	} else {
-		w1 := this.w - ss*2
+		w1 := this.w - scrollArrowSize*2
 		if !this.IsValid() {
-			x, y, w, h = ss, 0, w1, this.h
+			x, y, w, h = scrollArrowSize, 0, w1, this.h
 			return
 		}
 		ts := w1 * this.large / (this.large + this.max - this.min)
-		if ts < ss {
-			ts = ss
+		if ts < scrollMinThumb {
+			ts = scrollMinThumb
 		}
-		x = ss + (w1-ts)*this.value/(this.max-this.min)
+		if ts > w1 {
+			ts = w1
+		}
+		x = scrollArrowSize + (w1-ts)*this.value/(this.max-this.min)
 		y = 0
 		w = ts
 		h = this.h
@@ -276,15 +292,14 @@ func (this *ScrollBar) PointToValue(x, y float64) float64 {
 	if !this.IsValid() {
 		return 0
 	}
-	ss := Theme().ScrollWidth
 	var v float64
 	if this.IsVertical() {
-		h1 := this.h - ss*2
-		v = this.min + (this.large+this.max-this.min)*(y-ss)/h1
+		h1 := this.h - scrollArrowSize*2
+		v = this.min + (this.large+this.max-this.min)*(y-scrollArrowSize)/h1
 
 	} else {
-		w1 := this.w - ss*2
-		v = this.min + (this.large+this.max-this.min)*(x-ss)/w1
+		w1 := this.w - scrollArrowSize*2
+		v = this.min + (this.large+this.max-this.min)*(x-scrollArrowSize)/w1
 	}
 	if v < this.min {
 		v = this.min
@@ -303,14 +318,14 @@ func (this *ScrollBar) PointToPart(x, y float64) int {
 	if !this.IsValid() {
 		return 0
 	}
-	ss := Theme().ScrollWidth
 	tx, ty, tw, th := this.TrackRect()
-	// 取轴向上的坐标/滑块/轨道长度, 复用纯函数分类(端部绘制箭头按钮, 故 arrowSize = ss).
+	// 取轴向上的坐标/滑块/轨道长度, 复用纯函数分类(端部不再绘制箭头按钮, 故
+	// arrowSize = 0: 整条轨道即滑槽, 部件 1/5 不可达, 端部点击同空槽翻页).
 	var kind scrollPartKind
 	if this.IsVertical() {
-		kind = scrollPart(y, ty, th, this.h, ss)
+		kind = scrollPart(y, ty, th, this.h, scrollArrowSize)
 	} else {
-		kind = scrollPart(x, tx, tw, this.w, ss)
+		kind = scrollPart(x, tx, tw, this.w, scrollArrowSize)
 	}
 	// 映射回既有的 1..5 部件编号(onTimer 依赖之).
 	switch kind {

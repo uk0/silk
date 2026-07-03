@@ -58,7 +58,7 @@ func TestScrollBarPartNoArrows(t *testing.T) {
 func newTestScrollBar() *ScrollBar {
 	sb := NewScrollBar()
 	sb.SetVertical(true)
-	sb.SetSize(14, 300) // ScrollWidth wide, tall enough for visible trough
+	sb.SetSize(Theme().ScrollWidth, 300) // ScrollWidth wide, tall enough for visible trough
 	sb.SetRange(0, 100) // min..max
 	sb.SetDelta(2, 10)  // small (line) = 2, large (page) = 10
 	sb.SetValue(50)     // park the thumb in the middle
@@ -67,14 +67,13 @@ func newTestScrollBar() *ScrollBar {
 
 // troughClickY returns a y inside the before/after trough of the current thumb.
 func troughClickY(sb *ScrollBar, before bool) float64 {
-	ss := Theme().ScrollWidth
 	_, ty, _, th := sb.TrackRect()
 	if before {
-		// midpoint between the leading arrow and the thumb top.
-		return (ss + ty) * 0.5
+		// midpoint between the rail top and the thumb top.
+		return ty * 0.5
 	}
-	// midpoint between the thumb bottom and the trailing arrow.
-	return (ty + th + (sb.h - ss)) * 0.5
+	// midpoint between the thumb bottom and the rail bottom.
+	return (ty + th + sb.h) * 0.5
 }
 
 // TestScrollBarTroughPagesBackward: a single click in the trough above the thumb
@@ -152,34 +151,33 @@ func TestScrollBarTroughClampsAtMax(t *testing.T) {
 	}
 }
 
-// TestScrollBarArrowStepsByLine: the scrollbar draws end-arrow buttons (the
-// ScrollWidth-sized regions at each end). Clicking the leading button steps the
-// value down by one line step (small); the trailing button steps up by one.
-func TestScrollBarArrowStepsByLine(t *testing.T) {
+// TestScrollBarEndClicksPage: the modern bar draws no end-arrow buttons (the
+// arrow hit zone is 0), so a click at either rail end lands in the trough and
+// pages by one large step instead of line-stepping.
+func TestScrollBarEndClicksPage(t *testing.T) {
 	sb := newTestScrollBar()
-	small, _ := sb.Delta()
-	ss := Theme().ScrollWidth
+	_, large := sb.Delta()
 	start := sb.Value()
 
-	// leading arrow: any y < ss.
-	if part := sb.PointToPart(0, ss*0.5); part != 1 {
-		t.Fatalf("leading-arrow y classified as part %d, want 1", part)
+	// top end: y near 0 is trough-before-thumb (part 2), never an arrow.
+	if part := sb.PointToPart(0, 2); part != 2 {
+		t.Fatalf("top-end y classified as part %d, want 2 (before thumb)", part)
 	}
-	sb.OnLeftDown(0, ss*0.5)
-	sb.OnLeftUp(0, ss*0.5)
-	if got, want := sb.Value(), start-small; got != want {
-		t.Errorf("leading-arrow click: value = %v, want %v", got, want)
+	sb.OnLeftDown(0, 2)
+	sb.OnLeftUp(0, 2)
+	if got, want := sb.Value(), start-large; got != want {
+		t.Errorf("top-end click: value = %v, want %v", got, want)
 	}
 
-	// trailing arrow: any y >= h-ss.
+	// bottom end: y near h is trough-after-thumb (part 4), never an arrow.
 	start = sb.Value()
-	ty := sb.h - ss*0.5
-	if part := sb.PointToPart(0, ty); part != 5 {
-		t.Fatalf("trailing-arrow y classified as part %d, want 5", part)
+	by := sb.h - 2
+	if part := sb.PointToPart(0, by); part != 4 {
+		t.Fatalf("bottom-end y classified as part %d, want 4 (after thumb)", part)
 	}
-	sb.OnLeftDown(0, ty)
-	sb.OnLeftUp(0, ty)
-	if got, want := sb.Value(), start+small; got != want {
-		t.Errorf("trailing-arrow click: value = %v, want %v", got, want)
+	sb.OnLeftDown(0, by)
+	sb.OnLeftUp(0, by)
+	if got, want := sb.Value(), start+large; got != want {
+		t.Errorf("bottom-end click: value = %v, want %v", got, want)
 	}
 }

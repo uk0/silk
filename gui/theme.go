@@ -140,7 +140,7 @@ func Theme() *defaultTheme {
 		t.BorderColor = paint.Color{209, 213, 219, 160}       // softer border (gray-300), hairline alpha
 		t.BorderPen = paint.NewPen(t.BorderColor, 1)
 		t.ViewBGColor = paint.Color{255, 255, 255, 255}
-		t.ScrollWidth = 14
+		t.ScrollWidth = 10
 		t.ItemHeight = 24
 		t.SeparatorSize = 1
 
@@ -335,97 +335,35 @@ func roundedRect(g paint.Painter, x, y, w, h, r float64) {
 }
 
 func (t *defaultTheme) DrawScroll(g paint.Painter, scroll *ScrollBar) {
-	ss := t.ScrollWidth
 	w, h := scroll.Size()
 	part, _ := scroll.ActivePart()
 
-	// Colors
-	trackColor := paint.Color{243, 244, 246, 255}    // gray-100
-	thumbColor := paint.Color{156, 163, 175, 255}    // gray-400
-	thumbHover := paint.Color{107, 114, 128, 255}    // gray-500
-	arrowColor := paint.Color{107, 114, 128, 255}    // gray-500
-	if currentThemeMode == ThemeDark {
-		trackColor = paint.Color{39, 39, 42, 255}    // zinc-800
-		thumbColor = paint.Color{82, 82, 91, 255}    // zinc-600
-		thumbHover = paint.Color{113, 113, 122, 255}  // zinc-500
-		arrowColor = paint.Color{161, 161, 170, 255}  // zinc-400
+	// Modern rail-less scrollbar: a flat, near-invisible track with a floating
+	// rounded thumb and no end-arrow buttons. The thumb tint derives from
+	// TextColor at low alpha (the same both-modes trick as the tab hover fill)
+	// so light and dark themes stay coherent without hardcoded grays.
+	g.Rectangle(0, 0, w, h)
+	g.SetBrush1(t.FormColor)
+	g.Fill()
+
+	if !scroll.IsValid() {
+		return
 	}
 
+	tc := t.TextColor
+	tc.A = 80
+	if part == 3 { // pointer over (or dragging) the thumb
+		tc.A = 140
+	}
+
+	// Thumb floats 2px inside the rail edges; the radius matches half the
+	// pill's cross width so the ends stay fully rounded.
+	inset := 2.0
 	thumbRadius := 3.0
-	inset := 2.0 // padding inside the track
-
-	if scroll.IsVertical() {
-		// Track background
-		g.Rectangle(0, 0, w, h)
-		g.SetBrush1(trackColor)
-		g.Fill()
-
-		if scroll.IsValid() {
-			tx, ty, tw, th := scroll.TrackRect()
-			// Draw rounded thumb
-			tc := thumbColor
-			if part == 3 {
-				tc = thumbHover
-			}
-			roundedRect(g, tx+inset, ty+inset, tw-inset*2, th-inset*2, thumbRadius)
-			g.SetBrush1(tc)
-			g.Fill()
-		}
-
-		// Up arrow
-		hw := w * 0.5
-		b := 2.5
-		a := 3.0
-		g.MoveTo(hw, ss*0.5-b*0.5)
-		g.LineTo(hw-a, ss*0.5+b*0.5)
-		g.LineTo(hw+a, ss*0.5+b*0.5)
-		g.LineTo(hw, ss*0.5-b*0.5)
-		g.SetBrush1(arrowColor)
-		g.Fill()
-
-		// Down arrow
-		g.MoveTo(hw, h-ss*0.5+b*0.5)
-		g.LineTo(hw-a, h-ss*0.5-b*0.5)
-		g.LineTo(hw+a, h-ss*0.5-b*0.5)
-		g.LineTo(hw, h-ss*0.5+b*0.5)
-		g.SetBrush1(arrowColor)
-		g.Fill()
-	} else {
-		// Track background
-		g.Rectangle(0, 0, w, h)
-		g.SetBrush1(trackColor)
-		g.Fill()
-
-		if scroll.IsValid() {
-			tx, ty, tw, th := scroll.TrackRect()
-			tc := thumbColor
-			if part == 3 {
-				tc = thumbHover
-			}
-			roundedRect(g, tx+inset, ty+inset, tw-inset*2, th-inset*2, thumbRadius)
-			g.SetBrush1(tc)
-			g.Fill()
-		}
-
-		// Left arrow
-		hh := h * 0.5
-		b := 2.5
-		a := 3.0
-		g.MoveTo(ss*0.5-b*0.5, hh)
-		g.LineTo(ss*0.5+b*0.5, hh-a)
-		g.LineTo(ss*0.5+b*0.5, hh+a)
-		g.LineTo(ss*0.5-b*0.5, hh)
-		g.SetBrush1(arrowColor)
-		g.Fill()
-
-		// Right arrow
-		g.MoveTo(w-ss*0.5+b*0.5, hh)
-		g.LineTo(w-ss*0.5-b*0.5, hh-a)
-		g.LineTo(w-ss*0.5-b*0.5, hh+a)
-		g.LineTo(w-ss*0.5+b*0.5, hh)
-		g.SetBrush1(arrowColor)
-		g.Fill()
-	}
+	tx, ty, tw, th := scroll.TrackRect()
+	roundedRect(g, tx+inset, ty+inset, tw-inset*2, th-inset*2, thumbRadius)
+	g.SetBrush1(tc)
+	g.Fill()
 }
 
 func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
