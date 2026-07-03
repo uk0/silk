@@ -27,7 +27,7 @@ func init() {
 // VS Code's SCM view or Qt Creator's "Git > status". It is a pure
 // display/interaction widget — it never shells out to git itself. The
 // host (silkide) drives core.GitStatusPorcelain(dir) and pushes the
-// entries in via SetEntries; the panel renders them and emits two
+// entries in via SetEntries; the panel renders them and emits several
 // signals back:
 //
 //	SigFileActivated — a row's body was single-clicked. The host opens the
@@ -52,8 +52,12 @@ func init() {
 // keyed by entry.Path) without opening the file, while clicking the row
 // body still activates it. The message line + Commit button live in a
 // band at the bottom, a rolled text line in the same idiom as
-// debug-panel.go's watch input (no embedded gui.Edit). A "stage all /
-// none" toggle is deliberately deferred to a follow-up.
+// debug-panel.go's watch input (no embedded gui.Edit). The header carries a
+// "Stage All" toggle that checks / clears every row's stage state, and an
+// "Unstage" button that fires SigUnstageRequested over the checked set so the
+// host can drop those paths from the git index (core.GitUnstage). The commit
+// input takes Shift+Enter for a newline, so a message carries a subject and
+// body; plain Enter still submits.
 //
 // v1 is a single flat list with a per-row status letter, deliberately
 // not grouped: splitting the rows into "Staged" vs "Changes"
@@ -83,9 +87,10 @@ type GitChangesPanel struct {
 	lastClickIdx  int
 	lastClickTime time.Time
 
-	cbActivated func(entry core.GitStatusEntry)
-	cbDiff      func(entry core.GitStatusEntry)
-	cbCommit    func(message string, stagedPaths []string)
+	cbActivated  func(entry core.GitStatusEntry)
+	cbDiff       func(entry core.GitStatusEntry)
+	cbCommit     func(message string, stagedPaths []string)
+	cbUnstageReq func(paths []string)
 }
 
 // NewGitChangesPanel creates an empty changes panel.
@@ -183,6 +188,30 @@ func (this *GitChangesPanel) SigCommit(fn func(message string, stagedPaths []str
 	this.cbCommit = fn
 }
 
+// SigUnstageRequested registers the callback fired by the header "Unstage"
+// button. It receives the currently-checked paths (StagedPaths order); the
+// host moves them OUT of the git index (core.GitUnstage) and re-pushes the
+// refreshed status via SetEntries. This is distinct from the local
+// commit-selection toggles (StageAll / UnstageAll / SetStaged): those only
+// flip the in-panel `staged` set, while this asks the host to touch the real
+// git index. Fires only when at least one path is checked.
+func (this *GitChangesPanel) SigUnstageRequested(fn func(paths []string)) {
+	this.cbUnstageReq = fn
+}
+
+// requestUnstage fires SigUnstageRequested with the checked set. A no-op —
+// nothing fires — when nothing is checked, mirroring submitCommit, so the host
+// only ever gets a runnable request.
+func (this *GitChangesPanel) requestUnstage() {
+	paths := this.StagedPaths()
+	if len(paths) == 0 {
+		return
+	}
+	if this.cbUnstageReq != nil {
+		this.cbUnstageReq(paths)
+	}
+}
+
 // StagedPaths returns the paths the user has checked for staging, in
 // lexical order (a copy the host can hold onto). The order is stable so a
 // commit's file set is deterministic; git does not care about the order.
@@ -226,6 +255,62 @@ func (this *GitChangesPanel) ClearStaged() {
 	}
 	this.staged = nil
 	this.Self().Update()
+}
+
+// StageAll checks every current entry's path in the local commit-selection
+// set — the header "Stage All" affordance's on-state. Paths already checked
+// stay checked; a no-op on an empty change list. Repaints once when anything
+// changed.
+func (this *GitChangesPanel) StageAll() {
+	if len(this.entries) == 0 {
+		return
+	}
+	if this.staged == nil {
+		this.staged = make(map[string]bool, len(this.entries))
+	}
+	changed := false
+	for _, e := range this.entries {
+		if !this.staged[e.Path] {
+			this.staged[e.Path] = true
+			changed = true
+		}
+	}
+	if changed {
+		this.Self().Update()
+	}
+}
+
+// UnstageAll unchecks every path, emptying the local commit-selection set —
+// the header affordance's off-state and the counterpart to StageAll. It only
+// touches the in-panel `staged` set (same effect as ClearStaged); dropping
+// files from the git index is the host's job via SigUnstageRequested.
+func (this *GitChangesPanel) UnstageAll() {
+	this.ClearStaged()
+}
+
+// allStaged reports whether every current entry is checked. False on an empty
+// list, so the header toggle reads "stage all" rather than "clear" when there
+// is nothing to stage. Drives the toggle's direction and label.
+func (this *GitChangesPanel) allStaged() bool {
+	if len(this.entries) == 0 {
+		return false
+	}
+	for _, e := range this.entries {
+		if !this.staged[e.Path] {
+			return false
+		}
+	}
+	return true
+}
+
+// toggleStageAll is the header "Stage All" affordance's click action: stage
+// every row when not all are checked, otherwise clear the selection.
+func (this *GitChangesPanel) toggleStageAll() {
+	if this.allStaged() {
+		this.UnstageAll()
+	} else {
+		this.StageAll()
+	}
 }
 
 // isStaged reports whether a path is currently checked for staging. Safe
@@ -351,6 +436,35 @@ const (
 	gitRowPathX   = 42.0 // path-text x
 )
 
+// Header action-button geometry. The two buttons are right-aligned in the
+// header band as [Stage All][gap][Unstage], ending gitHeaderPad from the
+// right edge. Widths are fixed so the hit-test is a pure function of the
+// widget width (mirroring checkboxHitX / rowAtY) — no font measurement off
+// the paint path.
+const (
+	gitHeaderPad    = 6.0  // right-edge inset
+	gitHeaderBtnGap = 6.0  // gap between the two header buttons
+	gitStageAllBtnW = 50.0 // "Stage All" toggle width
+	gitUnstageBtnW  = 50.0 // "Unstage" button width
+)
+
+// headerUnstageRect returns the [x0, x1) span of the header "Unstage" button
+// for a widget of width w.
+func headerUnstageRect(w float64) (x0, x1 float64) {
+	x1 = w - gitHeaderPad
+	x0 = x1 - gitUnstageBtnW
+	return
+}
+
+// headerStageAllRect returns the [x0, x1) span of the header "Stage All"
+// toggle, sitting just left of the Unstage button.
+func headerStageAllRect(w float64) (x0, x1 float64) {
+	ux0, _ := headerUnstageRect(w)
+	x1 = ux0 - gitHeaderBtnGap
+	x0 = x1 - gitStageAllBtnW
+	return
+}
+
 // Draw renders a count header followed by one row per change: a status
 // letter in its accent colour, then the path with the basename
 // emphasised and the directory dimmed.
@@ -372,6 +486,9 @@ func (this *GitChangesPanel) Draw(g paint.Painter) {
 	g.Fill()
 	g.SetBrush1(paint.Color{R: 200, G: 200, B: 210, A: 255})
 	g.DrawText1(8, fe.Ascent+4, "更改 / Changes ("+strconv.Itoa(len(this.entries))+")")
+
+	// Header action buttons on the right (Stage All toggle + Unstage).
+	this.drawHeaderButtons(g, font, w)
 
 	if len(this.entries) > 0 {
 		rh := this.rowHeight
@@ -455,6 +572,46 @@ func (this *GitChangesPanel) drawCheckbox(g paint.Painter, x, y float64, checked
 	}
 }
 
+// drawHeaderButtons paints the two right-aligned header affordances: a "Stage
+// All" toggle whose label reflects whether a click will stage every row or
+// clear the selection, and an "Unstage" button that asks the host to drop the
+// checked set from the git index. Each dims when it has nothing to act on.
+func (this *GitChangesPanel) drawHeaderButtons(g paint.Painter, font paint.Font, w float64) {
+	sx0, sx1 := headerStageAllRect(w)
+	stageLabel := "全选"
+	if this.allStaged() {
+		stageLabel = "清空"
+	}
+	this.drawHeaderButton(g, font, sx0, sx1, stageLabel, len(this.entries) > 0,
+		paint.Color{R: 70, G: 100, B: 150, A: 255})
+
+	ux0, ux1 := headerUnstageRect(w)
+	this.drawHeaderButton(g, font, ux0, ux1, "撤出", len(this.staged) > 0,
+		paint.Color{R: 135, G: 100, B: 60, A: 255})
+}
+
+// drawHeaderButton paints one header chip in [x0, x1): an accent (or muted,
+// when disabled) fill with a centred label, matching the Commit button's
+// fill-plus-centred-label idiom.
+func (this *GitChangesPanel) drawHeaderButton(g paint.Painter, font paint.Font, x0, x1 float64, label string, enabled bool, accent paint.Color) {
+	fe := font.FontExtents()
+	const m = 3.0 // vertical inset within the header band
+	if enabled {
+		g.SetBrush1(accent)
+	} else {
+		g.SetBrush1(paint.Color{R: 40, G: 44, B: 52, A: 255})
+	}
+	g.Rectangle(x0, m, x1-x0, gitChangesHeaderH-2*m)
+	g.Fill()
+	if enabled {
+		g.SetBrush1(paint.Color{R: 225, G: 232, B: 240, A: 255})
+	} else {
+		g.SetBrush1(paint.Color{R: 120, G: 128, B: 138, A: 255})
+	}
+	lw := font.TextExtents(label).Width
+	g.DrawText1(x0+(x1-x0-lw)/2, fe.Ascent+4, label)
+}
+
 // drawCommitArea paints the bottom commit band at y=top: a hairline
 // separator, the message input line (a caret + typed text when focused, a
 // dim prompt when empty), then the Commit button, tinted green and
@@ -469,31 +626,37 @@ func (this *GitChangesPanel) drawCommitArea(g paint.Painter, font paint.Font, w,
 	g.Rectangle(0, top, w, 1)
 	g.Fill()
 
-	// Message input line.
+	// Message input: one or more rows (Shift+Enter appends a body line).
 	inputY := top + 1
+	inputH := rh * float64(this.commitInputRows())
 	if this.commitFocused {
 		g.SetBrush1(paint.Color{R: 40, G: 48, B: 60, A: 255})
 	} else {
 		g.SetBrush1(paint.Color{R: 30, G: 30, B: 36, A: 255})
 	}
-	g.Rectangle(0, inputY, w, rh)
+	g.Rectangle(0, inputY, w, inputH)
 	g.Fill()
 	if this.commitMsg == "" && !this.commitFocused {
 		g.SetBrush1(paint.Color{R: 110, G: 120, B: 135, A: 255})
 		g.DrawText1(8, inputY+fe.Ascent+2, "提交信息 / commit message")
 	} else {
+		lines := strings.Split(this.commitMsg, "\n")
 		g.SetBrush1(paint.Color{R: 210, G: 210, B: 220, A: 255})
-		g.DrawText1(8, inputY+fe.Ascent+2, this.commitMsg)
+		for i, ln := range lines {
+			g.DrawText1(8, inputY+float64(i)*rh+fe.Ascent+2, ln)
+		}
 		if this.commitFocused {
-			cx := 8 + font.TextExtents(this.commitMsg).Width + 1
+			last := lines[len(lines)-1]
+			cx := 8 + font.TextExtents(last).Width + 1
+			cy := inputY + float64(len(lines)-1)*rh
 			g.SetBrush1(paint.Color{R: 150, G: 190, B: 240, A: 255})
-			g.Rectangle(cx, inputY+3, 1.5, rh-6)
+			g.Rectangle(cx, cy+3, 1.5, rh-6)
 			g.Fill()
 		}
 	}
 
-	// Commit button.
-	btnY := inputY + rh
+	// Commit button below the (possibly multi-row) input.
+	btnY := inputY + inputH
 	n := len(this.staged)
 	enabled := n > 0 && strings.TrimSpace(this.commitMsg) != ""
 	if enabled {
@@ -524,11 +687,18 @@ func splitPathLabel(label string) (dir, base string) {
 
 // --- Commit band geometry ---
 
-// commitBandHeight is the pixel height reserved at the bottom for the
-// commit area: the message input line plus the Commit button (each one
-// row tall) and a 1px separator on top.
+// commitInputRows is the number of text rows the commit message input
+// occupies — one per line of commitMsg (a blank message still gets one row).
+// Lets the input grow as Shift+Enter appends body lines.
+func (this *GitChangesPanel) commitInputRows() int {
+	return strings.Count(this.commitMsg, "\n") + 1
+}
+
+// commitBandHeight is the pixel height reserved at the bottom for the commit
+// area: the message input (commitInputRows rows) plus the Commit button (one
+// row) and a 1px separator on top. It grows as the message gains body lines.
 func (this *GitChangesPanel) commitBandHeight() float64 {
-	return this.rowHeight*2 + 1
+	return this.rowHeight*float64(this.commitInputRows()+1) + 1
 }
 
 // commitBand returns the y where the commit band starts and whether it is
@@ -550,7 +720,7 @@ func (this *GitChangesPanel) commitInputAt(y float64) bool {
 		return false
 	}
 	inputY := top + 1
-	return y >= inputY && y < inputY+this.rowHeight
+	return y >= inputY && y < inputY+this.rowHeight*float64(this.commitInputRows())
 }
 
 // commitButtonAt reports whether y lands on the Commit button (the row
@@ -560,7 +730,7 @@ func (this *GitChangesPanel) commitButtonAt(y float64) bool {
 	if !ok {
 		return false
 	}
-	btnY := top + 1 + this.rowHeight
+	btnY := top + 1 + this.rowHeight*float64(this.commitInputRows())
 	return y >= btnY && y < btnY+this.rowHeight
 }
 
@@ -597,6 +767,20 @@ func (this *GitChangesPanel) submitCommit() {
 	}
 }
 
+// onCommitEnter handles the Enter key while the commit input is focused:
+// Shift+Enter appends a newline so the message can grow a body, plain Enter
+// submits. Split out of OnKeyDown because the shift-gated branch cannot be
+// exercised through OnKeyDown headlessly — gui.IsKeyDown polls live window
+// state — so tests drive this helper with an explicit shift flag.
+func (this *GitChangesPanel) onCommitEnter(shift bool) {
+	if shift {
+		this.commitMsg += "\n"
+		this.Self().Update()
+		return
+	}
+	this.submitCommit()
+}
+
 // --- Events ---
 
 // OnLeftDown routes a click. The bottom commit band takes it first: the
@@ -620,6 +804,18 @@ func (this *GitChangesPanel) OnLeftDown(x, y float64) {
 	}
 	// Any other click blurs the message input.
 	this.focusCommit(false)
+
+	// Header action buttons (Stage All toggle, Unstage) take clicks in the
+	// header band.
+	if y < gitChangesHeaderH {
+		w, _ := this.Size()
+		if x0, x1 := headerStageAllRect(w); x >= x0 && x < x1 {
+			this.toggleStageAll()
+		} else if x0, x1 := headerUnstageRect(w); x >= x0 && x < x1 {
+			this.requestUnstage()
+		}
+		return
+	}
 
 	idx := this.rowAt(y)
 	if idx < 0 || idx >= len(this.entries) {
@@ -659,7 +855,8 @@ func (this *GitChangesPanel) OnKeyDown(key int, repeat bool) {
 	}
 	switch key {
 	case gui.KeyEnter:
-		this.submitCommit()
+		// Shift+Enter inserts a newline (multi-line body); plain Enter submits.
+		this.onCommitEnter(gui.IsKeyDown(gui.KeyShift))
 	case gui.KeyEsc:
 		this.focusCommit(false)
 	case gui.KeyBackSpace:

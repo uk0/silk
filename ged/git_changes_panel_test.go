@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"silk/core"
+	"silk/gui"
 	"silk/paint"
 )
 
@@ -386,5 +387,112 @@ func TestGitChangesSubmitCommitNoop(t *testing.T) {
 	p2.submitCommit()
 	if fired2 {
 		t.Error("SigCommit fired with zero staged paths, want no-op")
+	}
+}
+
+// TestGitChangesStageAll checks StageAll checks every current entry's path in
+// the local commit-selection set, and is a no-op on an empty change list.
+func TestGitChangesStageAll(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetEntries(sampleEntries())
+
+	p.StageAll()
+	got := p.StagedPaths()
+	want := []string{"core/git2.go", "ged/new-file.go", "gui/widget.go", "scratch.txt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("after StageAll StagedPaths() = %v, want %v (every entry's path)", got, want)
+	}
+
+	empty := NewGitChangesPanel()
+	empty.StageAll()
+	if got := empty.StagedPaths(); len(got) != 0 {
+		t.Errorf("StageAll on empty panel staged %v, want empty", got)
+	}
+}
+
+// TestGitChangesUnstageAll checks UnstageAll empties the staged set.
+func TestGitChangesUnstageAll(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetEntries(sampleEntries())
+	p.StageAll()
+	if len(p.StagedPaths()) == 0 {
+		t.Fatal("precondition: StageAll should have staged every entry")
+	}
+
+	p.UnstageAll()
+	if got := p.StagedPaths(); len(got) != 0 {
+		t.Errorf("after UnstageAll StagedPaths() = %v, want empty", got)
+	}
+}
+
+// TestGitChangesSigUnstageRequested checks the header "Unstage" signal fires
+// with the currently-checked set (lexical order) and is a no-op when nothing
+// is checked — the host only ever gets a runnable request.
+func TestGitChangesSigUnstageRequested(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetEntries(sampleEntries())
+	p.SetStaged("gui/widget.go", true)
+	p.SetStaged("scratch.txt", true)
+
+	var got []string
+	fired := 0
+	p.SigUnstageRequested(func(paths []string) {
+		fired++
+		got = paths
+	})
+
+	p.requestUnstage()
+	if fired != 1 {
+		t.Fatalf("SigUnstageRequested fired %d times, want 1", fired)
+	}
+	if want := []string{"gui/widget.go", "scratch.txt"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unstage paths = %v, want %v (checked set, lexical)", got, want)
+	}
+
+	p.ClearStaged()
+	fired = 0
+	p.requestUnstage()
+	if fired != 0 {
+		t.Errorf("SigUnstageRequested fired %d times on empty checked set, want 0", fired)
+	}
+}
+
+// TestGitChangesCommitMultiline checks Shift+Enter inserts a newline into the
+// commit input (building a subject + body) and plain Enter submits a message
+// carrying the whole multi-line body. onCommitEnter is driven directly for the
+// Shift branch because IsKeyDown polls live window state; the plain-Enter
+// submit goes through OnKeyDown to exercise the real wiring.
+func TestGitChangesCommitMultiline(t *testing.T) {
+	p := NewGitChangesPanel()
+	p.SetStaged("a.go", true)
+	p.commitFocused = true
+
+	p.OnTextInput("subject line")
+	p.onCommitEnter(true) // Shift+Enter -> newline
+	p.onCommitEnter(true) // Shift+Enter -> blank line before the body
+	p.OnTextInput("body paragraph")
+
+	want := "subject line\n\nbody paragraph"
+	if p.commitMsg != want {
+		t.Fatalf("commitMsg = %q, want %q", p.commitMsg, want)
+	}
+
+	var gotMsg string
+	fired := 0
+	p.SigCommit(func(m string, _ []string) {
+		fired++
+		gotMsg = m
+	})
+
+	// Plain Enter (no Shift held: IsKeyDown is false headless) submits.
+	p.OnKeyDown(gui.KeyEnter, false)
+	if fired != 1 {
+		t.Fatalf("SigCommit fired %d times on Enter, want 1", fired)
+	}
+	if gotMsg != want {
+		t.Errorf("committed message = %q, want %q (subject+body)", gotMsg, want)
+	}
+	if p.commitMsg != "" {
+		t.Errorf("commitMsg after submit = %q, want empty", p.commitMsg)
 	}
 }
