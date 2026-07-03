@@ -85,6 +85,11 @@ func main() {
 	// through to GedScene.OpenFile / Save without the global plumbing
 	// SuggestDocDock would otherwise force.
 	editorTabs, designCanvas := buildPanels(frame)
+	// Bridge core's log stream into the bottom-dock Log panel now that
+	// buildPanels has constructed it — registered before the background
+	// refreshes below kick off so their core.Warn failures land in the
+	// pane rather than only on stderr.
+	installCoreLogSink()
 	// Kick off the initial `go list -json` walk on a goroutine so the
 	// frame keeps painting while it runs. globalPackages.SetPackages
 	// is goroutine-safe enough for our purposes (single writer, panel
@@ -1502,8 +1507,9 @@ var globalTestResults *ged.TestResultsPanel
 // tab of Terminal / BuildOutput / Problems / TestResults. Where
 // BuildOutput is the raw toolchain stream, this pane records silkide's
 // own lifecycle events (file opens, build start/finish, debugger and
-// gopls up/down). Fed exclusively through logEvent so call sites stay
-// one-liners and safe before the panel exists.
+// gopls up/down) via logEvent, plus core's own log stream (core.Warn /
+// core.Error / ...) via the installCoreLogSink bridge. Both feeds are
+// nil-safe before the panel exists.
 var globalLog *ged.LogPanel
 
 // logEvent appends one runtime-log line to globalLog. nil-safe so
@@ -1516,6 +1522,51 @@ func logEvent(level ged.LogLevel, msg string) {
 		return
 	}
 	globalLog.Append(level, msg)
+}
+
+// coreLevelToGed maps core's log levels onto the LogPanel's enum. The
+// two scales are parallel today, but an explicit switch (rather than a
+// numeric cast) keeps the bridge honest if either side ever grows a
+// level. Unknown levels read as info — a wrong badge beats a dropped
+// line.
+func coreLevelToGed(l core.LogLevel) ged.LogLevel {
+	switch l {
+	case core.LevelDebug:
+		return ged.LogDebug
+	case core.LevelInfo:
+		return ged.LogInfo
+	case core.LevelWarn:
+		return ged.LogWarn
+	case core.LevelError:
+		return ged.LogError
+	}
+	return ged.LogInfo
+}
+
+// installCoreLogSink subscribes the Log panel to core's log stream
+// (core.Log / Logf / Debug / Trace / Warn / Error), closing the "future
+// commit will plumb core.Log here" note in ged/log-panel.go. Without it
+// core.Warn / core.Error from the background goroutines (LSP, dlv, git
+// refreshes) only ever reach stderr, never the pane.
+//
+// The sink fires on whatever goroutine emitted the log line, so it
+// marshals onto the main thread via gui.Post — LogPanel.Append mutates
+// panel state and requests a repaint. Append never calls back into
+// core's log functions, so the bridge cannot feed back into itself.
+// The unregister handle is deliberately dropped: the panel lives as
+// long as the process. Coexists with logEvent, which records silkide's
+// own lifecycle events directly.
+func installCoreLogSink() {
+	if globalLog == nil {
+		return
+	}
+	core.RegisterLogSink(func(level core.LogLevel, message string) {
+		gui.Post(func() {
+			if globalLog != nil {
+				globalLog.Append(coreLevelToGed(level), message)
+			}
+		})
+	})
 }
 
 // coverageTempFile is the path of the cover profile written by the most
@@ -2720,6 +2771,11 @@ func saveActiveEditorToDisk(tabs *gui.TabWidget) bool {
 		return false
 	}
 	silkideToast(i18n.Tf("Saved %s", filepath.Base(path)), gui.ToastSuccess)
+	// A successful save changes `git status` output; re-pull it so the
+	// Changes panel shows the just-saved file without a manual refresh.
+	// globalCanvas resolves the same projectDir the panel's other feeds
+	// use, and refreshGitChanges is nil-safe before the panel exists.
+	refreshGitChanges(globalCanvas)
 	return true
 }
 
