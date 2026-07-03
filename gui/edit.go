@@ -55,6 +55,18 @@ type Edit struct {
 	// keep typing toward a valid value.
 	validator Validator
 
+	// valid caches the last classification of the buffer: true when no
+	// validator is installed or the text is Acceptable, false for
+	// Intermediate / Invalid. revalidate() keeps it fresh on every text
+	// mutation and on SetValidator; it drives the error border in Draw and
+	// IsValid() without re-running the validator each frame.
+	valid bool
+
+	// validationError holds the human-readable reason the field is invalid,
+	// sourced from the validator's ErrorMessage (when it implements
+	// ErrorMessager) or a generic fallback. Empty while valid.
+	validationError string
+
 	// completer, when non-nil, refreshes its Suggestions list on every
 	// keystroke so the host (or an attached popup) can render the
 	// current candidate set. The Edit itself does not draw a popup — a
@@ -89,6 +101,9 @@ func NewEdit() *Edit {
 func (this *Edit) Init(iw IWidget) {
 	this.ScrollArea.Init(iw)
 	this.padding = Theme().EditPadding
+	// Valid until a validator proves otherwise; keeps the error border off
+	// for the common no-validator case regardless of field zero values.
+	this.valid = true
 }
 
 func (this *Edit) Draw(g paint.Painter) {
@@ -109,8 +124,14 @@ func (this *Edit) Draw(g paint.Painter) {
 	g.Fill()
 
 	if !this.noFrame {
-		Theme().DrawEditFrame(g, 0, 0, this.w, this.h,
-			iw.HasFocus(), iw.IsHover(), this.readonly)
+		if this.validator != nil && !this.valid {
+			// Text fails its validator: draw the frame in error red instead
+			// of the normal focus/hover/border accents.
+			this.drawErrorFrame(g)
+		} else {
+			Theme().DrawEditFrame(g, 0, 0, this.w, this.h,
+				iw.HasFocus(), iw.IsHover(), this.readonly)
+		}
 	}
 
 	t := Theme()
@@ -225,6 +246,25 @@ func (this *Edit) Draw(g paint.Painter) {
 			g.DrawGlyphs(gs)
 		}
 	}
+}
+
+// errorFrameColor is the border colour drawn around an Edit whose text
+// fails its validator. No theme slot exists for an error colour, so we use
+// a fixed red-500 matching the theme's tailwind-derived palette (cf. the
+// blue-300 hover accent in DrawEditFrame) rather than reach into theme.go.
+var errorFrameColor = paint.Color{239, 68, 68, 255} // tailwind red-500
+
+// drawErrorFrame paints the Edit's rounded border in errorFrameColor using
+// the same geometry Theme().DrawEditFrame uses, so an invalid field reads
+// as a red-outlined version of the normal frame. Focus / hover accents are
+// intentionally dropped — the error state takes visual priority.
+func (this *Edit) drawErrorFrame(g paint.Painter) {
+	radius := 4.0
+	roundedRect(g, 0, 0, this.w, this.h, radius)
+	g.SetBrush1(paint.Color{255, 255, 255, 255})
+	g.FillPreserve()
+	g.SetPen1(errorFrameColor, 2)
+	g.Stroke()
 }
 
 func (this *Edit) OnMouseEnter() {
@@ -1089,6 +1129,7 @@ func (this *Edit) replace(begin, end int, s string) (caret int, old string) {
 	this.sel0, this.sel1 = caret, caret
 	this.Layout()
 	this.ScrollToCaret()
+	this.revalidate()
 	return
 }
 
@@ -1102,6 +1143,7 @@ func (this *Edit) SetText(s string) {
 	this.TextBlock.SetText(s)
 	this.emitChanged()
 	this.Layout()
+	this.revalidate()
 }
 
 // SetValidator installs (or clears, when nil) the input validator. The
@@ -1110,6 +1152,9 @@ func (this *Edit) SetText(s string) {
 // retroactively reject the current value, matching Qt's behaviour.
 func (this *Edit) SetValidator(v Validator) {
 	this.validator = v
+	// Reclassify the current text against the new validator so IsValid() /
+	// the error border reflect it immediately, before any further edit.
+	this.revalidate()
 }
 
 // Validator returns the currently installed validator, or nil when no
@@ -1150,6 +1195,72 @@ func (this *Edit) ValidatorFixup() {
 	this.TextBlock.SetText(fixed)
 	this.emitChanged()
 	this.Layout()
+	this.revalidate()
+}
+
+// revalidate reclassifies the current buffer against the installed
+// validator and refreshes the cached valid / validationError fields. A nil
+// validator means "always valid" (free-form text). Called after every text
+// mutation (replace, SetText, ValidatorFixup) and when a validator is
+// installed, so IsValid() and the error border never read a stale result.
+// Pure state — no GL side effects, safe on headless paths.
+func (this *Edit) revalidate() {
+	if this.validator == nil {
+		this.valid = true
+		this.validationError = ""
+		return
+	}
+	text := this.Text()
+	if this.validator.Validate(text) == Acceptable {
+		this.valid = true
+		this.validationError = ""
+		return
+	}
+	this.valid = false
+	if m, ok := this.validator.(ErrorMessager); ok {
+		this.validationError = m.ErrorMessage(text)
+	} else {
+		this.validationError = "invalid input"
+	}
+}
+
+// IsValid reports whether the current text satisfies the installed
+// validator. True when no validator is installed (free-form text is always
+// valid) or the text is Acceptable; false for Intermediate / Invalid. Reads
+// the cached result — O(1), no re-validation. A form gates its Submit
+// button on this via AllValid.
+func (this *Edit) IsValid() bool {
+	if this.validator == nil {
+		return true
+	}
+	return this.valid
+}
+
+// ValidationError returns the human-readable reason the field is invalid,
+// or "" when the field is valid or has no validator. Populated from the
+// validator's ErrorMessage when it implements ErrorMessager, else a generic
+// "invalid input". Hosts render it beside the field or via ShowToolTip.
+func (this *Edit) ValidationError() string {
+	if this.validator == nil {
+		return ""
+	}
+	return this.validationError
+}
+
+// AllValid reports whether every supplied Edit currently satisfies its
+// validator (see Edit.IsValid). A submit handler calls it to gate a form:
+// keep OK disabled until AllValid(fields...) is true. Nil entries are
+// skipped so callers may pass a sparse slice; zero edits → true.
+func AllValid(edits ...*Edit) bool {
+	for _, e := range edits {
+		if e == nil {
+			continue
+		}
+		if !e.IsValid() {
+			return false
+		}
+	}
+	return true
 }
 
 func (this *Edit) SetFont(font paint.Font) {

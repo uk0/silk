@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -341,4 +342,119 @@ func (v *RegExpValidator) Validate(input string) State {
 	}
 
 	return Invalid
+}
+
+// --- ErrorMessager ---------------------------------------------------
+//
+// ErrorMessager is the optional companion to Validator (sibling of
+// Fixupper): it supplies a human-readable reason when Validate returns a
+// non-Acceptable state. Edit detects it via type assertion and stores the
+// message in Edit.ValidationError() so a form can tell the user *why* a
+// field is rejected. Classify-only validators (Int / Double / RegExp) omit
+// it; Edit then falls back to a generic message.
+type ErrorMessager interface {
+	// ErrorMessage returns the reason input is not Acceptable, or "" when
+	// input is in fact Acceptable. Edit calls it only for non-Acceptable
+	// input.
+	ErrorMessage(input string) string
+}
+
+// --- RequiredValidator ----------------------------------------------
+//
+// RequiredValidator rejects empty (whitespace-only) input. It deliberately
+// never returns Invalid: an empty value must stay typable and
+// programmatically settable so the user can clear the field and a form
+// reset works. Empty is therefore Intermediate ("allowed in the buffer but
+// not submittable"); non-empty is Acceptable. A required field is thus a
+// submit-gate plus red-border affordance, not a keystroke filter.
+type RequiredValidator struct {
+	// Message overrides the default "this field is required" text returned
+	// by ErrorMessage. Leave empty for the default.
+	Message string
+}
+
+// Validate: whitespace-only input is Intermediate, anything else is
+// Acceptable.
+func (v *RequiredValidator) Validate(input string) State {
+	if strings.TrimSpace(input) == "" {
+		return Intermediate
+	}
+	return Acceptable
+}
+
+// ErrorMessage returns the required-field message for empty input, or ""
+// once the field carries a value.
+func (v *RequiredValidator) ErrorMessage(input string) string {
+	if strings.TrimSpace(input) != "" {
+		return ""
+	}
+	if v.Message != "" {
+		return v.Message
+	}
+	return "this field is required"
+}
+
+// --- ValidatorFunc --------------------------------------------------
+//
+// ValidatorFunc adapts an ordinary func(string) error into a Validator so
+// callers can express one-off rules ("must contain @", "must equal the
+// confirm-password field") without declaring a type. A nil error is
+// Acceptable; a non-nil error is Intermediate — NOT Invalid — so a partial
+// value the user is still typing is never keystroke-dropped: the func only
+// gates submission and drives the error border. The error's text becomes
+// the ValidationError message.
+type ValidatorFunc func(input string) error
+
+// Validate runs the wrapped func: nil error → Acceptable, else Intermediate.
+func (f ValidatorFunc) Validate(input string) State {
+	if f(input) == nil {
+		return Acceptable
+	}
+	return Intermediate
+}
+
+// ErrorMessage runs the wrapped func and returns its error text, or "" when
+// the func is satisfied.
+func (f ValidatorFunc) ErrorMessage(input string) string {
+	if err := f(input); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// --- LengthValidator ------------------------------------------------
+//
+// LengthValidator constrains input to a rune-count range [Min, Max]. Below
+// Min is Intermediate (keep typing to reach the minimum); within range is
+// Acceptable; above Max is Invalid (a hard cap like maxlength — the extra
+// keystroke is dropped, since appending can only make it longer). Max <= 0
+// means no upper bound.
+type LengthValidator struct {
+	Min int
+	Max int // <= 0 means unbounded
+}
+
+// Validate classifies by rune count: below Min is Intermediate, above Max
+// is Invalid, otherwise Acceptable.
+func (v *LengthValidator) Validate(input string) State {
+	n := len([]rune(input))
+	if v.Max > 0 && n > v.Max {
+		return Invalid
+	}
+	if n < v.Min {
+		return Intermediate
+	}
+	return Acceptable
+}
+
+// ErrorMessage explains a below-Min or above-Max count, "" when in range.
+func (v *LengthValidator) ErrorMessage(input string) string {
+	n := len([]rune(input))
+	if v.Max > 0 && n > v.Max {
+		return fmt.Sprintf("must be at most %d characters", v.Max)
+	}
+	if n < v.Min {
+		return fmt.Sprintf("must be at least %d characters", v.Min)
+	}
+	return ""
 }
