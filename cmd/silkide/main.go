@@ -725,6 +725,34 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 				openFileInEditorAt(tabs, frame.File, frame.Line, 0)
 			}
 		})
+		// Goroutine row → open its file:line.
+		globalDebugPanel.SigGoroutineActivated(func(g core.Goroutine) {
+			if g.File == "" || g.Line <= 0 {
+				return
+			}
+			if tabs := centerEditorTabs(); tabs != nil {
+				openFileInEditorAt(tabs, g.File, g.Line, 0)
+			}
+		})
+		// Editing a local's value → dlv SetVariable, then re-fetch locals.
+		globalDebugPanel.SigVariableEdited(func(name, newValue string) {
+			sess := globalDebug
+			if sess == nil {
+				return
+			}
+			go func() {
+				if err := sess.SetVariable(name, newValue, -1, 0); err != nil {
+					gui.Post(func() { silkideToast(i18n.Tf("Set variable failed: %v", err), gui.ToastError) })
+					return
+				}
+				locals, _ := sess.ListLocals(-1, 0)
+				gui.Post(func() {
+					if globalDebugPanel != nil {
+						globalDebugPanel.SetVariables(locals)
+					}
+				})
+			}()
+		})
 		// Watch expressions: the panel emits the submitted expr (it doesn't
 		// append it itself); merge with existing exprs, evaluate against the
 		// live session (or show a placeholder when not debugging), push back.
@@ -794,6 +822,20 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 					silkideToast(i18n.Tf("Committed %s", hash), gui.ToastSuccess)
 					refreshGitChanges(designCanvas)
 				})
+			}()
+		})
+		// Unstage from the git index (git reset HEAD) for the checked set.
+		globalGitChanges.SigUnstageRequested(func(paths []string) {
+			dir := projectDir(designCanvas)
+			if dir == "" || len(paths) == 0 {
+				return
+			}
+			go func() {
+				if err := core.GitUnstage(dir, paths); err != nil {
+					gui.Post(func() { silkideToast(i18n.Tf("Unstage failed: %v", err), gui.ToastError) })
+					return
+				}
+				gui.Post(func() { refreshGitChanges(designCanvas) })
 			}()
 		})
 		bottomDock.AddView(globalGitChanges)
@@ -912,12 +954,39 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) {
 			for p, e := range openEditors {
 				if e == ed {
 					delete(openEditors, p)
+					lspDidCloseFile(p) // tell gopls + drop diag/version state
 					break
 				}
 			}
 		}
 	}
 	tabs.RemoveTab(idx)
+}
+
+// lspDidCloseFile notifies gopls a document closed and drops its client-side
+// state (version + diagnostics), so gopls doesn't keep a ghost document and
+// the Problems panel doesn't show a closed file's stale entries.
+func lspDidCloseFile(path string) {
+	if !isGoFile(path) {
+		return
+	}
+	delete(lspVersions, path)
+	if _, had := lspDiagnostics[path]; had {
+		delete(lspDiagnostics, path)
+		if globalProblems != nil {
+			var all []ged.Problem
+			for _, ps := range lspDiagnostics {
+				all = append(all, ps...)
+			}
+			globalProblems.SetProblems(all)
+		}
+	}
+	if globalLSP == nil {
+		return
+	}
+	lsp := globalLSP
+	uri := fileURIOf(path)
+	go func() { _ = lsp.DidClose(uri) }()
 }
 
 // makeCodeEditor seeds a CodeEditor with the given text. The editor
@@ -1149,7 +1218,13 @@ func refreshPackages(canvas *ged.GedView) {
 			core.Warn("silkide: go list -json failed in", dir, ":", err)
 			return
 		}
-		globalPackages.SetPackages(pkgs)
+		// gui.Post: SetPackages mutates the panel; must run on the main thread
+		// (the rest of the panel feeds already do this — this was the one miss).
+		gui.Post(func() {
+			if globalPackages != nil {
+				globalPackages.SetPackages(pkgs)
+			}
+		})
 	}()
 }
 
@@ -2463,43 +2538,45 @@ func showDiffVsHEAD(tabs *gui.TabWidget, canvas *ged.GedView) {
 	}
 	logEvent(ged.LogInfo, "Diff vs HEAD: "+rel)
 
-	cmd := exec.Command("git", "diff", "HEAD", "--", rel)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		silkideToast(i18n.T("git diff failed (not a repo?)"), gui.ToastError)
-		return
-	}
-	if strings.TrimSpace(string(out)) == "" {
-		silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo)
-		return
-	}
-	files, parseErr := core.ParseUnifiedDiff(string(out))
-	if parseErr != nil {
-		core.Warn("silkide: parse git diff: ", parseErr)
-	}
-	if len(files) == 0 {
-		silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo)
-		return
-	}
-	oldLines, newLines := diffOldNewFromHunks(files[0].Hunks)
-
-	parent := gui.IWidget(globalFrame)
-	if parent == nil {
-		parent = gui.DefaultFrame()
-	}
-	dlg := gui.NewDialog(i18n.Tf("Diff vs HEAD: %s", filepath.Base(path)), parent)
-	dv := gui.NewDiffView()
-	dv.SetTexts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"))
-	box := gui.NewVBox()
-	box.SetSpacing(0)
-	box.AddWidget(dv)
-	dlg.SetContent(box)
-	dlg.AddButton(i18n.T("Close"), gui.DialogOK)
-	dlg.SetSize(820, 560)
-	dlg.ShowModal()
+	// Run git off the UI thread (it can block on credentials / a big repo);
+	// use core.GitDiffFile instead of a raw exec, then build the DiffView on
+	// the main thread via gui.Post.
+	go func() {
+		out, err := core.GitDiffFile(dir, rel)
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.T("git diff failed (not a repo?)"), gui.ToastError) })
+			return
+		}
+		if strings.TrimSpace(out) == "" {
+			gui.Post(func() { silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo) })
+			return
+		}
+		files, parseErr := core.ParseUnifiedDiff(out)
+		if parseErr != nil {
+			core.Warn("silkide: parse git diff: ", parseErr)
+		}
+		if len(files) == 0 {
+			gui.Post(func() { silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo) })
+			return
+		}
+		oldLines, newLines := diffOldNewFromHunks(files[0].Hunks)
+		gui.Post(func() {
+			parent := gui.IWidget(globalFrame)
+			if parent == nil {
+				parent = gui.DefaultFrame()
+			}
+			dlg := gui.NewDialog(i18n.Tf("Diff vs HEAD: %s", filepath.Base(path)), parent)
+			dv := gui.NewDiffView()
+			dv.SetTexts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"))
+			box := gui.NewVBox()
+			box.SetSpacing(0)
+			box.AddWidget(dv)
+			dlg.SetContent(box)
+			dlg.AddButton(i18n.T("Close"), gui.DialogOK)
+			dlg.SetSize(820, 560)
+			dlg.ShowModal()
+		})
+	}()
 }
 
 // escapeTestRunRegex escapes the regex metacharacters in a Go test
@@ -3318,10 +3395,12 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 	// global — stopDebugger may nil globalDebug concurrently on the main thread.
 	frames, _ := sess.Stacktrace(-1, 50)
 	locals, _ := sess.ListLocals(-1, 0)
+	goroutines, _ := sess.ListGoroutines()
 	gui.Post(func() {
 		if globalDebugPanel != nil {
 			globalDebugPanel.SetCallStack(frames)
 			globalDebugPanel.SetVariables(locals)
+			globalDebugPanel.SetGoroutines(goroutines)
 			dockSetActiveView(globalBottomDock, globalDebugPanel)
 			// Refresh watch values for this stop: read exprs on the main
 			// thread (panel state), Eval off-thread, push back via Post.
@@ -3345,6 +3424,28 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 			}
 		}
 	})
+}
+
+// restartDebug restarts the debuggee from the beginning (dlv restart keeps
+// breakpoints) and continues to the first stop. Palette "Restart Debug".
+func restartDebug() {
+	sess := globalDebug
+	if sess == nil {
+		silkideToast(i18n.T("No debug session"), gui.ToastWarning)
+		return
+	}
+	go func() {
+		if err := sess.Restart(); err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("Restart failed: %v", err), gui.ToastError) })
+			return
+		}
+		st, err := sess.Continue()
+		if err != nil {
+			gui.Post(func() { silkideToast(i18n.Tf("Debugger error: %v", err), gui.ToastError) })
+			return
+		}
+		debugHandleStop(sess, st)
+	}()
 }
 
 // debugContinue resumes a live dlv session to the next stop. Bound to

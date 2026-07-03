@@ -74,6 +74,7 @@ func (c *LSPClient) writeFrame(m *LSPMessage) error {
 //     力当 false 处理 (我们不消费 hover/completion 的高级 markdown 形态,
 //     纯文本路径足够);
 //   - rootUri 强烈建议给 (gopls 会在这个目录里扫包索引).
+//
 // 因此把这里只暴露 ProcessID + RootURI, 调用方需要更精细形状时可绕过
 // Initialize, 直接 SendRequest("initialize", customParams) + 手发
 // "initialized" notification.
@@ -92,6 +93,7 @@ const defaultRequestTimeout = 10 * time.Second
 //   - cmd.Stdin   <- 我们写 (请求/通知)
 //   - cmd.Stdout  -> 我们读 (响应/服务器通知)
 //   - cmd.Stderr  -> 我们 drain (日志, 防止满管道导致服务器卡住)
+//
 // 读循环作为 goroutine 在返回前就跑起来; 任何启动错误都会清理子进程后回报.
 func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 	if serverCmd == "" {
@@ -149,6 +151,7 @@ func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 //   - 有 ID + (Result 或 Error)  -> 对应 pending chan
 //   - 无 ID + Method != ""       -> notifications chan
 //   - 其它                       -> drop + 日志
+//
 // EOF / 读错误 时退出循环: fail 掉所有 pending, close notifications (本循环是
 // 它唯一的发送方), 最后关闭 done, 让 Close 知道读端已停.
 func (c *LSPClient) readLoop() {
@@ -187,6 +190,7 @@ func (c *LSPClient) readLoop() {
 //   - 通知 (无 ID, 有 Method): 非阻塞推到 notif (满了就丢, 避免拖死读循环)
 //   - 其它 (服务器发的 request -- LSP 允许, 例如 workspace/configuration):
 //     当前实现不回, 静默丢弃; 未来需要时再加 server->client request 路由.
+//
 // 注意:
 //   - 我们只识别数字 ID (NewRequest 总是写数字, 自洽).
 //   - pending map 里的 channel 是 buffered=1, 不会阻塞读循环.
@@ -268,8 +272,9 @@ func drainStderr(r io.ReadCloser) {
 
 // Initialize 走 LSP 规范的 initialize -> initialized 握手
 // 流程:
-//   1. SendRequest("initialize", params)  阻塞等响应
-//   2. 拿到 Result 之后立刻发 "initialized" notification (规范要求)
+//  1. SendRequest("initialize", params)  阻塞等响应
+//  2. 拿到 Result 之后立刻发 "initialized" notification (规范要求)
+//
 // 返回的是 initialize 响应里的原始 Result (包含 server capabilities 等),
 // 调用方按需 json.Unmarshal 到自己关心的结构上.
 func (c *LSPClient) Initialize(params LSPInitializeParams) (json.RawMessage, error) {
@@ -292,6 +297,7 @@ func (c *LSPClient) Initialize(params LSPInitializeParams) (json.RawMessage, err
 // 串行/并发都安全. 默认 10s 超时, 超时后:
 //   - 把 pending[id] 清掉, 防止读循环之后误送到一个无人监听的 chan
 //   - 返回 context-deadline 风格错误
+//
 // 不取消子进程: 单条请求超时不应该直接撕掉整个会话, 上层若决定终止, 自行 Close.
 func (c *LSPClient) SendRequest(method string, params interface{}) (*LSPMessage, error) {
 	if method == "" {
@@ -391,6 +397,20 @@ func (c *LSPClient) DidOpen(uri, languageID, text string, version int) error {
 	})
 }
 
+// DidClose 发 textDocument/didClose, 告诉服务器某文档已关闭. 不发的话 gopls
+// 会一直持有该文档 (过期 version + 诊断), 每关一个 tab 泄漏一份幽灵文档.
+func (c *LSPClient) DidClose(uri string) error {
+	type textDocument struct {
+		URI string `json:"uri"`
+	}
+	type params struct {
+		TextDocument textDocument `json:"textDocument"`
+	}
+	return c.SendNotification("textDocument/didClose", params{
+		TextDocument: textDocument{URI: uri},
+	})
+}
+
 // -----------------------------------------------------------------------------
 // 典型 IDE 操作的类型化便利封装
 // -----------------------------------------------------------------------------
@@ -464,6 +484,7 @@ func textDocumentPositionParams(uri string, line, character int) map[string]inte
 // gopls 在两种合法响应形状之间任意切换:
 //   - CompletionList: {"isIncomplete": bool, "items": []CompletionItem}
 //   - 直接的 []CompletionItem
+//
 // 这里都接住: 先按 CompletionList 解, items 非空就用; 否则当裸数组解.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) Completion(uri string, line, character int) ([]LSPCompletionItem, error) {
@@ -495,6 +516,7 @@ func (c *LSPClient) Completion(uri string, line, character int) ([]LSPCompletion
 //   - 字符串                               -> 直接用
 //   - MarkupContent{kind, value}           -> 取 value (gopls 默认走这个)
 //   - 数组 (string 或 MarkedString)        -> 用 "\n" join
+//
 // 服务器返回 null (光标位置没有可悬停信息) 时, 返回 (nil, nil), 不当错误.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) Hover(uri string, line, character int) (*LSPHover, error) {
@@ -523,9 +545,11 @@ func (c *LSPClient) Hover(uri string, line, character int) (*LSPHover, error) {
 
 // stringifyHoverContents 把 hover.contents 的三种规范形态都压成一段字符串
 // 解码顺序基于 JSON 第一个非空白字节:
-//   "  -> string 形态
-//   {  -> MarkupContent / MarkedString 对象形态
-//   [  -> 数组形态 (string 或 MarkedString 混排)
+//
+//	"  -> string 形态
+//	{  -> MarkupContent / MarkedString 对象形态
+//	[  -> 数组形态 (string 或 MarkedString 混排)
+//
 // 任何一种都不动 caller, 失败时 raw 原样返回上层做诊断.
 func stringifyHoverContents(raw json.RawMessage) (string, error) {
 	trimmed := bytes.TrimSpace(raw)
@@ -571,6 +595,7 @@ func stringifyHoverContents(raw json.RawMessage) (string, error) {
 // 规范允许 server 在两种形态间任选:
 //   - 单个 Location 对象
 //   - []Location (gopls 在跨实例 / 嵌入 / 接口实现处会用这个)
+//
 // null 表示没找到定义, 返回 (nil, nil), 上层照空切片处理即可.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) Definition(uri string, line, character int) ([]LSPLocation, error) {
@@ -653,11 +678,12 @@ type LSPSignatureHelp struct {
 // params 只要 {textDocument:{uri}}, 没有 position. 响应形状由 server 能力决定,
 // 规范允许两种, gopls 走前者:
 //   - hierarchical []DocumentSymbol:
-//       {name, detail, kind, range, selectionRange, children []DocumentSymbol}
+//     {name, detail, kind, range, selectionRange, children []DocumentSymbol}
 //     -- 嵌套, 有 range/selectionRange, *没有* 顶层 location
 //   - legacy []SymbolInformation (扁平):
-//       {name, kind, location:{uri, range}, containerName}
+//     {name, kind, location:{uri, range}, containerName}
 //     -- 没有 children, 位置藏在 location.range 里
+//
 // 区分手段: 探测数组里第一个元素有没有 "location" 字段. 有 -> SymbolInformation,
 // 否则当 DocumentSymbol (它用 range/selectionRange, 没有顶层 location). 两种都
 // 拿不准时偏向 DocumentSymbol -- 它是现代 server 的默认, 也是 gopls 的形态.
@@ -780,6 +806,7 @@ type LSPWorkspaceSymbol struct {
 //     -- location 是完整 Location, 带 range
 //   - 现代 WorkspaceSymbol:      {name, kind, containerName, location:{uri}}
 //     -- location 可能只带 uri, range 省略 (真要坐标时 server 靠 workspaceSymbol/resolve 补)
+//
 // 两种形态塞进同一个解码结构即可: location 用 LSPLocation 收, range 缺省时 json 保持零值,
 // 于是 Line/Character 自然落到 0 -- 正是"缺 range 就默认 0"的期望, 无需特判.
 // null/空数组 -> 空切片, 不当错误; server 端错误经 SendRequest 包好后原样透出.
@@ -818,9 +845,13 @@ func (c *LSPClient) WorkspaceSymbol(query string) ([]LSPWorkspaceSymbol, error) 
 
 // SignatureHelp 请求 textDocument/signatureHelp 并压平成 LSPSignatureHelp
 // params 是跟 hover/completion 同形的 TextDocumentPositionParams. 响应:
-//   SignatureHelp{signatures []SignatureInformation, activeSignature, activeParameter}
+//
+//	SignatureHelp{signatures []SignatureInformation, activeSignature, activeParameter}
+//
 // 其中每条 SignatureInformation 的 documentation 跟 hover.contents 同样是
-//   string | MarkupContent | []MarkedString 多态, 直接复用 stringifyHoverContents.
+//
+//	string | MarkupContent | []MarkedString 多态, 直接复用 stringifyHoverContents.
+//
 // 形参 documentation 当前不暴露 (UI 只展 label), 真要时在 LSPSignature 上扩字段即可.
 // server 返回 null (光标不在调用实参里) 时返回 (nil, nil), 不当错误.
 // 受默认 10s SendRequest 超时约束.
@@ -940,6 +971,7 @@ func (c *LSPClient) Formatting(uri string) ([]LSPTextEdit, error) {
 // 响应里的 WorkspaceEdit 有两种合法形态, server 任选:
 //   - changes:         {uri: []TextEdit}            -- 简单 map 形态, 优先吃这个
 //   - documentChanges: [{textDocument:{uri}, edits:[]TextEdit}]  -- 带版本号的形态
+//
 // 处理顺序: 先看 changes, 非空就用; changes 缺省时再折叠 documentChanges
 // 到同一个 Changes map (丢掉版本号, 上层只关心 uri->edits). 两者都给时以
 // changes 为准 -- 简单形态信息无损, 不必再读版本化形态.

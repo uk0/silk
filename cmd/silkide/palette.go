@@ -112,6 +112,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			dockSetActiveView(globalBottomDock, globalDebugPanel)
 		}
 	})
+	add("Restart Debug", "", func() { restartDebug() })
 	add("Stop Debugger", "", func() { stopDebugger() })
 	add("Go to Definition", "F12", func() { goToDefinitionViaLSP(editorTabs) })
 	add("Format Document", "Cmd+Shift+I", func() { formatDocumentViaLSP(editorTabs) })
@@ -264,6 +265,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// TODO/FIXME scan — walk the project + show the marker list.
 	add("Scan TODOs", "", func() {
 		scanTodos(designCanvas)
+	})
+	// Strip trailing whitespace from every line of the active editor.
+	add("Trim Trailing Whitespace", "", func() {
+		if ed := activeEditor(editorTabs); ed != nil {
+			ed.TrimTrailingWhitespace()
+		}
 	})
 	// Git history — flip to the log panel + reload git log.
 	add("Show Git History", "", func() {
