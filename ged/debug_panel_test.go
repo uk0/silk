@@ -570,3 +570,211 @@ func TestDebugWatchWheelIsolation(t *testing.T) {
 		t.Errorf("wheel in watch band moved other sections: stack=%v var=%v", p.stackScrollY, p.varScrollY)
 	}
 }
+
+// sampleGoroutines is a small goroutine set: id / file / line / function, in
+// the shape core.DebugSession.ListGoroutines returns.
+func sampleGoroutines() []core.Goroutine {
+	return []core.Goroutine{
+		{ID: 1, File: "/proj/a.go", Line: 10, Function: "main.foo"},
+		{ID: 18, File: "/proj/b.go", Line: 20, Function: "main.bar"},
+		{ID: 42, File: "/proj/c.go", Line: 30, Function: "main.worker"},
+	}
+}
+
+// TestDebugSetGoroutinesRoundTrip verifies SetGoroutines stores the rows and
+// Goroutines() returns an equal — but independent — copy in both directions.
+func TestDebugSetGoroutinesRoundTrip(t *testing.T) {
+	p := NewDebugPanel()
+	in := sampleGoroutines()
+	p.SetGoroutines(in)
+
+	got := p.Goroutines()
+	if !reflect.DeepEqual(got, in) {
+		t.Fatalf("Goroutines() = %+v\nwant %+v", got, in)
+	}
+
+	// Mutating the returned copy must not disturb the panel's state.
+	got[0].Function = "MUTATED"
+	if p.Goroutines()[0].Function != "main.foo" {
+		t.Error("Goroutines() returned an aliasing slice, not a copy")
+	}
+	// And mutating the input after SetGoroutines must not leak in either.
+	in[0].Function = "LEAK"
+	if p.Goroutines()[0].Function != "main.foo" {
+		t.Error("SetGoroutines aliased the caller's slice instead of copying")
+	}
+}
+
+// TestDebugClearClearsGoroutines verifies Clear() empties the goroutines band
+// too (they are stop-scoped like the call stack, dropped on continue).
+func TestDebugClearClearsGoroutines(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetCallStack(sampleFrames())
+	p.SetVariables(sampleVars())
+	p.SetGoroutines(sampleGoroutines())
+
+	p.Clear()
+
+	if got := p.Goroutines(); len(got) != 0 {
+		t.Errorf("after Clear, Goroutines() = %+v, want empty", got)
+	}
+}
+
+// TestDebugGoroutineHitTest exercises the goroutine-band hit-test against the
+// known geometry at 300x400: stack [0,126), locals [126,218), goroutines
+// [218,280) with header [218,240) and rows starting at 240, watch [280,400).
+func TestDebugGoroutineHitTest(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	p.SetGoroutines(sampleGoroutines())
+
+	cases := []struct {
+		name string
+		y    float64
+		want int
+	}{
+		{"stack band", 60, -1},
+		{"locals band", 150, -1},
+		{"goroutine header", 225, -1},
+		{"row 0", 250, 0},
+		{"row 1", 270, 1},
+		{"watch band", 300, -1},
+	}
+	for _, c := range cases {
+		if got := p.goroutineRowAt(c.y); got != c.want {
+			t.Errorf("%s: goroutineRowAt(%v) = %d, want %d", c.name, c.y, got, c.want)
+		}
+	}
+}
+
+// TestDebugGoroutineClickActivates simulates a click on goroutine row 0 and
+// checks SigGoroutineActivated fires with the right goroutine (the host opens
+// its file:line). Geometry: row 0 occupies y in [240,260); click the middle.
+func TestDebugGoroutineClickActivates(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	gs := sampleGoroutines()
+	p.SetGoroutines(gs)
+
+	var (
+		got   core.Goroutine
+		fired bool
+	)
+	p.SigGoroutineActivated(func(g core.Goroutine) { got = g; fired = true })
+
+	p.OnLeftDown(10, 250)
+
+	if !fired {
+		t.Fatal("OnLeftDown on a goroutine row did not fire SigGoroutineActivated")
+	}
+	if !reflect.DeepEqual(got, gs[0]) {
+		t.Errorf("SigGoroutineActivated goroutine = %+v, want %+v", got, gs[0])
+	}
+}
+
+// TestDebugVariableEditSubmit drives the inline value editor: begin-edit on a
+// locals row seeds the input with the current value; editing then Enter fires
+// SigVariableEdited(name, newText) and leaves edit mode. The panel does NOT
+// mutate its own vars — the host owns that via dlv SetVariable + SetVariables.
+func TestDebugVariableEditSubmit(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	p.SetVariables(sampleVars()) // {i int 42} {s string hello}
+
+	var (
+		gotName string
+		gotVal  string
+		fired   bool
+	)
+	p.SigVariableEdited(func(name, newValue string) {
+		gotName = name
+		gotVal = newValue
+		fired = true
+	})
+
+	// Begin editing row 0 (i = 42): the editor seeds with the current value.
+	p.beginEditVar(0)
+	if p.editingVar != 0 {
+		t.Fatalf("editingVar = %d, want 0", p.editingVar)
+	}
+	if p.varInput != "42" {
+		t.Fatalf("varInput = %q, want seeded %q", p.varInput, "42")
+	}
+
+	// Edit the value and submit.
+	p.OnKeyDown(gui.KeyBackSpace, false) // "42" -> "4"
+	p.OnKeyDown(gui.KeyBackSpace, false) // "4"  -> ""
+	p.OnTextInput("100")
+	if p.varInput != "100" {
+		t.Fatalf("varInput = %q, want %q", p.varInput, "100")
+	}
+	p.OnKeyDown(gui.KeyEnter, false)
+
+	if !fired {
+		t.Fatal("Enter did not fire SigVariableEdited")
+	}
+	if gotName != "i" || gotVal != "100" {
+		t.Errorf("SigVariableEdited = (%q,%q), want (%q,%q)", gotName, gotVal, "i", "100")
+	}
+	if p.editingVar != -1 {
+		t.Errorf("after submit, editingVar = %d, want -1 (edit mode exited)", p.editingVar)
+	}
+	if p.varInput != "" {
+		t.Errorf("after submit, varInput = %q, want cleared", p.varInput)
+	}
+	// The value was not applied locally — the host round-trips it.
+	if p.Variables()[0].Value != "42" {
+		t.Errorf("var value changed locally to %q, want unchanged (host-driven)", p.Variables()[0].Value)
+	}
+}
+
+// TestDebugVariableEditEscCancels verifies Esc leaves the inline editor
+// without firing SigVariableEdited and clears the edit state.
+func TestDebugVariableEditEscCancels(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetVariables(sampleVars())
+
+	fired := false
+	p.SigVariableEdited(func(string, string) { fired = true })
+
+	p.beginEditVar(1) // editing s = "hello"
+	if p.varInput != "hello" {
+		t.Fatalf("varInput = %q, want seeded %q", p.varInput, "hello")
+	}
+	p.OnTextInput("X") // "helloX"
+	p.OnKeyDown(gui.KeyEsc, false)
+
+	if fired {
+		t.Error("Esc fired SigVariableEdited, want no signal on cancel")
+	}
+	if p.editingVar != -1 {
+		t.Errorf("after Esc, editingVar = %d, want -1", p.editingVar)
+	}
+	if p.varInput != "" {
+		t.Errorf("after Esc, varInput = %q, want cleared", p.varInput)
+	}
+}
+
+// TestDebugVariableDoubleClickBeginsEdit drives the UI entry point: a single
+// click on a locals row only arms the double-click, a quick second click on
+// the same row opens the inline editor seeded with that row's value.
+//
+// Geometry (300x400): locals band [126,218), header [126,148), row 0 [148,168).
+func TestDebugVariableDoubleClickBeginsEdit(t *testing.T) {
+	p := NewDebugPanel()
+	p.SetSize(300, 400)
+	p.SetVariables(sampleVars())
+
+	y := 158.0
+	p.OnLeftDown(10, y) // first click: arms the double-click, no edit yet
+	if p.editingVar != -1 {
+		t.Fatalf("single click began edit (editingVar=%d), want -1", p.editingVar)
+	}
+	p.OnLeftDown(10, y) // quick second click on the same row: begins edit
+	if p.editingVar != 0 {
+		t.Fatalf("double click did not begin edit: editingVar=%d, want 0", p.editingVar)
+	}
+	if p.varInput != "42" {
+		t.Errorf("varInput = %q, want seeded %q", p.varInput, "42")
+	}
+}
