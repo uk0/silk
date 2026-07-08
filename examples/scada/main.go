@@ -146,6 +146,7 @@ func main() {
 	trend.SetTitle("温度趋势 Temp trend (live)")
 	trend.EnableRolling("temp", 240) // 240 × 0.5s ≈ 2 min ring
 	trend.SetTimeWindow(30 * time.Second)
+	trend.SetGPUAccelerated(true) // draw the high-rate trend line via the GL fast-path
 	trend.SetParent(form)
 	trend.SetBounds(190, 375, 700, 255)
 

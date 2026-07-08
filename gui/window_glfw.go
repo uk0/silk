@@ -110,6 +110,11 @@ type Window struct {
 	pboTexH      int32
 	pboAvailable bool
 
+	// glOverlays holds per-frame GPU chart-series draw requests. Populated by
+	// GPU-mode LineCharts during the Cairo pass and drawn after the texture
+	// blit (see gl_overlay.go / gl_overlay_glfw.go).
+	glOverlays []chartOverlay
+
 	mouseEntered bool
 	autoCaptured bool
 	toCapture    bool
@@ -463,6 +468,10 @@ func (this *Window) paint() {
 		backPainter.SetOperator(paint.OpOver)
 	}
 
+	// Reset the GPU chart-overlay queue before the widget tree draws; GPU-mode
+	// charts re-enqueue their series lines this frame (drawn after the blit).
+	this.resetGLOverlays()
+
 	// Scale Cairo context: logical coords -> physical pixels.
 	// Wrap the widget tree draw in panic recovery so a single broken widget
 	// cannot crash the entire paint cycle.
@@ -545,6 +554,9 @@ func (this *Window) paint() {
 	// Draw fullscreen quad at framebuffer resolution
 	gl.Viewport(0, 0, int32(fbw), int32(fbh))
 	drawFullscreenQuadUV(this.glTexture, int32(fbw), int32(fbh), texU, texV)
+
+	// GPU chart fast-path: draw queued series line strips over the blit.
+	this.drawGLOverlays(int32(fbw), int32(fbh))
 
 	gl.Flush()
 	this.glfwWin.SwapBuffers()

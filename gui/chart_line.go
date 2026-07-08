@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
 	"math"
 	"time"
@@ -101,6 +102,7 @@ type LineChart struct {
 	gridColor  paint.Color
 	axisColor  paint.Color
 	timeWindow time.Duration // visible X span for rolling series; 0 = full buffer
+	gpuAccel   bool          // draw data series via the GL fast-path overlay
 }
 
 func init() {
@@ -190,6 +192,38 @@ func (this *LineChart) SetTimeWindow(d time.Duration) {
 // TimeWindow returns the current visible X span (0 = full buffer).
 func (this *LineChart) TimeWindow() time.Duration { return this.timeWindow }
 
+// SetGPUAccelerated toggles the GL fast-path for data series. When on (and the
+// host window supports it), the frame/grid/axes/labels still render via Cairo
+// but the data polylines are drawn as native GL line strips after the texture
+// blit — cheaper for high-rate rolling trends. Off (the default) draws the
+// series with Cairo, byte-identically to the original path.
+func (this *LineChart) SetGPUAccelerated(b bool) {
+	this.gpuAccel = b
+	this.Self().Update()
+}
+
+// GPUAccelerated reports whether the GL series fast-path is enabled.
+func (this *LineChart) GPUAccelerated() bool { return this.gpuAccel }
+
+// drawSeriesGPU enqueues the collected series polylines onto the window's GL
+// overlay, returning true when it took ownership of drawing them. It returns
+// false — leaving the caller to Cairo-stroke the same lines — when GPU mode is
+// off, there is nothing to draw, or the host window has no GL overlay path
+// (e.g. Windows), so behaviour degrades cleanly.
+func (this *LineChart) drawSeriesGPU(g paint.Painter, plot geom.Rect, lines []chartSeriesLine) bool {
+	if !this.gpuAccel || len(lines) == 0 {
+		return false
+	}
+	win := this.Window()
+	if win == nil || !win.supportsGLOverlay() {
+		return false
+	}
+	var m geom.Mat3x2
+	g.GetMatrix(&m)
+	win.enqueueChartOverlay(buildChartOverlay(m, plot, lines, 2))
+	return true
+}
+
 // ClearSeries removes all series.
 func (this *LineChart) ClearSeries() {
 	this.series = nil
@@ -249,6 +283,7 @@ func (this *LineChart) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("自动缩放", this.AutoScale, this.SetAutoScale)
 	list.AddProperty("显示网格", this.ShowGrid, this.SetShowGrid)
 	list.AddProperty("显示图例", this.ShowLegend, this.SetShowLegend)
+	list.AddProperty("GPU加速", this.GPUAccelerated, this.SetGPUAccelerated)
 }
 
 // recalcScale recomputes minY/maxY from all series data.
@@ -425,47 +460,50 @@ func (this *LineChart) Draw(g paint.Painter) {
 		}
 	}
 
-	// Draw each series
+	// Collect each series as a polyline in local coords, then either hand the
+	// data lines to the GPU fast-path overlay or Cairo-stroke them. Collecting
+	// first keeps the two paths sharing one point-computation.
+	plot := geom.Rect{X: margin, Y: topMargin, Width: chartW, Height: chartH}
+	var lines []chartSeriesLine
 	for si := range this.series {
 		s := &this.series[si]
+		var pts []geom.Vec2
 		if s.rolling {
 			if !rollOK || s.rcount < 2 {
 				continue
 			}
-			g.SetPen1(s.Color, 2)
-			first := true
 			for _, smp := range s.orderedSamples() {
 				if smp.T.Before(cutoff) {
 					continue
 				}
 				x := rollingX(smp.T, rightT, window, margin, chartW)
 				y := topMargin + chartH*(1-(smp.V-this.minY)/yRange)
-				if first {
-					g.MoveTo(x, y)
-					first = false
-				} else {
-					g.LineTo(x, y)
-				}
+				pts = append(pts, geom.Vec2{X: x, Y: y})
+			}
+		} else {
+			if len(s.Points) < 2 {
+				continue
+			}
+			n := len(s.Points)
+			for i, v := range s.Points {
+				x := margin + chartW*float64(i)/float64(n-1)
+				y := topMargin + chartH*(1-(v-this.minY)/yRange)
+				pts = append(pts, geom.Vec2{X: x, Y: y})
+			}
+		}
+		if len(pts) >= 2 {
+			lines = append(lines, chartSeriesLine{color: s.Color, pts: pts})
+		}
+	}
+	if !this.drawSeriesGPU(g, plot, lines) {
+		for _, ln := range lines {
+			g.SetPen1(ln.color, 2)
+			g.MoveTo(ln.pts[0].X, ln.pts[0].Y)
+			for _, p := range ln.pts[1:] {
+				g.LineTo(p.X, p.Y)
 			}
 			g.Stroke()
-			continue
 		}
-		if len(s.Points) < 2 {
-			continue
-		}
-		g.SetPen1(s.Color, 2)
-
-		n := len(s.Points)
-		for i, v := range s.Points {
-			x := margin + chartW*float64(i)/float64(n-1)
-			y := topMargin + chartH*(1-(v-this.minY)/yRange)
-			if i == 0 {
-				g.MoveTo(x, y)
-			} else {
-				g.LineTo(x, y)
-			}
-		}
-		g.Stroke()
 	}
 
 	// Legend
