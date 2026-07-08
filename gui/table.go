@@ -288,6 +288,7 @@ type Table struct {
 	headerHeight       float64
 	sortColumn         int       // currently sorted column, -1 when unsorted
 	sortAscending      bool      // direction of the current sort
+	displayOrder       []int     // view-side sort permutation for a non-sortable model; nil = model's own order
 	colWidths          []float64 // per-column override widths, lazily seeded from the model
 	resizeCol          int       // column being resized via a header-boundary drag, -1 when idle
 	resizeStartX       float64   // pointer x at drag start (widget space)
@@ -354,7 +355,8 @@ func (this *Table) SetModel(m TableModel) {
 	this.cancelEdit()
 	this.model = m
 	this.sortColumn = -1
-	this.colWidths = nil // reseed widths from the new model on next use
+	this.displayOrder = nil // drop any view-side sort permutation from the old model
+	this.colWidths = nil    // reseed widths from the new model on next use
 	this.updateScroll()
 	this.Layout()
 }
@@ -547,40 +549,112 @@ func (this *Table) SortAscending() bool {
 
 // sortByColumn cycles the sort state for the given column: an unsorted column
 // sorts ascending, the active column toggles to descending, and a descending
-// column clears back to the original insertion order. It requires the model to
-// implement SortableTableModel; otherwise it is a no-op. This is the entry
+// column clears back to the model's natural order. A model implementing
+// SortableTableModel reorders itself; any other (read-only) model is left
+// untouched and the view sorts a display-order permutation instead, so a header
+// click still sorts on screen without mutating the model. This is the entry
 // point used by the header-click handler.
 func (this *Table) sortByColumn(col int) {
 	if this.model == nil {
-		return
-	}
-	sm, ok := this.model.(SortableTableModel)
-	if !ok {
 		return
 	}
 	if col < 0 || col >= this.model.ColumnCount() {
 		return
 	}
 
+	// Advance the sort state: unsorted -> ascending, ascending -> descending,
+	// descending -> cleared (natural order).
 	switch {
 	case this.sortColumn != col:
 		this.sortColumn = col
 		this.sortAscending = true
-		sm.SortByColumn(col, true)
 	case this.sortAscending:
 		this.sortAscending = false
-		sm.SortByColumn(col, false)
 	default:
-		// third click on the same column: restore original order
 		this.sortColumn = -1
 		this.sortAscending = false
-		sm.RestoreOrder()
+	}
+
+	// Apply the new state. A SortableTableModel reorders itself; a read-only
+	// model keeps a view-side permutation so it never gets mutated.
+	if sm, ok := this.model.(SortableTableModel); ok {
+		this.displayOrder = nil
+		if this.sortColumn < 0 {
+			sm.RestoreOrder()
+		} else {
+			sm.SortByColumn(this.sortColumn, this.sortAscending)
+		}
+	} else if this.sortColumn < 0 {
+		this.displayOrder = nil
+	} else {
+		this.buildDisplayOrder(this.sortColumn, this.sortAscending)
 	}
 
 	if this.cbSortChanged != nil {
 		this.cbSortChanged(this.sortColumn, this.sortAscending)
 	}
 	this.Update()
+}
+
+// buildDisplayOrder computes the view-side display permutation used to sort a
+// model that does not implement SortableTableModel. It stable-sorts the row
+// indices [0, RowCount) by column col — numerically when every non-empty cell
+// in the column parses as a number, otherwise case-insensitively — without ever
+// reordering or mutating the model. dispRow maps a display position back to the
+// model row through the result.
+func (this *Table) buildDisplayOrder(col int, ascending bool) {
+	n := this.model.RowCount()
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	numeric := this.columnIsNumericModel(col)
+	sort.SliceStable(order, func(a, b int) bool {
+		ca := this.model.CellText(order[a], col)
+		cb := this.model.CellText(order[b], col)
+		var c int
+		if numeric {
+			c = compareTableCellsNumeric(ca, cb)
+		} else {
+			c = compareTableCells(ca, cb)
+		}
+		if !ascending {
+			c = -c
+		}
+		return c < 0
+	})
+	this.displayOrder = order
+}
+
+// columnIsNumericModel reports whether every non-empty cell in the model's
+// column parses as a float64. It mirrors columnIsNumeric but reads through the
+// TableModel interface (used for the view-side sort of a non-sortable model).
+func (this *Table) columnIsNumericModel(col int) bool {
+	seen := false
+	for r := 0; r < this.model.RowCount(); r++ {
+		s := strings.TrimSpace(this.model.CellText(r, col))
+		if s == "" {
+			continue
+		}
+		if _, err := strconv.ParseFloat(s, 64); err != nil {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+// dispRow maps a display-space row position to the underlying model row. It is
+// the identity unless a view-side sort permutation is active (see
+// buildDisplayOrder), which happens only for a model that cannot sort itself.
+// Every model-row read or write that starts from a display position (drawing,
+// inline editing) goes through here so a view-side sort reorders rows on screen
+// without touching the model.
+func (this *Table) dispRow(r int) int {
+	if this.displayOrder != nil && r >= 0 && r < len(this.displayOrder) {
+		return this.displayOrder[r]
+	}
+	return r
 }
 
 // RowHeight returns the height of each data row.
@@ -814,7 +888,7 @@ func (this *Table) Draw(g paint.Painter) {
 		xPos := 0.0
 		for c := 0; c < colCount; c++ {
 			cw := this.columnWidth(c)
-			txt := this.model.CellText(r, c)
+			txt := this.model.CellText(this.dispRow(r), c)
 			if txt != "" {
 				g.SetBrush1(t.TextColor)
 				yt := y + fe.Ascent + (rh-fe.Height)*0.5
@@ -1178,7 +1252,7 @@ func (this *Table) beginEdit(row, col int) {
 	this.editing = true
 	x, y, w, h := this.cellRect(row, col)
 	this.editor.SetBounds(x, y, w, h)
-	this.editor.SetText(this.model.CellText(row, col))
+	this.editor.SetText(this.model.CellText(this.dispRow(row), col))
 	this.editor.SelectAll()
 	this.editor.SetVisible(true)
 	this.editor.SetFocus()
@@ -1198,11 +1272,12 @@ func (this *Table) commitEdit() {
 	text := this.editor.Text()
 	hadFocus := this.editor.HasFocus()
 	this.editor.SetVisible(false)
+	mrow := this.dispRow(row) // display row -> model row under a view-side sort
 	if em, ok := this.model.(EditableTableModel); ok {
-		em.SetCellText(row, col, text)
+		em.SetCellText(mrow, col, text)
 	}
 	if this.cbCellEdited != nil {
-		this.cbCellEdited(row, col, text)
+		this.cbCellEdited(mrow, col, text)
 	}
 	// Return focus to the table only when the commit was driven from the
 	// editor itself (Enter / programmatic). On a blur to another widget the

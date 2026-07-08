@@ -333,3 +333,131 @@ func assertRows(t *testing.T, label string, got, want []int) {
 		t.Errorf("%s: SelectedRows = %v, want %v", label, got, want)
 	}
 }
+
+// staticModel is a read-only TableModel: it implements neither
+// SortableTableModel nor EditableTableModel. It exists to prove the view can
+// sort a model that cannot sort itself, via its own display-order permutation,
+// without ever mutating the model.
+type staticModel struct {
+	headers []string
+	rows    [][]string
+}
+
+func (m *staticModel) RowCount() int    { return len(m.rows) }
+func (m *staticModel) ColumnCount() int { return len(m.headers) }
+func (m *staticModel) CellText(row, col int) string {
+	if row < 0 || row >= len(m.rows) || col < 0 || col >= len(m.rows[row]) {
+		return ""
+	}
+	return m.rows[row][col]
+}
+func (m *staticModel) HeaderText(col int) string   { return m.headers[col] }
+func (m *staticModel) ColumnWidth(col int) float64 { return 120 }
+
+// modelColumn reads a whole model column in raw (unsorted) model-row order, used
+// to assert a view-side sort never mutated the underlying model.
+func modelColumn(m TableModel, col int) []string {
+	out := make([]string, m.RowCount())
+	for r := range out {
+		out[r] = m.CellText(r, col)
+	}
+	return out
+}
+
+// displayColumn reads a whole column in display order, mapping each display row
+// through the table's dispRow permutation.
+func displayColumn(tbl *Table, m TableModel, col int) []string {
+	out := make([]string, m.RowCount())
+	for i := range out {
+		out[i] = m.CellText(tbl.dispRow(i), col)
+	}
+	return out
+}
+
+// TestTableViewSortReadOnlyModel: a model that does not implement
+// SortableTableModel is still sorted on screen. The view builds a display-order
+// permutation, so the displayed order changes while the model's own row order is
+// left untouched. Ascending -> descending -> cleared mirrors the sortable-model
+// click cycle, and SigSortChanged fires each step.
+func TestTableViewSortReadOnlyModel(t *testing.T) {
+	tbl := NewTable()
+	m := &staticModel{
+		headers: []string{"name"},
+		rows:    [][]string{{"Carol"}, {"alice"}, {"Bob"}},
+	}
+	tbl.SetModel(m)
+
+	// The test is only meaningful if the model really cannot sort itself.
+	if _, ok := tbl.Model().(SortableTableModel); ok {
+		t.Fatal("staticModel unexpectedly implements SortableTableModel")
+	}
+
+	original := []string{"Carol", "alice", "Bob"}
+	calls := 0
+	tbl.SigSortChanged(func(col int, ascending bool) { calls++ })
+
+	// First sort: ascending, case-insensitive.
+	tbl.sortByColumn(0)
+	if tbl.SortColumn() != 0 || !tbl.SortAscending() {
+		t.Fatalf("after first sort: col=%d asc=%v, want 0/true", tbl.SortColumn(), tbl.SortAscending())
+	}
+	if got, want := displayColumn(tbl, m, 0), []string{"alice", "Bob", "Carol"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("view ascending order = %v, want %v", got, want)
+	}
+	if got := modelColumn(m, 0); !reflect.DeepEqual(got, original) {
+		t.Errorf("view sort mutated the model: %v, want untouched %v", got, original)
+	}
+
+	// Second sort on the same column: descending.
+	tbl.sortByColumn(0)
+	if tbl.SortColumn() != 0 || tbl.SortAscending() {
+		t.Fatalf("after second sort: col=%d asc=%v, want 0/false", tbl.SortColumn(), tbl.SortAscending())
+	}
+	if got, want := displayColumn(tbl, m, 0), []string{"Carol", "Bob", "alice"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("view descending order = %v, want %v", got, want)
+	}
+
+	// Third sort: cleared back to the model's natural order.
+	tbl.sortByColumn(0)
+	if tbl.SortColumn() != -1 {
+		t.Fatalf("after third sort should be unsorted, got column %d", tbl.SortColumn())
+	}
+	if got := displayColumn(tbl, m, 0); !reflect.DeepEqual(got, original) {
+		t.Errorf("view natural order = %v, want %v", got, original)
+	}
+	if got := modelColumn(m, 0); !reflect.DeepEqual(got, original) {
+		t.Errorf("model changed across the sort cycle: %v, want %v", got, original)
+	}
+
+	if calls != 3 {
+		t.Errorf("SigSortChanged fired %d times, want 3", calls)
+	}
+}
+
+// TestTableViewSortReadOnlyNumeric: a numeric column of a non-sortable model
+// sorts by value, not lexically — "2","10","1" must display as 1,2,10, not
+// 1,10,2. Guards the numeric-vs-lexical detection on the view-side sort path.
+func TestTableViewSortReadOnlyNumeric(t *testing.T) {
+	tbl := NewTable()
+	m := &staticModel{
+		headers: []string{"n"},
+		rows:    [][]string{{"2"}, {"10"}, {"1"}},
+	}
+	tbl.SetModel(m)
+
+	tbl.sortByColumn(0)
+	if got, want := displayColumn(tbl, m, 0), []string{"1", "2", "10"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("numeric view sort = %v, want %v (numeric, not lexical)", got, want)
+	}
+
+	// A mixed (non-numeric) column falls back to a lexical compare.
+	m2 := &staticModel{
+		headers: []string{"s"},
+		rows:    [][]string{{"2"}, {"10"}, {"1a"}},
+	}
+	tbl.SetModel(m2)
+	tbl.sortByColumn(0)
+	if got, want := displayColumn(tbl, m2, 0), []string{"10", "1a", "2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("lexical view sort = %v, want %v", got, want)
+	}
+}
