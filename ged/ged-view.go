@@ -1741,8 +1741,71 @@ func (this *GedView) OpenFile(filename string) error {
 
 const alignTolerance = 1.5 // mm — snap distance for alignment guides
 
-// computeAlignGuides calculates alignment guides between the dragged item(s)
-// and all other items in the scene. dx, dy is the proposed movement delta.
+// computeAlignGuides is the pure geometry behind the drag-time alignment
+// guides. It returns one guide for every case where the dragged rect's left,
+// right, or horizontal centre lines up — within threshold — with the left,
+// right, or centre of any rect in others, or with the canvas horizontal centre
+// (and the top/bottom/centre analogue for horizontal guides). Vertical guides
+// are emitted as a segment spanning the canvas height at the aligned x;
+// horizontal guides span the canvas width at the aligned y. Receiver- and
+// scene-free (mirrors the pure snapToGrid) so it is unit-testable in isolation.
+func computeAlignGuides(dragged geom.Rect, others []geom.Rect, canvas geom.Rect, threshold float64) []alignGuide {
+	var guides []alignGuide
+
+	dcx, dcy := dragged.Center()
+	xEdges := [3]float64{dragged.Left(), dragged.Right(), dcx}
+	yEdges := [3]float64{dragged.Top(), dragged.Bottom(), dcy}
+
+	top, bottom := canvas.Top(), canvas.Bottom()
+	left, right := canvas.Left(), canvas.Right()
+	canCx, canCy := canvas.Center()
+
+	// A vertical guide runs down the canvas at the target x; a horizontal one
+	// runs across it at the target y. Snap to the target coordinate so guides
+	// that share an edge coincide exactly.
+	tryV := func(edge, target float64) {
+		if math.Abs(edge-target) < threshold {
+			guides = append(guides, alignGuide{x1: target, y1: top, x2: target, y2: bottom, snap: true})
+		}
+	}
+	tryH := func(edge, target float64) {
+		if math.Abs(edge-target) < threshold {
+			guides = append(guides, alignGuide{x1: left, y1: target, x2: right, y2: target, snap: true})
+		}
+	}
+
+	for _, o := range others {
+		ocx, ocy := o.Center()
+		xTargets := [3]float64{o.Left(), o.Right(), ocx}
+		yTargets := [3]float64{o.Top(), o.Bottom(), ocy}
+		for _, e := range xEdges {
+			for _, t := range xTargets {
+				tryV(e, t)
+			}
+		}
+		for _, e := range yEdges {
+			for _, t := range yTargets {
+				tryH(e, t)
+			}
+		}
+	}
+
+	// Canvas centre lines — the classic "centre on the page" guide.
+	for _, e := range xEdges {
+		tryV(e, canCx)
+	}
+	for _, e := range yEdges {
+		tryH(e, canCy)
+	}
+
+	return guides
+}
+
+// computeAlignGuides (method) refreshes this.alignGuides for the live drag: it
+// builds the proposed rect for each selected item (its current position offset
+// by dx,dy) and the rects of every non-selected sibling, then delegates to the
+// pure computeAlignGuides helper with the full scene as the canvas. Guides are
+// purely visual and never move a widget.
 func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 	this.alignGuides = nil
 	if len(sel) == 0 {
@@ -1755,78 +1818,30 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 	}
 
 	sceneW, sceneH := scene.Size()
-	allItems := scene.Children()
+	canvas := geom.Rect{X: 0, Y: 0, Width: sceneW, Height: sceneH}
 
-	// Build a set of selected items for fast lookup
+	// Build a set of selected items for fast lookup, then collect the rects of
+	// every non-selected sibling as alignment targets.
 	selSet := make(map[graph.IItem]bool, len(sel))
 	for _, s := range sel {
 		selSet[s] = true
 	}
-
-	// For each selected item, compute proposed edges and compare with others
-	for _, dragging := range sel {
-		px := dragging.X() + dx
-		py := dragging.Y() + dy
-		pw := dragging.Width()
-		ph := dragging.Height()
-
-		propLeft := px
-		propRight := px + pw
-		propCenterX := px + pw/2
-		propTop := py
-		propBottom := py + ph
-		propCenterY := py + ph/2
-
-		for _, other := range allItems {
-			if selSet[other] {
-				continue
-			}
-
-			ox, oy := other.X(), other.Y()
-			ow, oh := other.Width(), other.Height()
-			oLeft := ox
-			oRight := ox + ow
-			oCenterX := ox + ow/2
-			oTop := oy
-			oBottom := oy + oh
-			oCenterY := oy + oh/2
-
-			// Vertical guides (x-axis alignment)
-			xEdges := [][2]float64{
-				{propLeft, oLeft},
-				{propLeft, oRight},
-				{propRight, oLeft},
-				{propRight, oRight},
-				{propCenterX, oCenterX},
-			}
-			for _, pair := range xEdges {
-				if math.Abs(pair[0]-pair[1]) < alignTolerance {
-					this.alignGuides = append(this.alignGuides, alignGuide{
-						x1: pair[1], y1: 0,
-						x2: pair[1], y2: sceneH,
-						snap: true,
-					})
-				}
-			}
-
-			// Horizontal guides (y-axis alignment)
-			yEdges := [][2]float64{
-				{propTop, oTop},
-				{propTop, oBottom},
-				{propBottom, oTop},
-				{propBottom, oBottom},
-				{propCenterY, oCenterY},
-			}
-			for _, pair := range yEdges {
-				if math.Abs(pair[0]-pair[1]) < alignTolerance {
-					this.alignGuides = append(this.alignGuides, alignGuide{
-						x1: 0, y1: pair[1],
-						x2: sceneW, y2: pair[1],
-						snap: true,
-					})
-				}
-			}
+	var others []geom.Rect
+	for _, other := range scene.Children() {
+		if selSet[other] {
+			continue
 		}
+		others = append(others, geom.Rect{X: other.X(), Y: other.Y(), Width: other.Width(), Height: other.Height()})
+	}
+
+	for _, dragging := range sel {
+		dragged := geom.Rect{
+			X:      dragging.X() + dx,
+			Y:      dragging.Y() + dy,
+			Width:  dragging.Width(),
+			Height: dragging.Height(),
+		}
+		this.alignGuides = append(this.alignGuides, computeAlignGuides(dragged, others, canvas, alignTolerance)...)
 	}
 }
 
