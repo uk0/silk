@@ -64,6 +64,10 @@ var categoryDefs = []struct {
 		names: []string{"gui.LineChart", "gui.BarChart", "gui.PieChart", "gui.Gauge", "gui.ScatterPlot"},
 	},
 	{
+		name:  "组态 (SCADA)",
+		names: []string{"gui.Tank", "gui.Indicator", "gui.DigitalDisplay", "gui.Valve", "gui.Pipe"},
+	},
+	{
 		name:  "对话框/窗口 (Window)",
 		names: []string{"gui.Form", "gui.Dialog"},
 	},
