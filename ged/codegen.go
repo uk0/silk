@@ -76,6 +76,14 @@ var factoryMap = map[string]widgetMapping{
 	"gui.PieChart":          {goType: "*gui.PieChart", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPieChart()`},
 	"gui.Gauge":             {goType: "*gui.Gauge", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewGauge()`},
 	"gui.ScatterPlot":       {goType: "*gui.ScatterPlot", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewScatterPlot()`},
+	"gui.Tank":              {goType: "*gui.Tank", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTank()`},
+	"gui.Indicator":         {goType: "*gui.Indicator", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewIndicator()`},
+	"gui.DigitalDisplay":    {goType: "*gui.DigitalDisplay", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDigitalDisplay()`},
+	"gui.Valve":             {goType: "*gui.Valve", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewValve()`},
+	"gui.Pipe":              {goType: "*gui.Pipe", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPipe()`},
+	"gui.Pump":              {goType: "*gui.Pump", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPump()`},
+	"gui.Thermometer":       {goType: "*gui.Thermometer", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewThermometer()`},
+	"gui.ValueBar":          {goType: "*gui.ValueBar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewValueBar()`},
 	"gui.ToggleSwitch":      {goType: "*gui.ToggleSwitch", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewToggleSwitch()`},
 	"gui.SearchBox":         {goType: "*gui.SearchBox", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSearchBox()`},
 	"gui.NumberInput":       {goType: "*gui.NumberInput", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewNumberInput()`},
@@ -123,6 +131,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		factoryName   string
 		x, y, w, h    float64
 		defaultText   string
+		tagName       string // design-time SCADA/组态 tag bound to this widget's value
 		eventHandlers map[string]string
 		code          string // user-written event handler code
 		parentField   string // owning container field; "" = top-level (ui.Form)
@@ -192,11 +201,17 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 
 			// Get default text from the widget if it has one
 			var defaultText string
+			var tagName string
 			if fake.Widget() != nil {
 				if t, ok := fake.Widget().(interface{ Text() string }); ok {
 					defaultText = t.Text()
 				} else if t, ok := fake.Widget().(interface{ Title() string }); ok {
 					defaultText = t.Title()
+				}
+				// Industrial/SCADA widgets carry a design-time "tag" property;
+				// a non-empty one drives a runtime BindTag in the output.
+				if tw, ok := fake.Widget().(interface{ TagName() string }); ok {
+					tagName = tw.TagName()
 				}
 			}
 
@@ -207,6 +222,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				factoryName: factoryName,
 				x:           x, y: y, w: w, h: h,
 				defaultText:   defaultText,
+				tagName:       tagName,
 				eventHandlers: fake.EventHandlers(),
 				code:          fake.GetCode(),
 				parentField:   parentField,
@@ -219,6 +235,16 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		}
 	}
 	collect(scene.Children(), "", false)
+
+	// hasTags: any widget carries a design-time tag, so the output needs a
+	// core.TagDB field the host feeds and the widgets subscribe to.
+	hasTags := false
+	for i := range fields {
+		if fields[i].tagName != "" {
+			hasTags = true
+			break
+		}
+	}
 
 	var buf strings.Builder
 
@@ -236,6 +262,9 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// Struct
 	buf.WriteString(fmt.Sprintf("type %s struct {\n", opts.TypeName))
 	buf.WriteString("\tForm *gui.Form\n")
+	if hasTags {
+		buf.WriteString("\tTags *core.TagDB\n")
+	}
 	for _, f := range fields {
 		buf.WriteString(fmt.Sprintf("\t%s %s\n", f.name, f.goType))
 	}
@@ -254,6 +283,10 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	buf.WriteString("\tui.Form = gui.NewForm()\n")
 	buf.WriteString(fmt.Sprintf("\tui.Form.SetTitle(%q)\n", title))
 	buf.WriteString(fmt.Sprintf("\tui.Form.SetSize(%s, %s)\n\n", fmtFloat(formW), fmtFloat(formH)))
+
+	if hasTags {
+		buf.WriteString("\tui.Tags = core.NewTagDB()\n\n")
+	}
 
 	// Children
 	for _, f := range fields {
@@ -330,6 +363,19 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		}
 	}
 	buf.WriteString("\n")
+
+	// Tag bindings: wire each industrial widget whose design-time "tag"
+	// property is set to its named tag in ui.Tags, so a designed 组态 screen
+	// is data-driven at runtime. The host feeds live values via
+	// ui.Tags.GetOrCreate(name, core.Meta{}).SetValue(v).
+	if hasTags {
+		for _, f := range fields {
+			if f.tagName != "" {
+				emitTagBinding(&buf, f.factoryName, f.name, f.tagName)
+			}
+		}
+		buf.WriteString("\n")
+	}
 
 	buf.WriteString("\treturn ui\n")
 	buf.WriteString("}\n")
@@ -687,6 +733,40 @@ func emitEventBinding(buf *strings.Builder, imports map[string]bool, factoryName
 			fmt.Fprintf(buf, "\tui.%s.SigWidgetClicked(%s)\n", f.name, handler)
 			return true
 		}
+	}
+	return false
+}
+
+// emitTagBinding writes the runtime SCADA/组态 tag binding for an industrial
+// widget whose design-time "tag" property is set: it subscribes the widget's
+// value setter to the named tag in ui.Tags. Float widgets ease via
+// BindTagAnimated (which self-marshals onto the UI thread and animates toward
+// each new value); boolean widgets use BindTag + gui.Post + TagBool. Returns
+// false for factories with no known value binding, so the caller skips them.
+// The host feeds live values with ui.Tags.GetOrCreate(name, core.Meta{}).SetValue(v).
+func emitTagBinding(buf *strings.Builder, factoryName, fieldName, tagName string) bool {
+	tag := fmt.Sprintf("ui.Tags.GetOrCreate(%q, core.Meta{})", tagName)
+	switch factoryName {
+	case "gui.Tank":
+		// Tank.SetLevel wants a 0..1 fraction; tags carry engineering values,
+		// so normalise the common 0..100 percent range.
+		fmt.Fprintf(buf, "\tgui.BindTagAnimated(%s, func(v float64) { ui.%s.SetLevel(v / 100) }, 300*time.Millisecond)\n", tag, fieldName)
+		return true
+	case "gui.Gauge", "gui.DigitalDisplay", "gui.Thermometer", "gui.ValueBar":
+		fmt.Fprintf(buf, "\tgui.BindTagAnimated(%s, ui.%s.SetValue, 300*time.Millisecond)\n", tag, fieldName)
+		return true
+	case "gui.Indicator":
+		fmt.Fprintf(buf, "\tgui.BindTag(%s, func(v interface{}) { gui.Post(func() { ui.%s.SetOn(gui.TagBool(v)) }) })\n", tag, fieldName)
+		return true
+	case "gui.Valve":
+		fmt.Fprintf(buf, "\tgui.BindTag(%s, func(v interface{}) { gui.Post(func() { ui.%s.SetState(gui.TagBool(v)) }) })\n", tag, fieldName)
+		return true
+	case "gui.Pipe":
+		fmt.Fprintf(buf, "\tgui.BindTag(%s, func(v interface{}) { gui.Post(func() { ui.%s.SetActive(gui.TagBool(v)) }) })\n", tag, fieldName)
+		return true
+	case "gui.Pump":
+		fmt.Fprintf(buf, "\tgui.BindTag(%s, func(v interface{}) { gui.Post(func() { ui.%s.SetRunning(gui.TagBool(v)) }) })\n", tag, fieldName)
+		return true
 	}
 	return false
 }
