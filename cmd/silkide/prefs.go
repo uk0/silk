@@ -411,6 +411,18 @@ func registerSilkideTranslations() {
 		"Debugger failed: %v":         "调试器启动失败: %v",
 		"Debugger error: %v":          "调试器错误: %v",
 		"Stopped at %s:%d":            "已停在 %s:%d",
+		// Toolbar Stop button + status-bar cursor cell, plus the git and
+		// LSP code-action error/success toasts. These strings were already
+		// routed through i18n.T/i18n.Tf at their call sites but lacked a
+		// zh-CN entry, so a Chinese locale fell back to English.
+		"Stop":                     "停止",
+		"Ln 1, Col 1":              "行 1, 列 1",
+		"Stage failed: %v":         "暂存失败: %v",
+		"Commit failed: %v":        "提交失败: %v",
+		"Blame failed: %v":         "Blame 失败: %v",
+		"git show failed: %v":      "git show 失败: %v",
+		"Applied: %s (%d file(s))": "已应用: %s (%d 个文件)",
+		"Code action failed: %v":   "代码操作失败: %v",
 	})
 }
 

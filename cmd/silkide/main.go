@@ -1315,7 +1315,7 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	}
 	sb.AddPermanentWidget(gui.NewLabel(formatProjectStatus(project, modulePath, work)))
 	sb.AddPermanentWidget(gui.NewLabel("main"))
-	sb.AddPermanentWidget(gui.NewLabel("Ln 1, Col 1"))
+	sb.AddPermanentWidget(gui.NewLabel(i18n.T("Ln 1, Col 1")))
 	sb.AddPermanentWidget(gui.NewLabel("UTF-8"))
 	sb.AddPermanentWidget(gui.NewLabel("Go 1.25"))
 
