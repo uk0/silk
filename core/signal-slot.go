@@ -106,7 +106,27 @@ func connect(x reflect.Value, slot reflect.Value) (ret bool) {
 	return
 }
 
+// 丢弃 sender 首参再转调 slotFn 时最常见的两种信号签名, 预先算好类型以便快路径匹配.
+var (
+	typeFuncIface    = reflect.TypeOf((func(interface{}))(nil))
+	typeFuncIfaceStr = reflect.TypeOf((func(interface{}, string))(nil))
+)
+
+// slot_adaptor 生成一个类型与信号一致的适配器: 被调用时丢弃首个 sender 参数, 再转调 slotFn.
+// 常见签名走直接闭包快路径(零反射, emit 时无 []reflect.Value 装箱和 reflect.Value.Call),
+// 其余签名回退到 reflect.MakeFunc 的通用反射实现. 快路径的类型与 signalType 完全一致,
+// 故仍可直接赋给信号方法; 带返回值的信号(如 SigVerify)不匹配快路径, 自动走反射回退.
 func slot_adaptor(signalType reflect.Type, slotFn reflect.Value) reflect.Value {
+	switch signalType {
+	case typeFuncIface: // 信号 func(interface{}), 槽丢弃 sender 后为 func()
+		if fn, ok := slotFn.Interface().(func()); ok {
+			return reflect.ValueOf(func(interface{}) { fn() })
+		}
+	case typeFuncIfaceStr: // 信号 func(interface{}, string), 槽为 func(string)
+		if fn, ok := slotFn.Interface().(func(string)); ok {
+			return reflect.ValueOf(func(_ interface{}, s string) { fn(s) })
+		}
+	}
 	adaptor := func(in []reflect.Value) []reflect.Value {
 		return slotFn.Call(in[1:])
 	}
