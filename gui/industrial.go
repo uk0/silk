@@ -54,6 +54,8 @@ type Tank struct {
 	min, max  float64 // engineering range for the label
 	color     paint.Color
 	showLabel bool
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewTank creates a Tank filled to 0 with a default blue liquid.
@@ -112,9 +114,19 @@ func (this *Tank) EngValue() float64 {
 	return this.min + this.level*(this.max-this.min)
 }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *Tank) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *Tank) TagName() string { return this.tagName }
+
 func (this *Tank) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("液位", this.Level, this.SetLevel)
 	list.AddProperty("显示标签", this.ShowLabel, this.SetShowLabel)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *Tank) SizeHints() SizeHints {
@@ -193,6 +205,8 @@ type Indicator struct {
 	color    paint.Color // on color
 	offColor paint.Color
 	blink    bool
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewIndicator creates an off green lamp.
@@ -240,9 +254,19 @@ func (this *Indicator) SetBlink(b bool) {
 // IsBlink reports the blink flag.
 func (this *Indicator) IsBlink() bool { return this.blink }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *Indicator) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *Indicator) TagName() string { return this.tagName }
+
 func (this *Indicator) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("点亮", this.IsOn, this.SetOn)
 	list.AddProperty("闪烁", this.IsBlink, this.SetBlink)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *Indicator) SizeHints() SizeHints {
@@ -326,6 +350,8 @@ type DigitalDisplay struct {
 	lo, hi    float64
 	loColor   paint.Color
 	hiColor   paint.Color
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewDigitalDisplay creates a green-on-black readout showing 0.
@@ -409,10 +435,20 @@ func (this *DigitalDisplay) Text() string {
 	return fmt.Sprintf(this.format, this.value)
 }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *DigitalDisplay) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *DigitalDisplay) TagName() string { return this.tagName }
+
 func (this *DigitalDisplay) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("数值", this.Value, this.SetValue)
 	list.AddProperty("格式", this.Format, this.SetFormat)
 	list.AddProperty("单位", this.Unit, this.SetUnit)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *DigitalDisplay) SizeHints() SizeHints {
@@ -526,6 +562,8 @@ type Valve struct {
 	open        bool
 	openColor   paint.Color
 	closedColor paint.Color
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewValve creates a closed valve.
@@ -567,8 +605,18 @@ func (this *Valve) SetClosedColor(c paint.Color) {
 // ClosedColor returns the closed-state color.
 func (this *Valve) ClosedColor() paint.Color { return this.closedColor }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *Valve) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *Valve) TagName() string { return this.tagName }
+
 func (this *Valve) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("打开", this.State, this.SetState)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *Valve) SizeHints() SizeHints {
@@ -630,6 +678,8 @@ type Pipe struct {
 	active    bool
 	flowColor paint.Color
 	idleColor paint.Color
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewPipe creates an inactive horizontal pipe.
@@ -668,9 +718,19 @@ func (this *Pipe) SetVertical(b bool) {
 // IsVertical reports the pipe orientation.
 func (this *Pipe) IsVertical() bool { return this.vertical }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *Pipe) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *Pipe) TagName() string { return this.tagName }
+
 func (this *Pipe) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("有流量", this.IsActive, this.SetActive)
 	list.AddProperty("竖直", this.IsVertical, this.SetVertical)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *Pipe) SizeHints() SizeHints {
@@ -744,6 +804,8 @@ type Pump struct {
 	Widget
 	running bool
 	fault   bool
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewPump creates a stopped pump.
@@ -771,9 +833,19 @@ func (this *Pump) SetFault(b bool) {
 // IsFault reports the fault state.
 func (this *Pump) IsFault() bool { return this.fault }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *Pump) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *Pump) TagName() string { return this.tagName }
+
 func (this *Pump) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("运行", this.IsRunning, this.SetRunning)
 	list.AddProperty("故障", this.IsFault, this.SetFault)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *Pump) SizeHints() SizeHints {
@@ -828,6 +900,8 @@ type Thermometer struct {
 	value    float64
 	min, max float64
 	color    paint.Color
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewThermometer creates a 0..100 thermometer reading Min.
@@ -887,8 +961,18 @@ func (this *Thermometer) Fraction() float64 {
 	return clamp01((this.value - this.min) / rng)
 }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *Thermometer) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *Thermometer) TagName() string { return this.tagName }
+
 func (this *Thermometer) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("温度", this.Value, this.SetValue)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *Thermometer) SizeHints() SizeHints {
@@ -950,6 +1034,8 @@ type ValueBar struct {
 	normalColor        paint.Color
 	warnColor          paint.Color
 	alarmColor         paint.Color
+
+	tagName string // design-time tag name driving this widget
 }
 
 // NewValueBar creates a 0..100 bar reading 0.
@@ -1037,8 +1123,18 @@ func (this *ValueBar) Fraction() float64 {
 	return clamp01((this.value - this.min) / rng)
 }
 
+// SetTagName sets the design-time tag name that drives this widget.
+func (this *ValueBar) SetTagName(s string) {
+	this.tagName = s
+	this.Self().Update()
+}
+
+// TagName returns the design-time tag name.
+func (this *ValueBar) TagName() string { return this.tagName }
+
 func (this *ValueBar) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("数值", this.Value, this.SetValue)
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
 func (this *ValueBar) SizeHints() SizeHints {

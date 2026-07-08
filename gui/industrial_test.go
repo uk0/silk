@@ -323,3 +323,89 @@ func TestIndustrialFactoryRegistration(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TagName / design-time "tag" property
+// ---------------------------------------------------------------------------
+
+// tagged is the design-time tag-binding surface every industrial widget
+// exposes: a plain TagName round-trip plus EnumProperties for the property
+// sheet.
+type tagged interface {
+	core.IEnumProperties
+	SetTagName(string)
+	TagName() string
+}
+
+// industrialTaggedWidgets returns one fresh instance of every industrial
+// widget, keyed by name for readable failures.
+func industrialTaggedWidgets() map[string]tagged {
+	return map[string]tagged{
+		"Tank":           NewTank(),
+		"Indicator":      NewIndicator(),
+		"DigitalDisplay": NewDigitalDisplay(),
+		"Valve":          NewValve(),
+		"Pipe":           NewPipe(),
+		"Pump":           NewPump(),
+		"Thermometer":    NewThermometer(),
+		"ValueBar":       NewValueBar(),
+	}
+}
+
+// propCapture is a core.IPropertyList stand-in that records the get/set funcs a
+// widget registers so a test can drive an individual property by id.
+type propCapture struct {
+	gets map[string]interface{}
+	sets map[string]interface{}
+}
+
+func newPropCapture() *propCapture {
+	return &propCapture{
+		gets: map[string]interface{}{},
+		sets: map[string]interface{}{},
+	}
+}
+
+func (p *propCapture) AddProperty(id string, get, set interface{}) {
+	p.gets[id] = get
+	p.sets[id] = set
+}
+
+func TestIndustrialTagNameRoundTrip(t *testing.T) {
+	for name, w := range industrialTaggedWidgets() {
+		if got := w.TagName(); got != "" {
+			t.Errorf("%s: initial TagName = %q, want empty", name, got)
+		}
+		w.SetTagName("level")
+		if got := w.TagName(); got != "level" {
+			t.Errorf("%s: TagName = %q, want %q", name, got, "level")
+		}
+	}
+}
+
+func TestIndustrialTagEnumProperty(t *testing.T) {
+	for name, w := range industrialTaggedWidgets() {
+		pc := newPropCapture()
+		w.EnumProperties(pc)
+
+		get, ok := pc.gets["tag"].(func() string)
+		if !ok {
+			t.Fatalf("%s: EnumProperties exposes no string getter for %q", name, "tag")
+		}
+		set, ok := pc.sets["tag"].(func(string))
+		if !ok {
+			t.Fatalf("%s: EnumProperties exposes no string setter for %q", name, "tag")
+		}
+
+		// The property's setter drives the field; its getter reflects it.
+		set("flow")
+		if got := get(); got != "flow" {
+			t.Errorf("%s: tag getter after property set = %q, want %q", name, got, "flow")
+		}
+		// The property's getter also reflects writes made via SetTagName.
+		w.SetTagName("direct")
+		if got := get(); got != "direct" {
+			t.Errorf("%s: tag getter after SetTagName = %q, want %q", name, got, "direct")
+		}
+	}
+}
