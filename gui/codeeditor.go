@@ -431,6 +431,33 @@ type CodeEditor struct {
 	// run on the GLFW main thread, so the map needs no mutex.
 	tokenCache       map[int]tokenCacheEntry
 	tokenCacheLineCt int // line count at the last cache fill, for shift detection
+
+	// --- Monospace measurement fast path (Draw hot path) ---
+	// For a monospace font every ASCII glyph advances by the same width, so a
+	// string's pixel width is runeCount*charWidth without a per-string Cairo
+	// shaping call (C.CString + heap alloc + shaping). charWidth and monoFont
+	// are derived from the font once (ensureFontMetrics) and reused until
+	// SetFont swaps the font, which clears fontMetricsValid. monoFont is set
+	// only when "0"/"W"/"i" all report the same non-zero advance — the
+	// definition of monospace — so a proportional font leaves it false and
+	// every measureText keeps shaping (byte-identical to the old behavior).
+	charWidth        float64
+	monoFont         bool
+	fontMetricsValid bool
+
+	// --- Fold-region cache (Draw hot path) ---
+	// computeFoldRegions (a full-buffer brace scan) and visibleLines are both
+	// O(all lines) and were recomputed 3+ times per Draw — the only per-frame
+	// cost that grows with file size instead of the viewport. foldRegionsCache
+	// memoizes the brace scan (depends only on line content); visLineCache
+	// memoizes the drawn-index list (depends on content AND fold state). Both
+	// are dropped by invalidateFoldCache on any text change (rebuildText /
+	// SetText — the same funnel tokenCache uses); a fold toggle changes only
+	// the fold state, so it drops visLineCache alone via invalidateVisLineCache.
+	foldRegionsCache []foldRegion
+	foldRegionsValid bool
+	visLineCache     []int
+	visLineValid     bool
 }
 
 // tokenCacheEntry holds the tokens emitted for a (line index, line bytes,
@@ -579,6 +606,7 @@ func (this *CodeEditor) SetText(s string) {
 	this.foldedLines = make(map[int]bool)
 	this.clearTokenCache()
 	this.tokenCacheLineCt = len(this.lines)
+	this.invalidateFoldCache() // new buffer + reset folds: drop both fold caches
 	this.Self().Update()
 }
 
@@ -616,6 +644,7 @@ func (this *CodeEditor) ReplaceAllText(s string) {
 // SetFont sets the editor's monospace font.
 func (this *CodeEditor) SetFont(f paint.Font) {
 	this.font = f
+	this.fontMetricsValid = false // recompute charWidth/monoFont for the new font
 	this.Self().Update()
 }
 
@@ -1020,12 +1049,54 @@ func (this *CodeEditor) fontExtents() *paint.FontExtents {
 }
 
 // measureText returns the pixel width of text using the editor font.
+//
+// Monospace fast path: when the font is monospace (see ensureFontMetrics) and
+// s is pure printable ASCII, the width is exactly len(s)*charWidth — for such
+// glyphs runeCount == len(s) and each advances by charWidth, so the result is
+// byte-identical to Cairo shaping while skipping the cgo TextExtents call (and
+// its C.CString heap allocation). Anything with a tab, high-bit/UTF-8 rune, or
+// control byte, or any non-monospace font, falls back to the measured advance,
+// so rendering stays pixel-identical in every case.
 func (this *CodeEditor) measureText(s string) float64 {
 	if s == "" {
 		return 0
 	}
+	this.ensureFontMetrics()
+	if this.monoFont && isASCIIPrintable(s) {
+		return float64(len(s)) * this.charWidth
+	}
 	ext := this.font.TextExtents(s)
 	return ext.XAdvance
+}
+
+// ensureFontMetrics derives the cached single-character advance (charWidth) and
+// the monospace flag from the current font, once per font. The font is treated
+// as monospace only when "0", "W", and "i" all report the same non-zero
+// advance — the property measureText's fast path relies on. Cleared by SetFont.
+func (this *CodeEditor) ensureFontMetrics() {
+	if this.fontMetricsValid {
+		return
+	}
+	w0 := this.font.TextExtents("0").XAdvance
+	wW := this.font.TextExtents("W").XAdvance
+	wi := this.font.TextExtents("i").XAdvance
+	this.charWidth = w0
+	this.monoFont = w0 > 0 && w0 == wW && w0 == wi
+	this.fontMetricsValid = true
+}
+
+// isASCIIPrintable reports whether every byte of s is a printable ASCII
+// character (0x20..0x7E). For such strings runeCount == len(s), and on a
+// monospace font every glyph advances by exactly charWidth, which is what makes
+// the measureText fast path pixel-identical. Tabs, control bytes, and any
+// high-bit (UTF-8) rune fail the test and force the measured-advance fallback.
+func isASCIIPrintable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7E {
+			return false
+		}
+	}
+	return true
 }
 
 // clampCursor ensures cursor is within valid bounds.
@@ -1709,6 +1780,10 @@ func (this *CodeEditor) rebuildText() {
 		this.clearTokenCache()
 		this.tokenCacheLineCt = len(this.lines)
 	}
+	// Any edit can add/remove a brace and thus change the foldable regions
+	// even when the line count is unchanged, so drop the fold caches here on
+	// every mutation — this is the funnel every edit path hits.
+	this.invalidateFoldCache()
 	if this.onChanged != nil {
 		this.onChanged(this.text)
 	}
@@ -3742,8 +3817,11 @@ func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line strin
 		}
 		g.SetBrush1(c)
 		g.DrawText1(x, y, tok.text)
-		ext := this.font.TextExtents(tok.text)
-		x += ext.XAdvance
+		// Advance x by the token width. measureText takes the monospace fast
+		// path for the common ASCII token, avoiding a per-token cgo TextExtents
+		// call (~one C.CString alloc + Cairo shaping per visible token); it
+		// falls back to measured advance for tabs / non-ASCII, so x is identical.
+		x += this.measureText(tok.text)
 	}
 	return newInBlock
 }
@@ -6756,10 +6834,32 @@ func (this *CodeEditor) foldRegionEnclosing(line int) (foldRegion, bool) {
 	return best, found
 }
 
+// invalidateFoldCache drops both the fold-region and visible-line caches. It is
+// called on any text change (rebuildText, SetText) because a brace edit can add
+// or remove a foldable region without changing the line count.
+func (this *CodeEditor) invalidateFoldCache() {
+	this.foldRegionsValid = false
+	this.visLineValid = false
+}
+
+// invalidateVisLineCache drops only the visible-line cache, for when the fold
+// state (foldedLines) changes but the regions do not — a fold toggle hides or
+// shows lines without re-running the brace scan.
+func (this *CodeEditor) invalidateVisLineCache() {
+	this.visLineValid = false
+}
+
 // FoldRegions returns the foldable brace regions for the current text, ordered
-// by start line. Recomputed each call from the line slice (cheap brace scan).
+// by start line. The brace scan (O(all lines)) is memoized in foldRegionsCache
+// and reused until a text change invalidates it, since it is called several
+// times per Draw and depends only on line content.
 func (this *CodeEditor) FoldRegions() []foldRegion {
-	return computeFoldRegions(this.lines)
+	if this.foldRegionsValid {
+		return this.foldRegionsCache
+	}
+	this.foldRegionsCache = computeFoldRegions(this.lines)
+	this.foldRegionsValid = true
+	return this.foldRegionsCache
 }
 
 // IsFolded reports whether the region starting at the given line is collapsed.
@@ -6781,6 +6881,7 @@ func (this *CodeEditor) ToggleFold(startLine int) {
 	} else {
 		this.foldedLines[startLine] = true
 	}
+	this.invalidateVisLineCache() // fold state changed; regions unchanged
 	this.clampCursorVisible()
 	this.Self().Update()
 }
@@ -6793,6 +6894,7 @@ func (this *CodeEditor) FoldAll() {
 	for _, reg := range this.FoldRegions() {
 		this.foldedLines[reg.startLine] = true
 	}
+	this.invalidateVisLineCache() // fold state changed; regions unchanged
 	this.clampCursorVisible()
 	this.Self().Update()
 }
@@ -6800,6 +6902,7 @@ func (this *CodeEditor) FoldAll() {
 // UnfoldAll expands every collapsed region.
 func (this *CodeEditor) UnfoldAll() {
 	this.foldedLines = make(map[int]bool)
+	this.invalidateVisLineCache() // fold state changed; regions unchanged
 	this.Self().Update()
 }
 
@@ -6860,9 +6963,16 @@ func (this *CodeEditor) HighlightReferencesAtCursor() {
 
 // visibleLineIndices returns the ordered line indices currently drawn, honoring
 // the active folds. It is the bridge between the pure visibleLines helper and
-// the editor's live state.
+// the editor's live state. The result (O(all lines) to build) is memoized in
+// visLineCache and reused until a text change or a fold toggle invalidates it;
+// callers only read the slice, so sharing it is safe.
 func (this *CodeEditor) visibleLineIndices() []int {
-	return visibleLines(len(this.lines), this.foldedLines, this.FoldRegions())
+	if this.visLineValid {
+		return this.visLineCache
+	}
+	this.visLineCache = visibleLines(len(this.lines), this.foldedLines, this.FoldRegions())
+	this.visLineValid = true
+	return this.visLineCache
 }
 
 // lineToVisualRow maps a line index to its visual row (its position among the
