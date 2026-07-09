@@ -753,6 +753,7 @@ type designPropKind int
 const (
 	dpColor designPropKind = iota
 	dpFloat
+	dpInt
 	dpString
 	dpBool
 )
@@ -776,6 +777,12 @@ var industrialDesignProps = map[string][]designProp{
 	"gui.Thermometer":    {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
 	"gui.ValueBar":       {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
 	"gui.Gauge":          {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Unit", "SetUnit", dpString}, {"Title", "SetTitle", dpString}},
+	// Standard input/display widgets: reproduce a designer-set range and
+	// initial value/state.
+	"gui.Slider":      {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Value", "SetValue", dpFloat}},
+	"gui.ProgressBar": {{"Value", "SetValue", dpFloat}},
+	"gui.SpinBox":     {{"Min", "SetMin", dpInt}, {"Max", "SetMax", dpInt}, {"Value", "SetValue", dpInt}},
+	"gui.CheckBox":    {{"IsChecked", "SetChecked", dpBool}},
 }
 
 // emitDesignProperties emits setter calls for the design-time properties an
@@ -821,6 +828,11 @@ func emitDesignProperties(buf *strings.Builder, imports map[string]bool, factory
 				continue
 			}
 			fmt.Fprintf(buf, "\tui.%s.%s(%s)\n", fieldName, p.setter, fmtFloat(got.Float()))
+		case dpInt:
+			if got.Int() == def.Int() {
+				continue
+			}
+			fmt.Fprintf(buf, "\tui.%s.%s(%d)\n", fieldName, p.setter, got.Int())
 		case dpString:
 			if got.String() == def.String() {
 				continue

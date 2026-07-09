@@ -83,3 +83,36 @@ func TestGenerateCodeDesignProperties(t *testing.T) {
 	// The emitted SetColor/SetMax must type-check against the real gui + paint.
 	vetGeneratedCode(t, code)
 }
+
+// TestGenerateCodeStandardWidgetProperties verifies design-property
+// reproduction also covers standard input widgets (float range/value, int
+// range, bool state).
+func TestGenerateCodeStandardWidgetProperties(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("Panel")
+	scene.SetSize(200, 150)
+
+	addConfiguredFake(t, scene, "gui.Slider", "sld1", func(w interface{}) {
+		w.(interface{ SetMax(float64) }).SetMax(777)
+		w.(interface{ SetValue(float64) }).SetValue(42)
+	})
+	addConfiguredFake(t, scene, "gui.SpinBox", "spn1", func(w interface{}) {
+		w.(interface{ SetMax(int) }).SetMax(12345)
+	})
+	addConfiguredFake(t, scene, "gui.CheckBox", "cb1", func(w interface{}) {
+		w.(interface{ SetChecked(bool) }).SetChecked(true)
+	})
+
+	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "PanelUI"})
+	for _, s := range []string{
+		"ui.Sld1.SetMax(777)",
+		"ui.Sld1.SetValue(42)",
+		"ui.Spn1.SetMax(12345)",
+		"ui.Cb1.SetChecked(true)",
+	} {
+		if !strings.Contains(code, s) {
+			t.Errorf("generated code missing standard-widget property:\n  %s", s)
+		}
+	}
+	vetGeneratedCode(t, code)
+}
