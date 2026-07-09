@@ -60,6 +60,24 @@ func (this *Gauge) SetRange(min, max float64) {
 	this.Self().Update()
 }
 
+// SetMin sets the range minimum.
+func (this *Gauge) SetMin(v float64) {
+	this.min = v
+	this.Self().Update()
+}
+
+// Min returns the range minimum.
+func (this *Gauge) Min() float64 { return this.min }
+
+// SetMax sets the range maximum.
+func (this *Gauge) SetMax(v float64) {
+	this.max = v
+	this.Self().Update()
+}
+
+// Max returns the range maximum.
+func (this *Gauge) Max() float64 { return this.max }
+
 // SetTitle sets the gauge title.
 func (this *Gauge) SetTitle(s string) {
 	this.title = s
@@ -95,6 +113,8 @@ func (this *Gauge) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("标题", this.Title, this.SetTitle)
 	list.AddProperty("单位", this.Unit, this.SetUnit)
 	list.AddProperty("数值", this.Value, this.SetValue)
+	list.AddProperty("最小值", this.Min, this.SetMin)
+	list.AddProperty("最大值", this.Max, this.SetMax)
 }
 
 // SizeHints returns the preferred size.

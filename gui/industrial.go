@@ -94,8 +94,20 @@ func (this *Tank) SetRange(min, max float64) {
 	this.Self().Update()
 }
 
+// SetMin sets the engineering minimum.
+func (this *Tank) SetMin(v float64) {
+	this.min = v
+	this.Self().Update()
+}
+
 // Min returns the engineering minimum.
 func (this *Tank) Min() float64 { return this.min }
+
+// SetMax sets the engineering maximum.
+func (this *Tank) SetMax(v float64) {
+	this.max = v
+	this.Self().Update()
+}
 
 // Max returns the engineering maximum.
 func (this *Tank) Max() float64 { return this.max }
@@ -125,6 +137,8 @@ func (this *Tank) TagName() string { return this.tagName }
 
 func (this *Tank) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("液位", this.Level, this.SetLevel)
+	list.AddProperty("最小值", this.Min, this.SetMin)
+	list.AddProperty("最大值", this.Max, this.SetMax)
 	list.AddProperty("显示标签", this.ShowLabel, this.SetShowLabel)
 	list.AddProperty("颜色", this.Color, this.SetColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
@@ -944,8 +958,20 @@ func (this *Thermometer) SetRange(min, max float64) {
 	this.Self().Update()
 }
 
+// SetMin sets the range minimum.
+func (this *Thermometer) SetMin(v float64) {
+	this.min = v
+	this.Self().Update()
+}
+
 // Min returns the range minimum.
 func (this *Thermometer) Min() float64 { return this.min }
+
+// SetMax sets the range maximum.
+func (this *Thermometer) SetMax(v float64) {
+	this.max = v
+	this.Self().Update()
+}
 
 // Max returns the range maximum.
 func (this *Thermometer) Max() float64 { return this.max }
@@ -979,6 +1005,8 @@ func (this *Thermometer) TagName() string { return this.tagName }
 
 func (this *Thermometer) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("温度", this.Value, this.SetValue)
+	list.AddProperty("最小值", this.Min, this.SetMin)
+	list.AddProperty("最大值", this.Max, this.SetMax)
 	list.AddProperty("颜色", this.Color, this.SetColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
@@ -1080,8 +1108,20 @@ func (this *ValueBar) SetRange(min, max float64) {
 	this.Self().Update()
 }
 
+// SetMin sets the range minimum.
+func (this *ValueBar) SetMin(v float64) {
+	this.min = v
+	this.Self().Update()
+}
+
 // Min returns the range minimum.
 func (this *ValueBar) Min() float64 { return this.min }
+
+// SetMax sets the range maximum.
+func (this *ValueBar) SetMax(v float64) {
+	this.max = v
+	this.Self().Update()
+}
 
 // Max returns the range maximum.
 func (this *ValueBar) Max() float64 { return this.max }
@@ -1142,6 +1182,8 @@ func (this *ValueBar) TagName() string { return this.tagName }
 
 func (this *ValueBar) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("数值", this.Value, this.SetValue)
+	list.AddProperty("最小值", this.Min, this.SetMin)
+	list.AddProperty("最大值", this.Max, this.SetMax)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 

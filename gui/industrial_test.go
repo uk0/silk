@@ -419,14 +419,14 @@ func TestIndustrialTagEnumProperty(t *testing.T) {
 // exposed.
 func TestIndustrialEnumPropertyIDs(t *testing.T) {
 	want := map[string][]string{
-		"Tank":           {"液位", "显示标签", "颜色", "tag"},
+		"Tank":           {"液位", "最小值", "最大值", "显示标签", "颜色", "tag"},
 		"Indicator":      {"点亮", "闪烁", "颜色", "熄灭颜色", "tag"},
 		"DigitalDisplay": {"数值", "格式", "单位", "颜色", "tag"},
 		"Valve":          {"打开", "打开颜色", "关闭颜色", "tag"},
 		"Pipe":           {"有流量", "竖直", "流动颜色", "tag"},
 		"Pump":           {"运行", "故障", "tag"},
-		"Thermometer":    {"温度", "颜色", "tag"},
-		"ValueBar":       {"数值", "tag"},
+		"Thermometer":    {"温度", "最小值", "最大值", "颜色", "tag"},
+		"ValueBar":       {"数值", "最小值", "最大值", "tag"},
 	}
 	for name, w := range industrialTaggedWidgets() {
 		pc := newPropCapture()
@@ -511,5 +511,101 @@ func TestGaugeEnumProperties(t *testing.T) {
 	g.SetValue(63)
 	if got := get(); got != 63 {
 		t.Errorf("Gauge: 数值 getter after SetValue = %v, want 63", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Engineering range (min/max) accessors and design-time properties
+// ---------------------------------------------------------------------------
+
+// rangedWidget is the engineering-range surface of the SCADA widgets: the
+// two-arg SetRange plus the single-value min/max accessors the property sheet
+// binds to.
+type rangedWidget interface {
+	core.IEnumProperties
+	SetRange(min, max float64)
+	SetMin(float64)
+	SetMax(float64)
+	Min() float64
+	Max() float64
+}
+
+// rangedWidgets returns one fresh instance of every range-bearing widget,
+// keyed by name for readable failures.
+func rangedWidgets() map[string]rangedWidget {
+	return map[string]rangedWidget{
+		"Tank":        NewTank(),
+		"Thermometer": NewThermometer(),
+		"ValueBar":    NewValueBar(),
+		"Gauge":       NewGauge(),
+	}
+}
+
+func TestIndustrialMinMaxRoundTrip(t *testing.T) {
+	for name, w := range rangedWidgets() {
+		w.SetMin(-40)
+		w.SetMax(260)
+		if w.Min() != -40 || w.Max() != 260 {
+			t.Errorf("%s: range after SetMin/SetMax = [%v,%v], want [-40,260]",
+				name, w.Min(), w.Max())
+		}
+	}
+}
+
+func TestIndustrialMinMaxPreserveOtherBound(t *testing.T) {
+	for name, w := range rangedWidgets() {
+		w.SetRange(10, 90)
+		w.SetMin(5)
+		if w.Min() != 5 || w.Max() != 90 {
+			t.Errorf("%s: after SetMin(5) range = [%v,%v], want [5,90]",
+				name, w.Min(), w.Max())
+		}
+		w.SetMax(95)
+		if w.Min() != 5 || w.Max() != 95 {
+			t.Errorf("%s: after SetMax(95) range = [%v,%v], want [5,95]",
+				name, w.Min(), w.Max())
+		}
+	}
+}
+
+func TestIndustrialMinMaxEnumProperties(t *testing.T) {
+	for name, w := range rangedWidgets() {
+		pc := newPropCapture()
+		w.EnumProperties(pc)
+
+		getMin, ok := pc.gets["最小值"].(func() float64)
+		if !ok {
+			t.Fatalf("%s: EnumProperties exposes no float64 getter for %q", name, "最小值")
+		}
+		setMin, ok := pc.sets["最小值"].(func(float64))
+		if !ok {
+			t.Fatalf("%s: EnumProperties exposes no float64 setter for %q", name, "最小值")
+		}
+		getMax, ok := pc.gets["最大值"].(func() float64)
+		if !ok {
+			t.Fatalf("%s: EnumProperties exposes no float64 getter for %q", name, "最大值")
+		}
+		setMax, ok := pc.sets["最大值"].(func(float64))
+		if !ok {
+			t.Fatalf("%s: EnumProperties exposes no float64 setter for %q", name, "最大值")
+		}
+
+		// The property setters drive the widget's range; the getters reflect it.
+		setMin(12)
+		setMax(88)
+		if getMin() != 12 || getMax() != 88 {
+			t.Errorf("%s: property round-trip = [%v,%v], want [12,88]",
+				name, getMin(), getMax())
+		}
+		if w.Min() != 12 || w.Max() != 88 {
+			t.Errorf("%s: accessors after property set = [%v,%v], want [12,88]",
+				name, w.Min(), w.Max())
+		}
+		// The property getters also reflect writes made via SetRange.
+		w.SetRange(-5, 5)
+		if getMin() != -5 || getMax() != 5 {
+			t.Errorf("%s: property getters after SetRange = [%v,%v], want [-5,5]",
+				name, getMin(), getMax())
+		}
 	}
 }
