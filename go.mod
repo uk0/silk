@@ -10,6 +10,11 @@ require (
 	golang.org/x/net v0.52.0
 )
 
-require golang.org/x/text v0.36.0 // indirect
+require (
+	github.com/goburrow/serial v0.1.0 // indirect
+	github.com/robinson/gos7 v0.0.0-20260622162611-2d6806f80c8b // indirect
+	github.com/simonvetter/modbus v1.6.4 // indirect
+	golang.org/x/text v0.36.0 // indirect
+)
 
 replace mod/map => ./mod/map
