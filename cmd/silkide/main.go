@@ -43,6 +43,7 @@ import (
 	"github.com/uk0/silk/a11y"
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/decl"
+	_ "github.com/uk0/silk/device" // registers the DeviceComponent (Modbus/S7) factory for the palette
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"

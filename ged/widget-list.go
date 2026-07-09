@@ -65,7 +65,7 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "组态 (SCADA)",
-		names: []string{"gui.Tank", "gui.Indicator", "gui.DigitalDisplay", "gui.Valve", "gui.Pipe"},
+		names: []string{"gui.Tank", "gui.Indicator", "gui.DigitalDisplay", "gui.Valve", "gui.Pipe", "gui.DeviceComponent"},
 	},
 	{
 		name:  "对话框/窗口 (Window)",
