@@ -126,6 +126,13 @@ type cairoPainter struct {
 
 	sfont *scaledFont
 
+	// glyphBuf is a reusable scratch buffer for DrawText/DrawText1 glyph
+	// shaping. Text drawn every frame (labels, list rows) reshapes the same
+	// string repeatedly; reusing this buffer avoids a per-call []Glyph
+	// allocation. Safe because DrawGlyphs consumes the glyphs synchronously
+	// and nothing retains them, and painters are single-threaded during paint.
+	glyphBuf []Glyph
+
 	surface Surface
 	//saveNum int
 }
@@ -368,15 +375,15 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 
 func (this *cairoPainter) DrawText(text string) {
 	sf := this.applyFont()
-	glyphs := sf.TextToGlyphs(0, 0, text)
-	this.DrawGlyphs(glyphs)
+	this.glyphBuf = sf.textToGlyphsInto(0, 0, text, this.glyphBuf[:0])
+	this.DrawGlyphs(this.glyphBuf)
 }
 
 func (this *cairoPainter) DrawText1(x, y float64, text string) {
 	this.Translate(x, y)
 	sf := this.applyFont()
-	glyphs := sf.TextToGlyphs(0, 0, text)
-	this.DrawGlyphs(glyphs)
+	this.glyphBuf = sf.textToGlyphsInto(0, 0, text, this.glyphBuf[:0])
+	this.DrawGlyphs(this.glyphBuf)
 	this.Translate(-x, -y)
 }
 

@@ -150,6 +150,27 @@ func (this *scaledFont) TextToGlyphs(x, y float64, text string) (ret []Glyph) {
 	return
 }
 
+// textToGlyphsInto shapes text into dst, reusing dst's backing array when it
+// has the capacity and only allocating a fresh slice when the buffer must grow.
+// It returns the filled slice (valid until the buffer is next reused). Unlike
+// the exported TextToGlyphs — which always allocates a fresh slice the caller
+// may retain — this is the internal hot-path variant for DrawText/DrawText1,
+// where the glyphs are consumed synchronously and never kept.
+func (this *scaledFont) textToGlyphsInto(x, y float64, text string, dst []Glyph) []Glyph {
+	this.ScaledFont.TextToGlyphs_hack(x, y, text,
+		func(buf unsafe.Pointer, num int) {
+			if cap(dst) < num {
+				dst = make([]Glyph, num)
+			} else {
+				dst = dst[:num]
+			}
+			for i := 0; i < num; i++ {
+				dst[i] = *(*Glyph)(unsafe.Pointer(uintptr(buf) + uintptr(i)*24))
+			}
+		})
+	return dst
+}
+
 func (this *scaledFont) TextExtents(text string) *TextExtents {
 	return (*TextExtents)(this.ScaledFont.TextExtents(text))
 }
