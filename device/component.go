@@ -24,18 +24,30 @@ type Protocol int
 const (
 	ProtoModbusTCP Protocol = iota
 	ProtoS7
+	ProtoOPCUA
+	ProtoMQTT
 )
 
 func parseProtocol(s string) Protocol {
-	if strings.EqualFold(strings.TrimSpace(s), "s7") {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "s7":
 		return ProtoS7
+	case "opcua", "opc-ua", "opc":
+		return ProtoOPCUA
+	case "mqtt":
+		return ProtoMQTT
 	}
 	return ProtoModbusTCP
 }
 
 func (p Protocol) String() string {
-	if p == ProtoS7 {
+	switch p {
+	case ProtoS7:
 		return "s7"
+	case ProtoOPCUA:
+		return "opcua"
+	case ProtoMQTT:
+		return "mqtt"
 	}
 	return "modbus"
 }
@@ -137,6 +149,10 @@ func (d *DeviceComponent) Start(tags *core.TagDB) error {
 	switch d.protocol {
 	case ProtoS7:
 		drv = driver.NewS7(d.host, d.rack, d.slot)
+	case ProtoOPCUA:
+		drv = driver.NewOPCUA(fmt.Sprintf("opc.tcp://%s:%d", d.host, d.port))
+	case ProtoMQTT:
+		drv = driver.NewMQTT(fmt.Sprintf("tcp://%s:%d", d.host, d.port), fmt.Sprintf("silk-%s-%d", d.host, d.port))
 	default:
 		drv = driver.NewModbusTCP(fmt.Sprintf("tcp://%s:%d", d.host, d.port), uint8(d.unitID))
 	}

@@ -47,13 +47,22 @@ func TestParsePointsErrors(t *testing.T) {
 
 // TestProtocolRoundTrip checks the string<->enum mapping used by the property.
 func TestProtocolRoundTrip(t *testing.T) {
-	if parseProtocol("s7") != ProtoS7 || parseProtocol("S7") != ProtoS7 {
-		t.Error("s7 should parse to ProtoS7")
+	cases := map[string]Protocol{
+		"s7": ProtoS7, "S7": ProtoS7,
+		"opcua": ProtoOPCUA, "OPC-UA": ProtoOPCUA, "opc": ProtoOPCUA,
+		"mqtt": ProtoMQTT, "MQTT": ProtoMQTT,
+		"modbus": ProtoModbusTCP, "": ProtoModbusTCP,
 	}
-	if parseProtocol("modbus") != ProtoModbusTCP || parseProtocol("") != ProtoModbusTCP {
-		t.Error("default/modbus should parse to ProtoModbusTCP")
+	for in, want := range cases {
+		if got := parseProtocol(in); got != want {
+			t.Errorf("parseProtocol(%q) = %v, want %v", in, got, want)
+		}
 	}
-	if ProtoS7.String() != "s7" || ProtoModbusTCP.String() != "modbus" {
-		t.Error("protocol String mismatch")
+	for p, want := range map[Protocol]string{
+		ProtoModbusTCP: "modbus", ProtoS7: "s7", ProtoOPCUA: "opcua", ProtoMQTT: "mqtt",
+	} {
+		if p.String() != want {
+			t.Errorf("%d.String() = %q, want %q", p, p.String(), want)
+		}
 	}
 }
