@@ -41,6 +41,15 @@ func TestGenerateCodeDesignProperties(t *testing.T) {
 		w.(interface{ SetColor(paint.Color) }).SetColor(paint.Color{R: 10, G: 20, B: 30, A: 255})
 		w.(interface{ SetMax(float64) }).SetMax(250)
 	})
+	// DigitalDisplay: change string props (format + unit).
+	addConfiguredFake(t, scene, "gui.DigitalDisplay", "disp1", func(w interface{}) {
+		w.(interface{ SetFormat(string) }).SetFormat("%.2f")
+		w.(interface{ SetUnit(string) }).SetUnit("bar")
+	})
+	// Indicator: change a bool prop (blink).
+	addConfiguredFake(t, scene, "gui.Indicator", "ind1", func(w interface{}) {
+		w.(interface{ SetBlink(bool) }).SetBlink(true)
+	})
 	// Gauge left entirely at defaults — must emit no design setters.
 	addConfiguredFake(t, scene, "gui.Gauge", "gauge1", nil)
 
@@ -49,6 +58,9 @@ func TestGenerateCodeDesignProperties(t *testing.T) {
 	mustContain := []string{
 		"ui.Tank1.SetColor(paint.Color{R: 10, G: 20, B: 30, A: 255})",
 		"ui.Tank1.SetMax(250)",
+		`ui.Disp1.SetFormat("%.2f")`,
+		`ui.Disp1.SetUnit("bar")`,
+		"ui.Ind1.SetBlink(true)",
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(code, s) {

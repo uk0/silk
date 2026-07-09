@@ -769,10 +769,10 @@ type designProp struct {
 // fresh instance's default are emitted, so unchanged widgets stay terse.
 var industrialDesignProps = map[string][]designProp{
 	"gui.Tank":           {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"ShowLabel", "SetShowLabel", dpBool}},
-	"gui.Indicator":      {{"Color", "SetColor", dpColor}, {"OffColor", "SetOffColor", dpColor}},
-	"gui.DigitalDisplay": {{"Color", "SetColor", dpColor}, {"Unit", "SetUnit", dpString}},
+	"gui.Indicator":      {{"Color", "SetColor", dpColor}, {"OffColor", "SetOffColor", dpColor}, {"IsBlink", "SetBlink", dpBool}},
+	"gui.DigitalDisplay": {{"Color", "SetColor", dpColor}, {"Unit", "SetUnit", dpString}, {"Format", "SetFormat", dpString}},
 	"gui.Valve":          {{"OpenColor", "SetOpenColor", dpColor}, {"ClosedColor", "SetClosedColor", dpColor}},
-	"gui.Pipe":           {{"FlowColor", "SetFlowColor", dpColor}},
+	"gui.Pipe":           {{"FlowColor", "SetFlowColor", dpColor}, {"IsVertical", "SetVertical", dpBool}},
 	"gui.Thermometer":    {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
 	"gui.ValueBar":       {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
 	"gui.Gauge":          {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Unit", "SetUnit", dpString}, {"Title", "SetTitle", dpString}},
