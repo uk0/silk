@@ -94,6 +94,7 @@ func (this *Gauge) ClearZones() {
 func (this *Gauge) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("标题", this.Title, this.SetTitle)
 	list.AddProperty("单位", this.Unit, this.SetUnit)
+	list.AddProperty("数值", this.Value, this.SetValue)
 }
 
 // SizeHints returns the preferred size.

@@ -126,6 +126,7 @@ func (this *Tank) TagName() string { return this.tagName }
 func (this *Tank) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("液位", this.Level, this.SetLevel)
 	list.AddProperty("显示标签", this.ShowLabel, this.SetShowLabel)
+	list.AddProperty("颜色", this.Color, this.SetColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
@@ -266,6 +267,8 @@ func (this *Indicator) TagName() string { return this.tagName }
 func (this *Indicator) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("点亮", this.IsOn, this.SetOn)
 	list.AddProperty("闪烁", this.IsBlink, this.SetBlink)
+	list.AddProperty("颜色", this.Color, this.SetColor)
+	list.AddProperty("熄灭颜色", this.OffColor, this.SetOffColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
@@ -448,6 +451,7 @@ func (this *DigitalDisplay) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("数值", this.Value, this.SetValue)
 	list.AddProperty("格式", this.Format, this.SetFormat)
 	list.AddProperty("单位", this.Unit, this.SetUnit)
+	list.AddProperty("颜色", this.Color, this.SetColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
@@ -616,6 +620,8 @@ func (this *Valve) TagName() string { return this.tagName }
 
 func (this *Valve) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("打开", this.State, this.SetState)
+	list.AddProperty("打开颜色", this.OpenColor, this.SetOpenColor)
+	list.AddProperty("关闭颜色", this.ClosedColor, this.SetClosedColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
@@ -730,6 +736,7 @@ func (this *Pipe) TagName() string { return this.tagName }
 func (this *Pipe) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("有流量", this.IsActive, this.SetActive)
 	list.AddProperty("竖直", this.IsVertical, this.SetVertical)
+	list.AddProperty("流动颜色", this.FlowColor, this.SetFlowColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 
@@ -972,6 +979,7 @@ func (this *Thermometer) TagName() string { return this.tagName }
 
 func (this *Thermometer) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("温度", this.Value, this.SetValue)
+	list.AddProperty("颜色", this.Color, this.SetColor)
 	list.AddProperty("tag", this.TagName, this.SetTagName)
 }
 

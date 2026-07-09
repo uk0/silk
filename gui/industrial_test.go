@@ -409,3 +409,107 @@ func TestIndustrialTagEnumProperty(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Expanded design-time property sheets
+// ---------------------------------------------------------------------------
+
+// TestIndustrialEnumPropertyIDs pins the full property-sheet contract of every
+// industrial widget: the pre-existing entries survive and the added ones are
+// exposed.
+func TestIndustrialEnumPropertyIDs(t *testing.T) {
+	want := map[string][]string{
+		"Tank":           {"液位", "显示标签", "颜色", "tag"},
+		"Indicator":      {"点亮", "闪烁", "颜色", "熄灭颜色", "tag"},
+		"DigitalDisplay": {"数值", "格式", "单位", "颜色", "tag"},
+		"Valve":          {"打开", "打开颜色", "关闭颜色", "tag"},
+		"Pipe":           {"有流量", "竖直", "流动颜色", "tag"},
+		"Pump":           {"运行", "故障", "tag"},
+		"Thermometer":    {"温度", "颜色", "tag"},
+		"ValueBar":       {"数值", "tag"},
+	}
+	for name, w := range industrialTaggedWidgets() {
+		pc := newPropCapture()
+		w.EnumProperties(pc)
+		for _, id := range want[name] {
+			if _, ok := pc.gets[id]; !ok {
+				t.Errorf("%s: property %q not exposed", name, id)
+			}
+		}
+	}
+}
+
+// roundTripColorProp drives one captured paint.Color property end to end: the
+// recorded setter stores the value and the recorded getter reflects it.
+func roundTripColorProp(t *testing.T, name, id string, pc *propCapture, want paint.Color) {
+	t.Helper()
+	get, ok := pc.gets[id].(func() paint.Color)
+	if !ok {
+		t.Errorf("%s: EnumProperties exposes no color getter for %q", name, id)
+		return
+	}
+	set, ok := pc.sets[id].(func(paint.Color))
+	if !ok {
+		t.Errorf("%s: EnumProperties exposes no color setter for %q", name, id)
+		return
+	}
+	set(want)
+	if got := get(); got != want {
+		t.Errorf("%s: %q round-trip = %v, want %v", name, id, got, want)
+	}
+}
+
+func TestIndustrialColorEnumProperties(t *testing.T) {
+	cases := []struct {
+		name string
+		w    core.IEnumProperties
+		ids  []string
+	}{
+		{"Tank", NewTank(), []string{"颜色"}},
+		{"Indicator", NewIndicator(), []string{"颜色", "熄灭颜色"}},
+		{"DigitalDisplay", NewDigitalDisplay(), []string{"颜色"}},
+		{"Valve", NewValve(), []string{"打开颜色", "关闭颜色"}},
+		{"Pipe", NewPipe(), []string{"流动颜色"}},
+		{"Thermometer", NewThermometer(), []string{"颜色"}},
+	}
+	for _, c := range cases {
+		pc := newPropCapture()
+		c.w.EnumProperties(pc)
+		for i, id := range c.ids {
+			want := paint.Color{R: uint8(40 + 10*i), G: uint8(50 + 10*i), B: uint8(60 + 10*i), A: 255}
+			roundTripColorProp(t, c.name, id, pc, want)
+		}
+	}
+}
+
+// TestGaugeEnumProperties covers the Gauge chart widget (chart_gauge.go): the
+// pre-existing 标题/单位 entries survive and the added 数值 entry round-trips.
+func TestGaugeEnumProperties(t *testing.T) {
+	g := NewGauge()
+	pc := newPropCapture()
+	g.EnumProperties(pc)
+
+	for _, id := range []string{"标题", "单位"} {
+		if _, ok := pc.gets[id]; !ok {
+			t.Errorf("Gauge: property %q not exposed", id)
+		}
+	}
+
+	get, ok := pc.gets["数值"].(func() float64)
+	if !ok {
+		t.Fatalf("Gauge: EnumProperties exposes no float64 getter for %q", "数值")
+	}
+	set, ok := pc.sets["数值"].(func(float64))
+	if !ok {
+		t.Fatalf("Gauge: EnumProperties exposes no float64 setter for %q", "数值")
+	}
+	set(42.5)
+	if got := get(); got != 42.5 {
+		t.Errorf("Gauge: 数值 round-trip = %v, want 42.5", got)
+	}
+	// The property setter drives the same state as SetValue.
+	g.SetValue(63)
+	if got := get(); got != 63 {
+		t.Errorf("Gauge: 数值 getter after SetValue = %v, want 63", got)
+	}
+}
