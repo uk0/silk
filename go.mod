@@ -20,6 +20,7 @@ require (
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
+	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
