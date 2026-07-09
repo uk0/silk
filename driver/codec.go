@@ -207,6 +207,19 @@ func Encode(v interface{}, dt DataType, order ByteOrder) ([]byte, error) {
 	return order.normalize(b), nil // big-endian -> device order (normalize is self-inverse)
 }
 
+// tagValue normalizes a decoded device value into the representation silk tags
+// carry: bool for a boolean point, float64 for every numeric type (so
+// core.Value.Float() reads them uniformly regardless of the wire width).
+func tagValue(v interface{}, dt DataType) interface{} {
+	if dt == TypeBool {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+		return asFloat(v) != 0
+	}
+	return asFloat(v)
+}
+
 // asFloat coerces the common numeric/bool concrete types to float64.
 func asFloat(v interface{}) float64 {
 	switch x := v.(type) {
