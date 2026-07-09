@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	fyne.io/systray v1.12.2
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/expr-lang/expr v1.17.8
 	github.com/gen2brain/beeep v0.11.2
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260406072232-3ac4aa2bb164
@@ -20,7 +21,6 @@ require (
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
-	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
