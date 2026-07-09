@@ -119,6 +119,35 @@ func ScrollingList(g paint.Painter, rows int) {
 	}
 }
 
+// WidgetRows draws rows the way real widgets actually do: each row sets its
+// own fill color via SetBrush1, fills its background, sets a border pen via
+// SetPen1, strokes a divider, then sets a text color and draws a label. Unlike
+// ScrollingList — which reuses a handful of pre-built *SolidBrush values —
+// this exercises the SetBrush1/SetPen1/DrawText setters every widget invokes
+// per frame, so it reflects real per-frame allocation behaviour (the path the
+// painter's reused brush/pen/glyph buffers target).
+func WidgetRows(g paint.Painter, rows int) {
+	for i := 0; i < rows; i++ {
+		y := float64(i) * 28
+		if i&1 == 0 {
+			g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
+		} else {
+			g.SetBrush1(paint.Color{R: 242, G: 242, B: 242, A: 255})
+		}
+		g.Rectangle(0, y, 800, 28)
+		g.Fill()
+
+		g.SetPen1(paint.Color{R: 217, G: 217, B: 217, A: 255}, 1)
+		g.MoveTo(0, y+27)
+		g.LineTo(800, y+27)
+		g.Stroke()
+
+		g.SetBrush1(paint.Color{R: 26, G: 26, B: 26, A: 255})
+		g.MoveTo(12, y+18)
+		g.DrawText("Row label")
+	}
+}
+
 // TypicalForm draws a small dialog: 1 background, 1 title, 5 rows of
 // (label + edit), 2 buttons. Per-frame cost of a typical settings
 // dialog is dominated by this kind of mix.

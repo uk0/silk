@@ -83,3 +83,13 @@ func BenchmarkCairoTypicalForm(b *testing.B) {
 		TypicalForm(g)
 	}
 }
+
+func BenchmarkCairoWidgetRows(b *testing.B) {
+	g, _ := newCairoPainter()
+	WidgetRows(g, 1) // warm up font + atlas
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		WidgetRows(g, 1000)
+	}
+}
