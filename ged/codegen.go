@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"unicode"
 
@@ -131,7 +132,8 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		factoryName   string
 		x, y, w, h    float64
 		defaultText   string
-		tagName       string // design-time SCADA/组态 tag bound to this widget's value
+		tagName       string      // design-time SCADA/组态 tag bound to this widget's value
+		widget        interface{} // live designed widget, for reflecting design-time property values
 		eventHandlers map[string]string
 		code          string // user-written event handler code
 		parentField   string // owning container field; "" = top-level (ui.Form)
@@ -223,6 +225,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				x:           x, y: y, w: w, h: h,
 				defaultText:   defaultText,
 				tagName:       tagName,
+				widget:        fake.Widget(),
 				eventHandlers: fake.EventHandlers(),
 				code:          fake.GetCode(),
 				parentField:   parentField,
@@ -363,6 +366,13 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		}
 	}
 	buf.WriteString("\n")
+
+	// Design-time property setters: for industrial/组态 widgets, reproduce each
+	// configurable property the designer changed from its default (colors,
+	// range, unit, …) so the generated screen looks like the design.
+	for _, f := range fields {
+		emitDesignProperties(&buf, imports, f.factoryName, f.name, f.widget)
+	}
 
 	// Tag bindings: wire each industrial widget whose design-time "tag"
 	// property is set to its named tag in ui.Tags, so a designed 组态 screen
@@ -735,6 +745,101 @@ func emitEventBinding(buf *strings.Builder, imports map[string]bool, factoryName
 		}
 	}
 	return false
+}
+
+// designPropKind is the value type of a reproducible design-time property.
+type designPropKind int
+
+const (
+	dpColor designPropKind = iota
+	dpFloat
+	dpString
+	dpBool
+)
+
+// designProp names a widget's design-time property: the getter to read the
+// designed value, the setter to emit, and its kind.
+type designProp struct {
+	getter, setter string
+	kind           designPropKind
+}
+
+// industrialDesignProps lists the configurable design-time properties codegen
+// reproduces per SCADA/组态 widget. Only properties whose value differs from a
+// fresh instance's default are emitted, so unchanged widgets stay terse.
+var industrialDesignProps = map[string][]designProp{
+	"gui.Tank":           {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"ShowLabel", "SetShowLabel", dpBool}},
+	"gui.Indicator":      {{"Color", "SetColor", dpColor}, {"OffColor", "SetOffColor", dpColor}},
+	"gui.DigitalDisplay": {{"Color", "SetColor", dpColor}, {"Unit", "SetUnit", dpString}},
+	"gui.Valve":          {{"OpenColor", "SetOpenColor", dpColor}, {"ClosedColor", "SetClosedColor", dpColor}},
+	"gui.Pipe":           {{"FlowColor", "SetFlowColor", dpColor}},
+	"gui.Thermometer":    {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
+	"gui.ValueBar":       {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}},
+	"gui.Gauge":          {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Unit", "SetUnit", dpString}, {"Title", "SetTitle", dpString}},
+}
+
+// emitDesignProperties emits setter calls for the design-time properties an
+// industrial widget's designer changed from the widget's defaults. Values are
+// read reflectively from the live designed widget and compared against a fresh
+// factory instance, so only non-defaults are written. No-op for widgets with no
+// table entry (every non-industrial widget) or a missing getter/setter.
+func emitDesignProperties(buf *strings.Builder, imports map[string]bool, factoryName, fieldName string, widget interface{}) {
+	props := industrialDesignProps[factoryName]
+	if len(props) == 0 || widget == nil {
+		return
+	}
+	// Reference defaults must be built exactly as a freshly-dragged widget is
+	// (factory.New + setDefaultContent), so as-dragged defaults like a Gauge's
+	// "%" unit are recognised as unchanged. core.New alone skips
+	// setDefaultContent and would misreport them as edits.
+	refFake, err := NewFakeWidgetFromFactory(factoryName)
+	if err != nil || refFake.Widget() == nil {
+		return
+	}
+	dv := reflect.ValueOf(widget)
+	rv := reflect.ValueOf(refFake.Widget())
+	for _, p := range props {
+		getM := dv.MethodByName(p.getter)
+		refM := rv.MethodByName(p.getter)
+		setM := dv.MethodByName(p.setter)
+		if !getM.IsValid() || !refM.IsValid() || !setM.IsValid() {
+			continue
+		}
+		got := getM.Call(nil)[0]
+		def := refM.Call(nil)[0]
+		switch p.kind {
+		case dpColor:
+			gr, gg, gb, ga := colorRGBA(got)
+			dr, dg, db, da := colorRGBA(def)
+			if gr == dr && gg == dg && gb == db && ga == da {
+				continue
+			}
+			imports["github.com/uk0/silk/paint"] = true
+			fmt.Fprintf(buf, "\tui.%s.%s(paint.Color{R: %d, G: %d, B: %d, A: %d})\n", fieldName, p.setter, gr, gg, gb, ga)
+		case dpFloat:
+			if got.Float() == def.Float() {
+				continue
+			}
+			fmt.Fprintf(buf, "\tui.%s.%s(%s)\n", fieldName, p.setter, fmtFloat(got.Float()))
+		case dpString:
+			if got.String() == def.String() {
+				continue
+			}
+			fmt.Fprintf(buf, "\tui.%s.%s(%q)\n", fieldName, p.setter, got.String())
+		case dpBool:
+			if got.Bool() == def.Bool() {
+				continue
+			}
+			fmt.Fprintf(buf, "\tui.%s.%s(%v)\n", fieldName, p.setter, got.Bool())
+		}
+	}
+}
+
+// colorRGBA reads a paint.Color's R,G,B,A fields reflectively, so codegen need
+// not import paint just to read a color value.
+func colorRGBA(v reflect.Value) (r, g, b, a uint8) {
+	return uint8(v.FieldByName("R").Uint()), uint8(v.FieldByName("G").Uint()),
+		uint8(v.FieldByName("B").Uint()), uint8(v.FieldByName("A").Uint())
 }
 
 // emitTagBinding writes the runtime SCADA/组态 tag binding for an industrial
