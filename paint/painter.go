@@ -133,6 +133,21 @@ type cairoPainter struct {
 	// and nothing retains them, and painters are single-threaded during paint.
 	glyphBuf []Glyph
 
+	// solid is a reusable SolidBrush for SetBrush1 / SetBrush(Color), the color
+	// setter every widget calls before each fill. Pointing state.brush at this
+	// shared field instead of allocating a fresh *SolidBrush per call removes a
+	// pervasive per-fill allocation. Safe because Restore() does not read
+	// Go-side state.brush back (it relies on the next Set* before drawing), so
+	// the shared brush is never aliased across a save boundary; if Restore ever
+	// starts restoring state.brush, this must switch to storing the color by
+	// value in painterStateEx.
+	solid SolidBrush
+
+	// penScratch is the SetPen1 analogue of solid: a reusable pen so the
+	// stroke-color setter (SetPen1, called on every bordered/lined draw)
+	// does not allocate a fresh *pen per call. Same safety rationale as solid.
+	penScratch pen
+
 	surface Surface
 	//saveNum int
 }
@@ -186,7 +201,10 @@ func (this *cairoPainter) SetBrush(br Brush) {
 }
 
 func (this *cairoPainter) SetBrush1(cr Color) {
-	this.SetBrush(NewSolidBrush(cr))
+	// Reuse the painter's embedded solid brush instead of allocating a fresh
+	// *SolidBrush every call (see the solid field's doc for why this is safe).
+	this.solid.Color = cr
+	this.state.brush = &this.solid
 }
 
 func (this *cairoPainter) applyBrush() {
@@ -624,7 +642,11 @@ func (this *cairoPainter) DrawPixmap2(x, y float64, pixmap Pixmap, x0, y0 float6
 //}
 
 func (this *cairoPainter) SetPen1(cr Color, width float64) {
-	this.SetPen(NewPen(cr, width))
+	// Reuse the painter's embedded pen instead of allocating a fresh *pen every
+	// call (same safety rationale as SetBrush1 / the solid field).
+	this.penScratch.color = cr
+	this.penScratch.width = width
+	this.state.pen = &this.penScratch
 }
 
 //func (this *cairoPainter) SetSimplePen4(width float64, r, g, b uint8) {
