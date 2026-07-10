@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/uk0/silk/sqlite3" // registers the "sqlite3" driver (repo idiom)
+	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" driver (repo idiom)
 )
 
 // Kind classifies an event by what produced it.

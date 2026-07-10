@@ -10,6 +10,7 @@ require (
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260406072232-3ac4aa2bb164
 	github.com/gopcua/opcua v0.9.0
+	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/robinson/gos7 v0.0.0-20260622162611-2d6806f80c8b
 	github.com/simonvetter/modbus v1.6.4

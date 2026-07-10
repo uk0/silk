@@ -6,7 +6,7 @@ import (
 	//	"github.com/uk0/silk/gui"
 	//	"github.com/uk0/silk/gui"
 	"errors"
-	_ "github.com/uk0/silk/sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 	"os"
 	"path"
 	//	"sort"

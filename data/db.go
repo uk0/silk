@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"github.com/uk0/silk/core"
-	_ "github.com/uk0/silk/sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 	"runtime"
 	"strings"
 	"sync"

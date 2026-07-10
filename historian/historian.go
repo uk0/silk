@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/uk0/silk/core"
-	_ "github.com/uk0/silk/sqlite3" // registers the "sqlite3" driver (repo idiom)
+	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" driver (repo idiom)
 )
 
 // Historian owns a SQLite handle holding a single samples table.
