@@ -225,10 +225,44 @@ silk/
 
 ```go
 // go.mod
-module silk
+module github.com/uk0/silk
 ```
 
-Internal imports use: `silk/core`, `silk/gui`, `silk/ged`, etc.
+Internal imports use: `github.com/uk0/silk/core`, `github.com/uk0/silk/gui`, `github.com/uk0/silk/ged`, etc.
+
+---
+
+## 组态 / SCADA & Industrial Platform
+
+Beyond the widget toolkit, Silk ships a full industrial-automation (组态) stack
+built on a real-time tag database:
+
+- **Field-bus drivers** — Modbus TCP, Siemens S7, OPC-UA and MQTT, covering every
+  PLC data type and all four register/byte orders (ABCD/DCBA/BADC/CDAB), read-only
+  or read-write. Wrap two in a **redundant** driver for primary/backup failover, or
+  bridge protocols with the **gateway**. A **simulator** driver runs screens without
+  hardware.
+- **Tags & bindings** — `core.TagDB` streams device values into widgets via
+  value-driven bindings, animation, alarms and rolling trends. Configure a device and
+  its tag points visually with `DeviceComponent`, or stamp many devices from a
+  structured **template**.
+- **Data & logic** — **historian** (SQLite history), **reports** (interval
+  aggregation → CSV/HTML), **trend playback**, **recipes**, **calc/formula** tags,
+  **event log**, live **statistics**, runtime **Go scripting**, and **user auth** with
+  login sessions.
+
+```go
+tags := core.NewTagDB()
+dev := device.NewDeviceComponent()          // Modbus / S7 / OPC-UA / MQTT
+dev.SetProtocol("modbus")
+dev.SetHost("192.168.0.10")
+dev.SetPoints("level, hr:0, Float32, ABCD, RO\npump, coil:0, Bool, ABCD, RW")
+dev.Start(tags)                             // poll device -> tags -> screen
+```
+
+The `silkide` designer/IDE adds LSP (gopls) code intelligence, a Delve debugger, and
+Qt Creator-style **locator**, **find-in-files**, **snippets** and **build-issue**
+navigation.
 
 ---
 

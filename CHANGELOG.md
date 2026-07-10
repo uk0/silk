@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.4.0 (2026-07-09)
+
+### 组态 / SCADA & Industrial Automation
+- Real-time tag database (`TagDB`) with value-driven bindings, animation and alarms
+- Field-bus drivers: **Modbus TCP, Siemens S7, OPC-UA, MQTT** — all PLC data types, all four register/byte orders (ABCD/DCBA/BADC/CDAB), read-only / read-write
+- Driver **redundancy** (primary/backup failover), protocol **gateway** (data forwarding), **simulator** driver (hardware-free testing)
+- `DeviceComponent` — widget-form device configuration placeable in the designer
+- Structured-config **device templates** (batch tag instantiation)
+- **Historian** (SQLite tag history), **reports** (interval aggregation, CSV/HTML), **trend playback**
+- **Recipe** management, **calc/formula** tags, **event log**, live tag **statistics**
+- Alarm engine + notification/event bridge; industrial widgets (Tank, Gauge, Valve, Indicator, Pipe, …)
+- Runtime **Go scripting** (yaegi); **user auth** + login sessions
+
+### IDE (silkide) — Qt Creator parity
+- LSP (gopls): completion / hover / definition / references / rename / format / code actions
+- Delve debugger integration
+- **Locator** (fuzzy quick-open), **find-in-files**, **snippets**, **build-issue** parsing
+
+### Build
+- Go-gettable SQLite (`mattn/go-sqlite3`) — the tree now builds from a clean clone
+- CI covers the full SCADA + IDE package set
+
 ## v2.3.0 (2026-04-12)
 
 ### New Widgets (20 new)

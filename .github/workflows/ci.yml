@@ -39,7 +39,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
           cache: true
 
       - name: Install Cairo (Linux)
@@ -85,10 +85,18 @@ jobs:
           echo "/c/msys64/mingw64/bin" >> $GITHUB_PATH
 
       - name: Vet
-        run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+        run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
 
-      - name: Test
+      # Split into groups: building every cgo test binary in one invocation can
+      # exhaust the runner (cairo + sqlite amalgamation compile at once).
+      - name: Test (core UI)
         run: go test -short -count=1 ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/
+
+      - name: Test (SCADA backend)
+        run: go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/
+
+      - name: Test (IDE engines)
+        run: go test -short -count=1 ./locator/ ./filesearch/ ./snippet/ ./buildissues/
 
       - name: Build legacy entry points
         if: runner.os != 'Windows'
