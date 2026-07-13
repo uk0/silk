@@ -26,7 +26,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     # Default shell. Overridden for Windows where the cairo cgo build
-    # has to run inside an MSYS2 mingw64 environment so pkg-config
+    # has to run inside an MSYS2 ucrt64 environment so pkg-config
     # finds the cairo headers.
     defaults:
       run:
@@ -64,25 +64,25 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: false
           install: >-
-            mingw-w64-x86_64-cairo
-            mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gcc
 
       - name: Configure Windows cgo env
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          # Hand cgo the MSYS2 pkg-config + mingw64 toolchain so it
+          # Hand cgo the MSYS2 pkg-config + ucrt64 toolchain so it
           # can resolve cairo. setup-go's GOROOT/PATH ordering puts
-          # the Microsoft runtime in front of mingw64; clobber that
+          # the Microsoft runtime in front of ucrt64; clobber that
           # so cgo picks up the gcc we just installed.
-          echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
           echo "CC=gcc" >> $GITHUB_ENV
           echo "CXX=g++" >> $GITHUB_ENV
-          echo "/c/msys64/mingw64/bin" >> $GITHUB_PATH
+          echo "/c/msys64/ucrt64/bin" >> $GITHUB_PATH
 
       - name: Vet
         run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/

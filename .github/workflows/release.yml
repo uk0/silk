@@ -69,21 +69,21 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: |
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-cairo
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-cairo
 
       - name: Configure MSYS2 PATH (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
-          echo "PKG_CONFIG_PATH=C:/msys64/mingw64/lib/pkgconfig" >> $GITHUB_ENV
-          echo "CGO_CFLAGS=-IC:/msys64/mingw64/include" >> $GITHUB_ENV
-          echo "CGO_LDFLAGS=-LC:/msys64/mingw64/lib -lcairo" >> $GITHUB_ENV
+          echo "C:/msys64/ucrt64/bin" >> $GITHUB_PATH
+          echo "PKG_CONFIG_PATH=C:/msys64/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-IC:/msys64/ucrt64/include" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-LC:/msys64/ucrt64/lib -lcairo" >> $GITHUB_ENV
           echo "CGO_ENABLED=1" >> $GITHUB_ENV
 
       # ─── Test ───
@@ -128,17 +128,17 @@ jobs:
           cp -r icon dist/silk-${{ matrix.label }}/
           cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
           # Bundle MSYS2 cairo DLLs so the binary runs on systems without MSYS2.
-          cp /c/msys64/mingw64/bin/libcairo-2.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libpixman-1-0.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libfontconfig-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libfreetype-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libpng16-16.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libexpat-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libgcc_s_seh-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libstdc++-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libwinpthread-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/zlib1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/mingw64/bin/libbz2-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libcairo-2.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libpixman-1-0.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libfontconfig-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libfreetype-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libpng16-16.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libexpat-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libgcc_s_seh-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libstdc++-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libwinpthread-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/zlib1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          cp /c/msys64/ucrt64/bin/libbz2-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
           cd dist && 7z a silk-${{ matrix.label }}.zip silk-${{ matrix.label }}
 
       - name: Upload artifact
