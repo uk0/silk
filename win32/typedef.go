@@ -205,7 +205,7 @@ type (
 	HMODULE         HANDLE
 	HMONITOR        HANDLE
 	HPEN            HANDLE
-	HRESULT         uint32
+	HRESULT         uintptr
 	HRGN            HANDLE
 	HRSRC           HANDLE
 	HTHUMBNAIL      HANDLE
