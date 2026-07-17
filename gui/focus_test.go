@@ -158,10 +158,12 @@ func TestIsTabFocusablePredicate(t *testing.T) {
 	if isTabFocusable(NewLabel("x")) {
 		t.Fatalf("Label (auto, no OnKeyDown) should not be focusable")
 	}
-	// AutoFocus + no OnKeyDown (Button) => not focusable. This is what lets us
-	// avoid editing every widget: only key-handling widgets opt in by default.
-	if isTabFocusable(NewButton()) {
-		t.Fatalf("Button (auto, no OnKeyDown) should not be focusable")
+	// AutoFocus + implements OnKeyDown (Button) => focusable. Button now handles
+	// Enter/Space for keyboard activation, so like Slider it opts into the Tab
+	// chain automatically without an explicit policy. (The "no OnKeyDown => not
+	// focusable" branch stays covered by the Label case above.)
+	if !isTabFocusable(NewButton()) {
+		t.Fatalf("Button (auto, OnKeyDown) should be focusable")
 	}
 	// TabFocus on a Label opts it in even without OnKeyDown.
 	lbl := NewLabel("x")

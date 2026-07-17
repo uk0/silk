@@ -22,6 +22,14 @@ func init() {
 	core.RegisterFactory("gui.SearchBox", core.TypeOf((*SearchBox)(nil)))
 }
 
+// Compile-time checks: SearchBox must satisfy the keyboard and text-input
+// event interfaces the window dispatches (window_glfw.go onKey/onChar), or
+// keystrokes and typed characters silently never reach it.
+var (
+	_ IEventKeyDown   = (*SearchBox)(nil)
+	_ IEventTextInput = (*SearchBox)(nil)
+)
+
 func NewSearchBox() *SearchBox {
 	p := new(SearchBox)
 	p.Init(p)
@@ -115,7 +123,7 @@ func (this *SearchBox) OnFocusOut() {
 	this.Self().Update()
 }
 
-func (this *SearchBox) OnKeyDown(key int, mods int) {
+func (this *SearchBox) OnKeyDown(key int, repeat bool) {
 	runes := []rune(this.text)
 	switch key {
 	case KeyBackSpace:
@@ -156,13 +164,20 @@ func (this *SearchBox) OnKeyDown(key int, mods int) {
 	}
 }
 
-func (this *SearchBox) OnChar(ch rune) {
-	if ch < 32 {
+// OnTextInput implements IEventTextInput: the window routes committed text
+// here (already stripped of control chars by onChar). Each rune is inserted
+// at the caret and advances it, matching the old per-char handler.
+func (this *SearchBox) OnTextInput(s string) {
+	if s == "" {
 		return
 	}
 	runes := []rune(this.text)
-	runes = append(runes[:this.cursorPos], append([]rune{ch}, runes[this.cursorPos:]...)...)
-	this.cursorPos++
+	if this.cursorPos > len(runes) {
+		this.cursorPos = len(runes)
+	}
+	ins := []rune(s)
+	runes = append(runes[:this.cursorPos], append(ins, runes[this.cursorPos:]...)...)
+	this.cursorPos += len(ins)
 	this.text = string(runes)
 	this.fireTextChanged()
 	this.Self().Update()

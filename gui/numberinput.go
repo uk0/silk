@@ -28,6 +28,14 @@ func init() {
 	core.RegisterFactory("gui.NumberInput", core.TypeOf((*NumberInput)(nil)))
 }
 
+// Compile-time checks: NumberInput must satisfy the keyboard and text-input
+// event interfaces the window dispatches (window_glfw.go onKey/onChar), or
+// arrow-key stepping and typed digits silently never reach it.
+var (
+	_ IEventKeyDown   = (*NumberInput)(nil)
+	_ IEventTextInput = (*NumberInput)(nil)
+)
+
 func NewNumberInput() *NumberInput {
 	p := new(NumberInput)
 	p.Init(p)
@@ -152,7 +160,7 @@ func (this *NumberInput) commitEdit() {
 	}
 }
 
-func (this *NumberInput) OnKeyDown(key int, mods int) {
+func (this *NumberInput) OnKeyDown(key int, repeat bool) {
 	if !this.editing {
 		switch key {
 		case KeyUp:
@@ -183,14 +191,19 @@ func (this *NumberInput) OnKeyDown(key int, mods int) {
 	}
 }
 
-func (this *NumberInput) OnChar(ch rune) {
+// OnTextInput implements IEventTextInput. While editing, it appends the
+// digits / dot / minus of the committed text and drops any other rune,
+// preserving the numeric-only filter of the old per-char handler.
+func (this *NumberInput) OnTextInput(s string) {
 	if !this.editing {
 		return
 	}
 	// allow digits, dot, minus
-	if (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' {
-		this.editText += string(ch)
-		this.Self().Update()
+	for _, ch := range s {
+		if (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' {
+			this.editText += string(ch)
+			this.Self().Update()
+		}
 	}
 }
 

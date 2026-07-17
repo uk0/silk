@@ -128,6 +128,27 @@ func (this *Button) emit() {
 	this.action.Trigger(this.Self())
 }
 
+// Compile-time check: Button must satisfy IEventKeyDown so the window routes
+// keys to a focused button, and focus.go's AutoFocus heuristic places it in
+// the Tab chain.
+var _ IEventKeyDown = (*Button)(nil)
+
+// OnKeyDown implements IEventKeyDown so a focused button can be activated from
+// the keyboard: Enter or Space run the same path as a mouse click (emit ->
+// Action.Trigger / sub-popup toggle). Implementing this interface also opts
+// the button into the Tab focus chain (see focus.go AutoFocus). Guarded on
+// IsEnabled — which for a Button also implies a non-nil action — so a disabled
+// button ignores keys and emit() never dereferences a nil action.
+func (this *Button) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
+	switch key {
+	case KeyEnter, KeySpace:
+		this.emit()
+	}
+}
+
 func (this *Button) OnMouseStop(x, y float64) {
 	//this.Ow().Update()
 	//x, y = this.MapToGlobal(x, y)
