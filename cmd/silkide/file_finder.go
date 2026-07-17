@@ -3,12 +3,12 @@ package main
 import (
 	"io/fs"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
+	"github.com/uk0/silk/locator"
 )
 
 // fileEntry is one row in the quick-file-open list. Path is absolute
@@ -118,30 +118,32 @@ func walkProjectFiles(root string) []fileEntry {
 	return out
 }
 
-// filterFiles returns the subset of entries whose Display contains
-// every rune of query in order (subsequence match — same shape as
-// the Command Palette filter and VSCode's Cmd+P). Empty query passes
-// everything through unchanged.
+// rankFiles filters and ranks entries against query using the shared
+// locator fuzzy engine — the same scorer behind the Qt-Creator-style
+// quick-open box — instead of a hand-rolled subsequence-plus-length
+// sort. Each entry becomes a locator.Item: Name is the project-relative
+// Display (the string the user types against), Detail carries the
+// absolute Path through untouched, and Kind tags it "file". locator.Match
+// does the subsequence filtering and scoring (word/camelCase/separator
+// boundary, consecutive-run, and prefix/exact-match bonuses), so a tight
+// prefix hit like "main"→"main.go" outranks a scattered match, and gappy
+// matches fall to the bottom rather than being ordered purely by length.
 //
-// Ranks shorter Display strings first so a query like "main" surfaces
-// "main.go" above "internal/somepackage/main.go" — typical user
-// expectation when there are many files containing "main".
-func filterFiles(files []fileEntry, query string) []fileEntry {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		out := make([]fileEntry, len(files))
-		copy(out, files)
-		return out
+// query is trimmed but NOT lower-cased: locator folds case internally and
+// needs the original case to award its exact/prefix tier bonuses. An empty
+// (or all-space) query returns every entry, Name-sorted, per Match's
+// contract. Path survives the Item.Detail round-trip so the caller still
+// opens the same absolute file it selected.
+func rankFiles(files []fileEntry, query string) []fileEntry {
+	items := make([]locator.Item, len(files))
+	for i, f := range files {
+		items[i] = locator.Item{Name: f.Display, Detail: f.Path, Kind: "file"}
 	}
-	out := make([]fileEntry, 0, len(files))
-	for _, f := range files {
-		if subsequenceMatch(strings.ToLower(f.Display), q) {
-			out = append(out, f)
-		}
+	ranked := locator.Match(strings.TrimSpace(query), items)
+	out := make([]fileEntry, len(ranked))
+	for i, it := range ranked {
+		out[i] = fileEntry{Path: it.Detail, Display: it.Name}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return len(out[i].Display) < len(out[j].Display)
-	})
 	return out
 }
 
@@ -184,7 +186,7 @@ func showFileFinder(parent gui.IWidget, root string, tabs *gui.TabWidget) {
 
 	repopulate := func(query string) {
 		list.Clear()
-		for _, f := range filterFiles(files, query) {
+		for _, f := range rankFiles(files, query) {
 			list.Append(gui.ListItem{Text: f.Display, Data: f})
 		}
 		if list.Count() > 0 {
