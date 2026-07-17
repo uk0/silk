@@ -641,6 +641,23 @@ func (t *defaultTheme) DrawViewFrame(c paint.Painter, x, y, width, height float6
 	c.Stroke()
 }
 
+// drawHeaderBg paints the background of one table / header-view header cell.
+// The default theme renders headers programmatically and leaves ButtonPushedFace
+// nil (only tab faces still use pixmaps), so draw sites must not dereference the
+// face blindly. When a header face is configured it is used; otherwise the cell
+// is filled with the chrome FormColor. w and h are the cell size in the
+// painter's current coordinate space (the fill matches pixmapFace.Draw, which
+// also paints at the current origin).
+func (t *defaultTheme) drawHeaderBg(g paint.Painter, w, h float64) {
+	if t.ButtonPushedFace != nil {
+		t.ButtonPushedFace.Draw(g, w, h)
+		return
+	}
+	g.SetBrush1(t.FormColor)
+	g.Rectangle(0, 0, w, h)
+	g.Fill()
+}
+
 func (t *defaultTheme) DrawSeperator(c paint.Painter, w, h float64, vertical bool) {
 	x, y := 0.0, 0.0
 	//	c.SetLineWidth(1)

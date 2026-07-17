@@ -178,7 +178,7 @@ func (this *HeaderView) Draw(g paint.Painter) {
 		}
 		x := p.Offset
 		g.Translate(x, 0)
-		Theme().ButtonPushedFace.Draw(g, p.Size, this.h)
+		Theme().drawHeaderBg(g, p.Size, this.h)
 		g.Translate(-x, 0)
 		g.SetBrush1(Theme().TextColor)
 		g.DrawText1(x, y, this.getSectionText(p))

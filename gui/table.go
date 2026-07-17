@@ -837,7 +837,7 @@ func (this *Table) Draw(g paint.Painter) {
 	for c := 0; c < colCount; c++ {
 		cw := this.columnWidth(c)
 		// Header background
-		t.ButtonPushedFace.Draw(g, cw, hh)
+		t.drawHeaderBg(g, cw, hh)
 		// Header text
 		g.SetBrush1(t.TextColor)
 		txt := this.model.HeaderText(c)
