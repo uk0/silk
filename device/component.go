@@ -172,76 +172,8 @@ func (d *DeviceComponent) Stop() {
 	}
 }
 
-// parsePoints reads the point list. Each non-empty, non-comment line is
-// "tag,address,type,order,access", e.g. "level,hr:0,Float32,ABCD,RO". order and
-// access are optional (default ABCD / RO). Whitespace around fields is trimmed.
+// parsePoints delegates to the exported ParsePoints (points.go), which is the
+// single parser for the tag point-list CSV format.
 func parsePoints(csv string) ([]driver.TagPoint, error) {
-	var out []driver.TagPoint
-	for i, raw := range strings.Split(csv, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Split(line, ",")
-		for j := range f {
-			f[j] = strings.TrimSpace(f[j])
-		}
-		if len(f) < 3 {
-			return nil, fmt.Errorf("device: line %d: need at least tag,address,type", i+1)
-		}
-		dt, err := parseType(f[2])
-		if err != nil {
-			return nil, fmt.Errorf("device: line %d: %w", i+1, err)
-		}
-		order := driver.BigEndian
-		if len(f) >= 4 && f[3] != "" {
-			if order, err = parseOrder(f[3]); err != nil {
-				return nil, fmt.Errorf("device: line %d: %w", i+1, err)
-			}
-		}
-		access := driver.ReadOnly
-		if len(f) >= 5 && strings.EqualFold(f[4], "RW") {
-			access = driver.ReadWrite
-		}
-		out = append(out, driver.TagPoint{Tag: f[0], Address: f[1], Type: dt, Order: order, Access: access})
-	}
-	return out, nil
-}
-
-func parseType(s string) (driver.DataType, error) {
-	switch strings.ToLower(s) {
-	case "bool":
-		return driver.TypeBool, nil
-	case "int16":
-		return driver.TypeInt16, nil
-	case "uint16":
-		return driver.TypeUInt16, nil
-	case "int32":
-		return driver.TypeInt32, nil
-	case "uint32":
-		return driver.TypeUInt32, nil
-	case "int64":
-		return driver.TypeInt64, nil
-	case "uint64":
-		return driver.TypeUInt64, nil
-	case "float32":
-		return driver.TypeFloat32, nil
-	case "float64":
-		return driver.TypeFloat64, nil
-	}
-	return 0, fmt.Errorf("unknown type %q", s)
-}
-
-func parseOrder(s string) (driver.ByteOrder, error) {
-	switch strings.ToUpper(s) {
-	case "ABCD", "BIG":
-		return driver.BigEndian, nil
-	case "DCBA", "LITTLE":
-		return driver.LittleEndian, nil
-	case "BADC":
-		return driver.BigByteSwap, nil
-	case "CDAB":
-		return driver.LittleByteSwap, nil
-	}
-	return 0, fmt.Errorf("unknown byte order %q", s)
+	return ParsePoints(csv)
 }
