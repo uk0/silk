@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func init() {
@@ -660,8 +661,11 @@ var categoryNames = map[string]string{
 	"general":    "\u5e38\u89c4", // 常规
 }
 
-// categoryOfPropID classifies a property by its lowercase ID.
+// categoryOfPropID classifies a property by its ID. Ids are matched against
+// lowercase ascii keywords, so fold case here: ids are now stored verbatim and
+// may contain uppercase or unicode characters.
 func categoryOfPropID(id string) string {
+	id = strings.ToLower(id)
 	// Layout properties
 	layoutIDs := []string{"x", "y", "width", "height", "w", "h", "pos", "size", "bounds", "left", "top", "right", "bottom", "margin", "padding"}
 	for _, lid := range layoutIDs {
@@ -782,25 +786,28 @@ func (this *PropertySheet) Clear(owner interface{}) {
 	this.categoryLayout = nil
 }
 
+// IsValidPropId reports whether s is usable as a property id. In this codebase
+// property ids double as display labels, so the rule is intentionally
+// permissive: any non-empty, non-blank string is accepted as long as it
+// contains no control characters. This admits unicode/CJK letters (e.g. "液位"),
+// digits, spaces and punctuation used in labels (e.g. "Show Label", "GPU加速").
 func IsValidPropId(s string) bool {
-	n := len(s)
-	if n == 0 {
+	if s == "" {
 		return false
 	}
-	if s[0] != '_' && (s[0] < 'a' || s[0] > 'z') {
-		return false
-	}
-
-	for i := 1; i < n; i++ {
-		if s[i] != '_' && (s[i] < 'a' || s[i] > 'z') && (s[i] < '0' || s[i] > '9') {
+	hasContent := false
+	for _, r := range s {
+		if unicode.IsControl(r) {
 			return false
 		}
+		if !unicode.IsSpace(r) {
+			hasContent = true
+		}
 	}
-	return true
+	return hasContent
 }
 
 func (this *PropertySheet) AddProperty(id string, get, set interface{}) (item *PropertyItem, first bool) {
-	id = strings.ToLower(id)
 	if !IsValidPropId(id) {
 		core.Warn(`Invalid prop id "` + id + `"`)
 		return
