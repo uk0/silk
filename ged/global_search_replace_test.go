@@ -6,167 +6,47 @@ import (
 	"testing"
 )
 
-// TestReplaceInContent exercises the pure replacement core that ReplaceAll
-// builds on. It mirrors the search matching semantics: case-insensitive mode
-// matches what GlobalSearchPanel.Search finds.
-func TestReplaceInContent(t *testing.T) {
-	cases := []struct {
-		name        string
-		content     string
-		query       string
-		replacement string
-		ci          bool // case-insensitive
-		want        string
-		wantCount   int
-	}{
-		{
-			name:      "zero matches leaves content unchanged",
-			content:   "package main\nfunc main() {}\n",
-			query:     "absent",
-			want:      "package main\nfunc main() {}\n",
-			wantCount: 0,
-		},
-		{
-			name:        "empty query is a no-op",
-			content:     "hello",
-			query:       "",
-			replacement: "x",
-			want:        "hello",
-			wantCount:   0,
-		},
-		{
-			name:        "multiple matches on one line",
-			content:     "foo foo foo",
-			query:       "foo",
-			replacement: "bar",
-			want:        "bar bar bar",
-			wantCount:   3,
-		},
-		{
-			name:        "matches across multiple lines",
-			content:     "foo\nbar foo\nfoo baz\n",
-			query:       "foo",
-			replacement: "X",
-			want:        "X\nbar X\nX baz\n",
-			wantCount:   3,
-		},
-		{
-			name:        "case-insensitive matches mixed casing and preserves surrounding text",
-			content:     "Foo FOO foo fOo",
-			query:       "foo",
-			replacement: "bar",
-			ci:          true,
-			want:        "bar bar bar bar",
-			wantCount:   4,
-		},
-		{
-			name:        "case-sensitive only replaces exact casing",
-			content:     "Foo FOO foo",
-			query:       "foo",
-			replacement: "bar",
-			ci:          false,
-			want:        "Foo FOO bar",
-			wantCount:   1,
-		},
-		{
-			name:        "empty replacement deletes the match",
-			content:     "abXYZcd XYZ",
-			query:       "XYZ",
-			replacement: "",
-			want:        "abcd ",
-			wantCount:   2,
-		},
-		{
-			name:        "replacement containing the query is not re-matched (case-insensitive)",
-			content:     "cat cat",
-			query:       "cat",
-			replacement: "concatenate",
-			ci:          true,
-			want:        "concatenate concatenate",
-			wantCount:   2,
-		},
-		{
-			name:        "replacement containing the query is not re-matched (case-sensitive)",
-			content:     "ab ab",
-			query:       "ab",
-			replacement: "xabx",
-			ci:          false,
-			want:        "xabx xabx",
-			wantCount:   2,
-		},
-		{
-			name:        "overlapping potential matches are handled non-overlapping",
-			content:     "aaaa",
-			query:       "aa",
-			replacement: "b",
-			want:        "bb",
-			wantCount:   2,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, count := replaceInContent(tc.content, tc.query, tc.replacement, tc.ci)
-			if got != tc.want {
-				t.Errorf("content = %q, want %q", got, tc.want)
-			}
-			if count != tc.wantCount {
-				t.Errorf("count = %d, want %d", count, tc.wantCount)
-			}
-		})
-	}
-}
-
-// TestReplaceInContentNoChangeReturnsOriginal verifies that when nothing
-// matches the returned string is the unmodified original (count 0), which is
-// what ReplaceAll relies on to skip writing untouched files.
-func TestReplaceInContentNoChangeReturnsOriginal(t *testing.T) {
-	const content = "the quick brown fox"
-	got, count := replaceInContent(content, "cat", "dog", true)
-	if count != 0 {
-		t.Fatalf("count = %d, want 0", count)
-	}
-	if got != content {
-		t.Fatalf("content = %q, want unchanged %q", got, content)
-	}
-}
-
 // TestReplaceAllRewritesMatchingFiles is an integration test: it points a
-// headless GlobalSearchPanel at a temp dir, runs a search + Replace All, and
-// asserts that files with matches are rewritten (case-insensitively, like the
-// search) while non-matching and non-.go files are left byte-identical.
+// headless GlobalSearchPanel at a temp dir, seeds the results through the
+// synchronous engine helper (Search itself runs the walk off-thread and
+// marshals back via gui.Post, which a headless test cannot pump), then runs
+// Replace All and asserts that every file containing the query is rewritten
+// case-insensitively — including non-.go text now that the search is broadened
+// — while a file with no match stays byte-identical.
 func TestReplaceAllRewritesMatchingFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	// Two .go files that contain the query (in different casings).
 	a := filepath.Join(dir, "a.go")
 	b := filepath.Join(dir, "b.go")
-	// A .go file with no match — must stay byte-identical.
+	txt := filepath.Join(dir, "notes.txt") // broadened search covers non-.go text
 	noMatch := filepath.Join(dir, "nomatch.go")
-	// A non-.go file containing the query — search ignores it, so it must
-	// stay byte-identical too.
-	txt := filepath.Join(dir, "notes.txt")
 
 	aContent := "var Widget = 1\n// widget reference\n"
 	bContent := "type WIDGET struct{}\n"
+	txtContent := "this widget lives in text\n"
 	noMatchContent := "package main\nfunc main() {}\n"
-	txtContent := "this widget should not be touched\n"
 
 	writeFile(t, a, aContent)
 	writeFile(t, b, bContent)
-	writeFile(t, noMatch, noMatchContent)
 	writeFile(t, txt, txtContent)
+	writeFile(t, noMatch, noMatchContent)
 
 	p := NewGlobalSearchPanel()
 	p.SetRootDir(dir)
 
-	// Search is case-insensitive, so "widget" matches Widget, widget, WIDGET.
-	p.Search("widget")
-	if got := p.totalMatchCount(); got != 3 {
-		t.Fatalf("pre-replace match count = %d, want 3", got)
+	// Drive the search synchronously; this mirrors what Search's gui.Post
+	// closure does on the main thread once the background walk returns.
+	p.query = "widget"
+	p.applyResults(runSearch(p.rootDir, "widget"))
+	p.rebuildFlatRows()
+
+	// Case-insensitive search matches Widget, widget, WIDGET (.go) and the
+	// occurrence in notes.txt: 4 matches across 3 files.
+	if got := p.totalMatchCount(); got != 4 {
+		t.Fatalf("pre-replace match count = %d, want 4", got)
 	}
-	if got := p.totalFileCount(); got != 2 {
-		t.Fatalf("pre-replace file count = %d, want 2", got)
+	if got := p.totalFileCount(); got != 3 {
+		t.Fatalf("pre-replace file count = %d, want 3", got)
 	}
 
 	// Set replace text and run Replace All.
@@ -181,10 +61,10 @@ func TestReplaceAllRewritesMatchingFiles(t *testing.T) {
 
 	assertFileEquals(t, a, "var Gadget = 1\n// Gadget reference\n")
 	assertFileEquals(t, b, "type Gadget struct{}\n")
+	assertFileEquals(t, txt, "this Gadget lives in text\n")
 
-	// Untouched files must be byte-for-byte identical.
+	// A file with no match must be left byte-for-byte identical.
 	assertFileEquals(t, noMatch, noMatchContent)
-	assertFileEquals(t, txt, txtContent)
 }
 
 func writeFile(t *testing.T, path, content string) {

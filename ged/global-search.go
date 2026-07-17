@@ -1,7 +1,6 @@
 package ged
 
 import (
-	"bufio"
 	"fmt"
 	"math"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/filesearch"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
 )
@@ -99,7 +99,11 @@ func (this *GlobalSearchPanel) SigOpen(fn func(path string, line int)) {
 	this.cbOpen = fn
 }
 
-// Search executes a search across all .go files in rootDir.
+// Search runs a find-in-files search under rootDir for query. The filesystem
+// walk is handed to the shared filesearch engine on a background goroutine and
+// the results are marshalled back onto the main thread with gui.Post before any
+// panel state is mutated, so a search triggered from the input never blocks the
+// UI on disk I/O.
 func (this *GlobalSearchPanel) Search(query string) {
 	this.query = query
 	this.queryRunes = []rune(query)
@@ -119,157 +123,114 @@ func (this *GlobalSearchPanel) Search(query string) {
 	this.searching = true
 	this.Self().Update()
 
-	// Walk files
-	_ = filepath.Walk(this.rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		name := info.Name()
-
-		// Skip hidden
-		if strings.HasPrefix(name, ".") {
-			if info.IsDir() {
-				return filepath.SkipDir
+	root := this.rootDir
+	go func() {
+		matches := runSearch(root, query)
+		gui.Post(func() {
+			// A newer search may have superseded this one while it ran.
+			if this.query != query {
+				return
 			}
-			return nil
-		}
-		// Skip noise directories (reuse skipDirs from file-explorer.go)
-		if info.IsDir() && skipDirs[name] {
-			return filepath.SkipDir
-		}
-		// Only search .go files
-		if info.IsDir() || !strings.HasSuffix(name, ".go") {
-			return nil
-		}
+			this.searching = false
+			this.applyResults(matches)
+			this.rebuildFlatRows()
+			this.Self().Update()
+		})
+	}()
+}
 
-		this.searchFile(path, query)
-		return nil
+// runSearch runs the filesearch engine and maps its matches onto SearchMatch.
+// It is pure (touches no panel state and no GUI), so it is safe to call from a
+// goroutine and directly from tests. filesearch reports a 1-based BYTE column;
+// Column is stored 0-based in bytes — the same units Draw slices the line by —
+// so search and highlight agree and multibyte text before a match no longer
+// shifts the highlight. Every text file is scanned (binary files and
+// .git/vendor/node_modules are skipped by the engine), broadening the previous
+// .go-only search.
+func runSearch(root, query string) []SearchMatch {
+	matches, err := filesearch.Search(root, query, filesearch.Options{
+		IgnoreCase: true,
+		SkipBinary: true,
 	})
-
-	this.searching = false
-	this.rebuildFlatRows()
-	this.Self().Update()
-}
-
-// searchFile searches a single file for the query string.
-func (this *GlobalSearchPanel) searchFile(path, query string) {
-	f, err := os.Open(path)
 	if err != nil {
-		return
+		return nil
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	// Increase buffer for long lines
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	lineNum := 0
-	lowerQuery := strings.ToLower(query)
-
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		lowerLine := strings.ToLower(line)
-
-		// Find all matches on this line
-		offset := 0
-		for {
-			idx := strings.Index(lowerLine[offset:], lowerQuery)
-			if idx < 0 {
-				break
-			}
-			col := offset + idx
-			match := SearchMatch{
-				FilePath: path,
-				Line:     lineNum,
-				Column:   col,
-				LineText: line,
-				MatchLen: len(query),
-			}
-			this.results = append(this.results, match)
-
-			if _, exists := this.grouped[path]; !exists {
-				this.fileOrder = append(this.fileOrder, path)
-			}
-			this.grouped[path] = append(this.grouped[path], match)
-
-			offset = col + len(query)
-		}
+	out := make([]SearchMatch, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, SearchMatch{
+			FilePath: m.Path,
+			Line:     m.Line,
+			Column:   m.Col - 1,
+			LineText: m.Text,
+			MatchLen: len(query),
+		})
 	}
+	return out
 }
 
-// replaceInContent replaces every occurrence of query with replacement in
-// content, mirroring the search matching semantics. caseInsensitive selects
-// between a case-folded match (what Search uses) and an exact match. It returns
-// the rewritten content and the number of replacements made. Matching is
-// non-overlapping and scanning resumes past the inserted replacement, so a
-// replacement that contains the query is never re-matched.
-func replaceInContent(content, query, replacement string, caseInsensitive bool) (string, int) {
-	if query == "" {
-		return content, 0
-	}
-	if !caseInsensitive {
-		count := strings.Count(content, query)
-		if count == 0 {
-			return content, 0
+// applyResults installs a fresh result set and rebuilds the per-file grouping.
+// It must run on the main thread (Search marshals into it via gui.Post).
+func (this *GlobalSearchPanel) applyResults(matches []SearchMatch) {
+	this.results = matches
+	this.grouped = make(map[string][]SearchMatch)
+	this.fileOrder = nil
+	for i := range matches {
+		path := matches[i].FilePath
+		if _, ok := this.grouped[path]; !ok {
+			this.fileOrder = append(this.fileOrder, path)
 		}
-		return strings.ReplaceAll(content, query, replacement), count
+		this.grouped[path] = append(this.grouped[path], matches[i])
 	}
-
-	lowerContent := strings.ToLower(content)
-	lowerQuery := strings.ToLower(query)
-
-	var b strings.Builder
-	count := 0
-	offset := 0
-	for {
-		idx := strings.Index(lowerContent[offset:], lowerQuery)
-		if idx < 0 {
-			break
-		}
-		pos := offset + idx
-		b.WriteString(content[offset:pos]) // text before the match (original casing)
-		b.WriteString(replacement)
-		count++
-		offset = pos + len(query) // resume past the matched source text
-	}
-	if count == 0 {
-		return content, 0
-	}
-	b.WriteString(content[offset:]) // trailing remainder
-	return b.String(), count
 }
 
 // ReplaceAll rewrites every match of the current query with the replace text
-// across the files that the last search touched, then re-runs the search so the
-// results list reflects the new state. Only files that actually changed are
-// written back.
+// across the files the last search touched, using the filesearch engine to
+// compute each file's new contents (the same case-insensitive literal matching
+// the search used). A file whose contents are unchanged is not rewritten, and a
+// read or write failure is surfaced via the log instead of being dropped
+// silently. Afterwards the search is re-run synchronously so the results list
+// reflects the new state.
 func (this *GlobalSearchPanel) ReplaceAll() {
 	if this.query == "" || len(this.fileOrder) == 0 {
 		return
 	}
+	query := this.query
 	replacement := string(this.replaceRunes)
+	opt := filesearch.Options{IgnoreCase: true}
 
-	// Snapshot the file set; Search() rebuilds fileOrder underneath us.
+	// Snapshot the file set; the refresh below rebuilds fileOrder underneath us.
 	files := make([]string, len(this.fileOrder))
 	copy(files, this.fileOrder)
 
+	failed := 0
 	for _, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil {
+			failed++
+			core.Error(fmt.Sprintf("global search: read %s: %v", path, err))
 			continue
 		}
-		// Search matches case-insensitively, so replace the same way.
-		out, n := replaceInContent(string(data), this.query, replacement, true)
-		if n == 0 {
+		// The query never spans a newline, so replacing across the whole file
+		// is identical to replacing per matched line, and reuses the engine's
+		// tested matcher rather than a bespoke pass.
+		out := filesearch.Replace(filesearch.Match{Text: string(data)}, query, replacement, opt)
+		if out == string(data) {
+			continue // nothing changed; don't rewrite the file
+		}
+		if err := os.WriteFile(path, []byte(out), 0644); err != nil {
+			failed++
+			core.Error(fmt.Sprintf("global search: write %s: %v", path, err))
 			continue
 		}
-		_ = os.WriteFile(path, []byte(out), 0644)
+	}
+	if failed > 0 {
+		core.Warn(fmt.Sprintf("global search: replace all left %d file(s) unwritten", failed))
 	}
 
 	// Refresh results against the rewritten files.
-	this.Search(this.query)
+	this.applyResults(runSearch(this.rootDir, query))
+	this.rebuildFlatRows()
+	this.Self().Update()
 }
 
 // rebuildFlatRows flattens grouped results into a list of renderable rows.
@@ -499,7 +460,11 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 			lineNumExt := smallFont.TextExtents(lineStr)
 			textX := 24 + lineNumExt.XAdvance + 4
 
-			// Find match position in the trimmed text
+			// m.Column and m.MatchLen are BYTE offsets into m.LineText (the
+			// filesearch engine reports byte columns). Leading indent is ASCII,
+			// so the byte trim offset maps straight onto the trimmed line. Slice
+			// lineText by bytes so multibyte text before the match does not
+			// shift the highlight (search and highlight agree on byte offsets).
 			trimOffset := len(m.LineText) - len(strings.TrimLeft(m.LineText, " \t"))
 			matchCol := m.Column - trimOffset
 			if matchCol < 0 {
@@ -507,12 +472,11 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 			}
 
 			g.SetFont(normalFont)
-			lineRunes := []rune(lineText)
 
-			if matchCol >= 0 && matchCol < len(lineRunes) && matchCol+m.MatchLen <= len(lineRunes) {
+			if matchCol >= 0 && matchCol < len(lineText) && matchCol+m.MatchLen <= len(lineText) {
 				// Pre-match text
 				if matchCol > 0 {
-					pre := string(lineRunes[:matchCol])
+					pre := lineText[:matchCol]
 					g.SetBrush1(t.TextColor)
 					g.DrawText1(textX, rowY+rh-4, pre)
 					preExt := normalFont.TextExtents(pre)
@@ -520,7 +484,7 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 				}
 
 				// Match highlight background
-				matchText := string(lineRunes[matchCol : matchCol+m.MatchLen])
+				matchText := lineText[matchCol : matchCol+m.MatchLen]
 				matchExt := normalFont.TextExtents(matchText)
 				g.SetBrush1(paint.Color{R: 255, G: 200, B: 60, A: 120})
 				g.Rectangle(textX, rowY+2, matchExt.XAdvance, rh-4)
@@ -533,8 +497,8 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 
 				// Post-match text
 				postStart := matchCol + m.MatchLen
-				if postStart < len(lineRunes) {
-					post := string(lineRunes[postStart:])
+				if postStart < len(lineText) {
+					post := lineText[postStart:]
 					g.SetBrush1(t.TextColor)
 					g.DrawText1(textX, rowY+rh-4, post)
 				}
