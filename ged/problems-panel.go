@@ -1,12 +1,12 @@
 package ged
 
 import (
+	"github.com/uk0/silk/buildissues"
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 func init() {
@@ -43,80 +43,33 @@ type Problem struct {
 	Message  string
 }
 
-// parseProblems turns raw compiler output into structured Problem rows.
-// It recognises Go's two diagnostic shapes:
-//
-//	file:line:col: message
-//	file:line: message
-//
-// A message containing "warning" (case-insensitive) is classified as a
-// Warning, everything else as an Error. Lines that match neither shape
-// are ignored — this is the unit-testable core of the panel, kept as a
-// free function so it needs no GL context or live widget.
+// parseProblems turns raw compiler output into structured Problem rows
+// by delegating to the shared buildissues engine and mapping each
+// buildissues.Issue onto the panel's Problem type. Routing through the
+// one tested parser means the Problems pane and the Build Output pane
+// agree on every corner case — "file:line:col:" and "file:line:" shapes,
+// "# pkg" context headers, warning classification, and Windows
+// drive-letter paths (C:\...:line:col). It is kept as a free function so
+// it needs no GL context or live widget.
 func parseProblems(output string) []Problem {
 	var problems []Problem
-	for _, raw := range strings.Split(output, "\n") {
-		raw = strings.TrimRight(raw, "\r")
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		if p, ok := parseProblemLine(raw); ok {
-			problems = append(problems, p)
-		}
+	for _, is := range buildissues.Parse(output) {
+		problems = append(problems, Problem{
+			File:     is.File,
+			Line:     is.Line,
+			Col:      is.Col,
+			Severity: mapSeverity(is.Severity),
+			Message:  is.Message,
+		})
 	}
 	return problems
 }
 
-// parseProblemLine parses a single line into a Problem. The bool return
-// is false when the line is not a recognised diagnostic. It tries the
-// "file:line:col:" form first, then falls back to "file:line:" with a
-// zero column.
-func parseProblemLine(raw string) (Problem, bool) {
-	// "file.go:LINE:COL: message". SplitN with 4 keeps the message
-	// intact even when it itself contains colons (e.g. type names).
-	parts := strings.SplitN(raw, ":", 4)
-	if len(parts) >= 4 {
-		file := strings.TrimSpace(parts[0])
-		line, errL := strconv.Atoi(strings.TrimSpace(parts[1]))
-		col, errC := strconv.Atoi(strings.TrimSpace(parts[2]))
-		if errL == nil && errC == nil && file != "" {
-			msg := strings.TrimSpace(parts[3])
-			return Problem{
-				File:     file,
-				Line:     line,
-				Col:      col,
-				Severity: classifySeverity(msg),
-				Message:  msg,
-			}, true
-		}
-	}
-
-	// "file.go:LINE: message" — no column, so Col stays 0.
-	parts = strings.SplitN(raw, ":", 3)
-	if len(parts) >= 3 {
-		file := strings.TrimSpace(parts[0])
-		line, errL := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if errL == nil && file != "" {
-			msg := strings.TrimSpace(parts[2])
-			return Problem{
-				File:     file,
-				Line:     line,
-				Col:      0,
-				Severity: classifySeverity(msg),
-				Message:  msg,
-			}, true
-		}
-	}
-
-	return Problem{}, false
-}
-
-// classifySeverity maps a diagnostic message to a Severity. Go's
-// compiler does not emit a "warning:" prefix the way gcc does, but go
-// vet and several linters do, so a substring match on "warning" is the
-// pragmatic rule.
-func classifySeverity(msg string) Severity {
-	if strings.Contains(strings.ToLower(msg), "warning") {
+// mapSeverity maps a buildissues.Severity onto the panel's two-value
+// Severity. buildissues.Parse only ever yields Error or Warning, so any
+// non-warning severity collapses to SeverityError.
+func mapSeverity(s buildissues.Severity) Severity {
+	if s == buildissues.Warning {
 		return SeverityWarning
 	}
 	return SeverityError

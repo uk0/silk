@@ -72,7 +72,9 @@ func TestParseProblemsIgnoresNonMatching(t *testing.T) {
 }
 
 // TestParseProblemsSeverity checks the warning-vs-error classification
-// rule (case-insensitive substring match on "warning").
+// rule shared with the buildissues engine: a case-insensitive match on
+// the "warning:" prefix, so a message that merely contains the word
+// "warning" without the colon stays an Error.
 func TestParseProblemsSeverity(t *testing.T) {
 	cases := []struct {
 		line string
@@ -80,7 +82,7 @@ func TestParseProblemsSeverity(t *testing.T) {
 	}{
 		{"a.go:1:1: undefined: Foo", SeverityError},
 		{"a.go:1:1: Warning: shadows declaration", SeverityWarning},
-		{"a.go:1:1: this is a WARNING about something", SeverityWarning},
+		{"a.go:1:1: this is a WARNING about something", SeverityError},
 	}
 	for _, c := range cases {
 		got := parseProblems(c.line)

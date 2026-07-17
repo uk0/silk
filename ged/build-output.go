@@ -1,10 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/buildissues"
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
-	"strconv"
 	"strings"
 )
 
@@ -52,49 +52,43 @@ func (this *BuildOutput) Init(self gui.IWidget) {
 }
 
 // SetOutput parses compiler output text and populates the line list.
-// It recognizes Go compiler error format: filename.go:LINE:COL: message
+// Every non-blank line is kept as a log row; lines the shared
+// buildissues engine recognizes as diagnostics are flagged as clickable
+// errors carrying their file:line:col.
 func (this *BuildOutput) SetOutput(text string) {
-	this.lines = nil
+	this.lines = parseBuildOutputLines(text)
 	this.scrollY = 0
 	this.hoverIdx = -1
+	this.Self().Update()
+}
 
-	rawLines := strings.Split(text, "\n")
-	for _, raw := range rawLines {
+// parseBuildOutputLines splits raw tool output into display rows. Every
+// non-empty line is preserved as text; a line the shared buildissues
+// engine recognizes as a diagnostic is flagged IsError and carries its
+// File/Line/Col so the row can navigate to source. Delegating detection
+// to buildissues gives this pane the same handling as the Problems pane:
+// no-column lines, "# pkg" context headers, warnings, and Windows
+// drive-letter paths (C:\...:line:col) the old hand-rolled split dropped.
+// Pure, so it needs no GL context or live widget.
+func parseBuildOutputLines(text string) []BuildOutputLine {
+	var lines []BuildOutputLine
+	for _, raw := range strings.Split(text, "\n") {
 		raw = strings.TrimRight(raw, "\r")
 		if raw == "" {
 			continue
 		}
 		bol := BuildOutputLine{Text: raw}
-
-		// Try to parse "file.go:LINE:COL: ..." error format.
-		// Be careful: split on ":" but file path could be relative with no drive letter.
-		parts := strings.SplitN(raw, ":", 4)
-		if len(parts) >= 4 {
-			file := strings.TrimSpace(parts[0])
-			lineNum, errL := strconv.Atoi(strings.TrimSpace(parts[1]))
-			colNum, errC := strconv.Atoi(strings.TrimSpace(parts[2]))
-			if errL == nil && errC == nil && file != "" {
-				bol.IsError = true
-				bol.File = file
-				bol.Line = lineNum
-				bol.Col = colNum
-			}
+		// A single line yields at most one Issue; when it does, that
+		// line is a diagnostic, so lift its location onto the row.
+		if issues := buildissues.Parse(raw); len(issues) == 1 {
+			bol.IsError = true
+			bol.File = issues[0].File
+			bol.Line = issues[0].Line
+			bol.Col = issues[0].Col
 		}
-		// Also catch "file.go:LINE: ..." (no column) format
-		if !bol.IsError && len(parts) >= 3 {
-			file := strings.TrimSpace(parts[0])
-			lineNum, errL := strconv.Atoi(strings.TrimSpace(parts[1]))
-			if errL == nil && file != "" {
-				bol.IsError = true
-				bol.File = file
-				bol.Line = lineNum
-				bol.Col = 1
-			}
-		}
-
-		this.lines = append(this.lines, bol)
+		lines = append(lines, bol)
 	}
-	this.Self().Update()
+	return lines
 }
 
 // Clear removes all output lines.
