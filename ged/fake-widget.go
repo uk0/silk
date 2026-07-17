@@ -501,6 +501,26 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 		}
 		doc.AddChild(evtDoc)
 	}
+	// Persist the embedded widget's editable scalar properties (text, values,
+	// tag bindings, device settings, ...) under "props" so a configured widget
+	// round-trips. Geometry/name are already stored above; this covers the
+	// widget-specific fields enumerated via core.IEnumProperties. Each child is
+	// keyed by the property id with the serialized value, mirroring "events".
+	if this.widget != nil {
+		if ep, ok := this.widget.(core.IEnumProperties); ok {
+			if props := captureWidgetProperties(ep); len(props) > 0 {
+				propsDoc := core.NewTDoc()
+				propsDoc.SetKey("props")
+				for id, val := range props {
+					child := core.NewTDoc()
+					child.SetKey(id)
+					child.SetValue(val)
+					propsDoc.AddChild(child)
+				}
+				doc.AddChild(propsDoc)
+			}
+		}
+	}
 	// Persist nested child widgets under "children" — mirrors
 	// GedScene.SaveDesign so a FakeWidget acting as a layout container
 	// (VBox/HBox/...) round-trips the widgets laid out inside it. Flat
@@ -594,6 +614,26 @@ func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *int) {
 			if key != "" && handler != "" {
 				this.eventHandlers[key] = handler
 			}
+		}
+	}
+	// Restore the embedded widget's editable scalar properties from the "props"
+	// block written by SaveDesign. The widget was already constructed from the
+	// factory (NewFakeWidgetFromFactory) before loadDesign runs, so its setters
+	// are ready to receive the persisted values.
+	if propsDoc := doc.ChildByKey("props", false); propsDoc != nil && this.widget != nil {
+		if ep, ok := this.widget.(core.IEnumProperties); ok {
+			vals := make(map[string]string)
+			for _, child := range propsDoc.Childdren() {
+				key := child.Key()
+				if key == "" {
+					continue
+				}
+				var val string
+				child.Value(&val)
+				vals[key] = val
+			}
+			applyWidgetProperties(ep, vals)
+			this.MarkDirty()
 		}
 	}
 	// Reconstruct nested child widgets from the "children" block via the
