@@ -2179,18 +2179,18 @@ func buildProject(canvas *ged.GedView) {
 		} else if err == nil {
 			text += "\nbuild ok"
 		}
-		reportBuildOutput(text)
-		logEvent(buildEventLevel(err), "Build finished")
-		// Toast on completion. Goroutine-thread call into ShowToast is
-		// the same shape reportBuildOutput already uses to push into
-		// BuildOutput.SetOutput from here — the toast manager has its
-		// own mutex around the entry list, and the popup AttachWindow
-		// runs once on the next idle tick.
-		if err == nil {
-			silkideToast(i18n.T("Build successful"), gui.ToastSuccess)
-		} else {
-			silkideToast(i18n.T("Build failed"), gui.ToastError)
-		}
+		// UI mutation only: marshal the pane / log / status / toast
+		// updates onto the main thread (GLFW + Cairo are not
+		// goroutine-safe). The go build above stays on this worker.
+		onUI(func() {
+			reportBuildOutput(text)
+			logEvent(buildEventLevel(err), "Build finished")
+			if err == nil {
+				silkideToast(i18n.T("Build successful"), gui.ToastSuccess)
+			} else {
+				silkideToast(i18n.T("Build failed"), gui.ToastError)
+			}
+		})
 	}()
 }
 
@@ -2223,25 +2223,30 @@ func runProjectTests(canvas *ged.GedView) {
 		if err != nil && text == "" {
 			text = err.Error()
 		}
-		reportBuildOutput(text)
-		// Structured pass/fail view. SetOutput re-parses the same text
-		// BuildOutput just consumed, so the two panes always agree on
-		// the latest run's content.
-		if globalTestResults != nil {
-			globalTestResults.SetOutput(text)
-		}
-		// Auto-focus the test-results tab on failure — the raw log was
-		// already promoted by reportBuildOutput, but a failed run is the
-		// case where the structured view earns its keep, so it wins.
-		_, failed, _ := testResultCounts()
-		if err != nil || failed > 0 {
+		// UI mutation only: the go test above ran on this worker
+		// goroutine; marshal the pane / dock / toast updates (and the
+		// TestResults counts read) onto the main thread.
+		onUI(func() {
+			reportBuildOutput(text)
+			// Structured pass/fail view. SetOutput re-parses the same text
+			// BuildOutput just consumed, so the two panes always agree on
+			// the latest run's content.
 			if globalTestResults != nil {
-				dockSetActiveView(globalBottomDock, globalTestResults)
+				globalTestResults.SetOutput(text)
 			}
-			silkideToast(i18n.T("Tests failed"), gui.ToastError)
-		} else {
-			silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
-		}
+			// Auto-focus the test-results tab on failure — the raw log was
+			// already promoted by reportBuildOutput, but a failed run is the
+			// case where the structured view earns its keep, so it wins.
+			_, failed, _ := testResultCounts()
+			if err != nil || failed > 0 {
+				if globalTestResults != nil {
+					dockSetActiveView(globalBottomDock, globalTestResults)
+				}
+				silkideToast(i18n.T("Tests failed"), gui.ToastError)
+			} else {
+				silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
+			}
+		})
 	}()
 }
 
@@ -2401,20 +2406,25 @@ func runProjectVet(canvas *ged.GedView) {
 		if err != nil && text == "" {
 			text = err.Error()
 		}
-		reportBuildOutput(text)
-		// Problems gets a separate SetOutput because reportBuildOutput
-		// also feeds it but its content is the raw stream including the
-		// "$ go vet …" header. The header line is harmless (Problems
-		// skips lines that don't match the file:line:col shape), so
-		// we don't have to gate it.
-		if globalProblems != nil {
-			globalProblems.SetOutput(text)
-		}
-		if err == nil {
-			silkideToast(i18n.T("go vet ok"), gui.ToastSuccess)
-		} else {
-			silkideToast(i18n.T("go vet failed"), gui.ToastError)
-		}
+		// UI mutation only: the go vet above ran on this worker
+		// goroutine; marshal the pane / problems / toast updates onto
+		// the main thread.
+		onUI(func() {
+			reportBuildOutput(text)
+			// Problems gets a separate SetOutput because reportBuildOutput
+			// also feeds it but its content is the raw stream including the
+			// "$ go vet …" header. The header line is harmless (Problems
+			// skips lines that don't match the file:line:col shape), so
+			// we don't have to gate it.
+			if globalProblems != nil {
+				globalProblems.SetOutput(text)
+			}
+			if err == nil {
+				silkideToast(i18n.T("go vet ok"), gui.ToastSuccess)
+			} else {
+				silkideToast(i18n.T("go vet failed"), gui.ToastError)
+			}
+		})
 	}()
 }
 
