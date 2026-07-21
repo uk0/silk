@@ -115,6 +115,16 @@ func main() {
 		rebindAutoSaver(designCanvas.GedScene())
 	}
 
+	// Live preview: Ctrl+R on the design canvas runs the current screen against a
+	// throwaway in-memory scada.Services (drivers off, notifications silenced) and
+	// shows it in its own window. The controller tears the previous preview down
+	// before starting a new one, so repeated Ctrl+R never leaks a Services or the
+	// goroutines it starts. The closure holds the controller for the process life.
+	if designCanvas != nil {
+		previewHost := newPreviewController()
+		ged.PreviewCallback = func() { previewHost.preview(designCanvas.GedScene()) }
+	}
+
 	// Live selection feedback in the status bar's transient message
 	// slot. Without this the user has to mouse over to the right-side
 	// inspector to confirm what got selected after a click.
