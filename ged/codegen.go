@@ -106,6 +106,16 @@ var factoryMap = map[string]widgetMapping{
 	"gui.Timeline":          {goType: "*gui.Timeline", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTimeline()`},
 	"gui.NotificationPanel": {goType: "*gui.NotificationPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewNotificationPanel()`},
 	"gui.CodeEditor":        {goType: "*gui.CodeEditor", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCodeEditor()`},
+	// SCADA backend-bound widgets: alarm + the five operator panels live in gui;
+	// the field-device component lives in device. scada.BindScreen wires all of
+	// them from a shared scada.Services (see codegen_services.go).
+	"gui.AlarmPanel":      {goType: "*gui.AlarmPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewAlarmPanel()`},
+	"gui.RecipePanel":     {goType: "*gui.RecipePanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewRecipePanel()`},
+	"gui.ReportView":      {goType: "*gui.ReportView", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewReportView()`},
+	"gui.EventLogPanel":   {goType: "*gui.EventLogPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewEventLogPanel()`},
+	"gui.TrendPanel":      {goType: "*gui.TrendPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTrendPanel()`},
+	"gui.StatsPanel":      {goType: "*gui.StatsPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewStatsPanel()`},
+	"gui.DeviceComponent": {goType: "*device.DeviceComponent", importPath: "github.com/uk0/silk/device", constructor: `device.NewDeviceComponent()`},
 }
 
 // GenerateRunnable controls whether a complete runnable main() is generated.
@@ -125,21 +135,8 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	imports["github.com/uk0/silk/gui"] = true  // always needed for Form
 	imports["github.com/uk0/silk/core"] = true // needed for EventLoop in main()
 
-	type fieldInfo struct {
-		name          string
-		goType        string
-		constructor   string
-		factoryName   string
-		x, y, w, h    float64
-		defaultText   string
-		tagName       string      // design-time SCADA/组态 tag bound to this widget's value
-		widget        interface{} // live designed widget, for reflecting design-time property values
-		eventHandlers map[string]string
-		code          string // user-written event handler code
-		parentField   string // owning container field; "" = top-level (ui.Form)
-		parentAdd     bool   // parent is a simple-AddWidget container
-	}
-
+	// fieldInfo is declared at package scope (codegen_services.go) so the SCADA
+	// emission helpers can share it.
 	var fields []fieldInfo
 	nameCount := make(map[string]int)
 	usedNames := make(map[string]bool) // every field identifier emitted, for collision-free uniqueness
@@ -249,6 +246,15 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		}
 	}
 
+	// needServices: the design binds a shared scada.Services when any widget is
+	// tag-bound OR is a backend-bound SCADA widget (device / alarm / operator
+	// panel). It is a strict superset of hasTags, so a tag-bearing scene always
+	// takes the services path; a plain UI keeps the legacy TagDB-free output.
+	needServices := sceneNeedsServices(fields)
+	if needServices {
+		imports["github.com/uk0/silk/scada"] = true
+	}
+
 	var buf strings.Builder
 
 	// Header
@@ -265,7 +271,12 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// Struct
 	buf.WriteString(fmt.Sprintf("type %s struct {\n", opts.TypeName))
 	buf.WriteString("\tForm *gui.Form\n")
-	if hasTags {
+	if needServices {
+		// Services owns the shared TagDB/alarms/historian/... ; Tags is kept as an
+		// alias (== Services.Tags) so code written against the old field still works.
+		buf.WriteString("\tServices *scada.Services\n")
+		buf.WriteString("\tTags *core.TagDB\n")
+	} else if hasTags {
 		buf.WriteString("\tTags *core.TagDB\n")
 	}
 	for _, f := range fields {
@@ -287,7 +298,9 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	buf.WriteString(fmt.Sprintf("\tui.Form.SetTitle(%q)\n", title))
 	buf.WriteString(fmt.Sprintf("\tui.Form.SetSize(%s, %s)\n\n", fmtFloat(formW), fmtFloat(formH)))
 
-	if hasTags {
+	// Services-backed apps get their TagDB from scada.Services (wired in
+	// BindServices), so no private core.NewTagDB is allocated here.
+	if hasTags && !needServices {
 		buf.WriteString("\tui.Tags = core.NewTagDB()\n\n")
 	}
 
@@ -378,7 +391,11 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// property is set to its named tag in ui.Tags, so a designed 组态 screen
 	// is data-driven at runtime. The host feeds live values via
 	// ui.Tags.GetOrCreate(name, core.Meta{}).SetValue(v).
-	if hasTags {
+	// Legacy hand-wired tag bindings. Services-backed apps route the identical
+	// industrial-widget + panel wiring through scada.BindScreen (called from the
+	// generated BindServices), so this block is emitted only for the (now
+	// unreachable) tags-without-services combination the old output produced.
+	if hasTags && !needServices {
 		for _, f := range fields {
 			if f.tagName != "" {
 				emitTagBinding(&buf, f.factoryName, f.name, f.tagName)
@@ -390,10 +407,47 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	buf.WriteString("\treturn ui\n")
 	buf.WriteString("}\n")
 
+	// Services-backed apps get a BindServices method that attaches the shared
+	// scada.Services and delegates the whole screen's runtime wiring to
+	// scada.BindScreen.
+	if needServices {
+		emitBindServices(&buf, imports, opts.TypeName, fields)
+	}
+
 	// Generate main() function for runnable program
 	if opts.PackageName == "main" {
 		imports["github.com/uk0/silk/core"] = true
-		buf.WriteString(fmt.Sprintf(`
+		if needServices {
+			// Services-backed app: build the shared scada.Services, bind the screen
+			// to it, start the runtime, then run the UI. services.Stop tears the
+			// container (historian/eventlog/...) down on exit.
+			imports["log"] = true
+			imports["github.com/uk0/silk/scada"] = true
+			buf.WriteString(fmt.Sprintf(`
+func main() {
+	services, err := scada.New(scada.DefaultConfig(core.LocalDataDir()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer services.Stop()
+
+	ui := %s()
+	if err := ui.BindServices(services); err != nil {
+		log.Fatal(err)
+	}
+	if err := services.Start(); err != nil {
+		log.Fatal(err)
+	}
+
+	ui.Form.AttachWindow(gui.WtForm)
+	ui.Form.Window().SetIcon(nil)
+	ui.Form.Window().MoveToCenter()
+	ui.Form.Show()
+	core.EventLoop()
+}
+`, constructorName))
+		} else {
+			buf.WriteString(fmt.Sprintf(`
 func main() {
 	ui := %s()
 	ui.Form.AttachWindow(gui.WtForm)
@@ -403,6 +457,7 @@ func main() {
 	core.EventLoop()
 }
 `, constructorName))
+		}
 	}
 
 	// Append user-written event handler code

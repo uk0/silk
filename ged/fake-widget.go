@@ -676,6 +676,17 @@ func (this *FakeWidget) Generate() gui.IWidget {
 	if err != nil {
 		return nil
 	}
+	// Copy the designed widget's editable scalar properties (text, values, tag
+	// bindings, device host/points, ...) onto the fresh runtime widget so the
+	// generated widget keeps its configuration instead of reverting to factory
+	// defaults. Reuses the same capture/apply round-trip as save/load.
+	if this.widget != nil && fake.widget != nil {
+		if src, ok := this.widget.(core.IEnumProperties); ok {
+			if dst, ok := fake.widget.(core.IEnumProperties); ok {
+				applyWidgetProperties(dst, captureWidgetProperties(src))
+			}
+		}
+	}
 	x := gui.MmToPixelZ(this.X())
 	y := gui.MmToPixelZ(this.Y())
 	w := gui.MmToPixelZ(this.Width())

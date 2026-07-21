@@ -30,39 +30,54 @@ func addFakeWithTag(t *testing.T, scene *GedScene, factory, name, tag string) {
 }
 
 // TestGenerateCodeTagBinding verifies that industrial widgets carrying a
-// design-time tag emit a core.TagDB plus the correct runtime BindTag wiring —
-// float widgets via eased BindTagAnimated, booleans via BindTag+Post — while an
-// untagged widget emits none.
+// design-time tag make the design a SCADA app: the struct owns a shared
+// *scada.Services (with Tags kept as a compatibility alias), each tagged widget
+// is handed its design-time tag, and the actual value wiring is delegated to
+// scada.BindScreen (called from the generated BindServices) rather than
+// hand-emitted BindTag/TagDB. An untagged control is left untouched.
 func TestGenerateCodeTagBinding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
 	scene := NewGedScene()
 	scene.SetFormTitle("HMI")
 	scene.SetSize(200, 150)
-	addFakeWithTag(t, scene, "gui.Tank", "tank1", "level")  // float, needs /100
+	addFakeWithTag(t, scene, "gui.Tank", "tank1", "level")  // float
 	addFakeWithTag(t, scene, "gui.Valve", "valve1", "pump") // bool
 	addFakeWithTag(t, scene, "gui.Label", "lbl1", "")       // untagged control
 
 	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "HMIUI"})
 
 	want := []string{
-		"Tags *core.TagDB",
-		"ui.Tags = core.NewTagDB()",
-		"Tank1 *gui.Tank",   // factoryMap now types industrial widgets concretely
-		"Valve1 *gui.Valve", // (not gui.IWidget), so the setter calls compile
-		`gui.BindTagAnimated(ui.Tags.GetOrCreate("level", core.Meta{}), func(v float64) { ui.Tank1.SetLevel(v / 100) }, 300*time.Millisecond)`,
-		`gui.BindTag(ui.Tags.GetOrCreate("pump", core.Meta{}), func(v interface{}) { gui.Post(func() { ui.Valve1.SetState(gui.TagBool(v)) }) })`,
+		"Services *scada.Services",
+		"Tags *core.TagDB", // alias field kept for compatibility
+		"Tank1 *gui.Tank",  // factoryMap types industrial widgets concretely so
+		"Valve1 *gui.Valve", // the SetTagName calls compile
+		"func (ui *HMIUI) BindServices(s *scada.Services) error",
+		`ui.Tank1.SetTagName("level")`,
+		`ui.Valve1.SetTagName("pump")`,
+		"scada.BindScreen(s, ui.Form,",
+		"scada.New(scada.DefaultConfig(core.LocalDataDir()))",
 	}
 	for _, w := range want {
 		if !strings.Contains(code, w) {
-			t.Errorf("generated code missing:\n  %s", w)
+			t.Errorf("generated code missing:\n  %s\n----\n%s", w, code)
 		}
 	}
-	// Exactly the two tagged widgets bind — the untagged Label must not.
-	if n := strings.Count(code, "GetOrCreate"); n != 2 {
-		t.Errorf("GetOrCreate count = %d, want 2 (one per tagged widget)", n)
+	// The private-TagDB plumbing and hand-wired bindings are gone — scada.Services
+	// owns the registry and scada.BindScreen does the value wiring.
+	for _, bad := range []string{"core.NewTagDB()", "gui.BindTagAnimated("} {
+		if strings.Contains(code, bad) {
+			t.Errorf("generated code should no longer contain:\n  %s", bad)
+		}
+	}
+	// Exactly the two tagged widgets get a tag name — the untagged Label must not.
+	if n := strings.Count(code, "SetTagName("); n != 2 {
+		t.Errorf("SetTagName count = %d, want 2 (one per tagged widget)", n)
 	}
 
-	// Type-check the emitted BindTagAnimated / BindTag / TagDB against the real
-	// gui + core API — the definitive proof the 组态 bindings compile.
+	// Type-check the emitted services wiring against the real scada + gui + core
+	// API — the definitive proof the 组态 output compiles.
 	vetGeneratedCode(t, code)
 }
 
