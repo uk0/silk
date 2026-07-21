@@ -414,6 +414,12 @@ type CodeEditor struct {
 	// independent and still consulted afterwards.
 	snippets *SnippetSet
 
+	// snippetSess is the live multi-tab-stop session created when a trigger
+	// expands (via snippet.Expand). While Active, Tab advances the caret to the
+	// next tab stop and Shift+Tab to the previous; it is nil when no expansion
+	// is in flight, and the editor's default Tab handling runs instead.
+	snippetSess *snippetSession
+
 	// --- Tokenization cache (Draw hot path) ---
 	// tokenCache memoizes tokenizeLine output per line index, keyed by a
 	// fnv64a hash over the line bytes plus the incoming inBlock flag. A
@@ -513,8 +519,10 @@ func (this *CodeEditor) Snippets() *SnippetSet {
 }
 
 // tryExpandSnippetAtCursor expands a SnippetSet trigger when the identifier
-// ending flush at the cursor matches one. Returns true when expansion happened
-// (buffer + cursor updated, onChanged fired, redraw scheduled).
+// ending flush at the cursor matches one. The matched body is run through
+// snippet.Expand, spliced in place of the trigger, and a multi-tab-stop
+// snippetSession is started with the caret on the first stop. Returns true when
+// expansion happened (buffer + cursor updated, onChanged fired, redraw scheduled).
 //
 // The check is conservative: the cursor must sit immediately after an
 // identifier rune AND not in the middle of an identifier (no identifier rune
@@ -546,43 +554,53 @@ func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
 		return false
 	}
 	word := string(runes[start:end])
-
-	// Compute the global rune offset of the cursor in Text(): sum of rune
-	// lengths of all preceding lines (each plus a newline) plus cursorCol.
-	cursorOffset := 0
-	for i := 0; i < this.cursorLine; i++ {
-		cursorOffset += len([]rune(this.lines[i])) + 1 // +1 for '\n'
-	}
-	cursorOffset += end
-
-	newBuf, newCur, ok := this.snippets.Expand(this.Text(), cursorOffset, word)
-	if !ok {
+	sn := this.snippets.ByTrigger(word)
+	if sn == nil {
 		return false
+	}
+
+	// Leading whitespace of the trigger's line, prefixed to body lines after
+	// the first so the expansion lines up under the trigger column.
+	indent := ""
+	for _, r := range runes {
+		if r == ' ' || r == '\t' {
+			indent += string(r)
+		} else {
+			break
+		}
+	}
+
+	// Byte offset where the body is spliced in: the trigger's start position.
+	insByte := byteOffsetForCursor(this.lines, this.cursorLine, start)
+
+	text, sess, err := expandSnippetBody(sn.Body, indent, insByte)
+	if err != nil {
+		return false // malformed template: leave the buffer untouched
 	}
 
 	// Record undo before mutating: store the abbreviation we're replacing.
 	this.pushUndo(editAction{kind: 2, line: this.cursorLine, col: start, text: "", oldText: word})
 
-	// Replace buffer and re-derive line/col from the returned rune offset.
-	this.lines = strings.Split(newBuf, "\n")
+	// Splice: drop the trigger word, insert the expanded body.
+	oldText := this.Text()
+	newText := oldText[:insByte] + text + oldText[insByte+len(word):]
+	this.lines = strings.Split(newText, "\n")
 	if len(this.lines) == 0 {
 		this.lines = []string{""}
 	}
-	// Map newCur (rune offset) back to (line, col).
-	remaining := newCur
-	newLine, newCol := 0, 0
-	for i, ln := range this.lines {
-		ll := len([]rune(ln))
-		if remaining <= ll {
-			newLine, newCol = i, remaining
-			break
-		}
-		remaining -= ll + 1 // consume the line and its newline
-	}
-	this.cursorLine = newLine
-	this.cursorCol = newCol
-	this.clearSelection()
 	this.rebuildText()
+
+	// Start a tab-stop session and select its first stop ($1, or $0 when that
+	// is all the body carries). With no stops, land the caret after the body.
+	this.snippetSess = sess
+	if sess != nil {
+		if rs, ok := sess.Next(); ok {
+			this.selectSnippetRanges(rs)
+			return true
+		}
+	}
+	this.clearSelection()
+	this.cursorLine, this.cursorCol = cursorForByteOffset(this.lines, insByte+len(text))
 	this.ensureCursorVisible()
 	this.Self().Update()
 	return true
@@ -4810,6 +4828,12 @@ func (this *CodeEditor) OnMouseLeave() {
 }
 
 func (this *CodeEditor) OnTextInput(s string) {
+	// A snippet session that has advanced past its final stop ($0) ends as soon
+	// as buffer content is typed again; while it is still active, typing edits
+	// the current placeholder and leaves the session in place.
+	if this.snippetSess != nil && !this.snippetSess.Active() {
+		this.snippetSess = nil
+	}
 	// Route to rename input if active
 	if this.renameActive {
 		runes := []rune(this.renameText)
@@ -5483,6 +5507,25 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyTab:
+		// Active snippet session: Tab jumps to the next tab stop, Shift+Tab to
+		// the previous one. This runs before the selection-indent logic because
+		// the current stop is itself a selection.
+		if !ctrl && this.snippetSess != nil {
+			if this.snippetSess.Active() {
+				if shift {
+					if rs, ok := this.snippetSess.Prev(); ok {
+						this.selectSnippetRanges(rs)
+					}
+					return // Shift+Tab at the first stop is a no-op; keep the session.
+				}
+				if rs, ok := this.snippetSess.Next(); ok {
+					this.selectSnippetRanges(rs)
+					return
+				}
+			}
+			// Past the final stop: drop the session and fall back to plain Tab.
+			this.snippetSess = nil
+		}
 		// Multi-line selection: Tab indents every spanned line, Shift+Tab
 		// dedents. Snippet expansion only makes sense when there is a single
 		// caret on one line, so it runs only in the no-selection branch below.
@@ -5710,6 +5753,9 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyEsc:
+		// Escape ends any in-flight snippet tab-stop session, then behaves as a
+		// normal Escape (clearing extra cursors / the current selection).
+		this.snippetSess = nil
 		// Multi-cursor: Escape first collapses extra cursors, then the selection.
 		if len(this.additionalCursors) > 0 {
 			this.ClearAdditionalCursors()
