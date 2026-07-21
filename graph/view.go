@@ -109,7 +109,7 @@ type IView interface {
 
 	FindHandleAt(xMm, yMm float64) (decor IDecor, handle int)
 
-	//SetPropertyView(prop.IPropertyView)
+	SetPropertyView(prop.IPropertyView)
 
 	SetPropertyConfigName(cfgName string)
 	PropertyConfigName() (cfgName string)
@@ -176,7 +176,7 @@ type GraphView struct {
 
 	needEmitSelectionChanged bool
 
-	//	propertyView prop.IPropertyView
+	propertyView prop.IPropertyView
 
 	propertyCfgName string
 }
@@ -1081,15 +1081,19 @@ func (this *GraphView) FindHandleAt(xMm, yMm float64) (decor IDecor, handle int)
 	return this.Selection().FindHandleAt(xMm, yMm)
 }
 
-//func (this *GraphView) SetPropertyView(propView prop.IPropertyView) {
-//	if this.propertyView == propView {
-//		return
-//	}
-//	if this.propertyView != nil {
-//		this.propertyView.Clear(this.Self())
-//	}
-//	this.propertyView = propView
-//}
+func (this *GraphView) SetPropertyView(propView prop.IPropertyView) {
+	if this.propertyView == propView {
+		return
+	}
+	// Clear the outgoing sheet of the entries this view owns before the
+	// swap. emitSelectionChanged binds with the scene as the owner, so we
+	// must pass the same owner here — Clear is a no-op when the owner does
+	// not match what Bind recorded.
+	if this.propertyView != nil {
+		this.propertyView.Clear(this.Scene())
+	}
+	this.propertyView = propView
+}
 
 func (this *GraphView) SetPropertyConfigName(cfgName string) {
 	this.propertyCfgName = cfgName
@@ -1128,7 +1132,17 @@ func (this *GraphView) SetPageMarginVisible(b bool) {
 }
 
 func (this *GraphView) GetPropertyView() prop.IPropertyView {
+	// An explicitly injected sheet (silkide injects its right-dock
+	// PropertySheet) wins. Only when nothing was injected do we fall back
+	// to a tool-view registered under the prop.PropertySheet id in the
+	// owning frame, and that lookup is skipped when the view has no frame.
+	if this.propertyView != nil {
+		return this.propertyView
+	}
 	frame := gui.FindOwnerFrame(this)
+	if frame == nil {
+		return nil
+	}
 	p, _ := frame.ToolViewById("prop.PropertySheet").(prop.IPropertyView)
 	return p
 }

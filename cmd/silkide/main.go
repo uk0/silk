@@ -51,6 +51,7 @@ import (
 	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/pdfexport"
+	"github.com/uk0/silk/prop"
 	"github.com/uk0/silk/svgexport"
 )
 
@@ -411,8 +412,12 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 			core.Warn("export failed: ", err)
 		}
 	})
-	addIconAction("", "propsheet", "Settings", func() {
-		showProjectSettingsDialog(designCanvas)
+	// Focus the right-dock property sheet (Project Settings still lives in
+	// the hamburger menu). The propsheet glyph now matches its target: it
+	// brings the live property panel to the front rather than opening the
+	// modal settings dialog.
+	addIconAction("", "propsheet", "Properties", func() {
+		dockSetActiveView(globalRightDock, globalPropSheet)
 	})
 
 	frame.SetToolBar(tb)
@@ -599,6 +604,19 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
 			inspector.Rebuild()
 		})
+
+		// Live property sheet — sibling tab of the Object Inspector. The
+		// canvas drives the binding itself: GraphView.emitSelectionChanged
+		// pushes the current selection into whatever sheet was injected via
+		// SetPropertyView, so wiring the panel is just create → dock →
+		// inject. Selecting a widget then shows its name, geometry and the
+		// embedded widget's own fields (text, value, ...); editing a value
+		// repaints the canvas through the mark-dirty property adapter.
+		propSheet := prop.NewPropertySheet()
+		propSheet.SetTitle(i18n.T("Properties"))
+		globalPropSheet = propSheet
+		rightDock.AddView(propSheet)
+		designCanvas.SetPropertyView(propSheet)
 
 		// Code outline — sibling tab of the Object Inspector in the
 		// right dock. The panel existed and was factory-registered but
@@ -1486,6 +1504,12 @@ var globalOutline *ged.CodeOutlinePanel
 // the code outline. Used by the Cmd+Shift+O shortcut to bring the
 // outline tab to the front (mirrors globalLeftDock for global search).
 var globalRightDock *gui.Dock
+
+// globalPropSheet is the right-dock live property sheet — a sibling tab of
+// the Object Inspector that shows the selected canvas widget's properties.
+// The design canvas injects it via SetPropertyView so selection changes bind
+// into it automatically; the "propsheet" toolbar action focuses its tab.
+var globalPropSheet *prop.PropertySheet
 
 // globalProblems is the bottom-dock structured compiler-issues pane.
 // Sibling tab of Terminal + BuildOutput. reportBuildOutput feeds it

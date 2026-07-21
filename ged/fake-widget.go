@@ -642,17 +642,6 @@ func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *int) {
 	loadChildWidgets(doc.ChildByKey("children", false), this, skipped)
 }
 
-// corePropertyListAdapter wraps prop.IPropertyList to satisfy core.IPropertyList.
-// The core interface's AddProperty has no return values, while the prop interface
-// returns (*PropertyItem, bool). This adapter bridges the two.
-type corePropertyListAdapter struct {
-	list prop.IPropertyList
-}
-
-func (a *corePropertyListAdapter) AddProperty(id string, get, set interface{}) {
-	a.list.AddProperty(id, get, set)
-}
-
 func (this *FakeWidget) EnumProperties(list prop.IPropertyList) {
 	list.AddProperty("控件名称", this.WidgetName, this.SetWidgetName)
 	list.AddProperty("控件类型", this.WidgetFactoryName, nil)
@@ -663,11 +652,12 @@ func (this *FakeWidget) EnumProperties(list prop.IPropertyList) {
 	list.AddProperty("锁定", this.IsLocked, this.SetLocked)
 
 	// Also enumerate the embedded widget's properties so the property sheet
-	// shows widget-specific fields (text, checked, value, etc.).
+	// shows widget-specific fields (text, checked, value, etc.). The
+	// mark-dirty adapter wraps each embedded setter so editing one of these
+	// values in the sheet repaints the designer preview.
 	if this.widget != nil {
 		if ep, ok := this.widget.(core.IEnumProperties); ok {
-			adapter := &corePropertyListAdapter{list: list}
-			ep.EnumProperties(adapter)
+			ep.EnumProperties(newMarkDirtyPropertyList(list, this.MarkDirty))
 		}
 	}
 }
