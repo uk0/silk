@@ -27,6 +27,9 @@ type Gateway struct {
 	tags   *core.TagDB                // shared tag database
 	sinkBy map[string]driver.TagPoint // tag name -> sink point (the match table)
 
+	onError   func(tag string, err error) // optional: fired when a sink write fails
+	onForward func(tag string)            // optional: fired after a value reaches the sink
+
 	wireOnce sync.Once
 	cancels  []core.CancelFunc // forward subscriptions, released on Stop
 }
@@ -48,6 +51,16 @@ func NewGateway(source, sink driver.Driver, srcPoints, sinkPoints []driver.TagPo
 	}
 }
 
+// SetOnError registers a hook fired with the tag name and error whenever a
+// forward write to the sink fails. Passing nil disables it. Set it before Start
+// or ForwardOnce; without it a failed forward is only logged.
+func (g *Gateway) SetOnError(fn func(tag string, err error)) { g.onError = fn }
+
+// SetOnForward registers a hook fired with the tag name after each value is
+// written to the sink. Passing nil disables it. Set it before Start or
+// ForwardOnce.
+func (g *Gateway) SetOnForward(fn func(tag string)) { g.onForward = fn }
+
 // wireForwards subscribes each sink point's tag to a sink write, exactly once.
 // The subscription's priming callback carries the tag's current value; a
 // not-yet-polled tag primes nil, which is skipped so merely wiring the gateway
@@ -63,6 +76,13 @@ func (g *Gateway) wireForwards() {
 				}
 				if err := g.sink.WritePoint(sp, v.Raw); err != nil {
 					core.Warn("gateway forward ", sp.Tag, ": ", err)
+					if g.onError != nil {
+						g.onError(sp.Tag, err)
+					}
+					return
+				}
+				if g.onForward != nil {
+					g.onForward(sp.Tag)
 				}
 			})
 			g.cancels = append(g.cancels, c)

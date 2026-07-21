@@ -19,6 +19,14 @@ type Redundant struct {
 	primary, backup Driver
 	mu              sync.Mutex
 	usingBackup     bool // guarded by mu; false => primary is active
+
+	// OnFailover, if non-nil, is called with the newly active side ("primary"
+	// or "backup") each time traffic flips between the two devices. OnError, if
+	// non-nil, is called with the active device's error just before a failover
+	// retry. Both are optional status hooks; register them with SetOnFailover /
+	// SetOnError before the driver is put into service.
+	OnFailover func(active string)
+	OnError    func(error)
 }
 
 var _ Driver = (*Redundant)(nil)
@@ -28,6 +36,14 @@ var _ Driver = (*Redundant)(nil)
 func NewRedundant(primary, backup Driver) *Redundant {
 	return &Redundant{primary: primary, backup: backup}
 }
+
+// SetOnFailover registers the callback fired with the newly active side each
+// time traffic flips between the primary and backup. Passing nil disables it.
+func (r *Redundant) SetOnFailover(fn func(active string)) { r.OnFailover = fn }
+
+// SetOnError registers the callback fired with the active device's error just
+// before a failover retry. Passing nil disables it.
+func (r *Redundant) SetOnError(fn func(error)) { r.OnError = fn }
 
 // Connect connects both devices and succeeds if at least one comes up, recording
 // which side is active: primary when it connects, otherwise the backup. It fails
@@ -64,10 +80,12 @@ func (r *Redundant) Close() error {
 // value from whichever device answered, or the standby's error if both fail.
 func (r *Redundant) ReadPoint(p TagPoint) (interface{}, error) {
 	active, standby, usingBackup := r.pick()
-	if v, err := active.ReadPoint(p); err == nil {
+	v, err := active.ReadPoint(p)
+	if err == nil {
 		return v, nil
 	}
-	v, err := standby.ReadPoint(p)
+	r.fireError(err) // active read failed; report before failing over
+	v, err = standby.ReadPoint(p)
 	if err != nil {
 		return nil, err
 	}
@@ -80,9 +98,11 @@ func (r *Redundant) ReadPoint(p TagPoint) (interface{}, error) {
 // if either device accepted the write, or the standby's error if both fail.
 func (r *Redundant) WritePoint(p TagPoint, v interface{}) error {
 	active, standby, usingBackup := r.pick()
-	if err := active.WritePoint(p, v); err == nil {
+	err := active.WritePoint(p, v)
+	if err == nil {
 		return nil
 	}
+	r.fireError(err) // active write failed; report before failing over
 	if err := standby.WritePoint(p, v); err != nil {
 		return err
 	}
@@ -120,4 +140,20 @@ func (r *Redundant) promote(wasBackup bool) {
 	r.mu.Lock()
 	r.usingBackup = !wasBackup
 	r.mu.Unlock()
+	r.fireFailover() // active side flipped; report the new active outside the lock
+}
+
+// fireError reports err to the OnError hook when one is registered.
+func (r *Redundant) fireError(err error) {
+	if cb := r.OnError; cb != nil {
+		cb(err)
+	}
+}
+
+// fireFailover reports the newly active side to the OnFailover hook when one is
+// registered. It runs after mu is released so the hook may call Active().
+func (r *Redundant) fireFailover() {
+	if cb := r.OnFailover; cb != nil {
+		cb(r.Active())
+	}
 }

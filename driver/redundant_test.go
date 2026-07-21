@@ -194,3 +194,37 @@ func TestRedundantConnectBothFail(t *testing.T) {
 		t.Fatal("connect with both down: want error, got nil")
 	}
 }
+
+// TestRedundantStatusCallbacks: a primary read failure fires OnError with the
+// active device's error, then OnFailover with "backup" as traffic flips over.
+func TestRedundantStatusCallbacks(t *testing.T) {
+	p := &redFake{name: "p", val: int16(11)}
+	b := &redFake{name: "b", val: int16(22)}
+	r := NewRedundant(p, b)
+	if err := r.Connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	var gotErr error
+	var failovers []string
+	r.SetOnError(func(err error) { gotErr = err })
+	r.SetOnFailover(func(active string) { failovers = append(failovers, active) })
+
+	p.fail = true // primary read fails -> OnError, then failover to the backup
+	v, err := r.ReadPoint(TagPoint{Address: "x"})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if v != int16(22) {
+		t.Errorf("failover read = %v, want backup 22", v)
+	}
+	if gotErr == nil {
+		t.Fatal("OnError not fired on primary read failure")
+	}
+	if gotErr.Error() != "p: read fail" {
+		t.Errorf("OnError err = %v, want the primary's read error", gotErr)
+	}
+	if len(failovers) != 1 || failovers[0] != "backup" {
+		t.Errorf("OnFailover calls = %v, want [backup]", failovers)
+	}
+}

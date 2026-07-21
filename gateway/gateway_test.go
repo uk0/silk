@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ type fakeSink struct {
 	nWrite    int
 	connected bool
 	closed    bool
+	writeErr  error // if non-nil, WritePoint returns it instead of recording
 }
 
 func newSink() *fakeSink { return &fakeSink{writes: map[string]interface{}{}} }
@@ -55,6 +57,9 @@ func (s *fakeSink) ReadPoint(driver.TagPoint) (interface{}, error) { return nil,
 func (s *fakeSink) WritePoint(p driver.TagPoint, v interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.writeErr != nil {
+		return s.writeErr
+	}
 	s.writes[p.Address] = v
 	s.nWrite++
 	return nil
@@ -177,5 +182,72 @@ func TestGatewayStartForwardsAndCloses(t *testing.T) {
 	g.Stop()
 	if !sink.isClosed() {
 		t.Errorf("sink not closed after Stop")
+	}
+}
+
+// TestGatewayForwardErrorHook: a failing sink write fires the OnError hook with
+// the tag name and the sink's error, instead of dropping the failure to the log
+// alone. OnForward must not fire when the write fails.
+func TestGatewayForwardErrorHook(t *testing.T) {
+	src := newSource()
+	src.vals["S1"] = int16(7)
+	sink := newSink()
+	sink.writeErr = fmt.Errorf("sink down")
+	db := core.NewTagDB()
+
+	g := NewGateway(src, sink,
+		[]driver.TagPoint{roPoint("flow", "S1")},
+		[]driver.TagPoint{rwPoint("flow", "D1")},
+		db, time.Hour)
+	defer g.Stop()
+
+	var gotTag string
+	var gotErr error
+	var forwarded int
+	g.SetOnError(func(tag string, err error) { gotTag, gotErr = tag, err })
+	g.SetOnForward(func(string) { forwarded++ })
+
+	g.ForwardOnce() // synchronous: the hook fires before this returns
+
+	if gotTag != "flow" {
+		t.Errorf("OnError tag = %q, want flow", gotTag)
+	}
+	if gotErr == nil {
+		t.Fatal("OnError not fired on sink write failure")
+	}
+	if gotErr.Error() != "sink down" {
+		t.Errorf("OnError err = %v, want \"sink down\"", gotErr)
+	}
+	if forwarded != 0 {
+		t.Errorf("OnForward fired %d times on a failed write, want 0", forwarded)
+	}
+}
+
+// TestGatewayForwardSuccessHook: a successful forward fires the OnForward hook
+// with the tag name and leaves OnError untouched.
+func TestGatewayForwardSuccessHook(t *testing.T) {
+	src := newSource()
+	src.vals["S1"] = int16(7)
+	sink := newSink()
+	db := core.NewTagDB()
+
+	g := NewGateway(src, sink,
+		[]driver.TagPoint{roPoint("flow", "S1")},
+		[]driver.TagPoint{rwPoint("flow", "D1")},
+		db, time.Hour)
+	defer g.Stop()
+
+	var forwarded []string
+	var errs int
+	g.SetOnForward(func(tag string) { forwarded = append(forwarded, tag) })
+	g.SetOnError(func(string, error) { errs++ })
+
+	g.ForwardOnce()
+
+	if len(forwarded) != 1 || forwarded[0] != "flow" {
+		t.Errorf("OnForward calls = %v, want [flow]", forwarded)
+	}
+	if errs != 0 {
+		t.Errorf("OnError fired %d times on a healthy forward, want 0", errs)
 	}
 }
