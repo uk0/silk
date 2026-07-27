@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/uk0/silk/core"
@@ -48,12 +49,23 @@ type GlobalSearchPanel struct {
 	replaceCursor int
 	focusReplace  bool // true when the replace input holds keyboard focus
 
-	hoverIdx  int
-	scrollY   float64
-	rowHeight float64
-	searching bool
-	rootDir   string
-	cbOpen    func(path string, line int)
+	// Engine options. filesearch already supports regex / case folding /
+	// an extension filter; these hold the panel-side state that maps onto
+	// filesearch.Options (see searchOptions). Whole-word has no engine flag
+	// of its own — it is compiled into the pattern (see enginePattern).
+	optRegex     bool
+	optCaseSense bool
+	optWholeWord bool
+	include      []string // extensions to search, e.g. [".go", ".txt"]; empty = all
+	exclude      []string // globs filtered out after the walk, e.g. ["*_test.go"]
+
+	hoverIdx   int
+	scrollY    float64
+	rowHeight  float64
+	searching  bool
+	rootDir    string
+	cbOpen     func(path string, line int)
+	cbReplaced func(path, content string)
 
 	// flattened visible rows for rendering
 	flatRows []searchRow
@@ -99,6 +111,105 @@ func (this *GlobalSearchPanel) SigOpen(fn func(path string, line int)) {
 	this.cbOpen = fn
 }
 
+// SigFileReplaced registers the callback fired once per file that a committed
+// Replace All rewrote, with the file's new contents. The host uses it to reload
+// the open buffer for that path so an editor never keeps stale text for a file
+// that changed underneath it. It never fires for a transaction that rolled back.
+func (this *GlobalSearchPanel) SigFileReplaced(fn func(path, content string)) {
+	this.cbReplaced = fn
+}
+
+// SetRegex interprets the query as an RE2 regular expression.
+func (this *GlobalSearchPanel) SetRegex(on bool) {
+	this.optRegex = on
+	this.Self().Update()
+}
+
+// SetCaseSensitive matches the query case-sensitively (the default is to fold
+// case, as the panel always did).
+func (this *GlobalSearchPanel) SetCaseSensitive(on bool) {
+	this.optCaseSense = on
+	this.Self().Update()
+}
+
+// SetWholeWord requires the match to sit on word boundaries. The engine has no
+// flag for it, so it is compiled into the pattern as \b...\b — which forces
+// regex mode on for that search even for a literal query.
+func (this *GlobalSearchPanel) SetWholeWord(on bool) {
+	this.optWholeWord = on
+	this.Self().Update()
+}
+
+// SetInclude restricts the search to files with these extensions (a leading dot
+// is optional, matching is case-insensitive — filesearch's own Include rules).
+// An empty list searches every text file.
+func (this *GlobalSearchPanel) SetInclude(exts []string) {
+	this.include = append([]string(nil), exts...)
+	this.Self().Update()
+}
+
+// SetExclude drops results whose path matches one of these globs. Each pattern
+// is tested against the file's base name and against every path segment, so
+// both "*_test.go" and "testdata" work. The engine has no exclude filter, so
+// this is applied to its output (see excludedPath).
+func (this *GlobalSearchPanel) SetExclude(patterns []string) {
+	this.exclude = append([]string(nil), patterns...)
+	this.Self().Update()
+}
+
+// searchOptions maps the panel's option state onto the engine's Options.
+// Whole-word matching forces Regex on because it is expressed as \b...\b in the
+// pattern; SkipBinary is always on (a binary blob has no useful text hits).
+func (this *GlobalSearchPanel) searchOptions() filesearch.Options {
+	return filesearch.Options{
+		Regex:      this.optRegex || this.optWholeWord,
+		IgnoreCase: !this.optCaseSense,
+		Include:    this.include,
+		SkipBinary: true,
+	}
+}
+
+// enginePattern maps the user's query onto the pattern the engine matches.
+// Without whole-word it is the query verbatim (literal or regex, as the engine's
+// Regex flag says). With whole-word the query is wrapped in word boundaries —
+// quoted first when it is a literal, and grouped when it is already a regex so
+// an alternation like "a|b" becomes \b(?:a|b)\b rather than \ba|b\b.
+func enginePattern(query string, regex, wholeWord bool) string {
+	if !wholeWord || query == "" {
+		return query
+	}
+	if regex {
+		return `\b(?:` + query + `)\b`
+	}
+	return `\b` + regexp.QuoteMeta(query) + `\b`
+}
+
+// searchOptionLabel summarises the non-default options for the summary line,
+// e.g. " · regex · Aa · .go". It returns "" when everything is at its default
+// so the common case reads exactly as it did before.
+func searchOptionLabel(opt filesearch.Options, wholeWord bool, exclude []string) string {
+	var parts []string
+	if opt.Regex && !wholeWord {
+		parts = append(parts, "regex")
+	}
+	if wholeWord {
+		parts = append(parts, "word")
+	}
+	if !opt.IgnoreCase {
+		parts = append(parts, "Aa")
+	}
+	if len(opt.Include) > 0 {
+		parts = append(parts, strings.Join(opt.Include, ","))
+	}
+	if len(exclude) > 0 {
+		parts = append(parts, "!"+strings.Join(exclude, ","))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " · " + strings.Join(parts, " · ")
+}
+
 // Search runs a find-in-files search under rootDir for query. The filesystem
 // walk is handed to the shared filesearch engine on a background goroutine and
 // the results are marshalled back onto the main thread with gui.Post before any
@@ -124,8 +235,11 @@ func (this *GlobalSearchPanel) Search(query string) {
 	this.Self().Update()
 
 	root := this.rootDir
+	pattern := enginePattern(query, this.optRegex, this.optWholeWord)
+	opt := this.searchOptions()
+	exclude := this.exclude
 	go func() {
-		matches := runSearch(root, query)
+		matches := runSearchOpt(root, pattern, opt, exclude)
 		gui.Post(func() {
 			// A newer search may have superseded this one while it ran.
 			if this.query != query {
@@ -139,33 +253,120 @@ func (this *GlobalSearchPanel) Search(query string) {
 	}()
 }
 
-// runSearch runs the filesearch engine and maps its matches onto SearchMatch.
-// It is pure (touches no panel state and no GUI), so it is safe to call from a
-// goroutine and directly from tests. filesearch reports a 1-based BYTE column;
-// Column is stored 0-based in bytes — the same units Draw slices the line by —
-// so search and highlight agree and multibyte text before a match no longer
-// shifts the highlight. Every text file is scanned (binary files and
-// .git/vendor/node_modules are skipped by the engine), broadening the previous
-// .go-only search.
+// runSearch runs the engine with the panel's original defaults: a
+// case-insensitive literal scan of every text file. It is the no-options entry
+// point (and what a freshly built panel does).
 func runSearch(root, query string) []SearchMatch {
-	matches, err := filesearch.Search(root, query, filesearch.Options{
+	return runSearchOpt(root, query, filesearch.Options{
 		IgnoreCase: true,
 		SkipBinary: true,
-	})
+	}, nil)
+}
+
+// runSearchOpt runs the filesearch engine with explicit options and maps its
+// matches onto SearchMatch. It is pure (touches no panel state and no GUI), so
+// it is safe to call from a goroutine and directly from tests. filesearch
+// reports a 1-based BYTE column; Column is stored 0-based in bytes — the same
+// units Draw slices the line by — so search and highlight agree and multibyte
+// text before a match no longer shifts the highlight. MatchLen comes from the
+// matched text itself, not from len(pattern), because a regex or folded-case
+// match can be a different length than the pattern. Binary files and
+// .git/vendor/node_modules are skipped by the engine; exclude globs are applied
+// here (the engine has no exclude filter).
+func runSearchOpt(root, pattern string, opt filesearch.Options, exclude []string) []SearchMatch {
+	matches, err := filesearch.Search(root, pattern, opt)
 	if err != nil {
 		return nil
 	}
+	re := searchMatcher(pattern, opt)
 	out := make([]SearchMatch, 0, len(matches))
 	for _, m := range matches {
+		if excludedPath(m.Path, exclude) {
+			continue
+		}
+		col := m.Col - 1
 		out = append(out, SearchMatch{
 			FilePath: m.Path,
 			Line:     m.Line,
-			Column:   m.Col - 1,
+			Column:   col,
 			LineText: m.Text,
-			MatchLen: len(query),
+			MatchLen: matchLenAt(re, pattern, m.Text, col),
 		})
 	}
 	return out
+}
+
+// searchMatcher compiles the matcher filesearch uses for (pattern, opt) so a
+// match's byte length can be recovered and occurrences counted. It returns nil
+// for the literal case-sensitive path — there every match is len(pattern) — and
+// for a pattern that does not compile (the engine already reported that error).
+func searchMatcher(pattern string, opt filesearch.Options) *regexp.Regexp {
+	expr := ""
+	switch {
+	case opt.Regex:
+		expr = pattern
+	case opt.IgnoreCase:
+		expr = regexp.QuoteMeta(pattern)
+	default:
+		return nil
+	}
+	if opt.IgnoreCase {
+		expr = "(?i)" + expr
+	}
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil
+	}
+	return re
+}
+
+// matchLenAt returns the byte length of the match that starts at 0-based byte
+// offset col in text. With no matcher (literal, case-sensitive) every match is
+// the pattern's own length; that length is also the fallback when the matcher
+// cannot re-anchor at col (e.g. a pattern anchored with ^).
+func matchLenAt(re *regexp.Regexp, pattern, text string, col int) int {
+	if re == nil || col < 0 || col > len(text) {
+		return len(pattern)
+	}
+	if loc := re.FindStringIndex(text[col:]); loc != nil && loc[0] == 0 && loc[1] > 0 {
+		return loc[1]
+	}
+	return len(pattern)
+}
+
+// countMatches counts the non-overlapping, non-empty matches of pattern in text.
+func countMatches(re *regexp.Regexp, pattern, text string) int {
+	if re == nil {
+		return strings.Count(text, pattern)
+	}
+	n := 0
+	for _, loc := range re.FindAllStringIndex(text, -1) {
+		if loc[0] != loc[1] {
+			n++
+		}
+	}
+	return n
+}
+
+// excludedPath reports whether path is filtered out by any exclude glob. Each
+// pattern is matched (filepath.Match) against every path segment, so both a
+// file glob ("*_test.go") and a directory name ("testdata") work.
+func excludedPath(path string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	segs := strings.Split(filepath.ToSlash(path), "/")
+	for _, pat := range patterns {
+		if pat == "" {
+			continue
+		}
+		for _, seg := range segs {
+			if ok, err := filepath.Match(pat, seg); err == nil && ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // applyResults installs a fresh result set and rebuilds the per-file grouping.
@@ -183,52 +384,142 @@ func (this *GlobalSearchPanel) applyResults(matches []SearchMatch) {
 	}
 }
 
-// ReplaceAll rewrites every match of the current query with the replace text
-// across the files the last search touched, using the filesearch engine to
-// compute each file's new contents (the same case-insensitive literal matching
-// the search used). A file whose contents are unchanged is not rewritten, and a
-// read or write failure is surfaced via the log instead of being dropped
-// silently. Afterwards the search is re-run synchronously so the results list
-// reflects the new state.
-func (this *GlobalSearchPanel) ReplaceAll() {
+// FileReplacement is one file's previewed rewrite: what is on disk now and what
+// Replace All would put there. It is also the unit ApplyReplacements commits and
+// the record it rolls back from, so Before is the exact text to restore.
+type FileReplacement struct {
+	Path   string // file to rewrite
+	Before string // contents read from disk at preview time
+	After  string // contents once the replacement is applied
+	Count  int    // occurrences replaced in this file
+}
+
+// ComputeReplacements previews Replace All: for every file the last search
+// matched it reads the file, applies the replacement with the same pattern and
+// options the search used, and returns the before/after pair. It writes NOTHING
+// — the caller shows the diff and then hands the slice to ApplyReplacements —
+// so the destructive step is separated from the step that decides what to do.
+// Files that come out byte-identical (no occurrence, or a replacement equal to
+// the match) are left out entirely, so no file is touched for nothing.
+//
+// The replacement runs line by line — the same unit the search matches in — so a
+// regex can never replace across a line boundary and anchors keep the meaning
+// they had while searching.
+func (this *GlobalSearchPanel) ComputeReplacements() []FileReplacement {
 	if this.query == "" || len(this.fileOrder) == 0 {
-		return
+		return nil
 	}
-	query := this.query
+	pattern := enginePattern(this.query, this.optRegex, this.optWholeWord)
+	opt := this.searchOptions()
+	re := searchMatcher(pattern, opt)
 	replacement := string(this.replaceRunes)
-	opt := filesearch.Options{IgnoreCase: true}
 
-	// Snapshot the file set; the refresh below rebuilds fileOrder underneath us.
-	files := make([]string, len(this.fileOrder))
-	copy(files, this.fileOrder)
-
-	failed := 0
-	for _, path := range files {
+	out := make([]FileReplacement, 0, len(this.fileOrder))
+	for _, path := range this.fileOrder {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			failed++
 			core.Error(fmt.Sprintf("global search: read %s: %v", path, err))
 			continue
 		}
-		// The query never spans a newline, so replacing across the whole file
-		// is identical to replacing per matched line, and reuses the engine's
-		// tested matcher rather than a bespoke pass.
-		out := filesearch.Replace(filesearch.Match{Text: string(data)}, query, replacement, opt)
-		if out == string(data) {
-			continue // nothing changed; don't rewrite the file
-		}
-		if err := os.WriteFile(path, []byte(out), 0644); err != nil {
-			failed++
-			core.Error(fmt.Sprintf("global search: write %s: %v", path, err))
+		before := string(data)
+		after, n := replaceInText(before, pattern, replacement, opt, re)
+		if n == 0 || after == before {
 			continue
 		}
+		out = append(out, FileReplacement{Path: path, Before: before, After: after, Count: n})
 	}
-	if failed > 0 {
-		core.Warn(fmt.Sprintf("global search: replace all left %d file(s) unwritten", failed))
+	return out
+}
+
+// ApplyReplacements commits a previewed set of rewrites as one transaction:
+// either every file lands or none does. If a write fails, the files already
+// written are restored from their Before text and the error is returned, so a
+// failed Replace All never leaves the tree half-rewritten. Only on success does
+// the SigFileReplaced callback fire — once per rewritten file — so a host that
+// reloads open buffers from it never sees a state that was rolled back.
+func (this *GlobalSearchPanel) ApplyReplacements(reps []FileReplacement) error {
+	written := make([]FileReplacement, 0, len(reps))
+	for _, r := range reps {
+		if r.After == r.Before {
+			continue // nothing to do; don't touch the file's mtime
+		}
+		if err := os.WriteFile(r.Path, []byte(r.After), 0644); err != nil {
+			rollbackReplacements(written)
+			return fmt.Errorf("global search: write %s: %w (rolled back %d file(s))",
+				r.Path, err, len(written))
+		}
+		written = append(written, r)
+	}
+	if this.cbReplaced != nil {
+		for _, r := range written {
+			this.cbReplaced(r.Path, r.After)
+		}
+	}
+	return nil
+}
+
+// rollbackReplacements restores each already-written file to its Before text,
+// newest first. A rollback write that itself fails is logged, not swallowed:
+// that file is the one a human has to look at.
+func rollbackReplacements(written []FileReplacement) {
+	for i := len(written) - 1; i >= 0; i-- {
+		r := written[i]
+		if err := os.WriteFile(r.Path, []byte(r.Before), 0644); err != nil {
+			core.Error(fmt.Sprintf("global search: rollback %s: %v", r.Path, err))
+		}
+	}
+}
+
+// replaceInText rewrites every occurrence of pattern in text line by line,
+// preserving each line's original terminator ("\n", "\r\n", or none at EOF).
+// Working per line is what keeps regex anchors (^, $) and multiline flags
+// behaving exactly as they did during the search, and guarantees a pattern can
+// never be replaced across a line boundary. It returns the new text and the
+// number of occurrences replaced.
+func replaceInText(text, pattern, replacement string, opt filesearch.Options, re *regexp.Regexp) (string, int) {
+	var b strings.Builder
+	b.Grow(len(text))
+	count := 0
+	for rest := text; rest != ""; {
+		line, term := rest, ""
+		if i := strings.IndexByte(rest, '\n'); i >= 0 {
+			line, term, rest = rest[:i], "\n", rest[i+1:]
+			if strings.HasSuffix(line, "\r") {
+				line, term = line[:len(line)-1], "\r\n"
+			}
+		} else {
+			rest = ""
+		}
+		count += countMatches(re, pattern, line)
+		b.WriteString(filesearch.Replace(filesearch.Match{Text: line}, pattern, replacement, opt))
+		b.WriteString(term)
+	}
+	return b.String(), count
+}
+
+// ReplaceAll previews the rewrite and commits it in one transaction: nothing is
+// written unless every file can be written (see ComputeReplacements /
+// ApplyReplacements). A failed transaction is logged and leaves the tree exactly
+// as it was. Afterwards the search is re-run synchronously so the results list
+// reflects the state on disk either way.
+func (this *GlobalSearchPanel) ReplaceAll() {
+	reps := this.ComputeReplacements()
+	if len(reps) == 0 {
+		return
+	}
+	if err := this.ApplyReplacements(reps); err != nil {
+		core.Error(err.Error())
+	} else {
+		n := 0
+		for _, r := range reps {
+			n += r.Count
+		}
+		core.Trace(fmt.Sprintf("global search: replaced %d occurrence(s) in %d file(s)", n, len(reps)))
 	}
 
-	// Refresh results against the rewritten files.
-	this.applyResults(runSearch(this.rootDir, query))
+	// Refresh results against what is now on disk.
+	pattern := enginePattern(this.query, this.optRegex, this.optWholeWord)
+	this.applyResults(runSearchOpt(this.rootDir, pattern, this.searchOptions(), this.exclude))
 	this.rebuildFlatRows()
 	this.Self().Update()
 }
@@ -364,7 +655,8 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 	if len(this.results) > 0 {
 		g.SetFont(smallFont)
 		g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 255})
-		summary := fmt.Sprintf("%d matches in %d files", this.totalMatchCount(), this.totalFileCount())
+		summary := fmt.Sprintf("%d matches in %d files%s", this.totalMatchCount(), this.totalFileCount(),
+			searchOptionLabel(this.searchOptions(), this.optWholeWord, this.exclude))
 		g.DrawText1(8, summaryY+summaryH-3, summary)
 	} else if this.query != "" && !this.searching {
 		g.SetFont(smallFont)
