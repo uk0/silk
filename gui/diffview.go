@@ -13,17 +13,21 @@ func init() {
 }
 
 // DiffRowStatus classifies a single row in the side-by-side diff view.
-// The four states cover every (left, right) line-pairing we emit: matched
-// lines on both sides, a line that exists only on the left (removed), one
-// that exists only on the right (added), or a row where both sides hold a
-// line but they differ (modified).
+// The first four states cover every (left, right) line-pairing we emit:
+// matched lines on both sides, a line that exists only on the left
+// (removed), one that exists only on the right (added), or a row where both
+// sides hold a line but they differ (modified). DiffHunkHeader is the fifth
+// and only appears in patch mode (SetPatchFile): a full-width "@@ ... @@"
+// separator that carries the per-hunk stage/revert actions instead of a
+// left/right line pair.
 type DiffRowStatus int
 
 const (
-	DiffSame     DiffRowStatus = iota // both sides hold the same line
-	DiffRemoved                       // old has a line, new does not (left only)
-	DiffAdded                         // new has a line, old does not (right only)
-	DiffModified                      // both sides hold a line but they differ
+	DiffSame       DiffRowStatus = iota // both sides hold the same line
+	DiffRemoved                         // old has a line, new does not (left only)
+	DiffAdded                           // new has a line, old does not (right only)
+	DiffModified                        // both sides hold a line but they differ
+	DiffHunkHeader                      // patch mode: "@@ ... @@" separator row
 )
 
 // DiffRow is one row in the rendered diff: oldLine renders on the left and
@@ -75,6 +79,24 @@ type DiffView struct {
 	// a tooltip) can SetShowGutter(false) to suppress the numbers and
 	// reclaim the gutter width for the diff text.
 	showGutter bool
+
+	// --- patch mode (SetPatchFile), all zero/nil in plain two-text mode ---
+
+	// patchFile is the last patch handed to SetPatchFile, kept so hosts can
+	// read the paths back for a header; patchMode says we are showing it.
+	patchFile DiffPatchFile
+	patchMode bool
+
+	// rowHunk maps each diffRows index to the hunk it belongs to, or -1 for
+	// an unchanged gap row reconstructed from the original file.
+	rowHunk []int
+
+	// hunkHeaderRows holds the diffRows index of each hunk's header row, in
+	// hunk order — so hunkHeaderRows[i] is where hunk i starts on screen.
+	hunkHeaderRows []int
+
+	cbStageHunk  func(hunkIndex int)
+	cbRevertHunk func(hunkIndex int)
 }
 
 // diffGutterWidth is the fixed pixel width reserved at the left edge of
@@ -111,7 +133,8 @@ func (this *DiffView) SetShowGutter(b bool) {
 // added rows have no left counterpart, removed rows have no right
 // counterpart. The counters advance only when the row presents content
 // on that side — DiffSame and DiffModified bump both, DiffAdded bumps
-// only the right, DiffRemoved bumps only the left.
+// only the right, DiffRemoved bumps only the left, and a DiffHunkHeader
+// row bumps neither (it is a separator, not a line of either file).
 func gutterLineNumbers(rows []DiffRow) (left, right []int) {
 	left = make([]int, len(rows))
 	right = make([]int, len(rows))
@@ -286,10 +309,18 @@ func (this *DiffView) JumpToPrevChange() {
 // public setters can call us cheaply without juggling intermediate state.
 // A nil/empty text yields a nil line slice (rather than [""]) so a "no
 // content" side renders as zero rows instead of one phantom blank row.
+//
+// Setting either text explicitly also leaves patch mode: the rows now come
+// from the LCS pass, so the hunk map that SetPatchFile built no longer
+// describes them. The stage/revert callbacks stay registered.
 func (this *DiffView) recompute() {
 	this.oldLines = splitDiffLines(this.oldText)
 	this.newLines = splitDiffLines(this.newText)
 	this.diffRows = lineDiff(this.oldLines, this.newLines)
+	this.patchMode = false
+	this.patchFile = DiffPatchFile{}
+	this.rowHunk = nil
+	this.hunkHeaderRows = nil
 	this.scrollY = 0
 	this.activeChangeRow = -1
 	this.Self().Update()
@@ -506,6 +537,13 @@ func (this *DiffView) Draw(g paint.Painter) {
 		dr := this.diffRows[row]
 		y := float64(row)*lh - this.scrollY
 
+		// Patch mode: a hunk header spans both columns and shows the
+		// per-hunk actions rather than a left/right line pair.
+		if dr.Status == DiffHunkHeader {
+			this.drawHunkHeaderRow(g, dr.OldLine, y, w, lh, fe.Ascent, t)
+			continue
+		}
+
 		// Alternating stripe for "same" rows so the eye can track lines
 		// across the divider without losing its place.
 		if dr.Status == DiffSame && row%2 == 1 {
@@ -631,6 +669,8 @@ func (this *DiffView) OnMouseWheel(x, y, z float64) {
 // when that row is a change. Clicks on Same rows just take focus
 // without disturbing the navigation cursor — landing the cursor on a
 // non-change row would be surprising relative to the n/p behaviour.
+// In patch mode a click inside a hunk header's action zone fires the
+// stage/revert callback and consumes the click instead.
 func (this *DiffView) OnLeftDown(x, y float64) {
 	this.SetFocus()
 	if len(this.diffRows) == 0 {
@@ -640,6 +680,9 @@ func (this *DiffView) OnLeftDown(x, y float64) {
 	lh := fe.Height + 2
 	row := int((y + this.scrollY) / lh)
 	if row < 0 || row >= len(this.diffRows) {
+		return
+	}
+	if this.ActivateHunkAction(row, x) {
 		return
 	}
 	if this.diffRows[row].Status == DiffSame {
@@ -658,6 +701,362 @@ func (this *DiffView) OnKeyDown(key int, repeat bool) {
 	case 'P':
 		this.JumpToPrevChange()
 	}
+}
+
+// --- Patch mode: whole-file view of one file's patch, with hunk actions ---
+
+// DiffPatchLineKind classifies one line of a hunk body handed to
+// SetPatchFile. It mirrors core.PatchLineKind but is declared here so the
+// widget stays independent of the patch parser: any host that can produce
+// context/added/deleted lines can drive the view.
+type DiffPatchLineKind int
+
+const (
+	DiffPatchContext DiffPatchLineKind = iota // unchanged, on both sides
+	DiffPatchAdded                            // only in the new file
+	DiffPatchDeleted                          // only in the old file
+)
+
+// DiffPatchLine is one line of a hunk body, without the +/-/space marker.
+type DiffPatchLine struct {
+	Kind DiffPatchLineKind
+	Text string
+}
+
+// DiffPatchHunk is one hunk of a file patch. Header is the pre-rendered
+// "@@ -a,b +c,d @@" text for the header row; when empty the view renders one
+// from the four range fields. OldStart is 1-based and is what positions the
+// hunk against OldText so the unchanged gaps land in the right place.
+type DiffPatchHunk struct {
+	Header   string
+	OldStart int
+	OldLines int
+	NewStart int
+	NewLines int
+	Lines    []DiffPatchLine
+}
+
+// DiffPatchFile is one file's patch plus the original content it applies to.
+// OldText is what lets the view show the WHOLE file: the unchanged gaps
+// between hunks come from it. With OldText empty the view degrades to the
+// changed neighbourhoods only (still with header rows and hunk actions),
+// which is all a patch without its original file can show.
+type DiffPatchFile struct {
+	OldPath string
+	NewPath string
+	OldText string
+	Hunks   []DiffPatchHunk
+}
+
+// DiffHunkAction names the clickable affordances on a hunk header row.
+type DiffHunkAction int
+
+const (
+	DiffHunkActionNone   DiffHunkAction = iota // click landed outside both zones
+	DiffHunkActionStage                        // "stage this hunk"
+	DiffHunkActionRevert                       // "revert this hunk"
+)
+
+const (
+	// diffHunkActionW is the width of each action hot zone at the right edge
+	// of a hunk header row: [w-2*W, w-W) stages, [w-W, w) reverts. Fixed so
+	// the hit test is pure geometry — no font measuring, no render state.
+	diffHunkActionW = 60.0
+
+	diffStageLabel  = "暂存"
+	diffRevertLabel = "还原"
+)
+
+// NewDiffPatchFile converts a parsed core.FilePatch plus the original file
+// content into the plain struct SetPatchFile takes. Hosts that already speak
+// core.ParsePatchSet get the whole-file view in two calls.
+func NewDiffPatchFile(f core.FilePatch, original string) DiffPatchFile {
+	out := DiffPatchFile{OldPath: f.OldPath, NewPath: f.NewPath, OldText: original}
+	for _, h := range f.Hunks {
+		dh := DiffPatchHunk{
+			Header:   h.Header(),
+			OldStart: h.OldStart,
+			OldLines: h.OldLines,
+			NewStart: h.NewStart,
+			NewLines: h.NewLines,
+		}
+		for _, ln := range h.Lines {
+			k := DiffPatchContext
+			switch ln.Kind {
+			case core.PatchAdded:
+				k = DiffPatchAdded
+			case core.PatchDeleted:
+				k = DiffPatchDeleted
+			}
+			dh.Lines = append(dh.Lines, DiffPatchLine{Kind: k, Text: ln.Text})
+		}
+		out.Hunks = append(out.Hunks, dh)
+	}
+	return out
+}
+
+// SetPatchFile shows one file's patch as a whole-file side-by-side diff: the
+// unchanged gaps between hunks are reconstructed from f.OldText, each hunk is
+// introduced by a header row carrying the stage/revert actions, and the two
+// columns end up holding the complete old and new file text (readable back
+// through OldText/NewText).
+//
+// This is the multi-hunk, gap-aware counterpart to SetTexts. Calling either
+// SetTexts setter afterwards returns the view to plain two-text mode.
+func (this *DiffView) SetPatchFile(f DiffPatchFile) {
+	b := buildPatchRows(f)
+
+	this.patchFile = f
+	this.patchMode = true
+	this.oldText = b.oldText
+	this.newText = b.newText
+	this.oldLines = splitDiffLines(b.oldText)
+	this.newLines = splitDiffLines(b.newText)
+	this.diffRows = b.rows
+	this.rowHunk = b.rowHunk
+	this.hunkHeaderRows = b.headerRows
+	this.scrollY = 0
+	this.activeChangeRow = -1
+	this.Self().Update()
+}
+
+// PatchFile returns the patch last handed to SetPatchFile (zero value when
+// the view is in plain two-text mode).
+func (this *DiffView) PatchFile() DiffPatchFile { return this.patchFile }
+
+// IsPatchMode reports whether the rows came from SetPatchFile.
+func (this *DiffView) IsPatchMode() bool { return this.patchMode }
+
+// HunkCount is the number of hunks currently on screen.
+func (this *DiffView) HunkCount() int { return len(this.hunkHeaderRows) }
+
+// HunkHeaderRows returns a copy of the row index of each hunk's header row,
+// in hunk order. Hosts use it to scroll a hunk into view.
+func (this *DiffView) HunkHeaderRows() []int {
+	if len(this.hunkHeaderRows) == 0 {
+		return nil
+	}
+	out := make([]int, len(this.hunkHeaderRows))
+	copy(out, this.hunkHeaderRows)
+	return out
+}
+
+// HunkIndexAtRow maps a row index to the hunk it belongs to — header row and
+// body rows alike — or -1 for an unchanged gap row, an out-of-range row, or
+// any row in plain two-text mode.
+func (this *DiffView) HunkIndexAtRow(row int) int {
+	if row < 0 || row >= len(this.rowHunk) {
+		return -1
+	}
+	return this.rowHunk[row]
+}
+
+// SigStageHunk registers the callback fired when the user clicks a hunk
+// header's stage affordance. The argument is the hunk index, which indexes
+// straight into the hunk slice the host built the DiffPatchFile from (and
+// therefore into core.FilePatch.Hunks / ApplySelected).
+func (this *DiffView) SigStageHunk(fn func(hunkIndex int)) { this.cbStageHunk = fn }
+
+// SigRevertHunk is the symmetric hook for the revert affordance.
+func (this *DiffView) SigRevertHunk(fn func(hunkIndex int)) { this.cbRevertHunk = fn }
+
+// HunkActionAt hit-tests a click at column x on `row`. It returns the hunk
+// index and which action zone was hit; a row that is not a hunk header
+// yields (-1, DiffHunkActionNone), and a header row clicked outside both
+// zones yields (hunkIndex, DiffHunkActionNone). Pure geometry against the
+// widget size, so it is testable without any render state.
+func (this *DiffView) HunkActionAt(row int, x float64) (hunkIndex int, action DiffHunkAction) {
+	if row < 0 || row >= len(this.diffRows) || this.diffRows[row].Status != DiffHunkHeader {
+		return -1, DiffHunkActionNone
+	}
+	hunkIndex = this.HunkIndexAtRow(row)
+	if hunkIndex < 0 {
+		return -1, DiffHunkActionNone
+	}
+	w, _ := this.Size()
+	stageX := w - 2*diffHunkActionW
+	if stageX < 0 {
+		// Too narrow to place the labels; the header is text-only.
+		return hunkIndex, DiffHunkActionNone
+	}
+	switch {
+	case x >= w-diffHunkActionW:
+		return hunkIndex, DiffHunkActionRevert
+	case x >= stageX:
+		return hunkIndex, DiffHunkActionStage
+	}
+	return hunkIndex, DiffHunkActionNone
+}
+
+// ActivateHunkAction fires the stage/revert callback for a click at (row, x)
+// and reports whether the click hit an action zone. A hit consumes the click
+// even with no callback registered, so the header row never doubles as a
+// change-row selection.
+func (this *DiffView) ActivateHunkAction(row int, x float64) bool {
+	hunkIndex, action := this.HunkActionAt(row, x)
+	if hunkIndex < 0 {
+		return false
+	}
+	switch action {
+	case DiffHunkActionStage:
+		if this.cbStageHunk != nil {
+			this.cbStageHunk(hunkIndex)
+		}
+		return true
+	case DiffHunkActionRevert:
+		if this.cbRevertHunk != nil {
+			this.cbRevertHunk(hunkIndex)
+		}
+		return true
+	}
+	return false
+}
+
+// patchRowBuild is the output of buildPatchRows: the row list plus the maps
+// that tie rows back to hunks, and the two reconstructed full texts.
+type patchRowBuild struct {
+	rows       []DiffRow
+	rowHunk    []int
+	headerRows []int
+	oldText    string
+	newText    string
+}
+
+// buildPatchRows lays a file patch out as diff rows. For each hunk it emits
+// the unchanged gap that precedes it (taken from f.OldText, which is what the
+// old hunks-only rendering dropped), then a header row, then the body with
+// deleted/added runs paired position-by-position into DiffModified rows so
+// the two columns stay aligned — the same pairing rule lineDiff uses.
+//
+// Because the gaps are filled in, the emitted rows reconstruct the complete
+// old and new files: walking the rows and collecting each side's content
+// yields the two texts, and the gutter numbering therefore reads as real file
+// line numbers. Pure function, no widget state.
+func buildPatchRows(f DiffPatchFile) patchRowBuild {
+	var b patchRowBuild
+	oldLines := splitDiffLines(f.OldText)
+	var oldRecon, newRecon []string
+
+	emit := func(r DiffRow, hunk int) {
+		b.rows = append(b.rows, r)
+		b.rowHunk = append(b.rowHunk, hunk)
+		switch r.Status {
+		case DiffSame, DiffModified:
+			oldRecon = append(oldRecon, r.OldLine)
+			newRecon = append(newRecon, r.NewLine)
+		case DiffRemoved:
+			oldRecon = append(oldRecon, r.OldLine)
+		case DiffAdded:
+			newRecon = append(newRecon, r.NewLine)
+		}
+	}
+
+	cursor := 0 // next original line (0-based) not yet emitted
+	for hi, h := range f.Hunks {
+		// Unchanged gap before this hunk. Clamped so a bogus/overlapping
+		// OldStart can never index outside the original file.
+		start := h.OldStart - 1
+		if start < cursor {
+			start = cursor
+		}
+		if start > len(oldLines) {
+			start = len(oldLines)
+		}
+		for ; cursor < start; cursor++ {
+			emit(DiffRow{OldLine: oldLines[cursor], NewLine: oldLines[cursor], Status: DiffSame}, -1)
+		}
+
+		emit(DiffRow{OldLine: patchHunkHeaderText(h), Status: DiffHunkHeader}, hi)
+		b.headerRows = append(b.headerRows, len(b.rows)-1)
+
+		var pendDel, pendAdd []string
+		flush := func() {
+			k := len(pendDel)
+			if len(pendAdd) < k {
+				k = len(pendAdd)
+			}
+			for x := 0; x < k; x++ {
+				emit(DiffRow{OldLine: pendDel[x], NewLine: pendAdd[x], Status: DiffModified}, hi)
+			}
+			for x := k; x < len(pendDel); x++ {
+				emit(DiffRow{OldLine: pendDel[x], Status: DiffRemoved}, hi)
+			}
+			for x := k; x < len(pendAdd); x++ {
+				emit(DiffRow{NewLine: pendAdd[x], Status: DiffAdded}, hi)
+			}
+			pendDel = pendDel[:0]
+			pendAdd = pendAdd[:0]
+		}
+
+		for _, ln := range h.Lines {
+			switch ln.Kind {
+			case DiffPatchContext:
+				flush()
+				emit(DiffRow{OldLine: ln.Text, NewLine: ln.Text, Status: DiffSame}, hi)
+				cursor++
+			case DiffPatchDeleted:
+				pendDel = append(pendDel, ln.Text)
+				cursor++
+			case DiffPatchAdded:
+				pendAdd = append(pendAdd, ln.Text)
+			}
+		}
+		flush()
+
+		if cursor > len(oldLines) {
+			cursor = len(oldLines)
+		}
+	}
+
+	// Unchanged tail after the last hunk.
+	for ; cursor < len(oldLines); cursor++ {
+		emit(DiffRow{OldLine: oldLines[cursor], NewLine: oldLines[cursor], Status: DiffSame}, -1)
+	}
+
+	b.oldText = strings.Join(oldRecon, "\n")
+	b.newText = strings.Join(newRecon, "\n")
+	return b
+}
+
+// patchHunkHeaderText is the text of a hunk's header row: the host-supplied
+// Header when present, otherwise one rendered from the ranges (dropping the
+// ",1" count git elides).
+func patchHunkHeaderText(h DiffPatchHunk) string {
+	if h.Header != "" {
+		return h.Header
+	}
+	return "@@ -" + diffRangeText(h.OldStart, h.OldLines) +
+		" +" + diffRangeText(h.NewStart, h.NewLines) + " @@"
+}
+
+// diffRangeText renders "start,count", dropping a count of 1.
+func diffRangeText(start, count int) string {
+	if count == 1 {
+		return strconv.Itoa(start)
+	}
+	return strconv.Itoa(start) + "," + strconv.Itoa(count)
+}
+
+// drawHunkHeaderRow paints one hunk header: a muted band across both
+// columns, the "@@ ... @@" text on the left, and the two action labels in
+// the right-edge zones HunkActionAt hit-tests.
+func (this *DiffView) drawHunkHeaderRow(g paint.Painter, text string, y, w, lh, ascent float64, t *defaultTheme) {
+	g.SetBrush1(paint.Color{R: 225, G: 232, B: 245, A: 220})
+	g.Rectangle(0, y, w, lh)
+	g.Fill()
+
+	ty := y + ascent + 1
+	hdr := t.TextColor
+	hdr.A = 200
+	g.SetBrush1(hdr)
+	g.DrawText1(diffLinePad, ty, text)
+
+	if w-2*diffHunkActionW < 0 {
+		return
+	}
+	g.SetBrush1(paint.Color{R: 30, G: 110, B: 220, A: 255})
+	g.DrawText1(w-2*diffHunkActionW+diffLinePad, ty, diffStageLabel)
+	g.DrawText1(w-diffHunkActionW+diffLinePad, ty, diffRevertLabel)
 }
 
 // EnumProperties exposes the two texts to the property sheet so the
