@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -706,7 +707,8 @@ func TestDlvListLocals_Decode(t *testing.T) {
 		{Name: "p", Type: "*int", Value: "0xc000010050"},
 	}
 	for i, w := range want {
-		if vs[i] != w {
+		// Variable 带 Children slice, 不可比较 -> DeepEqual
+		if !reflect.DeepEqual(vs[i], w) {
 			t.Errorf("var[%d] = %+v, want %+v", i, vs[i], w)
 		}
 	}
@@ -760,7 +762,7 @@ func TestDlvEval_Decode(t *testing.T) {
 		t.Fatalf("Eval: %v", err)
 	}
 	want := Variable{Name: "x+1", Type: "int", Value: "43"}
-	if v != want {
+	if !reflect.DeepEqual(v, want) {
 		t.Errorf("v = %+v, want %+v", v, want)
 	}
 }
@@ -782,7 +784,7 @@ func TestDlvEval_ErrorPath(t *testing.T) {
 	if !strings.Contains(err.Error(), "could not find symbol") {
 		t.Errorf("err = %v, want dlv message", err)
 	}
-	if v != (Variable{}) {
+	if !reflect.DeepEqual(v, Variable{}) {
 		t.Errorf("v should be zero on error, got %+v", v)
 	}
 }
