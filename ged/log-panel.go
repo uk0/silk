@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.LogPanel",
 		Name: "日志",
-		Icon: "edit",
+		Icon: "log",
 		Desc: "IDE 运行时日志（信息 / 警告 / 错误）",
 	})
 }

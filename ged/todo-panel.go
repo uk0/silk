@@ -15,7 +15,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.TodoPanel",
 		Name: "待办 / TODO",
-		Icon: "document",
+		Icon: "todo",
 		Desc: "项目中的 TODO/FIXME 标记列表",
 	})
 }

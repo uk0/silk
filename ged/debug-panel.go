@@ -16,7 +16,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.DebugPanel",
 		Name: "调试 / Debug",
-		Icon: "edit",
+		Icon: "debug",
 		Desc: "断点处的调用栈与局部变量",
 	})
 }

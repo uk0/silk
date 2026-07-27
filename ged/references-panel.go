@@ -16,7 +16,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.ReferencesPanel",
 		Name: "引用 / References",
-		Icon: "search",
+		Icon: "references",
 		Desc: "符号的所有引用 (查找全部引用)",
 	})
 }

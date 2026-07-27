@@ -12,7 +12,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.ShortcutsPanel",
 		Name: "快捷键",
-		Icon: "edit",
+		Icon: "keymap",
 		Desc: "快捷键参考面板",
 	})
 }

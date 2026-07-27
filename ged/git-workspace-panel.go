@@ -14,7 +14,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.GitWorkspacePanel",
 		Name: "源码管理 / Source Control",
-		Icon: "tree-view",
+		Icon: "git-branch",
 		Desc: "分支 / 远程 + 冲突·已暂存·未暂存·未跟踪分组",
 	})
 }

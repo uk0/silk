@@ -14,7 +14,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.ProblemsPanel",
 		Name: "问题",
-		Icon: "edit",
+		Icon: "warning",
 		Desc: "编译问题列表（可排序）",
 	})
 }

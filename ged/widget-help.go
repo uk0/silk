@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.WidgetHelp",
 		Name: "帮助",
-		Icon: "edit",
+		Icon: "help",
 		Desc: "显示当前选中控件的说明文档",
 	})
 }

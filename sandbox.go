@@ -204,7 +204,7 @@ func main() {
 	list.SetIconVisible(true)
 	list.SetCheckBoxVisible(true)
 
-	list.Append(gui.ListItem{"aaaa", gui.LoadIcon("goble"), false, nil})
+	list.Append(gui.ListItem{"aaaa", gui.LoadIcon("globe"), false, nil})
 	list.Append(gui.ListItem{"测试", gui.LoadIcon("clipboard"), true, nil})
 	list.Append(gui.ListItem{"中文", gui.LoadIcon("folder"), false, nil})
 	list.Append(gui.ListItem{"Zoo", gui.LoadIcon("form"), true, nil})
@@ -217,7 +217,7 @@ func main() {
 	cb.SetParent(form)
 	cb.SetBounds(250, 20, 200, 30)
 
-	cb.Append(gui.ListItem{"aaaa", gui.LoadIcon("goble"), false, nil})
+	cb.Append(gui.ListItem{"aaaa", gui.LoadIcon("globe"), false, nil})
 	cb.Append(gui.ListItem{"测试", gui.LoadIcon("clipboard"), true, nil})
 	cb.Append(gui.ListItem{"中文", gui.LoadIcon("folder"), false, nil})
 	cb.Append(gui.ListItem{"Zoo", gui.LoadIcon("form"), true, nil})

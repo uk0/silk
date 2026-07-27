@@ -14,7 +14,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.Packages",
 		Name: "包列表",
-		Icon: "tree-view",
+		Icon: "packages",
 		Desc: "Go 项目包列表 (go list -json)",
 	})
 }

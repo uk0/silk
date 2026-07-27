@@ -18,7 +18,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.ProjectSettingsPanel",
 		Name: "项目",
-		Icon: "propsheet",
+		Icon: "project",
 		Desc: "项目设置面板",
 	})
 }

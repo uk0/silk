@@ -11,7 +11,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.TypeHierarchyPanel",
 		Name: "类型层次",
-		Icon: "tree-view",
+		Icon: "type-hierarchy",
 		Desc: "父类型 / 子类型 / 实现 导航",
 	})
 }

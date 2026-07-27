@@ -16,7 +16,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.CodeOutlinePanel",
 		Name: "大纲",
-		Icon: "tree-view",
+		Icon: "outline",
 		Desc: "代码大纲面板",
 	})
 }

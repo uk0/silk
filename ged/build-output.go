@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.BuildOutput",
 		Name: "输出",
-		Icon: "edit",
+		Icon: "build",
 		Desc: "编译输出及错误导航",
 	})
 }

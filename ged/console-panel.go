@@ -14,7 +14,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.ConsolePanel",
 		Name: "控制台",
-		Icon: "edit",
+		Icon: "terminal",
 		Desc: "运行时控制台输出",
 	})
 }

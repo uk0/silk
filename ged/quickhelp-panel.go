@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.QuickHelp",
 		Name: "快速帮助",
-		Icon: "edit",
+		Icon: "help",
 		Desc: "Qt Creator 风格的 Quick Help：调用 go doc 查看符号文档",
 	})
 }

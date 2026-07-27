@@ -21,7 +21,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.TerminalPanel",
 		Name: "终端",
-		Icon: "edit",
+		Icon: "terminal",
 		Desc: "集成终端 — 在项目目录中执行 shell 命令",
 	})
 }

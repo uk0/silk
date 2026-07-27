@@ -12,7 +12,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.KeymapPanel",
 		Name: "快捷键设置",
-		Icon: "edit",
+		Icon: "keymap",
 		Desc: "自定义键盘快捷键",
 	})
 }

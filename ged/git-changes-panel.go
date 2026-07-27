@@ -17,7 +17,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.GitChangesPanel",
 		Name: "更改 / Git Changes",
-		Icon: "edit",
+		Icon: "git",
 		Desc: "未提交改动列表（工作树相对索引的状态）",
 	})
 }

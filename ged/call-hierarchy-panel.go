@@ -14,7 +14,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.CallHierarchyPanel",
 		Name: "调用层次 / Call Hierarchy",
-		Icon: "tree-view",
+		Icon: "call-hierarchy",
 		Desc: "符号的调用者 / 被调用者树, 按需逐层展开",
 	})
 }

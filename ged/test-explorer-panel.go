@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.TestExplorer",
 		Name: "测试浏览器",
-		Icon: "tree-view",
+		Icon: "test-explorer",
 		Desc: "Go 测试树 (包 / 测试 / 子测试)",
 	})
 }

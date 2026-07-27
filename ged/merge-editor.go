@@ -13,7 +13,7 @@ func init() {
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "ged.MergeEditor",
 		Name: "合并 / Merge",
-		Icon: "edit",
+		Icon: "merge",
 		Desc: "三方合并冲突编辑器（ours / theirs / 两者 / 手工）",
 	})
 }
