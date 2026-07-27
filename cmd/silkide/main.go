@@ -70,6 +70,11 @@ func main() {
 	// every translated string in the toolbar / status bar resolves
 	// correctly the first time, and the saved window size is honoured
 	// instead of bouncing through the default and resizing.
+	// Release the run-lock on a clean exit. Without this every subsequent
+	// start reports "检测到程序上次运行时异常退出" even though the previous run
+	// quit normally — core.init() creates the lock and only core.Close()
+	// removes it.
+	defer core.Close()
 	installLocale()
 	// Dark theme by default: the editor and bottom panels already render
 	// dark, so a dark shell unifies the IDE (VS Code / JetBrains style)
@@ -3744,6 +3749,24 @@ func startLSPBackground(projectDir string) {
 				}
 				if m.Method == "textDocument/publishDiagnostics" {
 					handlePublishDiagnostics(m)
+					continue
+				}
+				// window/showMessage and window/logMessage carry the reason
+				// gopls is unhappy ("no go.mod in this directory", "cannot
+				// load packages", a toolchain mismatch...). Logging only the
+				// method name threw that away and left an IDE that misbehaves
+				// for no visible reason, so print the text at the severity
+				// gopls asked for — core.Error/Warn also reach silkide's log
+				// panel through the log sink.
+				if msg, level, ok := lspWindowMessage(m); ok {
+					switch level {
+					case lspMsgError:
+						core.Error("gopls: ", msg)
+					case lspMsgWarning:
+						core.Warn("gopls: ", msg)
+					default:
+						core.Log("gopls: ", msg)
+					}
 					continue
 				}
 				core.Log("lsp: ", m.Method)

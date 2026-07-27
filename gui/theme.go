@@ -4,6 +4,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
 	"math"
+	"os"
 	"runtime"
 )
 
@@ -799,7 +800,17 @@ func newPixmapFace(filename string) *pixmapFace {
 
 	src, err := paint.LoadPngFile(filename)
 	if err != nil {
-		core.Warn(err)
+		// A pixmap face is an optional themed 9-slice: Draw() falls back to a
+		// flat rect when it is absent, so a missing file is not an error worth
+		// shouting about — silk does not ship theme/default/*.png at all. A
+		// file that EXISTS but fails to decode is a real problem, so keep that
+		// one loud. Either way name the path: the old bare core.Warn(err)
+		// printed "file not found" with no hint which file.
+		if _, statErr := os.Stat(filename); statErr != nil {
+			core.Debug("theme: optional face not installed: ", filename)
+		} else {
+			core.Warn("theme: cannot load face ", filename, ": ", err)
+		}
 		return p
 	}
 
