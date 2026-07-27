@@ -76,7 +76,7 @@ Add these to your `~/.zshrc` or `~/.bashrc` for persistent use.
 
 ### Windows
 
-silk's Cairo bindings need `gcc + pkg-config + cairo` from MSYS2's MinGW64
+silk's Cairo bindings need `gcc + pkg-config + cairo` from MSYS2's UCRT64
 toolchain. Once those are on `PATH`, `go build` / `go run` / `go test` work
 from any of the three common Windows shells. Pick the one you prefer; the
 build flow is identical, only the env-var syntax differs.
@@ -84,17 +84,17 @@ build flow is identical, only the env-var syntax differs.
 #### One-time setup
 
 1. Install **MSYS2** from <https://www.msys2.org/>.
-2. Open the **MSYS2 MinGW64** shell (Start → "MSYS2 MinGW64").
+2. Open the **MSYS2 UCRT64** shell (Start → "MSYS2 UCRT64").
 3. Install the toolchain:
    ```bash
-   pacman -S mingw-w64-x86_64-gcc \
-             mingw-w64-x86_64-pkgconf \
-             mingw-w64-x86_64-cairo
+   pacman -S mingw-w64-ucrt-x86_64-gcc \
+             mingw-w64-ucrt-x86_64-pkgconf \
+             mingw-w64-ucrt-x86_64-cairo
    ```
 
 #### Build & run from each shell
 
-**MSYS2 MinGW64** (recommended — `PATH` is already set):
+**MSYS2 UCRT64** (recommended — `PATH` is already set):
 ```bash
 cd /c/path/to/silk
 go build -o silkide.exe ./cmd/silkide/
@@ -104,7 +104,7 @@ go test ./gui/ ./ged/ ./paint/ ./graph/ ./geom/
 
 **PowerShell**:
 ```powershell
-$env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 cd C:\path\to\silk
 go build -o silkide.exe .\cmd\silkide\
 .\silkide.exe
@@ -113,7 +113,7 @@ go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
 
 **Command Prompt (cmd.exe)**:
 ```cmd
-set PATH=C:\msys64\mingw64\bin;%PATH%
+set PATH=C:\msys64\ucrt64\bin;%PATH%
 cd C:\path\to\silk
 go build -o silkide.exe .\cmd\silkide\
 silkide.exe
@@ -124,11 +124,11 @@ go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
 
 ```bash
 go env CGO_ENABLED   # 1
-gcc --version        # mingw64 gcc, 13.x or newer
+gcc --version        # ucrt64 gcc, 13.x or newer
 pkg-config --modversion cairo  # 1.18.x
 ```
 
-If `go build` errors with `'cairo.h' file not found`, the MinGW64 `bin/`
+If `go build` errors with `'cairo.h' file not found`, the UCRT64 `bin/`
 isn't on `PATH` — re-run the env-var line for your shell. The `win32`
 package is compile-tagged Windows-only so it only enters the build on
 this platform; on macOS/Linux it's a no-op.
@@ -214,7 +214,7 @@ silk/
 │   ├── showcase/         All 62 widgets demo
 │   └── load_silkui/      SDK loader example
 │
-├── icon/             PNG icons (4 sizes × 46 icons)
+├── icon/             PNG icons (4 sizes × 64 icons)
 │
 ├── design.go         Visual designer entry point
 ├── demo.go           Widget gallery demo
@@ -483,6 +483,30 @@ go run design.go
 - Split editor view (Ctrl+\\)
 - Git gutter markers
 
+### IDE Features (silkide)
+
+- **Language server (gopls)** — completion, hover, go-to-definition,
+  find-references, rename, format, code actions, signature help, diagnostics,
+  plus call hierarchy, type hierarchy, implementations, inlay hints, semantic
+  tokens and code lens
+- **Debugger (Delve)** — breakpoints with conditions/hit counts/logpoints,
+  goroutine- and frame-scoped locals, arguments and watches, lazily expanded
+  variables, and a debug console
+- **Build & run** — kits (toolchain, GOOS/GOARCH, tags, race/coverage, deploy
+  profile), multiple named run/debug configurations, and a cancellable task
+  runner with streaming output
+- **Testing** — `go test -json` driven results in a package → test → subtest
+  explorer with run/debug/rerun-failed and gutter actions
+- **Analyzers** — vet, race, coverage, pprof, trace, govulncheck, staticcheck
+- **Version control** — branches, remotes, fetch/pull/push, stash, rebase,
+  cherry-pick, staged/unstaged/conflict grouping, hunk-level diff staging and a
+  three-way merge editor
+- **Navigation & search** — fuzzy quick-open, project-wide find/replace with
+  regex and transactional preview, grouped references, outline, bookmarks and a
+  live TODO index
+- **Terminal** — PTY-backed shell session with a full ANSI screen (Unix; ConPTY
+  pending on Windows)
+
 ---
 
 ## Troubleshooting
@@ -515,7 +539,7 @@ Safe to ignore — it's a linker hint, not an error.
 
 ### Windows: "The application was unable to start correctly (0xc000007b)"
 
-Ensure you're using the MSYS2 MinGW64 shell or have `C:\msys64\mingw64\bin` in PATH so Cairo DLLs are found at runtime.
+Ensure you're using the MSYS2 UCRT64 shell or have `C:\msys64\ucrt64\bin` in PATH so Cairo DLLs are found at runtime.
 
 ### F5 compile fails with "gofmt not found"
 
