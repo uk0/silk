@@ -9,13 +9,39 @@ import (
 )
 
 // GoMod 描述一个go.mod文件中我们关心的内容
-// 仅覆盖IDE所需的最小子集: module路径, go版本, require, replace
-// 未支持的指令: retract, exclude, toolchain, godebug (这些在实际项目中较少见)
+// 仅覆盖IDE所需的最小子集: module路径, go版本, toolchain, require, replace
+// 未支持的指令: retract, exclude, godebug (这些在实际项目中较少见)
 type GoMod struct {
 	Module    string
 	GoVersion string
+	// Toolchain 是 toolchain 指令的原始值(如 "go1.24.3" 或 "default"),
+	// 没有该指令时为 "". 它比 go 指令更强: 有 toolchain 时实际构建用的是
+	// 它指定的版本, 所以IDE展示"Go版本"应走 EffectiveGoVersion
+	Toolchain string
 	Requires  []GoModRequire
 	Replaces  []GoModReplace
+}
+
+// EffectiveGoVersion 返回该模块实际构建时使用的Go版本(不带"go"前缀)
+// 有可用的 toolchain 指令时以它为准, 否则退回 go 指令的版本
+// "default" 是 toolchain 的特殊值, 表示"用本地默认工具链", 按无 toolchain 处理
+func (m *GoMod) EffectiveGoVersion() string {
+	if m == nil {
+		return ""
+	}
+	tc := strings.TrimSpace(m.Toolchain)
+	if tc != "" && tc != "default" {
+		if v := trimGoVersionPrefix(tc); v != "" {
+			return v
+		}
+	}
+	return m.GoVersion
+}
+
+// trimGoVersionPrefix 把 "go1.24.3" 这类版本串的 "go" 前缀剥掉
+// 已经不带前缀的("1.24.3", "default")原样返回
+func trimGoVersionPrefix(s string) string {
+	return strings.TrimPrefix(strings.TrimSpace(s), "go")
 }
 
 // GoModRequire 一行require信息
@@ -114,6 +140,12 @@ func ParseGoMod(src string) (*GoMod, error) {
 				continue
 			}
 			gm.GoVersion = fields[1]
+		case "toolchain":
+			if len(fields) < 2 {
+				errs = append(errs, fmt.Sprintf("line %d: toolchain directive missing name", i+1))
+				continue
+			}
+			gm.Toolchain = trimQuotes(fields[1])
 		case "require":
 			// "require ("  开block, 否则单行
 			if len(fields) >= 2 && fields[1] == "(" {
@@ -141,7 +173,7 @@ func ParseGoMod(src string) (*GoMod, error) {
 			}
 			gm.Replaces = append(gm.Replaces, rep)
 		default:
-			// 忽略其他指令(exclude, retract, toolchain, ...)
+			// 忽略其他指令(exclude, retract, godebug, ...)
 		}
 	}
 
