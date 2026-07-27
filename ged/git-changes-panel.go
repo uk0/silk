@@ -48,21 +48,36 @@ func init() {
 // where a single click opens the file and a double click opens its diff.
 //
 // Each row carries a stage checkbox in its left gutter: clicking the
-// checkbox column toggles the row's stage state (tracked in `staged`,
-// keyed by entry.Path) without opening the file, while clicking the row
-// body still activates it. The message line + Commit button live in a
-// band at the bottom, a rolled text line in the same idiom as
-// debug-panel.go's watch input (no embedded gui.Edit). The header carries a
-// "Stage All" toggle that checks / clears every row's stage state, and an
-// "Unstage" button that fires SigUnstageRequested over the checked set so the
-// host can drop those paths from the git index (core.GitUnstage). The commit
-// input takes Shift+Enter for a newline, so a message carries a subject and
-// body; plain Enter still submits.
+// checkbox column acts on the row's stage state without opening the file,
+// while clicking the row body still activates it. The message line +
+// Commit button live in a band at the bottom, a rolled text line in the
+// same idiom as debug-panel.go's watch input (no embedded gui.Edit). The
+// header carries a "Stage All" toggle and an "Unstage" button that fires
+// SigUnstageRequested over the staged set so the host can drop those paths
+// from the git index (core.GitUnstage). The commit input takes Shift+Enter
+// for a newline, so a message carries a subject and body; plain Enter still
+// submits.
 //
-// v1 is a single flat list with a per-row status letter, deliberately
-// not grouped: splitting the rows into "Staged" vs "Changes"
-// (index-side vs worktree-side) sections is a follow-up that re-buckets
-// the same data without changing the data-push contract.
+// What the checkbox *means* depends on how the host pushes state in:
+//
+//	SetFiles (index-driven)  each file arrives with the GitIndexState the
+//	                         host read out of git, so the checkbox mirrors
+//	                         the real index. Clicking it changes nothing
+//	                         locally — it fires SigStage(path) /
+//	                         SigUnstage(path), the host runs git and pushes
+//	                         a fresh set back through SetFiles.
+//	SetEntries (legacy)      no index state arrives, so the checkbox is a
+//	                         local commit selection (tracked in `staged`,
+//	                         keyed by entry.Path) the way it always was.
+//
+// Index-driven mode is the accurate one: staging is a property of the git
+// index, not of a UI toggle. Legacy mode stays for hosts that still push
+// raw core.GitStatusPorcelain output.
+//
+// The list itself is flat with a per-row status letter; the grouped view —
+// conflict / staged / unstaged / untracked sections under collapsible
+// headers, plus the branch and remote bars — is GitWorkspacePanel, which
+// consumes the same []GitFileState this panel takes through SetFiles.
 type GitChangesPanel struct {
 	gui.Widget
 
@@ -71,11 +86,19 @@ type GitChangesPanel struct {
 	hoverIdx  int
 	rowHeight float64
 
-	// Per-row stage state: presence of a path (value true) means the user
-	// has checked it for the next commit. Keyed by entry.Path and pruned by
-	// SetEntries to the paths still present, so a committed / vanished file
-	// never lingers checked.
+	// Per-row stage state in legacy (SetEntries) mode: presence of a path
+	// (value true) means the user has checked it for the next commit. Keyed
+	// by entry.Path and pruned by SetEntries to the paths still present, so
+	// a committed / vanished file never lingers checked. Always nil in
+	// index-driven mode — there the index is the truth.
 	staged map[string]bool
+
+	// The index state the host reported per path through SetFiles, and the
+	// flag that switches the panel onto it. In index-driven mode the
+	// checkbox reads out of indexStates and a click asks the host to change
+	// the index instead of flipping local state.
+	indexStates map[string]GitIndexState
+	indexMode   bool
 
 	// Commit band at the bottom: a rolled message input line (mirroring
 	// debug-panel.go's watch input) plus a Commit button. commitMsg is the
@@ -91,6 +114,8 @@ type GitChangesPanel struct {
 	cbDiff       func(entry core.GitStatusEntry)
 	cbCommit     func(message string, stagedPaths []string)
 	cbUnstageReq func(paths []string)
+	cbStage      func(path string)
+	cbUnstage    func(path string)
 }
 
 // NewGitChangesPanel creates an empty changes panel.
@@ -112,15 +137,56 @@ func (this *GitChangesPanel) Init(self gui.IWidget) {
 // core.GitStatusPorcelain refresh — the panel keeps its own copy rather
 // than borrowing the host's slice so a later host refresh can't mutate
 // rows out from under a paint.
+//
+// This is the legacy push: no index state arrives with the rows, so the
+// checkbox column stays a local commit selection and the panel leaves
+// index-driven mode. Hosts that can report where each file sits in the
+// index should push SetFiles instead.
 func (this *GitChangesPanel) SetEntries(entries []core.GitStatusEntry) {
 	out := make([]core.GitStatusEntry, len(entries))
 	copy(out, entries)
 	this.entries = out
+	this.indexStates = nil
+	this.indexMode = false
 	this.scrollY = 0
 	this.hoverIdx = -1
 	this.lastClickIdx = -1
 	this.pruneStaged()
 	this.Self().Update()
+}
+
+// SetFiles replaces the change list with files whose index state the host
+// read out of git, switching the panel into index-driven mode: the checkbox
+// column then shows where each file actually sits in the index (staged /
+// unstaged / conflict / untracked) instead of what the user last clicked,
+// and a click on it fires SigStage / SigUnstage rather than mutating local
+// state. The host runs git and calls SetFiles again with the new truth.
+//
+// Any local commit selection left over from a previous SetEntries push is
+// dropped — the two models never mix.
+func (this *GitChangesPanel) SetFiles(files []GitFileState) {
+	entries := make([]core.GitStatusEntry, len(files))
+	states := make(map[string]GitIndexState, len(files))
+	for i, f := range files {
+		entries[i] = f.Entry
+		states[f.Entry.Path] = f.State
+	}
+	this.entries = entries
+	this.indexStates = states
+	this.indexMode = true
+	this.staged = nil
+	this.scrollY = 0
+	this.hoverIdx = -1
+	this.lastClickIdx = -1
+	this.Self().Update()
+}
+
+// IndexState reports the index bucket the host last reported for a path
+// through SetFiles. Unknown paths — and every path in legacy SetEntries
+// mode, where the host reports no index state at all — read as
+// GitUnstaged.
+func (this *GitChangesPanel) IndexState(path string) GitIndexState {
+	return this.indexStates[path]
 }
 
 // pruneStaged drops staged paths that no longer appear in the current
@@ -159,6 +225,8 @@ func (this *GitChangesPanel) Clear() {
 	this.hoverIdx = -1
 	this.lastClickIdx = -1
 	this.staged = nil
+	this.indexStates = nil
+	this.indexMode = false
 	this.Self().Update()
 }
 
@@ -199,6 +267,41 @@ func (this *GitChangesPanel) SigUnstageRequested(fn func(paths []string)) {
 	this.cbUnstageReq = fn
 }
 
+// SigStage registers the callback fired when the user stages one file in
+// index-driven mode (SetFiles) — a click on an unchecked row's checkbox, or
+// SetStaged(path, true). It receives that file's path; the host runs
+// core.GitStage on it and pushes the refreshed status back through
+// SetFiles. It never fires in legacy SetEntries mode, where the checkbox is
+// only a local commit selection.
+func (this *GitChangesPanel) SigStage(fn func(path string)) {
+	this.cbStage = fn
+}
+
+// SigUnstage registers the per-file counterpart to SigStage: a click on a
+// staged row's checkbox in index-driven mode, or SetStaged(path, false).
+// The host runs core.GitUnstage on that single path. Distinct from
+// SigUnstageRequested, which carries the whole staged set from the header
+// button.
+func (this *GitChangesPanel) SigUnstage(fn func(path string)) {
+	this.cbUnstage = fn
+}
+
+// requestStage asks the host to move one path into (on) or out of (off) the
+// git index. This is index-driven mode's only write path: the panel never
+// edits the index itself and never guesses the result — the host runs git
+// and pushes the new state back through SetFiles.
+func (this *GitChangesPanel) requestStage(path string, on bool) {
+	if on {
+		if this.cbStage != nil {
+			this.cbStage(path)
+		}
+		return
+	}
+	if this.cbUnstage != nil {
+		this.cbUnstage(path)
+	}
+}
+
 // requestUnstage fires SigUnstageRequested with the checked set. A no-op —
 // nothing fires — when nothing is checked, mirroring submitCommit, so the host
 // only ever gets a runnable request.
@@ -212,10 +315,22 @@ func (this *GitChangesPanel) requestUnstage() {
 	}
 }
 
-// StagedPaths returns the paths the user has checked for staging, in
-// lexical order (a copy the host can hold onto). The order is stable so a
-// commit's file set is deterministic; git does not care about the order.
+// StagedPaths returns the staged paths in lexical order (a copy the host
+// can hold onto). In index-driven mode those are the paths the host
+// reported as GitStaged — the real index; in legacy mode they are the ones
+// the user checked. The order is stable so a commit's file set is
+// deterministic; git does not care about the order.
 func (this *GitChangesPanel) StagedPaths() []string {
+	if this.indexMode {
+		out := make([]string, 0, len(this.indexStates))
+		for p, st := range this.indexStates {
+			if st == GitStaged {
+				out = append(out, p)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
 	out := make([]string, 0, len(this.staged))
 	for p := range this.staged {
 		out = append(out, p)
@@ -224,11 +339,32 @@ func (this *GitChangesPanel) StagedPaths() []string {
 	return out
 }
 
-// SetStaged checks (on) or unchecks (off) a path for staging. Unchecking
-// removes the key so StagedPaths stays a clean set. Host-callable so a
-// host UI (or a test) can drive the checkboxes without a click. Repaints
-// only when the state actually changes.
+// stagedCount is len(StagedPaths()) without the allocation — the Draw path
+// needs the tally on every frame.
+func (this *GitChangesPanel) stagedCount() int {
+	if this.indexMode {
+		n := 0
+		for _, st := range this.indexStates {
+			if st == GitStaged {
+				n++
+			}
+		}
+		return n
+	}
+	return len(this.staged)
+}
+
+// SetStaged is the programmatic checkbox click: it stages (on) or unstages
+// (off) a path. In index-driven mode it asks the host to change the git
+// index (SigStage / SigUnstage) and mutates nothing locally; in legacy mode
+// it flips the local commit selection, where unchecking removes the key so
+// StagedPaths stays a clean set. Repaints only when local state actually
+// changes.
 func (this *GitChangesPanel) SetStaged(path string, on bool) {
+	if this.indexMode {
+		this.requestStage(path, on)
+		return
+	}
 	if on {
 		if this.staged[path] {
 			return
@@ -246,9 +382,10 @@ func (this *GitChangesPanel) SetStaged(path string, on bool) {
 	this.Self().Update()
 }
 
-// ClearStaged unchecks every path. The host calls this to reset the stage
-// selection (e.g. after driving its own commit). A no-op when nothing is
-// staged.
+// ClearStaged unchecks every path in the local commit selection. The host
+// calls this to reset it (e.g. after driving its own commit). A no-op when
+// nothing is selected, and in index-driven mode, where there is no local
+// selection to clear — use UnstageAll to empty the real index.
 func (this *GitChangesPanel) ClearStaged() {
 	if len(this.staged) == 0 {
 		return
@@ -257,12 +394,21 @@ func (this *GitChangesPanel) ClearStaged() {
 	this.Self().Update()
 }
 
-// StageAll checks every current entry's path in the local commit-selection
-// set — the header "Stage All" affordance's on-state. Paths already checked
-// stay checked; a no-op on an empty change list. Repaints once when anything
-// changed.
+// StageAll is the header "Stage All" affordance's on-state: it stages every
+// current entry. In index-driven mode that means one SigStage per file that
+// is not staged yet (the host stages them and pushes the result back); in
+// legacy mode it checks every path in the local commit-selection set,
+// leaving already-checked paths alone. A no-op on an empty change list.
 func (this *GitChangesPanel) StageAll() {
 	if len(this.entries) == 0 {
+		return
+	}
+	if this.indexMode {
+		for _, e := range this.entries {
+			if !this.isStaged(e.Path) {
+				this.requestStage(e.Path, true)
+			}
+		}
 		return
 	}
 	if this.staged == nil {
@@ -280,11 +426,18 @@ func (this *GitChangesPanel) StageAll() {
 	}
 }
 
-// UnstageAll unchecks every path, emptying the local commit-selection set —
-// the header affordance's off-state and the counterpart to StageAll. It only
-// touches the in-panel `staged` set (same effect as ClearStaged); dropping
-// files from the git index is the host's job via SigUnstageRequested.
+// UnstageAll is the header affordance's off-state and the counterpart to
+// StageAll. In index-driven mode it fires one SigUnstage per staged path so
+// the host empties the index; in legacy mode it only unchecks the in-panel
+// selection (same effect as ClearStaged), leaving the real index to
+// SigUnstageRequested.
 func (this *GitChangesPanel) UnstageAll() {
+	if this.indexMode {
+		for _, p := range this.StagedPaths() {
+			this.requestStage(p, false)
+		}
+		return
+	}
 	this.ClearStaged()
 }
 
@@ -313,14 +466,20 @@ func (this *GitChangesPanel) toggleStageAll() {
 	}
 }
 
-// isStaged reports whether a path is currently checked for staging. Safe
-// on a nil map.
+// isStaged reports whether a path's checkbox reads checked: in index-driven
+// mode whether git has it staged, in legacy mode whether the user checked
+// it. Safe on nil maps.
 func (this *GitChangesPanel) isStaged(path string) bool {
+	if this.indexMode {
+		return this.indexStates[path] == GitStaged
+	}
 	return this.staged[path]
 }
 
 // toggleStagedAt flips the stage state of the entry at idx, keyed by its
-// path. Out-of-range indices are ignored.
+// path — a local flip in legacy mode, a SigStage / SigUnstage request in
+// index-driven mode (SetStaged routes it). Out-of-range indices are
+// ignored.
 func (this *GitChangesPanel) toggleStagedAt(idx int) {
 	if idx < 0 || idx >= len(this.entries) {
 		return
@@ -586,7 +745,7 @@ func (this *GitChangesPanel) drawHeaderButtons(g paint.Painter, font paint.Font,
 		paint.Color{R: 70, G: 100, B: 150, A: 255})
 
 	ux0, ux1 := headerUnstageRect(w)
-	this.drawHeaderButton(g, font, ux0, ux1, "撤出", len(this.staged) > 0,
+	this.drawHeaderButton(g, font, ux0, ux1, "撤出", this.stagedCount() > 0,
 		paint.Color{R: 135, G: 100, B: 60, A: 255})
 }
 
@@ -657,7 +816,7 @@ func (this *GitChangesPanel) drawCommitArea(g paint.Painter, font paint.Font, w,
 
 	// Commit button below the (possibly multi-row) input.
 	btnY := inputY + inputH
-	n := len(this.staged)
+	n := this.stagedCount()
 	enabled := n > 0 && strings.TrimSpace(this.commitMsg) != ""
 	if enabled {
 		g.SetBrush1(paint.Color{R: 45, G: 110, B: 70, A: 255})
@@ -750,7 +909,8 @@ func (this *GitChangesPanel) focusCommit(on bool) {
 // runnable commit. Like the rest of the panel it does not touch git or the
 // entry list itself: the host stages + commits and re-pushes the refreshed
 // status via SetEntries (which prunes the now-committed paths from
-// `staged`).
+// `staged`) or, in index-driven mode, via SetFiles — where the paths are
+// already staged in git, so the host's stage step is a no-op.
 func (this *GitChangesPanel) submitCommit() {
 	msg := strings.TrimSpace(this.commitMsg)
 	if msg == "" {
