@@ -1,27 +1,33 @@
 package core
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 // Delve (`dlv`) headless 调试器的进程控制器
-// 这一版只覆盖 IDE Debug 工具栏需要的最小生命周期 + 几个命令,
+// 这一版覆盖 IDE Debug 工具栏 + 断点/调用栈/变量面板需要的命令,
 // 不打算把 Delve 的整张 RPC 表都包过来. Wired 的方法:
-//   - RPCServer.CreateBreakpoint
-//   - RPCServer.ListBreakpoints
-//   - RPCServer.Command         (continue / next)
+//   - RPCServer.CreateBreakpoint / AmendBreakpoint / ClearBreakpoint / ListBreakpoints
+//   - RPCServer.Command         (continue / next / step / stepOut / switchGoroutine)
+//   - RPCServer.Stacktrace / ListGoroutines
+//   - RPCServer.ListLocalVars / ListFunctionArgs / Eval / Set
+//   - RPCServer.Restart
 //   - RPCServer.Detach          (Close 时尽力调用一次)
-// 其它(Eval, Stacktrace, ListGoroutines, ...) 留给后续 commit, 等 UI 真要
-// 用到的时候再加, 避免现在就把表面铺得太大. 第三方库一律不引入, stdlib only.
+// 其它(Disassemble, ListRegisters, ExamineMemory, Attach, core dump) 留给后续
+// commit, 等 UI 真要用到的时候再加. 第三方库一律不引入, stdlib only.
 //
 // 协议补丁: Delve 的 API v2 走的是 net/rpc 的 JSON-RPC 1.0 frame, 即
 //   {"method":"RPCServer.X","params":[...],"id":N}\n
@@ -47,16 +53,113 @@ type DebugSession struct {
 	enc       *json.Encoder
 	dec       *json.Decoder
 	nextRPCID int
+
+	// selGoroutine 是 IDE 通过 SwitchGoroutine 选中的 goroutine.
+	// 0 = 没选过, 各作用域方法回落到 dlv 自己的 "current goroutine" (-1);
+	// Go 的 goroutine id 从 1 起, 所以 0 可以安全地当"未选"哨兵 (DebugSession
+	// 也可以被结构体字面量构造, 不能依赖构造函数把它初始化成 -1).
+	// 用 atomic 而不是挂在 s.mu 下: 读它之后紧接着就要发 RPC(要拿 s.mu), 不能嵌套.
+	selGoroutine atomic.Int64
+
+	// 输出泵: dlv 进程 (以及跟它共享 fd 的 debuggee) 的 stdout/stderr 行.
+	// outMu 只护这三个字段, 与 s.mu 无关 -- 输出回调不该被 RPC 串行化卡住.
+	outMu      sync.Mutex
+	onOutput   func(stream, line string)
+	outBacklog []debugOutputLine
+	outPipes   []io.Closer
 }
 
 // Breakpoint 是用户/我们在源码某一行下的断点
-// Delve 的字段比这多得多 (Cond, HitCount, Tracepoint, ...), 当前 IDE 还用不上,
-// 先只暴露 ID/File/Line/Function 四个核心字段
+// 除 ID/File/Line/Function 之外还带上 IDE 断点面板要编辑的属性; 它们与 Delve
+// api.Breakpoint 的映射见 rpcBreakpoint. 结构体保持可比较 (全是标量),
+// 上层可以直接用 == 判断两个断点是否等价.
 type Breakpoint struct {
 	ID       int
 	File     string
 	Line     int
 	Function string // 可选
+
+	// Cond 是 Go 表达式条件, 空串表示无条件断点 (dlv Breakpoint.Cond).
+	// 只有 cond 求值为 true 时才真正停下, 例如 "i == 3" / "err != nil".
+	Cond string
+	// HitCount 是 dlv 报告的累计命中次数 (totalHitCount), 只读:
+	// AmendBreakpoint 不会把它写回去 (dlv 侧不接受重置).
+	HitCount uint64
+	// Tracepoint=true 时这个断点是一个 logpoint: dlv 命中后打印信息并自动继续,
+	// 不把程序停住. 线缆上 dlv 把这个标志叫 "continue".
+	Tracepoint bool
+	// LogMessage 是 logpoint 命中时要 dlv 求值并打印的表达式, 映射到 dlv
+	// Breakpoint.Variables 的第一个元素; 空串表示只打印命中位置本身.
+	LogMessage string
+	// Enabled=false 对应 dlv 的 disabled 断点: 仍在列表里但不生效.
+	// 注意零值 -- 自己构造 Breakpoint 交给 AmendBreakpoint 时记得显式置 true,
+	// 从 dlv 解码出来的断点一定带正确的 Enabled.
+	Enabled bool
+	// Verified=true 表示 dlv 真的把这个断点绑到了至少一个地址上 (addr/addrs 非空).
+	// 行号落在没有代码的位置时 dlv 通常直接报错而不是给一个未绑定断点, 所以实践中
+	// 它几乎总是 true; 保留该字段让 UI 能表达"待绑定/已失效"状态.
+	Verified bool
+}
+
+// rpcBreakpoint 是 Delve api.Breakpoint 的薄信封, 只挑我们暴露的字段
+// 创建/修改/列举三条路径共用它, 保证三处的线缆形态一致.
+// json tag 一律小写: encoding/json 匹配字段时大小写不敏感, 所以既吃 dlv 的
+// "Cond"/"totalHitCount" 也吃 "cond"; 反方向 dlv 用同一套 json 解码, 同理.
+// omitempty 让零值字段根本不出现在线缆上 -- 无条件断点因此与重构前逐字节一致.
+type rpcBreakpoint struct {
+	ID           int    `json:"id,omitempty"`
+	File         string `json:"file,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	FunctionName string `json:"functionName,omitempty"`
+	Cond         string `json:"cond,omitempty"`
+	// Variables 是 dlv 在 tracepoint 命中时求值并打印的表达式列表
+	Variables []string `json:"variables,omitempty"`
+	// Tracepoint 在 dlv 线缆上的字段名是 "continue"; 少数前端/版本写成
+	// "tracepoint", 解码时两个键都收下 (见 toModel), 编码只发 "continue".
+	Tracepoint    bool `json:"continue,omitempty"`
+	TracepointAlt bool `json:"tracepoint,omitempty"`
+	Disabled      bool `json:"disabled,omitempty"`
+	// Addr/Addrs 只在解码方向有意义: 非空即说明断点已绑到指令地址上
+	Addr  uint64   `json:"addr,omitempty"`
+	Addrs []uint64 `json:"addrs,omitempty"`
+	// TotalHitCount 是累计命中次数. 千万不要用 "hitCount" 这个键 --
+	// dlv 那边它是 map[goroutine]count, 解到标量上会让整个应答解码失败.
+	TotalHitCount uint64 `json:"totalHitCount,omitempty"`
+}
+
+// toModel 把线缆断点投影成对外的 Breakpoint
+func (b rpcBreakpoint) toModel() Breakpoint {
+	bp := Breakpoint{
+		ID:         b.ID,
+		File:       b.File,
+		Line:       b.Line,
+		Function:   b.FunctionName,
+		Cond:       b.Cond,
+		HitCount:   b.TotalHitCount,
+		Tracepoint: b.Tracepoint || b.TracepointAlt,
+		Enabled:    !b.Disabled,
+		Verified:   b.Addr != 0 || len(b.Addrs) > 0,
+	}
+	if len(b.Variables) > 0 {
+		bp.LogMessage = b.Variables[0]
+	}
+	return bp
+}
+
+// breakpointToRPC 是 toModel 的反方向, 供 CreateBreakpoint / AmendBreakpoint 用
+func breakpointToRPC(bp Breakpoint) rpcBreakpoint {
+	out := rpcBreakpoint{
+		ID:         bp.ID,
+		File:       bp.File,
+		Line:       bp.Line,
+		Cond:       bp.Cond,
+		Tracepoint: bp.Tracepoint,
+		Disabled:   !bp.Enabled,
+	}
+	if bp.LogMessage != "" {
+		out.Variables = []string{bp.LogMessage}
+	}
+	return out
 }
 
 // StopState 表示 program 在某次 Continue/Step 之后停下来的位置和原因
@@ -97,9 +200,25 @@ func LaunchDebug(packageDir string, args []string) (*DebugSession, error) {
 	}
 	cmd := exec.Command("dlv", cmdArgs...)
 	cmd.Dir = packageDir
-	// 不把 stdout/stderr 接出来 -- IDE 侧目前不消费; 之后要看日志时再加.
+	// 把 dlv 的 stdout/stderr 接成管道: `dlv debug` 下被调试程序继承同一对 fd,
+	// 所以这两条流里既有 dlv 自己的日志 (build 报错 / API server listening),
+	// 也有 debuggee 的 print 输出 -- 上层用 OnOutput 订阅.
+	// 拿不到管道不算致命: 退化成旧行为(输出被丢弃)继续启动, 不为了看日志把整次
+	// 调试搞失败. 一旦接了管道就必须一直有人读, 否则 debuggee 写满管道会被挂住;
+	// pumpOutput 的 goroutine 承担这个责任 (没人订阅时丢进有上限的 backlog).
+	sess := &DebugSession{cmd: cmd, port: port}
+	stdout, outErr := cmd.StdoutPipe()
+	stderr, errErr := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start dlv: %w", err)
+	}
+	if outErr == nil {
+		sess.trackPipe(stdout)
+		go sess.pumpOutput("stdout", stdout)
+	}
+	if errErr == nil {
+		sess.trackPipe(stderr)
+		go sess.pumpOutput("stderr", stderr)
 	}
 
 	// dlv debug runs `go build` BEFORE it opens the listen port; a cold
@@ -110,16 +229,14 @@ func LaunchDebug(packageDir string, args []string) (*DebugSession, error) {
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
+		sess.closeOutputPipes()
 		return nil, fmt.Errorf("dial dlv: %w", err)
 	}
 
-	return &DebugSession{
-		cmd:  cmd,
-		port: port,
-		conn: conn,
-		enc:  json.NewEncoder(conn),
-		dec:  json.NewDecoder(conn),
-	}, nil
+	sess.conn = conn
+	sess.enc = json.NewEncoder(conn)
+	sess.dec = json.NewDecoder(conn)
+	return sess, nil
 }
 
 // Close 停掉 dlv: 标记 closed -> 关连接 -> 尽力 Detach -> kill 进程兜底
@@ -156,6 +273,9 @@ func (s *DebugSession) Close() error {
 		_ = s.cmd.Process.Kill()
 		_, _ = s.cmd.Process.Wait()
 	}
+	// 进程已经没了, 读端也可以收了 -- 让 pumpOutput 的 goroutine 退出, 不留 fd.
+	// 放在 Kill/Wait 之后: 提前关读端会让还活着的 dlv 写 stdout 时吃 EPIPE.
+	s.closeOutputPipes()
 	return nil
 }
 
@@ -191,6 +311,91 @@ func (s *DebugSession) sendDetachBestEffort() {
 // Port 返回 dlv headless 监听的端口号, 给上层日志/UI 用
 func (s *DebugSession) Port() int { return s.port }
 
+// -----------------------------------------------------------------------------
+// debuggee / dlv 输出 -- OnOutput 订阅 stdout/stderr 行
+// -----------------------------------------------------------------------------
+
+// maxOutputBacklog 是 OnOutput 尚未注册时最多缓存多少行
+// dlv 一起来就会打 "API server listening at: ..." 之类的行, 而 OnOutput 只能在
+// LaunchDebug 返回之后才注册 -- 不缓存就必然漏掉开头几行 (包括 build 失败的原因).
+// 上限用来防止无人订阅时内存无限涨; 溢出的行直接丢弃 (调试控制台不是日志系统).
+const maxOutputBacklog = 512
+
+// debugOutputLine 是一行还没被消费的调试输出
+type debugOutputLine struct {
+	stream string
+	text   string
+}
+
+// OnOutput 注册 dlv 进程 (以及跟它共享 fd 的被调试程序) 的输出行回调
+// stream 是 "stdout" 或 "stderr", line 已去掉行尾的 \r\n. 注册之前积压的行会在
+// 注册时按序补发一遍, 所以晚注册也看得到 dlv 的启动输出. fn 传 nil 表示取消订阅
+// (此时新行重新进 backlog).
+// 回调在读取 goroutine 上同步执行: 不要在里面做阻塞的事, UI 侧应当转成一次异步刷新.
+func (s *DebugSession) OnOutput(fn func(stream, line string)) {
+	s.outMu.Lock()
+	s.onOutput = fn
+	var backlog []debugOutputLine
+	if fn != nil {
+		backlog, s.outBacklog = s.outBacklog, nil
+	}
+	s.outMu.Unlock()
+	// 补发放在锁外: 回调里可能反手再调 OnOutput/发 RPC, 持锁调用容易自锁
+	for _, l := range backlog {
+		fn(l.stream, l.text)
+	}
+}
+
+// emitOutput 把一行输出交给订阅者; 没有订阅者时进 backlog
+func (s *DebugSession) emitOutput(stream, line string) {
+	s.outMu.Lock()
+	fn := s.onOutput
+	if fn == nil {
+		if len(s.outBacklog) < maxOutputBacklog {
+			s.outBacklog = append(s.outBacklog, debugOutputLine{stream: stream, text: line})
+		}
+		s.outMu.Unlock()
+		return
+	}
+	s.outMu.Unlock()
+	fn(stream, line)
+}
+
+// pumpOutput 按行读 r 直到 EOF/出错, 每行调一次 emitOutput
+// 用 bufio.Reader 而不是 Scanner: 被调程序完全可能打出超过 Scanner 默认 64KiB
+// 上限的一行 (dump 一个大结构体), Scanner 那时会直接放弃剩下的整条流.
+// 最后一段没有换行的内容也会被投递出去 (进程被 kill 时很常见).
+func (s *DebugSession) pumpOutput(stream string, r io.Reader) {
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			s.emitOutput(stream, strings.TrimRight(line, "\r\n"))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// trackPipe 记下一个要在 Close 时关掉的管道读端
+func (s *DebugSession) trackPipe(c io.Closer) {
+	s.outMu.Lock()
+	s.outPipes = append(s.outPipes, c)
+	s.outMu.Unlock()
+}
+
+// closeOutputPipes 关掉所有管道读端, 让阻塞在 Read 上的 pumpOutput 立刻返回
+func (s *DebugSession) closeOutputPipes() {
+	s.outMu.Lock()
+	pipes := s.outPipes
+	s.outPipes = nil
+	s.outMu.Unlock()
+	for _, p := range pipes {
+		_ = p.Close()
+	}
+}
+
 // SetBreakpoint 在 file:line 处下断点, 返回 dlv 分配的 ID
 // dlv 不要求 file 是绝对路径但强烈推荐, 否则其内部要靠 packageDir 解析
 func (s *DebugSession) SetBreakpoint(file string, line int) (*Breakpoint, error) {
@@ -212,32 +417,113 @@ func (s *DebugSession) SetConditionalBreakpoint(file string, line int, cond stri
 // 借 omitempty 省掉该字段, 等价于无条件断点. dlv API v2 的应答把断点放在
 // "Breakpoint" 字段下.
 func (s *DebugSession) createBreakpoint(file string, line int, cond string) (*Breakpoint, error) {
-	type bpSpec struct {
-		File string `json:"file"`
-		Line int    `json:"line"`
-		Cond string `json:"cond,omitempty"`
-	}
 	type createIn struct {
-		Breakpoint bpSpec `json:"Breakpoint"`
+		Breakpoint rpcBreakpoint `json:"Breakpoint"`
 	}
 	type createOut struct {
-		Breakpoint struct {
-			ID           int    `json:"id"`
-			File         string `json:"file"`
-			Line         int    `json:"line"`
-			FunctionName string `json:"functionName"`
-		} `json:"Breakpoint"`
+		Breakpoint rpcBreakpoint `json:"Breakpoint"`
 	}
 	var out createOut
-	if err := s.rpcCall("CreateBreakpoint", createIn{Breakpoint: bpSpec{File: file, Line: line, Cond: cond}}, &out); err != nil {
+	spec := rpcBreakpoint{File: file, Line: line, Cond: cond}
+	if err := s.rpcCall("CreateBreakpoint", createIn{Breakpoint: spec}, &out); err != nil {
 		return nil, err
 	}
-	return &Breakpoint{
-		ID:       out.Breakpoint.ID,
-		File:     out.Breakpoint.File,
-		Line:     out.Breakpoint.Line,
-		Function: out.Breakpoint.FunctionName,
-	}, nil
+	bp := out.Breakpoint.toModel()
+	return &bp, nil
+}
+
+// ClearBreakpoint 按 dlv 分配的 ID 删除一个断点
+// 走 RPCServer.ClearBreakpoint (params {Id}). 断点不存在时 dlv 回错误, 原样上抛 --
+// UI 侧删一个已经没了的断点应当当成"已经是目标状态", 由调用方决定是否忽略.
+// 应答里带着被删掉的断点, 我们不消费.
+func (s *DebugSession) ClearBreakpoint(id int) error {
+	type clearIn struct {
+		ID int `json:"Id"`
+	}
+	return s.rpcCall("ClearBreakpoint", clearIn{ID: id}, nil)
+}
+
+// ClearBreakpointByLocation 删除 file:line 上的断点
+// dlv 没有按位置删的 RPC, 这里先 ListBreakpoints 再按位置找 ID -- 编辑器 gutter
+// 只知道文件和行号, 不该逼 UI 自己维护一张 id 表. 该行没有断点时返回错误.
+// 路径比较见 sameSourceFile: dlv 一律回绝对路径, 而 IDE 手里可能是相对路径.
+func (s *DebugSession) ClearBreakpointByLocation(file string, line int) error {
+	bp, err := s.findBreakpointAt(file, line)
+	if err != nil {
+		return err
+	}
+	if bp == nil {
+		return fmt.Errorf("no breakpoint at %s:%d", file, line)
+	}
+	return s.ClearBreakpoint(bp.ID)
+}
+
+// ToggleBreakpoint 是编辑器 gutter 点击的后端: 该行没断点就下一个, 已有就删掉
+// 新建时返回创建出来的断点; 删除时返回 (nil, nil) -- 调用方用 nil 判断"这次是删".
+func (s *DebugSession) ToggleBreakpoint(file string, line int) (*Breakpoint, error) {
+	bp, err := s.findBreakpointAt(file, line)
+	if err != nil {
+		return nil, err
+	}
+	if bp != nil {
+		return nil, s.ClearBreakpoint(bp.ID)
+	}
+	return s.SetBreakpoint(file, line)
+}
+
+// AmendBreakpoint 把 bp 的可编辑状态写回 dlv (条件 / logpoint / 启用位)
+// 走 RPCServer.AmendBreakpoint, bp.ID 必须是 dlv 已知的断点 ID.
+// 语义是"整体替换"而不是"局部合并": bp 里为零值的字段会把 dlv 上对应的设置清掉
+// (Cond="" 即取消条件), 所以正确用法是从 SetBreakpoint/ListBreakpoints 拿到对象,
+// 改字段, 再整个传回来. File/Line 不能靠 amend 改 (dlv 忽略), 换行请删了重下.
+// HitCount 是只读的, 不会被写回.
+func (s *DebugSession) AmendBreakpoint(bp *Breakpoint) error {
+	if bp == nil {
+		return errors.New("amend breakpoint: nil breakpoint")
+	}
+	if bp.ID <= 0 {
+		return fmt.Errorf("amend breakpoint: invalid id %d", bp.ID)
+	}
+	type amendIn struct {
+		Breakpoint rpcBreakpoint `json:"Breakpoint"`
+	}
+	return s.rpcCall("AmendBreakpoint", amendIn{Breakpoint: breakpointToRPC(*bp)}, nil)
+}
+
+// findBreakpointAt 在当前断点列表里找 file:line 上的用户断点
+// 找不到返回 (nil, nil) -- 这是正常情况 (toggle 的"新建"分支), 不是错误.
+// 只看 ID>0: dlv 自己那些内部断点 (unrecovered-panic 等) ID 为负, 不能被用户删.
+func (s *DebugSession) findBreakpointAt(file string, line int) (*Breakpoint, error) {
+	bps, err := s.ListBreakpoints()
+	if err != nil {
+		return nil, err
+	}
+	for i := range bps {
+		if bps[i].ID > 0 && bps[i].Line == line && sameSourceFile(bps[i].File, file) {
+			return &bps[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// sameSourceFile 判断两个源文件路径是否指同一个文件
+// 先按 filepath.Clean 逐字符比; 不等时再退一步看"一个是不是另一个的路径后缀" --
+// dlv 返回的是编译期的绝对路径, 而 IDE 手里可能是相对项目根的相对路径, 对同一个
+// 文件两者不会字面相等. 只在"一个绝对一个相对"时才做后缀匹配, 且要求边界落在
+// 路径分隔符上, 避免 a/foo.go 匹配到 b/barfoo.go.
+func sameSourceFile(a, b string) bool {
+	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	if ca == cb {
+		return true
+	}
+	absA, absB := filepath.IsAbs(ca), filepath.IsAbs(cb)
+	if absA == absB {
+		return false
+	}
+	if absB {
+		ca, cb = cb, ca // 统一成 ca 绝对 / cb 相对
+	}
+	return strings.HasSuffix(ca, string(filepath.Separator)+cb)
 }
 
 // ListBreakpoints 拉取当前所有断点
@@ -247,14 +533,8 @@ func (s *DebugSession) ListBreakpoints() ([]Breakpoint, error) {
 	type listIn struct {
 		All bool `json:"All"`
 	}
-	type bpEnvelope struct {
-		ID           int    `json:"id"`
-		File         string `json:"file"`
-		Line         int    `json:"line"`
-		FunctionName string `json:"functionName"`
-	}
 	type listOut struct {
-		Breakpoints []bpEnvelope `json:"Breakpoints"`
+		Breakpoints []rpcBreakpoint `json:"Breakpoints"`
 	}
 	var out listOut
 	if err := s.rpcCall("ListBreakpoints", listIn{All: false}, &out); err != nil {
@@ -262,12 +542,7 @@ func (s *DebugSession) ListBreakpoints() ([]Breakpoint, error) {
 	}
 	bps := make([]Breakpoint, 0, len(out.Breakpoints))
 	for _, b := range out.Breakpoints {
-		bps = append(bps, Breakpoint{
-			ID:       b.ID,
-			File:     b.File,
-			Line:     b.Line,
-			Function: b.FunctionName,
-		})
+		bps = append(bps, b.toModel())
 	}
 	return bps, nil
 }
@@ -303,11 +578,51 @@ func (s *DebugSession) StepOut() (*StopState, error) {
 	return s.command("stepOut")
 }
 
-// command 是 Continue/Step 共享的内部包装. dlv 的 Command RPC 在 API v2 下
-// 接受 {"name": "<cmd>"}, 返回 {"State": DebuggerState}.
+// SwitchGoroutine 把 dlv 的"当前 goroutine"切到 id, 并把这个选择记在 session 上
+// 之后 Stacktrace/ListLocals/ListArgs/Eval/LoadVariable/SetVariable 传负数
+// goroutineID (即"当前") 时都解析到 id -- 这是 IDE goroutine 面板双击一行之后
+// 变量/调用栈跟着换上下文的机制. 走 RPCServer.Command 的 "switchGoroutine" 子命令,
+// 要求程序处于停止状态; dlv 报错时不改动本地选择.
+func (s *DebugSession) SwitchGoroutine(id int64) error {
+	if _, err := s.commandOn("switchGoroutine", id); err != nil {
+		return err
+	}
+	s.selGoroutine.Store(id)
+	return nil
+}
+
+// SelectedGoroutine 返回 SwitchGoroutine 记下的 goroutine id
+// 没切过时返回 -1, 也就是 dlv 的"当前 goroutine".
+func (s *DebugSession) SelectedGoroutine() int64 {
+	if id := s.selGoroutine.Load(); id > 0 {
+		return id
+	}
+	return -1
+}
+
+// scopeGoroutine 把调用方给的 goroutineID 解析成真正发给 dlv 的值
+// id>=0 原样透传 (调用方点名了某个 goroutine); id<0 表示"当前", 此时若
+// SwitchGoroutine 选过一个就用它, 否则回 -1 交给 dlv 自己决定.
+func (s *DebugSession) scopeGoroutine(id int64) int64 {
+	if id >= 0 {
+		return id
+	}
+	return s.SelectedGoroutine()
+}
+
+// command 是 Continue/Step 共享的内部包装, 不指定 goroutine
 func (s *DebugSession) command(name string) (*StopState, error) {
+	return s.commandOn(name, 0)
+}
+
+// commandOn 是 command 的带 goroutine 版本. dlv 的 Command RPC 在 API v2 下
+// 接受 {"name": "<cmd>", "goroutineID": <id>}, 返回 {"State": DebuggerState}.
+// goroutineID 传 0 表示"不指定", 靠 omitempty 从线缆上消失 -- 于是 continue/next
+// 这些老命令发出的 JSON 与加这个字段之前逐字节一致.
+func (s *DebugSession) commandOn(name string, goroutineID int64) (*StopState, error) {
 	type cmdIn struct {
-		Name string `json:"name"`
+		Name        string `json:"name"`
+		GoroutineID int64  `json:"goroutineID,omitempty"`
 	}
 	// DebuggerState 是个大对象, 这里只挑当前线程位置以及退出信号
 	type loc struct {
@@ -338,7 +653,7 @@ func (s *DebugSession) command(name string) (*StopState, error) {
 		} `json:"State"`
 	}
 	var out stateOut
-	if err := s.rpcCall("Command", cmdIn{Name: name}, &out); err != nil {
+	if err := s.rpcCall("Command", cmdIn{Name: name, GoroutineID: goroutineID}, &out); err != nil {
 		return nil, err
 	}
 	// Reason 是 dlv 没原生提供的语义, 这里根据上下文推:
@@ -386,13 +701,84 @@ type Goroutine struct {
 	Function string
 }
 
-// Variable 是 dlv Eval/ListLocalVars 应答的极简投影
-// Delve 的 Variable 还有 Kind/Addr/Children/Len/Cap/Flags/... 一大堆字段,
-// IDE 第一版的悬浮 + watch panel 只需要 Name/Type/Value, 其它留给后续 commit.
+// Variable 是 dlv Eval/ListLocalVars/ListFunctionArgs 应答的投影
+// 除 Name/Type/Value 之外带上变量树要用的元信息: Kind 决定 UI 画什么图标 / 能不能
+// 展开, Len/Cap 让 slice/map 在不展开的情况下也能显示规模, Addr 供"跳到内存"用,
+// Children 是已经加载回来的子变量.
+// 注意 Children==nil 有两种含义 (没有子项 / 还没加载): 需要展开时调 LoadVariable
+// 再要一层, 不要把 nil 当成"确定没有子项". 这就是懒展开的契约 -- 变量树默认只
+// 加载一层, 用户点开哪个节点才为那个节点付一次 RPC.
 type Variable struct {
 	Name  string
 	Type  string
 	Value string
+
+	// Kind 是 Go reflect.Kind 的名字 ("struct"/"slice"/"map"/"ptr"/...);
+	// dlv 线缆上给的是数值, 这里转成名字. 空串表示 dlv 没报(或报了 Invalid).
+	Kind string
+	// Addr 是变量地址, 0 表示没有地址 (常量/寄存器里的值/未加载).
+	Addr uint64
+	// Len 是字符串/slice/map/array/chan 的元素个数 (字符串是字节数), 其它类型为 0.
+	// 它是"真实长度", 可能大于 len(Children) -- LoadConfig.MaxArrayValues 会截断.
+	Len int
+	// Cap 是 slice 容量, 其它类型为 0.
+	Cap int
+	// Children 是已加载的子变量: struct 的字段 / slice 的元素 / ptr 的目标;
+	// map 按 dlv 的约定是 key,value 交替排列.
+	Children []Variable
+}
+
+// rpcVariable 是 dlv api.Variable 的薄信封
+// Len/Cap 在线缆上是 int64, Kind 是 reflect.Kind 的数值; Children 递归引用自身.
+type rpcVariable struct {
+	Name     string        `json:"name"`
+	Type     string        `json:"type"`
+	Value    string        `json:"value"`
+	Kind     uint          `json:"kind"`
+	Addr     uint64        `json:"addr"`
+	Len      int64         `json:"len"`
+	Cap      int64         `json:"cap"`
+	Children []rpcVariable `json:"children"`
+}
+
+// convertVariable 递归把线缆变量投影成模型变量
+// 子变量为空时 Children 保持 nil (而不是空 slice), 让"没展开"在 UI 侧只有一种形态.
+func convertVariable(v rpcVariable) Variable {
+	out := Variable{
+		Name:  v.Name,
+		Type:  v.Type,
+		Value: v.Value,
+		Kind:  kindName(v.Kind),
+		Addr:  v.Addr,
+		Len:   int(v.Len),
+		Cap:   int(v.Cap),
+	}
+	if len(v.Children) > 0 {
+		out.Children = make([]Variable, 0, len(v.Children))
+		for _, c := range v.Children {
+			out.Children = append(out.Children, convertVariable(c))
+		}
+	}
+	return out
+}
+
+// convertVariables 投影一组线缆变量; 返回值恒非 nil, 与重构前 ListLocals 一致
+func convertVariables(in []rpcVariable) []Variable {
+	out := make([]Variable, 0, len(in))
+	for _, v := range in {
+		out = append(out, convertVariable(v))
+	}
+	return out
+}
+
+// kindName 把线缆上的数值 kind 转成 Go 里的类别名
+// 0 是 reflect.Invalid -- dlv 用它表示"未知/未加载", 这里映射成空串而不是
+// "invalid", 免得 UI 把它当成一个真实类别显示出来.
+func kindName(k uint) string {
+	if k == 0 {
+		return ""
+	}
+	return reflect.Kind(k).String()
 }
 
 // loadConfig 是 dlv 在 Eval/Stacktrace(Full)/ListLocalVars 里要求的取值上限
@@ -419,14 +805,25 @@ func defaultLoadConfig() loadConfig {
 	}
 }
 
-// evalScope 是 dlv EvalScope: 选哪一个 goroutine 的哪一帧
-// GoroutineID = -1 表示当前(SelectedGoroutine), Frame 0 是栈顶
-type evalScope struct {
-	GoroutineID int `json:"GoroutineID"`
-	Frame       int `json:"Frame"`
+// loadConfigDepth 是默认上限 + 指定的递归展开层数
+// depth<0 表示"用默认的 1 层"; depth==0 表示只加载这一层, 不展开任何子项.
+func loadConfigDepth(depth int) loadConfig {
+	cfg := defaultLoadConfig()
+	if depth >= 0 {
+		cfg.MaxVariableRecurse = depth
+	}
+	return cfg
 }
 
-// rpcLocation / rpcVariable 是 dlv 应答的薄信封, 只挑我们暴露的字段
+// evalScope 是 dlv EvalScope: 选哪一个 goroutine 的哪一帧
+// GoroutineID = -1 表示当前(SelectedGoroutine), Frame 0 是栈顶.
+// dlv 侧这个字段是 int64 (goroutine id 会长到 int32 装不下), 这里对齐.
+type evalScope struct {
+	GoroutineID int64 `json:"GoroutineID"`
+	Frame       int   `json:"Frame"`
+}
+
+// rpcLocation 是 dlv 应答里位置的薄信封, 只挑我们暴露的字段
 // 这些类型不出包, 上层永远拿到的是 StackFrame / Variable / Goroutine.
 type rpcLocation struct {
 	File     string `json:"file"`
@@ -436,22 +833,17 @@ type rpcLocation struct {
 	} `json:"function"`
 }
 
-type rpcVariable struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value string `json:"value"`
-}
-
 // Stacktrace 返回当前/指定 goroutine 的调用栈
-// goroutineID = -1 表示当前 SelectedGoroutine. depth 是最多取几帧 (栈顶起算).
+// goroutineID < 0 表示"当前 goroutine": 若 SwitchGoroutine 选过一个就用它, 否则
+// 交给 dlv 的 SelectedGoroutine. depth 是最多取几帧 (栈顶起算).
 // Full=false 让 dlv 不带 Locals/Arguments -- 我们这里只画位置, 想看局部变量走
-// ListLocals. 这样应答体积更小.
+// ListLocals/ListArgs. 这样应答体积更小.
 func (s *DebugSession) Stacktrace(goroutineID, depth int) ([]StackFrame, error) {
 	type stackIn struct {
-		ID     int  `json:"Id"`
-		Depth  int  `json:"Depth"`
-		Full   bool `json:"Full"`
-		Defers bool `json:"Defers"`
+		ID     int64 `json:"Id"`
+		Depth  int   `json:"Depth"`
+		Full   bool  `json:"Full"`
+		Defers bool  `json:"Defers"`
 	}
 	type rpcFrame struct {
 		Location rpcLocation `json:"Location"`
@@ -460,7 +852,8 @@ func (s *DebugSession) Stacktrace(goroutineID, depth int) ([]StackFrame, error) 
 		Locations []rpcFrame `json:"Locations"`
 	}
 	var out stackOut
-	if err := s.rpcCall("Stacktrace", stackIn{ID: goroutineID, Depth: depth, Full: false, Defers: false}, &out); err != nil {
+	in := stackIn{ID: s.scopeGoroutine(int64(goroutineID)), Depth: depth, Full: false, Defers: false}
+	if err := s.rpcCall("Stacktrace", in, &out); err != nil {
 		return nil, err
 	}
 	frames := make([]StackFrame, 0, len(out.Locations))
@@ -474,10 +867,20 @@ func (s *DebugSession) Stacktrace(goroutineID, depth int) ([]StackFrame, error) 
 	return frames, nil
 }
 
-// ListGoroutines 拉取所有 goroutine
-// 不分页 (Start=0, Count=0 在 dlv 里语义是 "全部"); 一旦 IDE 真要分页再加.
+// ListGoroutines 拉取所有 goroutine (不分页)
+// 等价于 ListGoroutinesPage(0, 0) -- dlv 里 Count=0 的语义就是"全部".
 // 取 UserCurrentLoc 而非 CurrentLoc -- 用户关心自己写的代码而不是 runtime 帧.
 func (s *DebugSession) ListGoroutines() ([]Goroutine, error) {
+	gs, _, err := s.ListGoroutinesPage(0, 0)
+	return gs, err
+}
+
+// ListGoroutinesPage 分页拉 goroutine 列表
+// start 是起始游标 (第一页传 0), count 是本页最多几条 (0 = 全部).
+// 第二个返回值是下一页的游标 (dlv 的 Nextg): 0 表示已经到底了, 非 0 时把它当成
+// 下一次调用的 start. 一个真实服务进程 goroutine 上万, 面板靠这个避免一次把整张
+// 表拉回来 (也避免 dlv 一次给我们几 MB 的 JSON).
+func (s *DebugSession) ListGoroutinesPage(start, count int) ([]Goroutine, int, error) {
 	type listIn struct {
 		Start int `json:"Start"`
 		Count int `json:"Count"`
@@ -489,11 +892,11 @@ func (s *DebugSession) ListGoroutines() ([]Goroutine, error) {
 	}
 	type listOut struct {
 		Goroutines []rpcGoroutine `json:"Goroutines"`
-		// Nextg int -- 分页游标, 当前不消费
+		Nextg      int            `json:"Nextg"` // 下一页游标, 0 = 没有下一页
 	}
 	var out listOut
-	if err := s.rpcCall("ListGoroutines", listIn{Start: 0, Count: 0}, &out); err != nil {
-		return nil, err
+	if err := s.rpcCall("ListGoroutines", listIn{Start: start, Count: count}, &out); err != nil {
+		return nil, 0, err
 	}
 	gs := make([]Goroutine, 0, len(out.Goroutines))
 	for _, g := range out.Goroutines {
@@ -502,45 +905,77 @@ func (s *DebugSession) ListGoroutines() ([]Goroutine, error) {
 		if loc.File == "" {
 			loc = g.CurrentLoc
 		}
-		out := Goroutine{ID: g.ID, File: loc.File, Line: loc.Line}
+		item := Goroutine{ID: g.ID, File: loc.File, Line: loc.Line}
 		if loc.Function != nil {
-			out.Function = loc.Function.Name
+			item.Function = loc.Function.Name
 		}
-		gs = append(gs, out)
+		gs = append(gs, item)
 	}
-	return gs, nil
+	return gs, out.Nextg, nil
 }
 
-// ListLocals 拉取指定 frame 的局部变量
-// goroutineID=-1 -> 当前 goroutine; frame=0 -> 栈顶. 不含函数参数 (那是
-// ListFunctionArgs), 想要全量参数+局部以后再加 ListArgs 方法.
+// ListLocals 拉取指定 (goroutine, frame) 的局部变量
+// goroutineID<0 -> 当前 goroutine (SwitchGoroutine 选过则是它); frame=0 -> 栈顶.
+// 只含局部变量; 函数参数走 ListArgs -- dlv 把两者拆成了两个 RPC.
 func (s *DebugSession) ListLocals(goroutineID, frame int) ([]Variable, error) {
+	return s.listVars("ListLocalVars", int64(goroutineID), frame)
+}
+
+// ListArgs 拉取指定 (goroutine, frame) 的函数参数
+// 与 ListLocals 一起才是一帧的完整变量视图 (Qt Creator 的 Locals and Expressions
+// 里 arguments 是单独一组). goroutineID<0 的含义同 ListLocals.
+func (s *DebugSession) ListArgs(goroutineID int64, frame int) ([]Variable, error) {
+	return s.listVars("ListFunctionArgs", goroutineID, frame)
+}
+
+// listVars 是 ListLocalVars / ListFunctionArgs 共享的实现
+// 两个 RPC 的入参形态完全一样; 应答的字段名不一样 -- ListLocalVarsOut 用
+// "Variables", ListFunctionArgsOut 用 "Args", 所以这里两个键都解, 取非空的那个.
+func (s *DebugSession) listVars(method string, goroutineID int64, frame int) ([]Variable, error) {
 	type listIn struct {
 		Scope evalScope  `json:"Scope"`
 		Cfg   loadConfig `json:"Cfg"`
 	}
 	type listOut struct {
 		Variables []rpcVariable `json:"Variables"`
+		Args      []rpcVariable `json:"Args"`
 	}
 	var out listOut
 	in := listIn{
-		Scope: evalScope{GoroutineID: goroutineID, Frame: frame},
+		Scope: evalScope{GoroutineID: s.scopeGoroutine(goroutineID), Frame: frame},
 		Cfg:   defaultLoadConfig(),
 	}
-	if err := s.rpcCall("ListLocalVars", in, &out); err != nil {
+	if err := s.rpcCall(method, in, &out); err != nil {
 		return nil, err
 	}
-	vs := make([]Variable, 0, len(out.Variables))
-	for _, v := range out.Variables {
-		vs = append(vs, Variable{Name: v.Name, Type: v.Type, Value: v.Value})
+	vars := out.Variables
+	if len(vars) == 0 {
+		vars = out.Args
 	}
-	return vs, nil
+	return convertVariables(vars), nil
 }
 
 // Eval 在 (goroutine, frame) 作用域下求值一个 Go 表达式
 // 表达式形态遵循 dlv 文档: 支持局部/包级变量 + 成员/索引/解引用, 不支持函数调用.
-// 这是 hover-to-inspect 和 watch panel 的基础.
+// 这是 hover-to-inspect 和 watch panel 的基础. 默认只展开一层嵌套, 要更深走
+// LoadVariable.
 func (s *DebugSession) Eval(expr string, goroutineID, frame int) (Variable, error) {
+	return s.eval(expr, int64(goroutineID), frame, defaultLoadConfig())
+}
+
+// LoadVariable 是变量树"懒展开"的后端: 用户点开某个节点时才把那一层子变量拉回来
+// expr 是节点的完整路径表达式 ("x" / "x.Field" / "s[3]"), depth 直接映射到 dlv 的
+// LoadConfig.MaxVariableRecurse: 0 = 只加载这个节点本身, 1 = 连它的直接子项,
+// 越大展开越深; depth<0 用默认的 1. 其它上限 (字符串长度/数组元素数) 与 Eval 一致.
+// 典型用法: 面板拿到 Children==nil 的节点 -> 用户点开 -> LoadVariable(路径, g, f, 1)
+// -> 用返回值的 Children 填充这一层. 深度别给大值, dlv 是同步的, 一次深展开会把
+// 整个 session 卡住 (同一 session 上的 RPC 是串行的).
+func (s *DebugSession) LoadVariable(expr string, goroutineID int64, frame, depth int) (Variable, error) {
+	return s.eval(expr, goroutineID, frame, loadConfigDepth(depth))
+}
+
+// eval 是 Eval / LoadVariable 共享的实现, 唯一差别是 LoadConfig
+func (s *DebugSession) eval(expr string, goroutineID int64, frame int, cfg loadConfig) (Variable, error) {
 	type evalIn struct {
 		Scope evalScope  `json:"Scope"`
 		Expr  string     `json:"Expr"`
@@ -551,18 +986,14 @@ func (s *DebugSession) Eval(expr string, goroutineID, frame int) (Variable, erro
 	}
 	var out evalOut
 	in := evalIn{
-		Scope: evalScope{GoroutineID: goroutineID, Frame: frame},
+		Scope: evalScope{GoroutineID: s.scopeGoroutine(goroutineID), Frame: frame},
 		Expr:  expr,
-		Cfg:   defaultLoadConfig(),
+		Cfg:   cfg,
 	}
 	if err := s.rpcCall("Eval", in, &out); err != nil {
 		return Variable{}, err
 	}
-	return Variable{
-		Name:  out.Variable.Name,
-		Type:  out.Variable.Type,
-		Value: out.Variable.Value,
-	}, nil
+	return convertVariable(out.Variable), nil
 }
 
 // SetVariable 把 (goroutine, frame) 作用域下的某个变量 symbol 赋成 value
@@ -570,7 +1001,7 @@ func (s *DebugSession) Eval(expr string, goroutineID, frame int) (Variable, erro
 // {Scope: EvalScope, Symbol, Value}, 应答为空 (无 result). symbol 是变量名
 // (例如 "x" 或 "p.Field"), value 是 Go 字面量字符串 (dlv 自己解析, 例如 "42"
 // / "\"hi\"" / "true"). 类型不匹配或符号不存在时 dlv 回 error, 这里原样 wrap.
-// goroutineID=-1 表示当前 SelectedGoroutine, frame=0 是栈顶.
+// goroutineID<0 表示当前 goroutine (SwitchGoroutine 选过则是它), frame=0 是栈顶.
 func (s *DebugSession) SetVariable(symbol, value string, goroutineID, frame int) error {
 	type setIn struct {
 		Scope  evalScope `json:"Scope"`
@@ -578,7 +1009,7 @@ func (s *DebugSession) SetVariable(symbol, value string, goroutineID, frame int)
 		Value  string    `json:"Value"`
 	}
 	in := setIn{
-		Scope:  evalScope{GoroutineID: goroutineID, Frame: frame},
+		Scope:  evalScope{GoroutineID: s.scopeGoroutine(int64(goroutineID)), Frame: frame},
 		Symbol: symbol,
 		Value:  value,
 	}
