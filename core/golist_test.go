@@ -3,8 +3,41 @@ package core
 import (
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// TestParseGoListJSON_StderrPollutionBreaksIt pins WHY RunGoList must keep
+// stdout and stderr apart. It used to call CombinedOutput, so on a machine that
+// still had to fetch dependencies `go list` prefixed the stream with
+// "go: downloading ..." and the decoder failed on the first character:
+//
+//	go list parse: invalid character 'g' looking for beginning of value
+//
+// Worse, the loop aborts on the first error, so one harmless progress line
+// dropped EVERY package. Windows CI hit exactly this on a cold module cache.
+func TestParseGoListJSON_StderrPollutionBreaksIt(t *testing.T) {
+	clean := `{"Dir":"/x","ImportPath":"example.com/x","Name":"x"}`
+
+	pkgs, err := ParseGoListJSON(clean)
+	if err != nil || len(pkgs) != 1 {
+		t.Fatalf("clean stdout should parse: pkgs=%d err=%v", len(pkgs), err)
+	}
+
+	polluted := "go: downloading github.com/foo/bar v1.2.3\n" + clean
+	pkgs, err = ParseGoListJSON(polluted)
+	if err == nil {
+		t.Fatal("stderr mixed into stdout should fail to parse; " +
+			"if this ever passes, the guarantee below is no longer needed")
+	}
+	if len(pkgs) != 0 {
+		t.Errorf("got %d packages from polluted input, want 0 — "+
+			"the parser aborts on the first error, which is why separation matters", len(pkgs))
+	}
+	if !strings.Contains(err.Error(), "invalid character 'g'") {
+		t.Errorf("unexpected error, want the 'g' from \"go: downloading\": %v", err)
+	}
+}
 
 // 一份手写的多包样本, 模拟 `go list -json ./...` 的真实输出形态:
 // - 顶层不是数组, 而是多个 pretty-printed 对象首尾相接
@@ -167,9 +200,14 @@ func TestRunGoList_Smoke(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH, skipping smoke test")
 	}
-	out, err := RunGoList(".", "./...")
+	out, diag, err := RunGoList(".", "./...")
 	if err != nil {
-		t.Fatalf("RunGoList failed: %v\noutput:\n%s", err, out)
+		t.Fatalf("RunGoList failed: %v\nstdout:\n%s\nstderr:\n%s", err, out, diag)
+	}
+	// stdout must be pure JSON: nothing from stderr may leak into it, or the
+	// decoder trips over the first "go: downloading ..." line.
+	if trimmed := strings.TrimSpace(out); trimmed != "" && !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("stdout does not start with a JSON object — stderr leaked in?\ngot: %.120s", trimmed)
 	}
 	pkgs, err := ParseGoListJSON(out)
 	if err != nil {

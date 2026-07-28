@@ -44,7 +44,12 @@ wait "$PID" 2>/dev/null || true
 
 # A process can stay alive and still have printed something fatal (a recovered
 # panic in a worker, a checkptr report on another goroutine).
-if grep -qiE "panic:|fatal error|checkptr|main loop mechanism unavailable" "$LOG"; then
+#
+# "go list ... failed" is in here deliberately: this workflow runs the IDE
+# against silk's own module, where `go list -json` must succeed. It once failed
+# with "invalid character 'g'" because stderr was merged into the JSON stream,
+# and the run still passed as a warning — the packages pane was simply empty.
+if grep -qiE "panic:|fatal error|checkptr|main loop mechanism unavailable|go list .*failed" "$LOG"; then
   echo "::error::$BIN logged a fatal marker while running"
   echo "----- $LOG -----"
   cat "$LOG"

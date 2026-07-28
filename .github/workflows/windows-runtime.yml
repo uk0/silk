@@ -71,6 +71,15 @@ jobs:
       - name: Package init is checkptr-clean
         run: go test -race -count=1 -run TestBackendRegistersMainLoop ./gui/ ./win32/
 
+      # silkide degrades gracefully without gopls (it warns and keeps running,
+      # which the smoke below proves), but then the whole LSP path — launching
+      # the server, the initialize handshake, didOpen — is never exercised.
+      # Install it so the smoke covers the wired-up case too. Non-fatal: a
+      # network hiccup here must not fail a Windows runtime check.
+      - name: Install gopls
+        continue-on-error: true
+        run: go install golang.org/x/tools/gopls@latest
+
       - name: Build the GUI binaries
         run: |
           go build -v -o design.exe design.go

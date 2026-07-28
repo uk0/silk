@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -69,39 +70,63 @@ func ParseGoListJSON(src string) ([]GoListPackage, error) {
 	return pkgs, nil
 }
 
-// RunGoList 在 dir 目录下执行 `go list -json` 并把合并后的 stdout+stderr 文本返回
+// RunGoList 在 dir 目录下执行 `go list -json`, 分别返回 stdout(JSON)与 stderr(诊断).
 // args 为空时默认补 "./..."(扫描当前模块所有 package)
-// 之所以保留 stderr: 当模块状态有问题(缺依赖, 语法错误)时 `go list` 仍会
-// 给部分 package 输出 JSON, 但同时把诊断信息打到 stderr; 上层若拿不到 stderr
-// 就无从展示给用户. 因此即使 cmd.Run 失败也会返回已收集到的输出.
-func RunGoList(dir string, args ...string) (string, error) {
+//
+// stdout 与 stderr 必须分开: 早先这里用 CombinedOutput, 把 stderr 混进了 JSON 流.
+// `go list` 在需要拉依赖时会往 stderr 打 "go: downloading ..." 之类的进度行, 混流后
+// json.Decoder 会在第一个字符 'g' 上失败 ——
+//
+//	go list parse: invalid character 'g' looking for beginning of value
+//
+// 而当时的解析循环一遇错就整体中断, 于是一行无害的进度信息就让全部 package 信息丢失.
+// 这个故障是 Windows CI 上首次构建(依赖尚未缓存)时暴露出来的.
+//
+// 即使 cmd 执行失败也会把已收集到的输出返回: 模块状态有问题(缺依赖, 语法错误)时
+// `go list` 仍会为可用的 package 输出 JSON, 同时把诊断打到 stderr, 上层两者都要用.
+func RunGoList(dir string, args ...string) (jsonOut string, diagnostics string, err error) {
 	if len(args) == 0 {
 		args = []string{"./..."}
 	}
 	full := append([]string{"list", "-json"}, args...)
 	cmd := exec.Command("go", full...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("go list %s: %w", strings.Join(args, " "), err)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if runErr != nil {
+		return stdout.String(), stderr.String(),
+			fmt.Errorf("go list %s: %w", strings.Join(args, " "), runErr)
 	}
-	return string(out), nil
+	return stdout.String(), stderr.String(), nil
 }
 
 // LoadGoListJSON 是 RunGoList + ParseGoListJSON 的便捷封装
 // 即使 go list 本身报错也会尝试解析其 stdout(go list 有"边报错边出 JSON"的行为)
 // 这样能在依赖缺失时仍把可用的 package 信息提交给 IDE
+//
+// 只解析 stdout; stderr 只在出错时附到 error 里供展示, 绝不喂给 JSON 解析器.
 func LoadGoListJSON(dir string, args ...string) ([]GoListPackage, error) {
-	out, runErr := RunGoList(dir, args...)
+	out, diag, runErr := RunGoList(dir, args...)
 	pkgs, parseErr := ParseGoListJSON(out)
+	diag = strings.TrimSpace(diag)
 	if runErr != nil && parseErr != nil {
-		return pkgs, fmt.Errorf("%w; %v", runErr, parseErr)
+		return pkgs, fmt.Errorf("%w; %v%s", runErr, parseErr, diagSuffix(diag))
 	}
 	if runErr != nil {
-		return pkgs, runErr
+		return pkgs, fmt.Errorf("%w%s", runErr, diagSuffix(diag))
 	}
 	if parseErr != nil {
-		return pkgs, parseErr
+		return pkgs, fmt.Errorf("%w%s", parseErr, diagSuffix(diag))
 	}
 	return pkgs, nil
+}
+
+// diagSuffix 把 go list 的 stderr 作为可读后缀附到 error 上(为空时不加).
+func diagSuffix(diag string) string {
+	if diag == "" {
+		return ""
+	}
+	return "; go list stderr: " + diag
 }
