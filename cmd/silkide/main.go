@@ -2211,13 +2211,19 @@ func buildProject(canvas *ged.GedView) {
 		if dir != "" {
 			cmd.Dir = dir
 		}
-		out, err := cmd.CombinedOutput()
-		text := string(out)
+		// Stream + heartbeat instead of CombinedOutput: a first cgo build of a
+		// repo this size takes minutes on Windows and used to print nothing at
+		// all until it finished, which is indistinguishable from a hang.
+		header := fmt.Sprintf("$ go build ./...   (cwd: %s)", dir)
+		text, err := runWithProgress(cmd, header, func(s string) {
+			onUI(func() { reportBuildOutput(s) })
+		})
 		if err != nil && text == "" {
 			text = err.Error()
 		} else if err == nil {
 			text += "\nbuild ok"
 		}
+		text = header + "\n" + text
 		// UI mutation only: marshal the pane / log / status / toast
 		// updates onto the main thread (GLFW + Cairo are not
 		// goroutine-safe). The go build above stays on this worker.
