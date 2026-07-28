@@ -94,6 +94,13 @@ func (this *Surface) Status() Status    { return STATUS_SUCCESS }
 func (this *Surface) Destroy()          {}
 func (this *Surface) MarkDirty()        {}
 
+// Finish matches cairo_surface_finish: after it the surface accepts no further
+// drawing. A pure-Go surface owns only Go memory that the collector reclaims,
+// so there is nothing to release — but the method must exist, because callers
+// selected by filename on Windows (gui/window_windows.go) call it on every
+// build, cgo or not.
+func (this *Surface) Finish() {}
+
 // Flush rebuilds dataBGRA from img.Pix (R↔B swapped). Called every
 // frame by Window.paint() right before DataPtr() / TexImage2D, so
 // the GL upload sees Cairo-compatible BGRA byte order. Rebuilding

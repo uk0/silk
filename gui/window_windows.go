@@ -110,7 +110,35 @@ func init() {
 		screenDpi = 96
 	}
 	core.Debug("Main screen DPI: ", screenDpi)
-	//	core.SetMainLoop(mainLoop, quitLoop)
+	// Hand core the Win32 message pump. Without this core.EventLoop() has no
+	// loop to run and every silk program dies on Windows before showing a
+	// window: "panic: main loop mechanism unavailable, typically you need a
+	// gui package". The GLFW backend registers the same pair at
+	// window_glfw.go; the line here had been left commented out referring to
+	// unexported names that do not exist.
+	core.SetMainLoop(MainLoop, QuitLoop)
+}
+
+// serviceUIFrame runs the per-iteration work the GLFW loop does after input:
+// tasks queued from background goroutines (gui.Post — LSP, dlv, build output,
+// SCADA tag updates) and the animation engine. The Win32 pump used to do
+// neither, so on Windows a posted task was queued forever and animations never
+// advanced. The 47ms idle timer (SetTimer → WM_TIMER) keeps the pump turning
+// while the user is idle, which matches the GLFW backend's 47ms idle wait, so
+// no extra wakeup hook is needed.
+func serviceUIFrame() {
+	drainUITasks()
+	AnimationTick()
+	if HasActiveAnimations() {
+		// Animations that only mutate geometry (SlideIn/ScaleUp/Shake) or run
+		// off elapsed time do not self-invalidate; nudge every visible window
+		// so the frame actually reaches the screen.
+		for _, win := range winMap {
+			if win != nil && win.IsVisible() {
+				win.Update()
+			}
+		}
+	}
 }
 
 // appIconResourceID is the icon ordinal a packaged silk .exe is expected to
@@ -1459,6 +1487,7 @@ func MainLoop() {
 			win32.TranslateMessage(&msg)
 			win32.DispatchMessage(&msg)
 		}
+		serviceUIFrame()
 	}
 }
 
@@ -1660,6 +1689,9 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 			win32.TranslateMessage(&msg)
 			win32.DispatchMessage(&msg)
 		}
+		// A modal dialog must keep servicing posted tasks and animations too,
+		// otherwise everything queued while it is open stalls until it closes.
+		serviceUIFrame()
 	}
 	return
 }
