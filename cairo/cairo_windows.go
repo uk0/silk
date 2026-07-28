@@ -2,7 +2,11 @@
 
 package cairo
 
-// #include <cairo/cairo-win32.h>
+// cairo-win32.h sits next to cairo.h, so include it the same way cairo.go
+// includes <cairo.h>: bare. pkg-config hands cgo -I<prefix>/include/cairo,
+// which resolves both; the previous <cairo/cairo-win32.h> additionally needed
+// -I<prefix>/include, which pkg-config does not promise.
+// #include <cairo-win32.h>
 import "C"
 
 import (
