@@ -71,19 +71,26 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          # Keep the Windows PATH visible inside the MSYS2 shell: the packaging
+          # step below needs the Go toolchain and 7z from the runner image.
+          path-type: inherit
           install: |
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-pkg-config
             mingw-w64-ucrt-x86_64-cairo
 
+      # Ask MSYS2 itself where it lives instead of hardcoding C:\msys64 —
+      # setup-msys2 may install under RUNNER_TEMP, and a wrong root here means
+      # cgo cannot find cairo and the release binaries never build.
       - name: Configure MSYS2 PATH (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: msys2 {0}
         run: |
-          echo "C:/msys64/ucrt64/bin" >> $GITHUB_PATH
-          echo "PKG_CONFIG_PATH=C:/msys64/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
-          echo "CGO_CFLAGS=-IC:/msys64/ucrt64/include" >> $GITHUB_ENV
-          echo "CGO_LDFLAGS=-LC:/msys64/ucrt64/lib -lcairo" >> $GITHUB_ENV
+          ROOT="$(cygpath -m /ucrt64)"
+          echo "$(cygpath -w /ucrt64/bin)" >> $GITHUB_PATH
+          echo "PKG_CONFIG_PATH=$ROOT/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CGO_CFLAGS=-I$ROOT/include" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L$ROOT/lib -lcairo" >> $GITHUB_ENV
           echo "CGO_ENABLED=1" >> $GITHUB_ENV
 
       # ─── Test ───
@@ -118,27 +125,39 @@ jobs:
           cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
           cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
 
+      # Runs in the MSYS2 shell so /ucrt64 resolves wherever setup-msys2 put it,
+      # and resolves the DLL set with ldd instead of a hand-written list. The
+      # old list was both hardcoded to C:\msys64 AND swallowed every failure
+      # with "|| true", so a wrong path or a new cairo dependency (harfbuzz,
+      # brotli, glib...) shipped a zip that simply refuses to start on a machine
+      # without MSYS2 — with no sign of trouble in the build log.
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: msys2 {0}
         run: |
-          mkdir -p dist/silk-${{ matrix.label }}
-          cp silk-designer-${{ matrix.label }}.exe dist/silk-${{ matrix.label }}/silk-designer.exe
-          cp silk-demo-${{ matrix.label }}.exe dist/silk-${{ matrix.label }}/silk-demo.exe
-          cp -r icon dist/silk-${{ matrix.label }}/
-          cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
-          # Bundle MSYS2 cairo DLLs so the binary runs on systems without MSYS2.
-          cp /c/msys64/ucrt64/bin/libcairo-2.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libpixman-1-0.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libfontconfig-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libfreetype-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libpng16-16.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libexpat-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libgcc_s_seh-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libstdc++-6.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libwinpthread-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/zlib1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
-          cp /c/msys64/ucrt64/bin/libbz2-1.dll dist/silk-${{ matrix.label }}/ 2>/dev/null || true
+          set -euo pipefail
+          OUT="dist/silk-${{ matrix.label }}"
+          mkdir -p "$OUT"
+          cp silk-designer-${{ matrix.label }}.exe "$OUT/silk-designer.exe"
+          cp silk-demo-${{ matrix.label }}.exe "$OUT/silk-demo.exe"
+          cp -r icon "$OUT/"
+          cp README.md LICENSE CHANGELOG.md "$OUT/"
+
+          # Copy every MSYS2-provided DLL the binaries actually link against.
+          for exe in "$OUT"/*.exe; do
+            ldd "$exe" | awk '{print $3}' | grep -iE '^/(ucrt64|mingw64)/' | sort -u | while read -r dll; do
+              [ -f "$dll" ] && cp -n "$dll" "$OUT/" || true
+            done
+          done
+
+          # A package without cairo is dead on arrival; do not publish one.
+          if [ ! -f "$OUT/libcairo-2.dll" ]; then
+            echo "::error::libcairo-2.dll was not bundled - the release would not start"
+            ldd "$OUT/silk-designer.exe" || true
+            exit 1
+          fi
+          echo "bundled DLLs:"; ls -1 "$OUT"/*.dll
+
           cd dist && 7z a silk-${{ matrix.label }}.zip silk-${{ matrix.label }}
 
       - name: Upload artifact

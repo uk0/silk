@@ -38,6 +38,12 @@ jobs:
         with:
           msystem: UCRT64
           update: false
+          # setup-msys2 defaults to path-type: minimal, which strips the
+          # Windows PATH — the Go that actions/setup-go just installed then
+          # does not exist inside this shell ("go: command not found").
+          # inherit keeps it while still putting the MSYS2 toolchain first, so
+          # gcc/pkg-config still resolve to UCRT64.
+          path-type: inherit
           install: >-
             mingw-w64-ucrt-x86_64-cairo
             mingw-w64-ucrt-x86_64-pkgconf
@@ -48,7 +54,8 @@ jobs:
           echo "PKG_CONFIG_PATH=/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
           echo "CC=gcc" >> $GITHUB_ENV
           echo "CXX=g++" >> $GITHUB_ENV
-          echo "/c/msys64/ucrt64/bin" >> $GITHUB_PATH
+          # Derived, not hardcoded: setup-msys2 may install under RUNNER_TEMP.
+          echo "$(cygpath -w /ucrt64/bin)" >> $GITHUB_PATH
 
       # 1. The backend must hand core an event loop. This is a pure assertion —
       #    no window needed — and it is the exact bug that made every silk

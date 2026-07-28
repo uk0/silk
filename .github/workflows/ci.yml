@@ -66,6 +66,11 @@ jobs:
         with:
           msystem: UCRT64
           update: false
+          # Without path-type: inherit the MSYS2 shell drops the Windows PATH,
+          # so the "Build silkide (Windows)" step below cannot find the Go
+          # installed by actions/setup-go ("go: command not found"). MSYS2
+          # paths still come first, so gcc/pkg-config stay UCRT64.
+          path-type: inherit
           install: >-
             mingw-w64-ucrt-x86_64-cairo
             mingw-w64-ucrt-x86_64-pkgconf
@@ -82,7 +87,11 @@ jobs:
           echo "PKG_CONFIG_PATH=/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
           echo "CC=gcc" >> $GITHUB_ENV
           echo "CXX=g++" >> $GITHUB_ENV
-          echo "/c/msys64/ucrt64/bin" >> $GITHUB_PATH
+          # Derive the Windows path instead of hardcoding C:\msys64:
+          # setup-msys2 may install under RUNNER_TEMP rather than the image's
+          # preinstalled location, and a wrong entry here silently leaves the
+          # cairo DLLs off PATH for anything run outside this shell.
+          echo "$(cygpath -w /ucrt64/bin)" >> $GITHUB_PATH
 
       - name: Vet
         run: go vet ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
