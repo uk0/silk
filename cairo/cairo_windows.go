@@ -2,10 +2,16 @@
 
 package cairo
 
-// cairo-win32.h sits next to cairo.h, so include it the same way cairo.go
-// includes <cairo.h>: bare. pkg-config hands cgo -I<prefix>/include/cairo,
+// cairo-win32.h sits next to cairo.h, so it is included bare, the same way
+// cairo.go includes <cairo.h>. pkg-config hands cgo -I<prefix>/include/cairo,
 // which resolves both; the previous <cairo/cairo-win32.h> additionally needed
 // -I<prefix>/include, which pkg-config does not promise.
+//
+// NOTE: this paragraph is deliberately separated from the block below by a
+// blank line. The comment immediately above import "C" is the cgo preamble and
+// is compiled AS C — prose in there is fed to the C compiler and fails with
+// "expected '=', ',', ';', 'asm' or '__attribute__'".
+
 // #include <cairo-win32.h>
 import "C"
 
