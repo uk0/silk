@@ -228,6 +228,15 @@ func SetMainLoop(mainLoopFn, quitLoopFn func()) {
 	quitLoop = quitLoopFn
 }
 
+// HasMainLoop reports whether a window backend has registered its event loop.
+//
+// EventLoop panics without one, and that panic is the whole failure: the
+// Windows backend once had its SetMainLoop call commented out, so every silk
+// program compiled cleanly and then died at startup with "main loop mechanism
+// unavailable". A build can never catch that; a test asserting this is true
+// after importing gui can.
+func HasMainLoop() bool { return mainLoop != nil }
+
 // 运行事件循环
 func EventLoop() {
 	if mainLoop == nil {

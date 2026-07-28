@@ -1,0 +1,93 @@
+name: Windows runtime
+
+# Windows broke twice in ways a build could never catch: the backend compiled
+# but left core without an event loop ("main loop mechanism unavailable"), and a
+# resource ordinal faked as a pointer aborted package init under checkptr. Both
+# only show up when the program actually RUNS, so this workflow starts the real
+# binaries on a Windows runner and asserts they stay alive.
+#
+# Same trigger policy as ci.yml: pull requests, never a push to main (tags drive
+# release.yml). workflow_dispatch is there so it can be run on demand after a
+# Windows-specific change.
+on:
+  pull_request:
+    branches: [main, opengl]
+  workflow_dispatch:
+
+jobs:
+  runtime:
+    name: Windows runtime smoke
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Install MSYS2 + Cairo (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gcc
+
+      - name: Configure cgo env
+        run: |
+          echo "PKG_CONFIG_PATH=/ucrt64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+          echo "/c/msys64/ucrt64/bin" >> $GITHUB_PATH
+
+      # 1. The backend must hand core an event loop. This is a pure assertion —
+      #    no window needed — and it is the exact bug that made every silk
+      #    program panic at startup on Windows while compiling perfectly.
+      - name: Backend registers its event loop
+        run: go test -count=1 -run TestBackendRegistersMainLoop -v ./gui/
+
+      # 2. Package init under the race detector, which also enables checkptr.
+      #    gui's init calls registerWndClasses(), where faking a resource
+      #    ordinal as a pointer used to abort the process before main. Scoped to
+      #    one trivial test so init runs but the cairo drawing paths (which do
+      #    their own C-pointer arithmetic) are not exercised here.
+      - name: Package init is checkptr-clean
+        run: go test -race -count=1 -run TestBackendRegistersMainLoop ./gui/ ./win32/
+
+      - name: Build the GUI binaries
+        run: |
+          go build -v -o design.exe design.go
+          go build -v -o demo.exe demo.go
+          go build -v -o silkide.exe ./cmd/silkide/
+
+      # 3. The real check: start each binary and require it to still be running
+      #    a few seconds later. An unregistered loop, a checkptr abort or a
+      #    startup panic all exit immediately, which this catches; a clean
+      #    startup keeps the process alive until we kill it.
+      - name: Run design.exe
+        run: ./.github/scripts/windows-run-smoke.sh ./design.exe
+
+      - name: Run demo.exe
+        run: ./.github/scripts/windows-run-smoke.sh ./demo.exe
+
+      - name: Run silkide.exe
+        run: ./.github/scripts/windows-run-smoke.sh ./silkide.exe
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-runtime-logs
+          path: |
+            *.smoke.log
+          if-no-files-found: ignore
