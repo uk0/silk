@@ -13,6 +13,15 @@ import (
 	"unsafe"
 )
 
+// MakeIntResource is the Go form of Win32's MAKEINTRESOURCE.
+//
+// Deprecated: it fabricates a *uint16 out of a small integer, which is not a
+// valid Go pointer. The runtime's checkptr instrumentation (enabled by -race
+// and -d=checkptr) aborts the process with "checkptr: pointer arithmetic
+// computed bad pointer value" the moment such a value is produced, so
+// `go run -race` could not even reach main. Pass the id to the *Resource
+// variants of the API instead (LoadIconResource, LoadCursorResource), which
+// hand it to the syscall as the raw uintptr Win32 actually expects.
 func MakeIntResource(id uint16) *uint16 {
 	return (*uint16)(unsafe.Pointer(uintptr(id)))
 }

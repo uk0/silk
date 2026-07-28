@@ -141,6 +141,19 @@ func LoadIcon(instance HINSTANCE, iconName *uint16) HICON {
 
 }
 
+// LoadIconResource loads an icon by NUMERIC resource id — Win32's
+// MAKEINTRESOURCE form of LoadIcon, e.g. LoadIconResource(0, IDI_APPLICATION).
+//
+// The lpIconName parameter is overloaded: a small integer is a resource
+// ordinal, not an address. Squeezing it through a *uint16 requires
+// unsafe.Pointer(uintptr(id)), which is not a valid Go pointer and makes the
+// runtime's checkptr instrumentation abort the process under -race. Passing the
+// ordinal straight through as a syscall argument is both correct and safe.
+func LoadIconResource(instance HINSTANCE, id uintptr) HICON {
+	ret, _, _ := procLoadIcon.Call(uintptr(instance), id)
+	return HICON(ret)
+}
+
 func LoadCursor(instance HINSTANCE, cursorName *uint16) HCURSOR {
 	ret, _, _ := procLoadCursor.Call(
 		uintptr(instance),
@@ -148,6 +161,14 @@ func LoadCursor(instance HINSTANCE, cursorName *uint16) HCURSOR {
 
 	return HCURSOR(ret)
 
+}
+
+// LoadCursorResource loads a cursor by NUMERIC resource id (the
+// MAKEINTRESOURCE form, e.g. IDC_ARROW). See LoadIconResource for why the
+// ordinal must not be laundered through a *uint16.
+func LoadCursorResource(instance HINSTANCE, id uintptr) HCURSOR {
+	ret, _, _ := procLoadCursor.Call(uintptr(instance), id)
+	return HCURSOR(ret)
 }
 
 func ShowWindow(hwnd HWND, cmdshow int) bool {

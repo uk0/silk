@@ -67,7 +67,9 @@ type CursorData struct {
 type Cursor win32.HCURSOR
 
 func loadSystemCursor(id int) *Cursor {
-	hc := win32.LoadCursor(0, (*uint16)(unsafe.Pointer(uintptr(id))))
+	// Same checkptr trap as registerWndClasses: a cursor ordinal is not an
+	// address, so it must not be cast through a *uint16.
+	hc := win32.LoadCursorResource(0, uintptr(id))
 	if hc == 0 {
 		return nil
 	}

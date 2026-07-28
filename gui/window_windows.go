@@ -113,10 +113,21 @@ func init() {
 	//	core.SetMainLoop(mainLoop, quitLoop)
 }
 
+// appIconResourceID is the icon ordinal a packaged silk .exe is expected to
+// carry in its resource section (the conventional first icon). Absent — a plain
+// `go build` embeds no resources — LoadIcon returns 0 and the caller falls back
+// to the stock application icon.
+const appIconResourceID = 100
+
 func registerWndClasses() {
-	hIcon := win32.LoadIcon(hInstance, (*uint16)(unsafe.Pointer(uintptr(100))))
+	// Resource ordinals go through the *Resource variants: the old
+	// (*uint16)(unsafe.Pointer(uintptr(id))) cast is not a valid Go pointer, so
+	// checkptr (on under -race) aborted here before main even started —
+	// "checkptr: pointer arithmetic computed bad pointer value" in
+	// registerWndClasses.
+	hIcon := win32.LoadIconResource(hInstance, appIconResourceID)
 	if hIcon == 0 {
-		hIcon = win32.LoadIcon(0, (*uint16)(unsafe.Pointer(uintptr(win32.IDI_APPLICATION))))
+		hIcon = win32.LoadIconResource(0, win32.IDI_APPLICATION)
 	}
 	var wc win32.WNDCLASSEX
 	wc = win32.WNDCLASSEX{
@@ -184,15 +195,15 @@ func updateCursor() {
 //	return this
 //}d
 
-//func newWindow(widget *Widget, wt WindowType) *Window {
-//	p := new(Window)
-//	p.widget = widget.Self()
-//	err := p.create(widget.OwnerWindow(), wt)
-//	if err != nil {
-//		return nil
+//	func newWindow(widget *Widget, wt WindowType) *Window {
+//		p := new(Window)
+//		p.widget = widget.Self()
+//		err := p.create(widget.OwnerWindow(), wt)
+//		if err != nil {
+//			return nil
+//		}
+//		return p
 //	}
-//	return p
-//}
 var uiThread win32.HANDLE
 
 func (this *Window) create(p *Window, wt WindowType) error {
