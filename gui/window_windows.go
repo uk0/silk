@@ -127,7 +127,20 @@ func init() {
 // while the user is idle, which matches the GLFW backend's 47ms idle wait, so
 // no extra wakeup hook is needed.
 func serviceUIFrame() {
+	uiHeartbeat()
 	drainUITasks()
+
+	// Rate-limit the animation work to ~60fps. This runs after EVERY dispatched
+	// message, and a moving mouse alone delivers hundreds per second — ticking
+	// and invalidating on each one pegged the CPU repainting the whole designer
+	// far faster than anyone can see. The GLFW backend gets this for free
+	// because its loop begins with WaitEventsTimeout(1/60).
+	now := time.Now()
+	if now.Sub(lastAnimFrame) < animFrameInterval {
+		return
+	}
+	lastAnimFrame = now
+
 	AnimationTick()
 	if HasActiveAnimations() {
 		// Animations that only mutate geometry (SlideIn/ScaleUp/Shake) or run
@@ -140,6 +153,11 @@ func serviceUIFrame() {
 		}
 	}
 }
+
+// Animation pacing for the Win32 pump. UI-thread only, so plain variables.
+const animFrameInterval = time.Second / 60
+
+var lastAnimFrame time.Time
 
 // appIconResourceID is the icon ordinal a packaged silk .exe is expected to
 // carry in its resource section (the conventional first icon). Absent — a plain

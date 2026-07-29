@@ -1279,6 +1279,7 @@ func MainLoop() {
 		} else {
 			glfw.WaitEventsTimeout(0.047)
 		}
+		uiHeartbeat()
 		processTimers()
 
 		// Run tasks queued from background goroutines (dlv/LSP callbacks)
