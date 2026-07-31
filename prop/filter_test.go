@@ -254,3 +254,25 @@ func TestSheetHiddenPropertyDrawsNoLabel(t *testing.T) {
 		t.Errorf("a sheet whose only row is hidden painted %d pixels, want %d (chrome only)", got, bare)
 	}
 }
+
+// TestCategoryChevronFollowsWhatIsShown pins the expander against the rows the
+// user can actually see. A filter displays a collapsed category's matches, and
+// the arrow used to keep pointing right — reading as "nothing under here" above
+// visible rows, with a click that flips the arrow and changes nothing else.
+func TestCategoryChevronFollowsWhatIsShown(t *testing.T) {
+	cases := []struct {
+		expanded bool
+		filter   string
+		wantOpen bool
+	}{
+		{true, "", true},
+		{false, "", false},
+		{false, "color", true},
+		{true, "color", true},
+	}
+	for _, c := range cases {
+		if got := categoryChevronOpen(c.expanded, c.filter); got != c.wantOpen {
+			t.Errorf("expanded=%v filter=%q: chevron open = %v, want %v", c.expanded, c.filter, got, c.wantOpen)
+		}
+	}
+}

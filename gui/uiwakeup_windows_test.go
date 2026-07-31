@@ -3,7 +3,9 @@
 package gui
 
 import (
+	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/uk0/silk/win32"
@@ -12,12 +14,28 @@ import (
 // TestUIWakeupHookIsInstalled pins that init() actually reached SetUIWakeup.
 // Without the hook gui.Post enqueues silently and the task waits for the idle
 // timer, which is indistinguishable from "the IDE ignored me".
+//
+// It reads the source rather than uiWakeupFn: resetUIQueue nils that global in
+// a t.Cleanup, and on the GLFW side the nil is load-bearing — restoring the
+// real hook would have tests calling glfw.PostEmptyEvent against an
+// uninitialised GLFW. So the live value says nothing about what init did once
+// any queue test has run, and this assertion has to sit above that.
 func TestUIWakeupHookIsInstalled(t *testing.T) {
-	uiTaskMu.Lock()
-	wake := uiWakeupFn
-	uiTaskMu.Unlock()
-	if wake == nil {
-		t.Fatal("the Win32 backend installed no UI wakeup hook")
+	raw, err := os.ReadFile("window_windows.go")
+	if err != nil {
+		t.Fatalf("cannot read the Win32 backend: %v", err)
+	}
+	src := string(raw)
+	start := strings.Index(src, "\nfunc init() {")
+	if start < 0 {
+		t.Fatal("window_windows.go has no init()")
+	}
+	body := src[start:]
+	if end := strings.Index(body, "\n}\n"); end >= 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "SetUIWakeup(") {
+		t.Error("init() does not install a UI wakeup hook; gui.Post waits for the idle timer instead of waking the pump")
 	}
 }
 

@@ -1255,6 +1255,12 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 }
 
 // drawCategoryHeader renders a collapsible category header row.
+// categoryChevronOpen reports whether a category header should draw the open
+// (downward) chevron. Split out so the rule is testable without a painter.
+func categoryChevronOpen(expanded bool, filter string) bool {
+	return expanded || filter != ""
+}
+
 func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, ypos, width float64, fe *paint.FontExtents) {
 	cat := this.categories[catKey]
 	if cat == nil {
@@ -1288,7 +1294,11 @@ func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, yp
 		textColor = paint.Color{R: 40, G: 40, B: 50, A: 255}
 	}
 	g.SetBrush1(textColor)
-	if cat.expanded {
+	// An active filter shows a category's matching rows whatever its collapse
+	// state, so the chevron has to follow what is on screen rather than the
+	// stored flag — a collapsed category under a filter was drawing the
+	// right-pointing "closed" arrow above the rows it was displaying.
+	if categoryChevronOpen(cat.expanded, this.filter) {
 		// Downward triangle
 		g.MoveTo(triX, triY-triSize*0.5)
 		g.LineTo(triX+triSize*2, triY-triSize*0.5)

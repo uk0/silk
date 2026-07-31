@@ -1,6 +1,10 @@
 package gui
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 // The clipboard has two independent implementations — clipboard_windows.go
 // (win32 handles) and clipboard_glfw.go (GLFW string + a process-local map)
@@ -123,4 +127,45 @@ func TestClipboardClearWithoutWindowDoesNotSucceed(t *testing.T) {
 	if err := Clipboard.Clear(); err != errNoClipboardWindow {
 		t.Fatalf("Clear() with no window = %v; want %v", err, errNoClipboardWindow)
 	}
+}
+
+// TestWin32ReadsAnEmptyTextPayloadAsAbsent covers the half of the empty-payload
+// rule that a macOS host cannot execute. clipboardPayloadPresent is a pure
+// function written alongside its own test, so that test cannot go red against
+// any earlier code; the substance of the fix is that the win32 read loop
+// consults it and keeps looking, and that Formats() hides what Data() would
+// then refuse. Removing either guard puts the backends back to answering one
+// clipboard state two different ways, which is exactly what this pins.
+func TestWin32ReadsAnEmptyTextPayloadAsAbsent(t *testing.T) {
+	src, err := os.ReadFile("clipboard_windows.go")
+	if err != nil {
+		t.Fatalf("cannot read the win32 clipboard backend: %v", err)
+	}
+	body := funcBodyIn(t, string(src), "func (this *clipBoard) Data(format string)")
+
+	guard := strings.Index(body, "clipboardPayloadPresent(")
+	if guard < 0 {
+		t.Fatal("the win32 read loop no longer applies the empty-payload rule; a zero-length CF_UNICODETEXT reads as a successful paste while GLFW reports nothing there")
+	}
+	if !strings.Contains(body[guard:], "continue") {
+		t.Error("the win32 read loop stops at the empty payload instead of looking at the remaining formats")
+	}
+	if !strings.Contains(string(src), "func clipboardHasData(") {
+		t.Error("Formats() no longer filters what Data() would refuse; it advertises a format the next read rejects")
+	}
+}
+
+// funcBodyIn returns the body of the named function in src.
+func funcBodyIn(t *testing.T, src, header string) string {
+	t.Helper()
+	start := strings.Index(src, header)
+	if start < 0 {
+		t.Fatalf("source does not contain %q", header)
+	}
+	rest := src[start:]
+	end := strings.Index(rest, "\n}\n")
+	if end < 0 {
+		t.Fatalf("%q is not terminated", header)
+	}
+	return rest[:end]
 }
