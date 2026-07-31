@@ -264,6 +264,47 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 	return cmd
 }
 
+// GenerateResizeCommand grows every selected item by (dw, dh) millimetres,
+// anchored at each item's top-left corner and floored at minSize by
+// resizeRectBy. Returns nil when nothing would actually change, so a caller
+// can forward that as a quiet no-op instead of pushing an empty command.
+//
+// Unlike the drag-handle path in ResizeDecor, an IsLockPos item is kept here:
+// the top-left anchor means resizing never moves it, so a position lock has
+// nothing to violate. Only IsLockSize opts an item out.
+func (s *Selection) GenerateResizeCommand(dw, dh, minSize float64) *ResizeCommand {
+	if dw == 0 && dh == 0 {
+		return nil
+	}
+
+	if s.IsEmpty() {
+		return nil
+	}
+
+	cmd := NewResizeCommand()
+	for p := s.first; p != nil; p = p.next {
+		item := p.item
+		if item.IsLockSize() {
+			continue
+		}
+
+		if s.isItemAncestorSelected(item) {
+			continue
+		}
+		rect := item.Bounds1()
+		newRect := resizeRectBy(rect, dw, dh, minSize)
+		if newRect == rect {
+			continue
+		}
+		cmd.AddItem(item, newRect)
+
+	}
+	if cmd.Count() == 0 {
+		return nil
+	}
+	return cmd
+}
+
 func (s *Selection) FindHandleAt(xMm, yMm float64) (decor IDecor, handle int) {
 	// 和绘图方向相反, 从后往前找
 	for p := s.last; p != nil; p = p.prev {

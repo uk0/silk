@@ -78,6 +78,10 @@ type GedView struct {
 	dragOriginX float64
 	dragOriginY float64
 
+	// gestureSeq groups the commands pushed by one continuous keyboard
+	// gesture so they collapse into a single undo step; see beginGesture.
+	gestureSeq uint64
+
 	// Space+Drag pan state
 	spacePanReady bool
 	isPanning     bool
@@ -1368,6 +1372,21 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 			this.Self().Update()
 		}
 
+	// Ctrl+arrow resizes the selection instead of moving it: Right/Down grow,
+	// Left/Up shrink, with each item's top-left corner pinned so only the size
+	// changes. Reads the same `ctrl` probe as every other shortcut in this
+	// switch, and must precede the plain-arrow case below because both match
+	// the same four keys.
+	case ctrl && (key == gui.KeyLeft || key == gui.KeyRight || key == gui.KeyUp || key == gui.KeyDown):
+		if this.Selection().IsEmpty() {
+			return
+		}
+		this.beginGesture(repeat)
+		// The arrow→delta mapping is identical for moving and resizing, so the
+		// nudge helper does double duty here rather than being copied.
+		dw, dh, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, nudgeGridStep)
+		this.resizeSelection(dw, dh)
+
 	// Arrow keys nudge the selection by 1mm (nudgeGridStep mm with Shift).
 	// Goes through the UndoStack so a stray arrow press in the middle of a
 	// layout can be reversed with Cmd+Z. Designer-tool muscle memory: every
@@ -1379,6 +1398,7 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		if this.Selection().IsEmpty() {
 			return
 		}
+		this.beginGesture(repeat)
 		dx, dy, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, nudgeGridStep)
 		this.nudgeSelection(dx, dy)
 
@@ -1554,6 +1574,21 @@ func (this *GedView) selectPrevWidget() {
 	this.Self().Update()
 }
 
+// beginGesture opens a new merge group unless this key event is an
+// auto-repeat. Commands pushed under the same gesture number collapse into a
+// single undo step (graph.MoveCommand.MergeWidth), so holding an arrow key
+// down leaves one entry on the stack instead of one per repeat — a held key
+// used to bury the previous edit under hundreds of one-millimetre moves.
+// Releasing and pressing again opens a new group, and so a new undo step.
+func (this *GedView) beginGesture(repeat bool) {
+	if !repeat {
+		this.gestureSeq++
+	}
+}
+
+// minWidgetSize is the floor (in mm) a keyboard resize will not shrink past.
+const minWidgetSize = 1.0
+
 // nudgeGridStep is the larger Shift+arrow step (in mm). Qt Designer and
 // every IDE bind plain arrows to a 1-unit "fine move" and Shift+arrow to a
 // coarse grid-sized jump; 10 mm matches the coarse-grid muscle memory.
@@ -1603,6 +1638,25 @@ func (this *GedView) nudgeSelection(dx, dy float64) {
 	if cmd == nil {
 		return
 	}
+	cmd.SetMergeToken(this.gestureSeq)
+	this.Scene().UndoStack().Push(cmd)
+	this.Self().Update()
+}
+
+// resizeSelection grows every selected item by (dw, dh) millimetres, anchored
+// at the top-left corner so nothing moves. Mirrors nudgeSelection: one
+// ResizeCommand on the UndoStack, tagged with the current gesture so a held
+// Ctrl+arrow collapses into a single undo step.
+//
+// Quiet no-op when the selection is empty, entirely size-locked, or already
+// at minWidgetSize in the requested direction — GenerateResizeCommand returns
+// nil for all three, which we forward rather than pushing an empty command.
+func (this *GedView) resizeSelection(dw, dh float64) {
+	cmd := this.Selection().GenerateResizeCommand(dw, dh, minWidgetSize)
+	if cmd == nil {
+		return
+	}
+	cmd.SetMergeToken(this.gestureSeq)
 	this.Scene().UndoStack().Push(cmd)
 	this.Self().Update()
 }

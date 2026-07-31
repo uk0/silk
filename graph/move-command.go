@@ -3,6 +3,8 @@ package graph
 import (
 	"fmt"
 	"math"
+
+	"github.com/uk0/silk/gui"
 )
 
 type moveRecord struct {
@@ -11,8 +13,9 @@ type moveRecord struct {
 }
 
 type MoveCommand struct {
-	records []moveRecord
-	isUndo  bool
+	records    []moveRecord
+	isUndo     bool
+	mergeToken uint64
 }
 
 func NewMoveCommand() *MoveCommand {
@@ -61,4 +64,39 @@ func (cmd *MoveCommand) Text() string {
 
 func (cmd *MoveCommand) Count() int {
 	return len(cmd.records)
+}
+
+// SetMergeToken tags cmd as belonging to one continuous gesture, such as the
+// burst of auto-repeat events a held arrow key produces. Commands sharing a
+// non-zero token collapse into a single undo step; the zero default means
+// "never merge", so a caller that does not opt in keeps one command per push.
+func (cmd *MoveCommand) SetMergeToken(token uint64) {
+	cmd.mergeToken = token
+}
+
+// MergeWidth folds next into cmd so a held arrow key leaves one undo step
+// instead of one per key repeat. gui.UndoStack.Push probes the command below
+// the stack top for this exact — misspelled — method name and, when it returns
+// true, redoes next without growing the stack.
+//
+// cmd has already been redone, so its records hold the positions from before
+// the gesture started, which is precisely what a later Undo must restore.
+// Absorbing next is therefore a no-op on cmd's records. That only holds while
+// both commands drive the identical item list: an item moved by next but
+// absent from cmd would keep no undo record at all, so a differing list
+// refuses the merge and lets the stack start a fresh step instead.
+func (cmd *MoveCommand) MergeWidth(next gui.ICommand) bool {
+	other, ok := next.(*MoveCommand)
+	if !ok || cmd.mergeToken == 0 || cmd.mergeToken != other.mergeToken {
+		return false
+	}
+	if len(cmd.records) != len(other.records) {
+		return false
+	}
+	for i := range cmd.records {
+		if cmd.records[i].item != other.records[i].item {
+			return false
+		}
+	}
+	return true
 }
