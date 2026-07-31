@@ -1000,14 +1000,15 @@ func (this *PropertySheet) Layout() {
 	this.searchBox.SetBounds(filterBoxMargin, filterBoxMargin,
 		this.Width()-filterBoxMargin*2, filterBoxHeight)
 
-	// Group properties by category. Rows the filter rejects are dropped here
-	// rather than skipped further down, so a category whose children all fail
-	// emits no header at all. Their editors are absolutely positioned child
-	// widgets: hiding them explicitly is what stops a filtered-out control
-	// from painting on top of the rows that survived.
+	// Group properties by category. Rows the filter rejects, and rows the
+	// config hides, are dropped here rather than skipped further down, so a
+	// category left with no drawable child emits no header at all. Their
+	// editors are absolutely positioned child widgets: hiding them explicitly
+	// is what stops a dropped control from painting on top of the rows that
+	// survived.
 	catItems := make(map[string][]*PropertyItem)
 	for _, p := range this.rlist {
-		if !propMatchesFilter(p.Label(), p.Id(), this.filter) {
+		if !p.IsVisible() || !propMatchesFilter(p.Label(), p.Id(), this.filter) {
 			p.vrow = -1
 			control := p.Control()
 			if control != nil {
@@ -1018,6 +1019,12 @@ func (this *PropertySheet) Layout() {
 		cat := categoryOfPropID(p.Id())
 		catItems[cat] = append(catItems[cat], p)
 	}
+
+	// An active filter outranks a collapsed category: the user asked for the
+	// matching rows, and a header with nothing under it reads as a broken
+	// filter box. Blank-only text is no filter, the rule propMatchesFilter
+	// uses. Same behaviour as the widget palette (ged/widget-list.go).
+	filtering := strings.TrimSpace(this.filter) != ""
 
 	vrow := 0
 	ypos := this.contentTop()
@@ -1042,7 +1049,7 @@ func (this *PropertySheet) Layout() {
 		})
 		ypos += categoryHeaderHeight
 
-		if !cat.expanded {
+		if !cat.expanded && !filtering {
 			// Hide all items in collapsed category
 			for _, p := range items {
 				p.vrow = -1
@@ -1055,35 +1062,26 @@ func (this *PropertySheet) Layout() {
 		}
 
 		for _, p := range items {
-			if p.IsVisible() {
-				this.vlist = append(this.vlist, p)
-				if p.parent != nil {
-					p.indent = p.parent.indent + 1
-				} else {
-					p.indent = 0
-				}
-				p.vrow = vrow
-				vrow++
-				p.ypos = ypos
-				this.categoryLayout = append(this.categoryLayout, categoryLayoutEntry{
-					isHeader: false,
-					item:     p,
-					ypos:     ypos,
-				})
-				ypos += p.ItemHeight()
-				// 显示控件
-				control := p.Control()
-				if control != nil {
-					control.SetBounds1(this.getItemRect(p, pitemControl))
-					control.SetVisible(true)
-				}
+			this.vlist = append(this.vlist, p)
+			if p.parent != nil {
+				p.indent = p.parent.indent + 1
 			} else {
-				p.vrow = -1
-				// 隐藏控件
-				control := p.Control()
-				if control != nil {
-					control.SetVisible(false)
-				}
+				p.indent = 0
+			}
+			p.vrow = vrow
+			vrow++
+			p.ypos = ypos
+			this.categoryLayout = append(this.categoryLayout, categoryLayoutEntry{
+				isHeader: false,
+				item:     p,
+				ypos:     ypos,
+			})
+			ypos += p.ItemHeight()
+			// 显示控件
+			control := p.Control()
+			if control != nil {
+				control.SetBounds1(this.getItemRect(p, pitemControl))
+				control.SetVisible(true)
 			}
 		}
 	}
@@ -1240,6 +1238,11 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 	if len(this.categoryLayout) == 0 && this.filter == "" {
 		g.SetBrush1(gui.Theme().TextColor)
 		for _, p := range this.rlist {
+			// A sheet whose rows are all hidden also lays out to nothing, and
+			// the fallback would draw exactly the labels Layout refused.
+			if !p.IsVisible() {
+				continue
+			}
 			labelRect := this.getItemRect(p, pitemLabel)
 			yt := labelRect.Y + fe.Ascent + (p.ItemHeight()-fe.Height)*0.5
 			xt := labelRect.X

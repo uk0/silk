@@ -1,6 +1,10 @@
 package prop
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/uk0/silk/paint"
+)
 
 // TestPropMatchesFilter pins the filter-box predicate down: a blank query keeps
 // every row, a query that matches nothing keeps none, matching is
@@ -143,5 +147,110 @@ func TestSheetFilterFollowsSearchBox(t *testing.T) {
 	sheet.SetFilter("")
 	if got := sheet.searchBox.Text(); got != "" {
 		t.Errorf(`SetFilter("") left the search box showing %q`, got)
+	}
+}
+
+// TestSheetFilterOverridesCollapsedCategory covers the combination that used to
+// draw a header with nothing under it: collapse 外观, then filter for one of its
+// rows. A match the user asked for outranks the collapse, and the collapse comes
+// back untouched once the query is cleared.
+func TestSheetFilterOverridesCollapsedCategory(t *testing.T) {
+	sheet := newTestSheet()
+
+	x := 0
+	color := "red"
+	addTestProp(sheet, "x", func() int { return x }, func(v int) { x = v })
+	colorItem := addTestProp(sheet, "color", func() string { return color }, func(v string) { color = v })
+
+	sheet.categories["appearance"].expanded = false
+	sheet.SetFilter("color")
+
+	headers, ids := layoutRows(sheet)
+	if !equalStrs(headers, []string{"appearance"}) {
+		t.Errorf("filtered collapsed headers = %v, want [appearance]", headers)
+	}
+	if !equalStrs(ids, []string{"color"}) {
+		t.Errorf("filtered collapsed rows = %v, want [color]", ids)
+	}
+	if !colorItem.Control().IsVisible() {
+		t.Error(`matching row "color" stayed hidden inside the collapsed category`)
+	}
+
+	// Clearing the query restores the collapse the user set.
+	sheet.SetFilter("")
+	headers, ids = layoutRows(sheet)
+	if !equalStrs(headers, []string{"layout", "appearance"}) {
+		t.Errorf("headers after clearing = %v, want [layout appearance]", headers)
+	}
+	if !equalStrs(ids, []string{"x"}) {
+		t.Errorf("rows after clearing = %v, want [x] (appearance is still collapsed)", ids)
+	}
+	if colorItem.Control().IsVisible() {
+		t.Error(`row "color" kept a visible editor after the collapse was restored`)
+	}
+}
+
+// TestSheetHiddenPropertyDropsItsHeader pins the other source of an empty
+// header: a category whose only property is configured hidden must not print a
+// header for rows that will never be drawn.
+func TestSheetHiddenPropertyDropsItsHeader(t *testing.T) {
+	sheet := newTestSheet()
+
+	x := 0
+	color := "red"
+	addTestProp(sheet, "x", func() int { return x }, func(v int) { x = v })
+	colorItem := addTestProp(sheet, "color", func() string { return color }, func(v string) { color = v })
+	colorItem.SetCfgHidden(true)
+
+	sheet.Layout()
+	headers, ids := layoutRows(sheet)
+	if !equalStrs(headers, []string{"layout"}) {
+		t.Errorf("headers with a hidden appearance row = %v, want [layout]", headers)
+	}
+	if !equalStrs(ids, []string{"x"}) {
+		t.Errorf("rows with a hidden appearance row = %v, want [x]", ids)
+	}
+}
+
+// sheetInk renders a sheet into an offscreen pixmap and counts the pixels it
+// touched. Absolute counts are font-dependent, so tests compare two sheets that
+// differ by one row rather than asserting a number.
+func sheetInk(t *testing.T, sheet *PropertySheet) int {
+	t.Helper()
+	pix := paint.NewPixmap(240, 240)
+	sheet.SetBounds(0, 0, 240, 240)
+	sheet.Layout()
+	sheet.Draw(pix.NewPainter())
+	pix.Flush()
+	img, err := pix.Image()
+	if err != nil {
+		t.Fatalf("reading the rendered sheet: %v", err)
+	}
+	ink := 0
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if _, _, _, a := img.At(x, y).RGBA(); a != 0 {
+				ink++
+			}
+		}
+	}
+	return ink
+}
+
+// TestSheetHiddenPropertyDrawsNoLabel covers the corner that dropping hidden
+// rows from the layout opens up: with every row hidden the sheet lays out to
+// nothing, which is also the state Draw's flat fallback exists for, and the
+// fallback would paint the very labels Layout refused.
+func TestSheetHiddenPropertyDrawsNoLabel(t *testing.T) {
+	bare := sheetInk(t, newTestSheet())
+
+	sheet := newTestSheet()
+	v := 0
+	item := addTestProp(sheet, "x", func() int { return v }, func(n int) { v = n })
+	item.SetCfgHidden(true)
+
+	if got := sheetInk(t, sheet); got != bare {
+		t.Errorf("a sheet whose only row is hidden painted %d pixels, want %d (chrome only)", got, bare)
 	}
 }
