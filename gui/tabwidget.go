@@ -89,8 +89,14 @@ func (this *TabWidget) RemoveTab(idx int) {
 		return
 	}
 
-	this.tabBar.RemoveTab(idx)
+	// 先删页面, 再删标签.
+	// TabBar.RemoveTab re-activates a surviving tab from inside RemoveTab, and
+	// that callback indexes into the stack. Dropping the tab first made the
+	// callback address the stack with post-removal tab indices, leaving the bar
+	// pointing at one page and the stack showing another — after which clicking
+	// the tab the bar already considers active did nothing at all.
 	this.stack.RemovePage(idx)
+	this.tabBar.RemoveTab(idx)
 
 	this.refs = append(this.refs[:idx], this.refs[idx+1:]...)
 

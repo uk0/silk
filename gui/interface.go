@@ -39,6 +39,14 @@ type IEventRightUp interface {
 	OnRightUp(x, y float64)
 }
 
+type IEventMiddleDown interface {
+	OnMiddleDown(x, y float64)
+}
+
+type IEventMiddleUp interface {
+	OnMiddleUp(x, y float64)
+}
+
 type IEventMouseStop interface {
 	OnMouseStop(x, y float64)
 }

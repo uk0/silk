@@ -1184,6 +1184,10 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		return win.on_WM_RBUTTONDOWN(msg, wParam, lParam)
 	case win32.WM_RBUTTONUP:
 		return win.on_WM_RBUTTONUP(msg, wParam, lParam)
+	case win32.WM_MBUTTONDOWN:
+		return win.on_WM_MBUTTONDOWN(msg, wParam, lParam)
+	case win32.WM_MBUTTONUP:
+		return win.on_WM_MBUTTONUP(msg, wParam, lParam)
 	case win32.WM_MOUSEMOVE:
 		return win.on_WM_MOUSEMOVE(msg, wParam, lParam)
 	case win32.WM_MOUSEWHEEL:
@@ -1359,6 +1363,36 @@ func (win *Window) on_WM_RBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 	}
 	win.autoCaptured = false
 	win.toCapture = false
+	return 0
+}
+
+// The middle button never captures the mouse: it has no drag semantics here,
+// and arming win.toCapture without a matching release path would strand the
+// capture on the pressed widget.
+func (win *Window) on_WM_MBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	lastMouseTime = time.Now()
+	x, y := posFromLParam(lParam)
+	if lastMouseWidget == nil {
+		lastMouseWidget = win.widget.FindWidgetAt(x, y)
+	}
+	if lastMouseWidget != nil {
+		if i, ok := lastMouseWidget.(IEventMiddleDown); ok {
+			x1, y1 := lastMouseWidget.MapFromWindow(x, y)
+			i.OnMiddleDown(x1, y1)
+		}
+	}
+	return 0
+}
+
+func (win *Window) on_WM_MBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	lastMouseTime = time.Now()
+	if lastMouseWidget != nil {
+		if i, ok := lastMouseWidget.(IEventMiddleUp); ok {
+			x, y := posFromLParam(lParam)
+			x1, y1 := lastMouseWidget.MapFromWindow(x, y)
+			i.OnMiddleUp(x1, y1)
+		}
+	}
 	return 0
 }
 

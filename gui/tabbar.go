@@ -34,6 +34,7 @@ type TabBar struct {
 	cbDeactivate  func(tb *TabBar, idx int)
 	cbClose       func(tb *TabBar, idx int) bool
 	downTab       int
+	downMidTab    int
 	downX         float64
 	downY         float64
 	downCloseBtn  bool
@@ -135,6 +136,12 @@ func (this *_Tab) Data() interface{} {
 	return this.data
 }
 
+// 标签宽度总是为关闭按钮预留位置.
+// Theme.DrawTab paints the close button at [w-TabMargin.R-TabCloseSize, w-TabMargin.R]
+// and TabBar.HitTest treats that same band as the close hot zone, so the width
+// has to cover it. Drop the reservation and the band lands on the tail of the
+// title again: pressing the last characters of the active tab's own label
+// closes the tab.
 func (this *_Tab) SizeHints() SizeHints {
 	t := Theme()
 	fe := t.Font.FontExtents()
@@ -145,14 +152,14 @@ func (this *_Tab) SizeHints() SizeHints {
 		m := t.TabMargin
 		h := math.Max(t.IconSize, fe.Height)
 		w := ext.Width + h
-		w += m.L*2 + m.R
+		w += m.L*2 + m.R + t.TabCloseSize
 		h += m.T + m.B
 		return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
 	} else {
 		m := t.TabMargin
 		h := fe.Height
 		w := ext.Width
-		w += m.L + m.R
+		w += m.L + m.R + t.TabCloseSize
 		h += m.T + m.B
 		if w < h {
 			w = h * 2
@@ -170,6 +177,7 @@ func (this *TabBar) Init(self IWidget) {
 	this.closeBtn = true
 	this.hoverTab = -1
 	this.downTab = -1
+	this.downMidTab = -1
 	this.dropPos = -1
 }
 
@@ -240,8 +248,32 @@ func (this *TabBar) OnLeftDown(x, y float64) {
 	this.downX = x
 	this.downY = y
 	this.downTab, this.downCloseBtn = this.HitTest(x, y)
-	this.SetActiveTab(this.downTab)
+	// 点在标签条的空白处不改变当前标签.
+	// SetActiveTab(-1) deactivates without firing cbActivate, so the container
+	// keeps showing a view no tab claims until the next layout — at which point
+	// Dock.Layout() hides every view and the pane goes blank.
+	if this.downTab != -1 {
+		this.SetActiveTab(this.downTab)
+	}
 	this.Self().Update()
+}
+
+// OnMiddleDown/OnMiddleUp give the strip the close-on-middle-click every IDE
+// has. The press only arms a candidate; the release must land on the same tab,
+// so a middle press that slides off the tab is abandoned like a button press.
+func (this *TabBar) OnMiddleDown(x, y float64) {
+	this.downMidTab, _ = this.HitTest(x, y)
+}
+
+func (this *TabBar) OnMiddleUp(x, y float64) {
+	idx := this.downMidTab
+	this.downMidTab = -1
+	if idx == -1 {
+		return
+	}
+	if up, _ := this.HitTest(x, y); up == idx {
+		this.CloseTab(idx)
+	}
 }
 
 func (this *TabBar) OnLeftUp(x, y float64) {

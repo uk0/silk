@@ -1517,6 +1517,20 @@ func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action,
 					i.OnRightDown(x1, y1)
 				}
 			}
+		case glfw.MouseButtonMiddle:
+			// No win.toCapture here: the middle button has no drag semantics,
+			// and arming capture without a matching release path would strand
+			// it on the pressed widget. Mirrors on_WM_MBUTTONDOWN.
+			lastMouseTime = time.Now()
+			if lastMouseWidget == nil {
+				lastMouseWidget = win.widget.FindWidgetAt(x, y)
+			}
+			if lastMouseWidget != nil {
+				if i, ok := lastMouseWidget.(IEventMiddleDown); ok {
+					x1, y1 := lastMouseWidget.MapFromWindow(x, y)
+					i.OnMiddleDown(x1, y1)
+				}
+			}
 		}
 	} else if action == glfw.Release {
 		switch button {
@@ -1548,6 +1562,14 @@ func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action,
 			}
 			win.autoCaptured = false
 			win.toCapture = false
+		case glfw.MouseButtonMiddle:
+			lastMouseTime = time.Now()
+			if lastMouseWidget != nil {
+				if i, ok := lastMouseWidget.(IEventMiddleUp); ok {
+					x1, y1 := lastMouseWidget.MapFromWindow(x, y)
+					i.OnMiddleUp(x1, y1)
+				}
+			}
 		}
 	}
 }
