@@ -8,8 +8,9 @@ import (
 	"io"
 	"net"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -511,19 +512,46 @@ func (s *DebugSession) findBreakpointAt(file string, line int) (*Breakpoint, err
 // dlv 返回的是编译期的绝对路径, 而 IDE 手里可能是相对项目根的相对路径, 对同一个
 // 文件两者不会字面相等. 只在"一个绝对一个相对"时才做后缀匹配, 且要求边界落在
 // 路径分隔符上, 避免 a/foo.go 匹配到 b/barfoo.go.
+// 比较统一在斜杠路径上做: dlv 在 Windows 上回反斜杠, 而 Go 的源码引用和 IDE 自己
+// 记的路径是正斜杠; 更要命的是 filepath.IsAbs 在 Windows 上不认没有盘符的根路径,
+// "/w/proj/main.go" 对 dlv 是绝对路径、对 filepath 却是相对路径 -- 于是两边都被判
+// 成相对, 后缀匹配根本不会执行, Windows 上按位置清断点整个失效.
 func sameSourceFile(a, b string) bool {
-	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	ca, cb := normalizeSourcePath(a), normalizeSourcePath(b)
 	if ca == cb {
 		return true
 	}
-	absA, absB := filepath.IsAbs(ca), filepath.IsAbs(cb)
-	if absA == absB {
+	rootA, rootB := isRootedSourcePath(ca), isRootedSourcePath(cb)
+	if rootA == rootB {
 		return false
 	}
-	if absB {
-		ca, cb = cb, ca // 统一成 ca 绝对 / cb 相对
+	if rootB {
+		ca, cb = cb, ca // 统一成 ca 带根 / cb 相对
 	}
-	return strings.HasSuffix(ca, string(filepath.Separator)+cb)
+	return strings.HasSuffix(ca, "/"+cb)
+}
+
+// normalizeSourcePath 把路径化成比较用的唯一形式: 正斜杠、无冗余元素, 大小写不敏感
+// 的文件系统上再折叠大小写 (dlv 回 "C:\W\main.go" 而 IDE 记 "c:/w/main.go" 是常态).
+func normalizeSourcePath(p string) string {
+	p = path.Clean(strings.ReplaceAll(p, `\`, "/"))
+	if runtime.GOOS == "windows" {
+		p = strings.ToLower(p)
+	}
+	return p
+}
+
+// isRootedSourcePath 判断路径是否从文件系统根开始, POSIX 的前导斜杠和 Windows 的
+// 盘符前缀都算 -- 两种形式 dlv 都会回。
+func isRootedSourcePath(p string) bool {
+	if strings.HasPrefix(p, "/") {
+		return true
+	}
+	if len(p) < 2 || p[1] != ':' {
+		return false
+	}
+	c := p[0]
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // ListBreakpoints 拉取当前所有断点

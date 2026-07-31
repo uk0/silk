@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -470,11 +471,34 @@ func TestDlvSameSourceFile(t *testing.T) {
 		{"/w/a/main.go", "/w/b/main.go", false},
 		{"a/main.go", "b/main.go", false},
 		{"/w/main.go", "", false},
+
+		// Windows 形态: dlv 回带盘符的反斜杠路径, IDE 手里是正斜杠相对路径.
+		// 这几条在 POSIX 上也必须成立 -- 分隔符与盘符的判定不依赖运行平台,
+		// 否则整组用例只在 mac 上是绿的, Windows 上按位置清断点全线失效.
+		{`C:\w\proj\pkg\main.go`, "pkg/main.go", true},
+		{`C:\w\proj\pkg\main.go`, `pkg\main.go`, true},
+		{`C:\w\a\main.go`, `C:\w\a\main.go`, true},
+		{`C:\w\a\main.go`, `C:\w\b\main.go`, false},
+		{`C:\w\proj\pkg\barmain.go`, "main.go", false},
+		// 无盘符的根路径 -- dlv 在 Linux debuggee 上就是这么回的,
+		// filepath.IsAbs 在 Windows 上不认它, 曾因此两边都判成相对路径.
+		{"/w/proj/pkg/main.go", `pkg\main.go`, true},
 	}
 	for _, c := range cases {
 		if got := sameSourceFile(c.a, c.b); got != c.want {
 			t.Errorf("sameSourceFile(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// TestDlvSameSourceFileIsCaseInsensitiveOnWindows: dlv 回 "C:\\W\\Main.go" 而
+// IDE 记 "c:/w/main.go" 是常态, 在大小写不敏感的文件系统上这必须算同一个文件.
+func TestDlvSameSourceFileIsCaseInsensitiveOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("大小写折叠只在 windows 上生效")
+	}
+	if !sameSourceFile(`C:\W\PROJ\Main.go`, "c:/w/proj/main.go") {
+		t.Error("同一个文件因大小写不同被判成两个")
 	}
 }
 
