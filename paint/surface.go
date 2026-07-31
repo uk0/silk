@@ -5,9 +5,12 @@ import (
 	"github.com/uk0/silk/core"
 	//	"fmt"
 	"runtime"
+	"sync/atomic"
 )
 
-var cairoSurfaceCount = 0
+// Atomic because the decrement happens in a finalizer, which the runtime runs
+// on its own goroutine concurrently with whatever thread is allocating.
+var cairoSurfaceCount atomic.Int64
 
 type Surface interface {
 	SurfaceType() cairo.SurfaceType
@@ -45,14 +48,14 @@ func (this *cairoSurface) NewSimilar(w, h int, color, alpha bool) Surface {
 }
 */
 func (this *cairoSurface) setFinalizer() {
-	cairoSurfaceCount++
-	//fmt.Println("cairoSurfaceCount =", cairoSurfaceCount)
-	if cairoSurfaceCount > 2000 && cairoSurfaceCount%100 == 0 {
-		core.Warn("seems cairo surface leaks, count = ", cairoSurfaceCount)
+	n := cairoSurfaceCount.Add(1)
+	//fmt.Println("cairoSurfaceCount =", n)
+	if n > 2000 && n%100 == 0 {
+		core.Warn("seems cairo surface leaks, count = ", n)
 	}
 	runtime.SetFinalizer(this, func(p *cairoSurface) {
 		p.Surface.Destroy()
-		cairoSurfaceCount--
+		cairoSurfaceCount.Add(-1)
 	})
 }
 

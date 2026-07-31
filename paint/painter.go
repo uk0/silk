@@ -6,10 +6,13 @@ import (
 	"github.com/uk0/silk/geom"
 	"math"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
 
-var cairoPainterCount = 0
+// Atomic because the decrement happens in a finalizer, which the runtime runs
+// on its own goroutine concurrently with whatever thread is allocating.
+var cairoPainterCount atomic.Int64
 
 // 此函数为四舍五入操作
 // 注: 此函数只用于实现"对齐到像素"功能, 不能正确处理nan,inf等非法值
@@ -153,15 +156,15 @@ type cairoPainter struct {
 }
 
 func (this *cairoPainter) setFinalizer() {
-	cairoPainterCount++
+	n := cairoPainterCount.Add(1)
 	//core.Warn("y")
-	//fmt.Println("cairoPainterCount =", cairoPainterCount)
-	if cairoPainterCount > 1500 && cairoPainterCount%100 == 0 {
-		core.Warn("seems cairo painter leaks, count = ", cairoPainterCount)
+	//fmt.Println("cairoPainterCount =", n)
+	if n > 1500 && n%100 == 0 {
+		core.Warn("seems cairo painter leaks, count = ", n)
 	}
 	runtime.SetFinalizer(this, func(p *cairoPainter) {
 		p.cairo.Destroy()
-		cairoPainterCount--
+		cairoPainterCount.Add(-1)
 		if p.CurrentState() != 0 {
 			core.Warn("unbalance save/restore of g: depth =", p.CurrentState())
 		}

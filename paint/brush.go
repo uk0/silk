@@ -3,9 +3,12 @@ package paint
 import (
 	"github.com/uk0/silk/cairo"
 	"runtime"
+	"sync/atomic"
 )
 
-var cairoPatternCount = 0
+// Atomic because the decrement happens in a finalizer, which the runtime runs
+// on its own goroutine concurrently with whatever thread is allocating.
+var cairoPatternCount atomic.Int64
 
 type Brush interface {
 }
@@ -23,10 +26,10 @@ type PixmapBrush struct {
 }
 
 func (this *PixmapBrush) setFinalizer() {
-	cairoPatternCount++
+	cairoPatternCount.Add(1)
 	runtime.SetFinalizer(this, func(p *PixmapBrush) {
 		p.pat.Destroy()
-		cairoPatternCount--
+		cairoPatternCount.Add(-1)
 	})
 }
 
@@ -94,13 +97,13 @@ func (g *LinearGradient) cairoPattern() *cairo.Pattern {
 		p.AddColorStopRGBA(float64(s.Offset), r, gg, b, a)
 	}
 	g.pat = p
-	cairoPatternCount++
+	cairoPatternCount.Add(1)
 	if !g.finalizer {
 		g.finalizer = true
 		runtime.SetFinalizer(g, func(lg *LinearGradient) {
 			if lg.pat != nil {
 				lg.pat.Destroy()
-				cairoPatternCount--
+				cairoPatternCount.Add(-1)
 			}
 		})
 	}
@@ -144,13 +147,13 @@ func (g *RadialGradient) cairoPattern() *cairo.Pattern {
 		p.AddColorStopRGBA(float64(s.Offset), r, gg, b, a)
 	}
 	g.pat = p
-	cairoPatternCount++
+	cairoPatternCount.Add(1)
 	if !g.finalizer {
 		g.finalizer = true
 		runtime.SetFinalizer(g, func(rg *RadialGradient) {
 			if rg.pat != nil {
 				rg.pat.Destroy()
-				cairoPatternCount--
+				cairoPatternCount.Add(-1)
 			}
 		})
 	}
