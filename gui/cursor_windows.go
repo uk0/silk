@@ -194,6 +194,13 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 	win32.DeleteObject(win32.HGDIOBJ(hBitmap))
 	win32.DeleteObject(win32.HGDIOBJ(hMonoBitmap))
 
+	// A null handle wrapped in a Cursor is worse than an error: SetCursor(0)
+	// hides the pointer outright. Report the failure the way the GLFW backend
+	// does so callers can fall back.
+	if hCursor == 0 {
+		return nil, core.StrErr("failed to create cursor from image")
+	}
+
 	//return hCursor, nil
 	ret := new(Cursor)
 	*ret = Cursor(hCursor)
@@ -211,6 +218,9 @@ func LoadCursorData(name string) (data CursorData, err error) {
 	defer dir.Close()
 
 	infos, err := dir.Readdir(-1)
+	if err != nil {
+		return
+	}
 	for _, info := range infos {
 		n := info.Name()
 		if info.IsDir() {
@@ -322,7 +332,14 @@ func GenerateDropCursors(content paint.Pixmap) (curs []*Cursor) {
 				float64(hotX-arrow.HotX), float64(hotY-arrow.HotY))
 			g.Paint()
 		*/
+		// The composed pixmap can still be refused (cairo rejects an oversized
+		// surface, CreateIconIndirect runs out of handles). dnd_windows.go
+		// feeds this slice straight to SetCursor from inside the DoDragDrop
+		// callback, where Native() would dereference the nil.
 		cur, _ := NewCursorFromData(CursorData{pixmap, hotX, hotY})
+		if cur == nil {
+			cur = cursorArrow
+		}
 		curs = append(curs, cur)
 	}
 	return
