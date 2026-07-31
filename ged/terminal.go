@@ -203,7 +203,12 @@ func (this *TerminalPanel) RunWithEnv(cmd string, extraEnv []string) {
 		this.sessionWrite([]byte(cmd + "\r"))
 		return
 	}
-	if this.running {
+	// running is written by the worker goroutine when a command exits, so the
+	// early-out has to read it under mu like every other reader does.
+	this.mu.Lock()
+	running := this.running
+	this.mu.Unlock()
+	if running {
 		return
 	}
 	// Snapshot extraEnv so later caller mutation can't race the worker.
