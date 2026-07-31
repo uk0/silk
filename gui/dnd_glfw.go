@@ -128,6 +128,13 @@ func (this *Window) DoDragDrop(from interface{},
 	// Interactive drag loop: poll events and track mouse until button released
 	result := DndIgnore
 	var lastDropWidget IWidget
+	// Cursor position the drag was last offered to the widget tree at. OLE calls
+	// DragOver off real mouse-move messages while this loop polls every
+	// millisecond, and dndDragOver reports no holder for a target that refuses
+	// the drag, so an unconditional walk re-ran OnDragEnter on every refusing
+	// target about a thousand times a second with the cursor standing still.
+	walked := false
+	var walkX, walkY float64
 	dragging := true
 	dndActive = true
 	defer func() { dndActive = false }()
@@ -144,7 +151,10 @@ func (this *Window) DoDragDrop(from interface{},
 		if targetWidget != nil {
 			wx, wy = targetWidget.MapFromGlobal(mx, my)
 		}
-		lastDropWidget = dndDragOver(targetWidget, lastDropWidget, wx, wy, ctx)
+		if !walked || mx != walkX || my != walkY {
+			lastDropWidget = dndDragOver(targetWidget, lastDropWidget, wx, wy, ctx)
+			walkX, walkY, walked = mx, my, true
+		}
 
 		// Update cursor based on current action
 		if len(cursors) >= 4 {

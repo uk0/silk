@@ -282,6 +282,13 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	cmd.AddItem(item, parent)
 	this.Scene().PushCommand(cmd)
 
+	// Claim the drop. Both backends offer it to the widget under the cursor and
+	// then to its ancestors, stopping at the first one that sets an action, so a
+	// canvas that stays on DndIgnore reads as a refusal: the drop it already
+	// consumed would be handed on to the enclosing Dock and Frame, and the
+	// palette would be told DndIgnore.
+	dnd.SetAction(gui.DndCopy)
+
 	this.Self().Update()
 }
 

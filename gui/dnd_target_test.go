@@ -2,6 +2,9 @@ package gui
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	gotoken "go/token" // the package already has a token type of its own
 	"os"
 	"strings"
 	"testing"
@@ -229,6 +232,100 @@ func TestDndWindowsOffersLinkEffect(t *testing.T) {
 		return
 	}
 	t.Fatal("dnd_windows.go: DoDragDrop no longer computes acts")
+}
+
+// TestDndGlfwWalksOnlyWhenTheCursorMoves pins the poll cadence of the GLFW drag
+// loop against Win32's. OLE calls IDropTarget::DragOver off real mouse-move
+// messages; the GLFW loop polls every millisecond, and dndDragOver reports no
+// holder for a target that refuses the drag, so that target is entered again on
+// the next poll. Offering the drag on every poll therefore ran OnDragEnter on
+// every refusing target roughly a thousand times a second while the cursor
+// stood still — the walk has to be gated on the cursor actually having moved.
+func TestDndGlfwWalksOnlyWhenTheCursorMoves(t *testing.T) {
+	fset := gotoken.NewFileSet()
+	file, err := parser.ParseFile(fset, "dnd_glfw.go", nil, 0)
+	if err != nil {
+		t.Fatalf("cannot parse dnd_glfw.go: %v", err)
+	}
+	fn := dndDoDragDrop(t, file)
+
+	// Whatever the loop names them, the cursor variables are the ones it reads
+	// out of MousePosition; the guard has to test those.
+	cursor := map[string]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		if call, ok := as.Rhs[0].(*ast.CallExpr); !ok || !dndCalls(call, "MousePosition") {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok {
+				cursor[id.Name] = true
+			}
+		}
+		return true
+	})
+	if len(cursor) == 0 {
+		t.Fatal("dnd_glfw.go: DoDragDrop no longer reads MousePosition()")
+	}
+
+	var guards []*ast.IfStmt
+	var walk *ast.CallExpr
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.IfStmt:
+			if dndReads(x.Cond, cursor) {
+				guards = append(guards, x)
+			}
+		case *ast.CallExpr:
+			if dndCalls(x, "dndDragOver") {
+				walk = x
+			}
+		}
+		return true
+	})
+	if walk == nil {
+		t.Fatal("dnd_glfw.go: DoDragDrop no longer calls dndDragOver")
+	}
+	for _, g := range guards {
+		if g.Body.Pos() < walk.Pos() && walk.End() <= g.Body.End() {
+			return
+		}
+	}
+	t.Error("dnd_glfw.go: DoDragDrop offers the drag to the widget tree on every poll, not only when the cursor moved")
+}
+
+// dndDoDragDrop returns the parsed DoDragDrop method of file.
+func dndDoDragDrop(t *testing.T, file *ast.File) *ast.FuncDecl {
+	t.Helper()
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Recv != nil && fn.Name.Name == "DoDragDrop" {
+			return fn
+		}
+	}
+	t.Fatal("dnd_glfw.go has no DoDragDrop method")
+	return nil
+}
+
+// dndCalls reports whether call invokes the plain function named name.
+func dndCalls(call *ast.CallExpr, name string) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// dndReads reports whether expr mentions any of the named variables.
+func dndReads(expr ast.Expr, names map[string]bool) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && names[id.Name] {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func readDndSource(t *testing.T, file string) string {
