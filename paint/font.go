@@ -6,6 +6,7 @@ import (
 	"github.com/uk0/silk/hashmap"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -14,15 +15,18 @@ var fontFaceCacheAccessId uint64
 var scaledFontCache = hashmap.NewHashMap(hashScaledFontCacheKey, equalScaledFontCacheKey)
 var scaledFontCacheAccessId uint64
 var globalFontOptions = cairo.NewFontOptions()
-var fontFaceCount = 0
-var scaledFontCount = 0
+
+// Atomic because the decrements happen in finalizers, which the runtime runs
+// on its own goroutine concurrently with whatever thread is allocating.
+var fontFaceCount atomic.Int64
+var scaledFontCount atomic.Int64
 var identityMatrix = geom.Mat3x2{1, 0, 0, 1, 0, 0}
 
 type FontExtents cairo.FontExtents
 type TextExtents cairo.TextExtents
 type Glyph cairo.Glyph
 
-func murmur3_32(_p uintptr, _len int) uint32 {
+func murmur3_32(b []byte) uint32 {
 	const c1 uint32 = 0xcc9e2d51
 	const c2 uint32 = 0x1b873593
 	const r1 uint32 = 15
@@ -30,13 +34,13 @@ func murmur3_32(_p uintptr, _len int) uint32 {
 	const m uint32 = 5
 	const n uint32 = 0xe6546b64
 
-	p := unsafe.Pointer(_p)
-
 	var hash uint32 = 0x5a7cbfed // seed
 
+	_len := len(b)
 	len0 := uint32(_len)
+	i := 0
 	for _len >= 4 {
-		k := *((*uint32)(p))
+		k := uint32(b[i]) | uint32(b[i+1])<<8 | uint32(b[i+2])<<16 | uint32(b[i+3])<<24
 		k *= c1
 		k = (k << r1) | (k >> (32 - r1))
 		k *= c2
@@ -44,7 +48,7 @@ func murmur3_32(_p uintptr, _len int) uint32 {
 		hash ^= k
 		hash = (hash << r2) | (hash >> (32 - r2))
 		hash = hash*m + n
-		p = unsafe.Pointer(uintptr(p) + 4)
+		i += 4
 		_len -= 4
 	}
 
@@ -53,14 +57,11 @@ func murmur3_32(_p uintptr, _len int) uint32 {
 
 		switch _len {
 		case 3:
-			p2 := (*uint8)(unsafe.Pointer(uintptr(p) + 2))
-			k ^= uint32(*p2) << 16
+			k ^= uint32(b[i+2]) << 16
 		case 2:
-			p1 := (*uint8)(unsafe.Pointer(uintptr(p) + 1))
-			k ^= uint32(*p1) << 8
+			k ^= uint32(b[i+1]) << 8
 		case 1:
-			p0 := (*uint8)(p)
-			k ^= uint32(*p0)
+			k ^= uint32(b[i])
 			k *= c1
 			k = (k << r1) | (k >> (32 - r1))
 			k *= c2
@@ -98,7 +99,11 @@ func equalScaledFontCacheKey(a, b interface{}) bool {
 
 func hashScaledFontCacheKey(i interface{}) uint32 {
 	m := i.(*scaledFontCacheKey)
-	return murmur3_32(uintptr(unsafe.Pointer(m)), int(unsafe.Sizeof(*m)))
+	// Hand the key to the hash as a slice, never as a uintptr: an address
+	// carried in an integer has no pointer provenance, so the GC may collect
+	// the key mid-hash and -race's checkptr aborts the process on the
+	// uintptr -> unsafe.Pointer conversion.
+	return murmur3_32(unsafe.Slice((*byte)(unsafe.Pointer(m)), unsafe.Sizeof(*m)))
 }
 
 type ScaledFont interface {
@@ -116,10 +121,10 @@ type scaledFont struct {
 }
 
 func (this *scaledFont) setFinalizer() {
-	scaledFontCount++
+	scaledFontCount.Add(1)
 	runtime.SetFinalizer(this, func(p *scaledFont) {
 		p.ScaledFont.Destroy()
-		scaledFontCount--
+		scaledFontCount.Add(-1)
 	})
 }
 
@@ -214,10 +219,10 @@ type fontFace struct {
 }
 
 func (this *fontFace) setFinalizer() {
-	fontFaceCount++
+	fontFaceCount.Add(1)
 	runtime.SetFinalizer(this, func(p *fontFace) {
 		p.face.Destroy()
-		fontFaceCount--
+		fontFaceCount.Add(-1)
 	})
 }
 
