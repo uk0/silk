@@ -1162,10 +1162,14 @@ func AnyWindowId() (ret WinId) {
 
 func KeyState(key int) (down, checked bool) {
 	for gw := range winMap {
-		glfwKey := vkToGLFWKey(key)
-		if glfwKey != glfw.KeyUnknown {
-			state := gw.GetKey(glfwKey)
-			down = state == glfw.Press
+		// Any one of the GLFW keys behind this VK counts as down: Ctrl, Shift
+		// and Alt each have a left and a right key, and the user may hold
+		// either.
+		for _, glfwKey := range vkToGLFWKeys(key) {
+			if gw.GetKey(glfwKey) == glfw.Press {
+				down = true
+				break
+			}
 		}
 		break
 	}
@@ -2350,12 +2354,18 @@ func (this *Window) ExportGv(g *gv.Graph) {
 	edge.ArrowHead = "none"
 }
 
-// vkToGLFWKey maps a VK code back to GLFW key for KeyState queries
-func vkToGLFWKey(vk int) glfw.Key {
+// vkToGLFWKeys maps a VK code back to every GLFW key that produces it, for
+// KeyState queries. The mapping is many-to-one — KeyCtrl comes from both
+// LeftControl and RightControl, and KeyShift and KeyMenu likewise cover two
+// keys each — so a caller must probe the whole set. Returning the first match
+// instead handed back a key Go's randomised map iteration picked at random,
+// which reported a held modifier as up whenever it landed on the other side of
+// the keyboard.
+func vkToGLFWKeys(vk int) (keys []glfw.Key) {
 	for gk, v := range glfwKeyToVK {
 		if v == vk {
-			return gk
+			keys = append(keys, gk)
 		}
 	}
-	return glfw.KeyUnknown
+	return
 }

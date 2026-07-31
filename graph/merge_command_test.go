@@ -35,8 +35,9 @@ func pendingMove(token uint64, items ...IItem) *MoveCommand {
 // The untagged cases are the important ones: a mouse drag pushes a MoveCommand
 // with no token, and if that absorbed a following keyboard nudge then undoing
 // the nudge would silently take the drag back with it. The item-list cases
-// matter just as much — a merge keeps only the lower command's records, so an
-// item present in just one of the two would end up with no undo record at all.
+// matter just as much, and they are asymmetric: a merge keeps only the lower
+// command's records, so an item present only in the incoming command would end
+// up with no undo record at all, while an item it has dropped still has one.
 func TestMoveCommandMergeWidthGating(t *testing.T) {
 	a, b := NewRectItem(), NewRectItem()
 	a.SetBounds(0, 0, 10, 10)
@@ -53,7 +54,7 @@ func TestMoveCommandMergeWidthGating(t *testing.T) {
 		{"untagged next never merges", redoneMove(7, a), pendingMove(0, a), false},
 		{"different gestures", redoneMove(7, a), pendingMove(8, a), false},
 		{"next covers more items", redoneMove(7, a), pendingMove(7, a, b), false},
-		{"next covers fewer items", redoneMove(7, a, b), pendingMove(7, a), false},
+		{"next covers fewer items", redoneMove(7, a, b), pendingMove(7, a), true},
 		{"same count, different items", redoneMove(7, a), pendingMove(7, b), false},
 	}
 
@@ -121,7 +122,12 @@ func TestResizeCommandMergeWidthGating(t *testing.T) {
 		{"same gesture, same items", redone(7, a, b), pending(7, a, b), true},
 		{"untagged prev never merges", redone(0, a), pending(0, a), false},
 		{"different gestures", redone(7, a), pending(8, a), false},
-		{"different item lists", redone(7, a), pending(7, a, b), false},
+		{"next covers more items", redone(7, a), pending(7, a, b), false},
+		// The reachable one: a burst shrinking a mixed selection drops every
+		// item that reaches the size floor, so from the second repeat onward
+		// the incoming command drives a subset. Refusing that split one held
+		// key into two undo steps.
+		{"next covers fewer items", redone(7, a, b), pending(7, a), true},
 	}
 
 	for _, tc := range cases {
@@ -161,5 +167,24 @@ func TestResizeRectBy(t *testing.T) {
 					base, tc.dw, tc.dh, minSize, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestResizeRectBySubFloorExtent: nothing stops a widget from already being
+// smaller than the floor — the property sheet takes any size, and so does a
+// loaded design file. Clamping such an extent up to minSize would let the
+// shrink key double it, so the floor may only ever hold an extent back, never
+// push it up. Growing still works from down there.
+func TestResizeRectBySubFloorExtent(t *testing.T) {
+	tiny := geom.Rect{X: 10, Y: 20, Width: 0.5, Height: 0.5}
+	const minSize = 1.0
+
+	if got := resizeRectBy(tiny, -1, -1, minSize); got != tiny {
+		t.Errorf("shrinking a sub-floor rect gave %+v, want it left at %+v", got, tiny)
+	}
+
+	want := geom.Rect{X: 10, Y: 20, Width: 1.5, Height: 1.5}
+	if got := resizeRectBy(tiny, 1, 1, minSize); got != want {
+		t.Errorf("growing a sub-floor rect gave %+v, want %+v", got, want)
 	}
 }

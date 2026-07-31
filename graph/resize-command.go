@@ -16,9 +16,18 @@ func resizeRectBy(rect geom.Rect, dw, dh, minSize float64) geom.Rect {
 	return geom.Rect{
 		X:      rect.X,
 		Y:      rect.Y,
-		Width:  math.Max(rect.Width+dw, minSize),
-		Height: math.Max(rect.Height+dh, minSize),
+		Width:  resizeExtent(rect.Width, dw, minSize),
+		Height: resizeExtent(rect.Height, dh, minSize),
 	}
+}
+
+// resizeExtent applies delta to extent, floored at minSize. The floor may only
+// ever lower an extent, never raise one — hence math.Min(extent, minSize)
+// rather than a bare minSize. A widget can already sit below the floor (the
+// property sheet accepts any size, and a design file can carry one), and
+// clamping straight up to minSize would make the shrink key enlarge it.
+func resizeExtent(extent, delta, minSize float64) float64 {
+	return math.Max(extent+delta, math.Min(extent, minSize))
 }
 
 type resizeRecord struct {
@@ -91,13 +100,15 @@ func (cmd *ResizeCommand) MergeWidth(next gui.ICommand) bool {
 	if !ok || cmd.mergeToken == 0 || cmd.mergeToken != other.mergeToken {
 		return false
 	}
-	if len(cmd.records) != len(other.records) {
-		return false
-	}
-	for i := range cmd.records {
-		if cmd.records[i].item != other.records[i].item {
+	i := 0
+	for j := range other.records {
+		for i < len(cmd.records) && cmd.records[i].item != other.records[j].item {
+			i++
+		}
+		if i == len(cmd.records) {
 			return false
 		}
+		i++
 	}
 	return true
 }

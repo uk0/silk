@@ -1655,9 +1655,10 @@ func (this *GedView) nudgeSelection(dx, dy float64) {
 // ResizeCommand on the UndoStack, tagged with the current gesture so a held
 // Ctrl+arrow collapses into a single undo step.
 //
-// Quiet no-op when the selection is empty, entirely size-locked, or already
-// at minWidgetSize in the requested direction — GenerateResizeCommand returns
-// nil for all three, which we forward rather than pushing an empty command.
+// Quiet no-op when the selection is empty, entirely size-locked, or already at
+// or under minWidgetSize in the requested direction — GenerateResizeCommand
+// returns nil for all three, which we forward rather than pushing an empty
+// command.
 func (this *GedView) resizeSelection(dw, dh float64) {
 	cmd := this.Selection().GenerateResizeCommand(dw, dh, minWidgetSize)
 	if cmd == nil {

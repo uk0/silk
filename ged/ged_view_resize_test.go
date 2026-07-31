@@ -88,6 +88,36 @@ func TestResizeSelectionFloorsAtMinWidgetSize(t *testing.T) {
 	}
 }
 
+// TestResizeSelectionLeavesSubFloorWidgetAlone: a widget can already be smaller
+// than minWidgetSize, and one Ctrl+Left used to clamp it up to the floor — the
+// shrink key made it bigger. Shrinking below the floor is a no-op instead.
+func TestResizeSelectionLeavesSubFloorWidgetAlone(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+
+	fake := addFakeAt(t, scene, "tiny", 40, 30, 0.5, 0.5)
+	view.Selection().Clear()
+	view.Selection().Add(fake)
+
+	before := view.Scene().UndoStack().Count()
+	view.beginGesture(false)
+	view.resizeSelection(-1, -1)
+
+	if x, y, w, h := fake.Bounds(); x != 40 || y != 30 || w != 0.5 || h != 0.5 {
+		t.Errorf("Ctrl+Left/Up on a 0.5x0.5 widget gave (%g, %g, %g, %g), want (40, 30, 0.5, 0.5)",
+			x, y, w, h)
+	}
+	if got := view.Scene().UndoStack().Count() - before; got != 0 {
+		t.Errorf("a shrink that changed nothing pushed %d undo commands, want 0", got)
+	}
+
+	// Growing out of the sub-floor range must still work.
+	view.resizeSelection(1, 1)
+	if _, _, w, h := fake.Bounds(); w != 1.5 || h != 1.5 {
+		t.Errorf("Ctrl+Right/Down on the same widget gave (%g, %g), want (1.5, 1.5)", w, h)
+	}
+}
+
 // TestResizeSelectionSkipsSizeLocked: a size-locked widget must come through a
 // resize untouched, and a selection holding nothing else must not push an undo
 // command at all — otherwise Ctrl+arrow on a locked widget accumulates undo
@@ -192,4 +222,50 @@ func TestHeldResizeKeyIsOneUndoStep(t *testing.T) {
 	if _, _, w, _ := fake.Bounds(); w != 20 {
 		t.Errorf("after redo: width = %g, want 20 — redo replays the whole burst", w)
 	}
+}
+
+// TestHeldShrinkOverMixedSizesIsOneUndoStep: coalescing must survive a
+// selection whose widgets reach the floor at different times. The small widget
+// bottoms out on the first repeat and leaves the command's record list from
+// there on, which used to break the merge and split one held key into two undo
+// steps — the second of which reversed only part of the burst.
+func TestHeldShrinkOverMixedSizesIsOneUndoStep(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+
+	big := addFakeAt(t, scene, "big", 0, 0, 100, 10)
+	small := addFakeAt(t, scene, "small", 0, 40, 2, 10)
+	view.Selection().Clear()
+	view.Selection().Add(big)
+	view.Selection().Add(small)
+
+	before := view.Scene().UndoStack().Count()
+	view.beginGesture(false)
+	view.resizeSelection(-1, 0)
+	for i := 0; i < 9; i++ {
+		view.beginGesture(true)
+		view.resizeSelection(-1, 0)
+	}
+
+	if got := view.Scene().UndoStack().Count() - before; got != 1 {
+		t.Errorf("1 press + 9 repeats pushed %d undo commands, want 1", got)
+	}
+	if _, _, w, _ := big.Bounds(); w != 90 {
+		t.Errorf("after the burst: big width = %g, want 90", w)
+	}
+	if _, _, w, _ := small.Bounds(); w != minWidgetSize {
+		t.Errorf("after the burst: small width = %g, want %g", w, minWidgetSize)
+	}
+
+	view.Scene().UndoStack().Undo()
+	bw := widthOf(big)
+	sw := widthOf(small)
+	if bw != 100 || sw != 2 {
+		t.Errorf("after one undo: widths = (%g, %g), want (100, 2) — one undo reverses the whole burst", bw, sw)
+	}
+}
+
+func widthOf(fw *FakeWidget) float64 {
+	_, _, w, _ := fw.Bounds()
+	return w
 }

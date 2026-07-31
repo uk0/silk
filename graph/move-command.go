@@ -82,21 +82,29 @@ func (cmd *MoveCommand) SetMergeToken(token uint64) {
 // cmd has already been redone, so its records hold the positions from before
 // the gesture started, which is precisely what a later Undo must restore.
 // Absorbing next is therefore a no-op on cmd's records. That only holds while
-// both commands drive the identical item list: an item moved by next but
-// absent from cmd would keep no undo record at all, so a differing list
-// refuses the merge and lets the stack start a fresh step instead.
+// cmd records every item next touches: an item moved by next but absent from
+// cmd would keep no undo record at all, so such a list refuses the merge and
+// lets the stack start a fresh step instead.
+//
+// The test is containment, not equality. A later step in the same gesture may
+// legitimately drive fewer items — ResizeCommand's generator drops an item
+// once it reaches the size floor — and cmd still holds that item's pre-gesture
+// state, so the burst stays one undo step. Both lists are built by walking the
+// selection in order, so one pass over cmd's records decides it.
 func (cmd *MoveCommand) MergeWidth(next gui.ICommand) bool {
 	other, ok := next.(*MoveCommand)
 	if !ok || cmd.mergeToken == 0 || cmd.mergeToken != other.mergeToken {
 		return false
 	}
-	if len(cmd.records) != len(other.records) {
-		return false
-	}
-	for i := range cmd.records {
-		if cmd.records[i].item != other.records[i].item {
+	i := 0
+	for j := range other.records {
+		for i < len(cmd.records) && cmd.records[i].item != other.records[j].item {
+			i++
+		}
+		if i == len(cmd.records) {
 			return false
 		}
+		i++
 	}
 	return true
 }
