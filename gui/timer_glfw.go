@@ -8,8 +8,13 @@ import (
 )
 
 var (
-	timerMu     sync.Mutex
-	timerMap    = make(map[uintptr]*timerEntry)
+	// timerMu guards the map only. It does not make Timer callable from a
+	// background goroutine: the Win32 backend cannot honour that (see
+	// timer_windows.go), so off-thread callers must still go through Post().
+	timerMu  sync.Mutex
+	timerMap = make(map[uintptr]*timerEntry)
+	// timerNextId only ever counts up, so an id names one arming of one Timer
+	// and presence in timerMap is identity.
 	timerNextId uintptr
 )
 
@@ -50,23 +55,32 @@ func (t *Timer) Start(millisecond uint32, f func()) bool {
 func processTimers() {
 	timerMu.Lock()
 	// Collect due timers
-	var due []func()
+	var due []uintptr
 	now := time.Now()
-	for _, entry := range timerMap {
+	for id, entry := range timerMap {
 		if now.Sub(entry.lastFire) >= entry.interval {
 			entry.lastFire = now
-			due = append(due, entry.callback)
+			due = append(due, id)
 		}
 	}
 	timerMu.Unlock()
 
-	// Fire outside of lock
-	for _, cb := range due {
+	// Fire outside of lock, re-reading each id: a callback earlier in this
+	// batch may have stopped a timer later in it, and Stop() has to mean no
+	// further callback. Win32 gets that for free — it looks the id up in
+	// timerMap as each WM_TIMER is dispatched.
+	for _, id := range due {
+		timerMu.Lock()
+		entry := timerMap[id]
+		timerMu.Unlock()
+		if entry == nil {
+			continue
+		}
 		func() {
 			defer func() {
 				recover()
 			}()
-			cb()
+			entry.callback()
 		}()
 	}
 }

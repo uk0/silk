@@ -4,6 +4,23 @@ import (
 	"github.com/uk0/silk/win32"
 )
 
+// timerMap maps a live win32 timer id to its callback. The WM_TIMER handler in
+// window_windows.go looks the id up as each message is dispatched, one at a
+// time — that lookup is also what keeps a stopped timer quiet, since KillTimer
+// does not remove WM_TIMER messages already sitting in the queue.
+//
+// No mutex, deliberately. Timer is UI-thread-only and a lock would hide that
+// instead of fixing it: SetTimer(NULL, ...) binds the timer to the message
+// queue of the calling OS thread, and Go migrates an unpinned goroutine between
+// threads at will, so a timer armed off the UI thread posts WM_TIMER to a
+// thread with no pump and never fires. Locking the map would quiet the race
+// detector and leave the timer dead. Off-thread callers go through Post()
+// (uiqueue.go), as the rest of the codebase already does.
+//
+// Win32 wart with no cheap fix: SetTimer can hand back an id KillTimer just
+// freed, so a stale WM_TIMER queued for the previous arming can dispatch once
+// into the new timer's callback. Closing that needs a generation tag in the map
+// value, which the dispatch site in window_windows.go would have to read too.
 var timerMap = make(map[uintptr]func())
 
 // Low precision timer in "UI thread"

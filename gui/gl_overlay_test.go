@@ -1,6 +1,9 @@
 package gui
 
 import (
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/uk0/silk/geom"
@@ -63,4 +66,51 @@ func TestBuildChartOverlayDropsShortLines(t *testing.T) {
 	if len(ov.lines) != 0 {
 		t.Fatalf("lines = %d, want 0 (short line dropped)", len(ov.lines))
 	}
+}
+
+// TestGLOverlaySeamMatchesAcrossBackends catches a hook added to one backend
+// file and forgotten in the other. gl_overlay_windows.go compiles only under
+// GOOS=windows, so nothing in a mac or Linux build — not the compiler, not the
+// rest of this suite — notices when gl_overlay_glfw.go grows a method the
+// Windows stub lacks; the break surfaces only in a Windows cross-build, which
+// is easy to skip. Comparing the two files as text fails here instead.
+func TestGLOverlaySeamMatchesAcrossBackends(t *testing.T) {
+	glfwSigs := windowMethodSigs(t, "gl_overlay_glfw.go")
+	winSigs := windowMethodSigs(t, "gl_overlay_windows.go")
+	if len(glfwSigs) == 0 {
+		t.Fatal("no *Window methods found in gl_overlay_glfw.go; this test can no longer see the seam")
+	}
+	for name, sig := range glfwSigs {
+		got, ok := winSigs[name]
+		if !ok {
+			t.Errorf("gl_overlay_windows.go declares no %s; the Windows build will not compile", name)
+			continue
+		}
+		if got != sig {
+			t.Errorf("%s signature differs: glfw %q, windows %q", name, sig, got)
+		}
+	}
+	for name := range winSigs {
+		if _, ok := glfwSigs[name]; !ok {
+			t.Errorf("gl_overlay_windows.go declares %s with no GLFW counterpart", name)
+		}
+	}
+}
+
+// windowMethodSigs maps each `func (this *Window) Name(...)` in file to its
+// normalized parameter and result text. Parameter names count as part of the
+// signature: the two overlay files are meant to read as mirrors, so a rename
+// on one side alone is worth flagging.
+func windowMethodSigs(t *testing.T, file string) map[string]string {
+	t.Helper()
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", file, err)
+	}
+	re := regexp.MustCompile(`(?m)^func \(this \*Window\) (\w+)\(([^)]*)\)([^{]*)\{`)
+	sigs := make(map[string]string)
+	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		sigs[m[1]] = strings.Join(strings.Fields(m[2]+" "+m[3]), " ")
+	}
+	return sigs
 }
