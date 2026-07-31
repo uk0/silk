@@ -24,14 +24,22 @@ func armUIThreadDetector(t *testing.T, onUIThread bool) *[]string {
 	oldOwner, oldDebug := uiThreadOwner, uiThreadDebug
 	uiThreadOwner = func() bool { return onUIThread }
 	uiThreadDebug = func() bool { return true }
-	uiThreadReports.Store(0)
+	resetUIThreadReports()
 
 	t.Cleanup(func() {
 		unregister()
 		uiThreadOwner, uiThreadDebug = oldOwner, oldDebug
-		uiThreadReports.Store(0)
+		resetUIThreadReports()
 	})
 	return &warnings
+}
+
+// resetUIThreadReports hands the next test a fresh report budget. Test-only:
+// a site's budget is spent once per process by design.
+func resetUIThreadReports() {
+	uiThreadReportMu.Lock()
+	clear(uiThreadReports)
+	uiThreadReportMu.Unlock()
 }
 
 // TestAssertUIThreadReportsOffThread pins the detector's reason for existing:
@@ -119,6 +127,32 @@ func TestAssertUIThreadReportsAreCapped(t *testing.T) {
 		t.Fatalf("expected %d reports, got %d", uiThreadReportLimit, len(*warnings))
 	}
 }
+
+// TestUIThreadReportsAreCappedPerOffender pins that the flood guard costs one
+// offender's noise and not the rest of the session. A worker that mutates in a
+// loop spends its budget in the first second; a second offender — the LSP
+// callback that only fires when you open a file, the watcher that only fires on
+// a save — appears minutes later and must still be reported.
+func TestUIThreadReportsAreCappedPerOffender(t *testing.T) {
+	warnings := armUIThreadDetector(t, false)
+
+	for i := 0; i < uiThreadReportLimit*3; i++ {
+		hotOffender()
+	}
+	spent := len(*warnings)
+	if spent != uiThreadReportLimit {
+		t.Fatalf("the hot offender reported %d times, want %d", spent, uiThreadReportLimit)
+	}
+
+	lateOffender()
+	if len(*warnings) == spent {
+		t.Fatal("an offender found after the first one spent the budget reported nothing")
+	}
+}
+
+// Two call sites, so the fingerprints the cap is keyed on differ.
+func hotOffender()  { assertUIThread("Widget.Update") }
+func lateOffender() { assertUIThread("Widget.Update") }
 
 // TestWidgetUpdateIsInstrumented pins the chokepoint itself. The detector is
 // worthless if a later edit drops the one call site it hangs off, and nothing

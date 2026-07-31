@@ -2,8 +2,9 @@ package gui
 
 import (
 	"fmt"
+	"runtime"
 	"runtime/debug"
-	"sync/atomic"
+	"sync"
 
 	"github.com/uk0/silk/core"
 )
@@ -32,12 +33,23 @@ var uiThreadOwner func() bool
 // flipped afterwards, which would leave the check untestable.
 var uiThreadDebug = core.IsDebugOn
 
-// uiThreadReportLimit caps the reports per process. One offending worker can
-// call Update in a tight loop, and a log flood would bury the first report —
-// the one that still has the offender's own frames on the stack.
+// uiThreadReportLimit caps the reports per offending call site. One offending
+// worker can call Update in a tight loop, and a log flood would bury the first
+// report — the one that still has the offender's own frames on the stack. Per
+// site rather than per process, because a session lasts hours: the ticker that
+// misbehaves from the first second must not spend the budget the LSP callback
+// or the file watcher needs when it first fires, half an hour later.
 const uiThreadReportLimit = 5
 
-var uiThreadReports atomic.Int32
+// uiThreadSiteLimit bounds how many sites are remembered, so the bookkeeping
+// stays finite in a process that runs for days. A program with this many
+// distinct off-thread mutation sites is past the point of being told again.
+const uiThreadSiteLimit = 64
+
+var (
+	uiThreadReportMu sync.Mutex
+	uiThreadReports  = make(map[uint64]int) // call site -> reports already made
+)
 
 // assertUIThread reports that what is running off the UI thread. Ordered so the
 // common case is a load and a nil compare: it sits on Widget.Update(), which
@@ -54,10 +66,37 @@ func assertUIThread(what string) {
 // it the warning says a mutation happened on the wrong thread but not which
 // goroutine started it.
 func reportOffUIThread(what string) {
-	if uiThreadReports.Add(1) > uiThreadReportLimit {
+	if !claimUIThreadReport(uiThreadCallSite()) {
 		return
 	}
 	core.Warn(fmt.Sprintf(
 		"ui: %s ran off the UI thread; widgets have no locking, so this corrupts state silently — marshal it with gui.Post\n%s",
 		what, debug.Stack()))
+}
+
+// claimUIThreadReport spends one report from the site's own budget.
+func claimUIThreadReport(site uint64) bool {
+	uiThreadReportMu.Lock()
+	defer uiThreadReportMu.Unlock()
+	made, tracked := uiThreadReports[site]
+	if made >= uiThreadReportLimit || (!tracked && len(uiThreadReports) >= uiThreadSiteLimit) {
+		return false
+	}
+	uiThreadReports[site] = made + 1
+	return true
+}
+
+// uiThreadCallSite fingerprints the frames above the detector, which is what
+// tells one offender from another: the same worker mutating from the same line
+// hashes to the same site, a different one does not. FNV-1a straight over the
+// raw PCs — they only ever have to compare equal, never to be resolved or
+// printed, and the stack the report carries is built separately.
+func uiThreadCallSite() uint64 {
+	var pcs [32]uintptr
+	n := runtime.Callers(3, pcs[:]) // skip runtime.Callers, this, reportOffUIThread
+	h := uint64(14695981039346656037)
+	for _, pc := range pcs[:n] {
+		h = (h ^ uint64(pc)) * 1099511628211
+	}
+	return h
 }

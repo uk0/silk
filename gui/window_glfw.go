@@ -137,6 +137,14 @@ type Window struct {
 func init() {
 	runtime.LockOSThread()
 
+	// Only meaningful after LockOSThread: this is now the one thread the event
+	// loop will ever run on. Off-thread widget mutation is silent corruption in
+	// this framework, so under SILK_DEBUG name the offender (see uithread.go).
+	// window_windows.go installs its own for the same reason; without one here
+	// the detector was inert on macOS and Linux.
+	uiThreadId = currentThreadId()
+	uiThreadOwner = func() bool { return currentThreadId() == uiThreadId }
+
 	if err := glfw.Init(); err != nil {
 		panic("failed to init GLFW: " + err.Error())
 	}
