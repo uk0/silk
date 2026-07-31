@@ -1224,6 +1224,17 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		return win.on_WM_MBUTTONDOWN(msg, wParam, lParam)
 	case win32.WM_MBUTTONUP:
 		return win.on_WM_MBUTTONUP(msg, wParam, lParam)
+	// 双击的第二次按下走 DBLCLK 消息, 必须当作普通按下.
+	// Both window classes ask for CS_DBLCLKS, so Windows replaces the second
+	// WM_xBUTTONDOWN of a fast double click with WM_xBUTTONDBLCLK. Unhandled it
+	// reaches no widget while its WM_xBUTTONUP still does, so every second click
+	// of a rapid sequence was lost here and delivered under GLFW, which
+	// synthesises no double click at all: closing several tabs by middle
+	// clicking the same spot skipped every other tab on Windows only.
+	case win32.WM_LBUTTONDBLCLK:
+		return win.on_WM_LBUTTONDOWN(msg, wParam, lParam)
+	case win32.WM_MBUTTONDBLCLK:
+		return win.on_WM_MBUTTONDOWN(msg, wParam, lParam)
 	case win32.WM_MOUSEMOVE:
 		return win.on_WM_MOUSEMOVE(msg, wParam, lParam)
 	case win32.WM_MOUSEWHEEL:

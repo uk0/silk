@@ -156,3 +156,30 @@ func TestTabBarMiddleClickClosesTab(t *testing.T) {
 		}
 	}
 }
+
+// TestTabBarMiddleUpWithoutPressClosesNothing covers a release the strip never
+// armed. The middle button takes no capture, so a press that wanders off the
+// strip is followed by a move that reassigns lastMouseWidget: the release goes
+// to whatever is under the cursor and the strip never runs OnMiddleUp. With the
+// candidate left armed, the *next* middle release that happens to land on the
+// strip — from a press somewhere else entirely — closed the tab of the
+// abandoned press.
+func TestTabBarMiddleUpWithoutPressClosesNothing(t *testing.T) {
+	tb := newTabBar3()
+	var closed []int
+	tb.SetCloseCallback(func(_ *TabBar, idx int) bool {
+		closed = append(closed, idx)
+		return true
+	})
+	_, _, _, h := tb.Bounds()
+	my := h * 0.5
+	mid := func(i int) float64 { return tabCellStart(tb, i) + tb.tabs[i].width*0.5 }
+
+	tb.OnMiddleDown(mid(1), my)
+	tb.OnMouseLeave() // pointer left the strip; the release lands elsewhere
+
+	tb.OnMiddleUp(mid(1), my) // a later press's release, drifting back over tab 1
+	if closed != nil {
+		t.Fatalf("middle release with no press on the strip closed %v, want nothing", closed)
+	}
+}

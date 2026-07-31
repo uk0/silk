@@ -238,6 +238,13 @@ func (this *TabBar) Count() int {
 
 func (this *TabBar) OnMouseLeave() {
 	//core.Debug("(this *TabBar) OnMouseLeave()")
+	// 指针离开标签条即放弃中键候选.
+	// The middle button takes no capture, so the move that carried the pointer
+	// off the strip has already reassigned lastMouseWidget and the release goes
+	// to another widget — OnMiddleUp never runs to clear the candidate. Left
+	// armed, the next middle release that happens to land on the strip, from a
+	// press somewhere else entirely, closes the tab of the abandoned press.
+	this.downMidTab = -1
 	if this.hoverTab != -1 {
 		this.hoverTab = -1
 		this.Self().Update()
