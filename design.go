@@ -1330,6 +1330,26 @@ func bindPropertySheetTo(gv *ged.GedView) {
 	})
 }
 
+// bindStatusBarTo makes the permanent status bar indicators follow gv instead
+// of only being computed at startup and from a handful of menu actions. The
+// scene's attach/detach signals cover every way the widget count moves — drop,
+// paste, delete, undo, redo all reparent items — and SigZoomChanged covers
+// wheel and menu zoom. The scene signals are used rather than the view's own
+// because GraphView.SigItemAttached holds a single callback and
+// refreshTreeForCurrentView already owns it for the object inspector.
+func bindStatusBarTo(gv *ged.GedView) {
+	if gv == nil {
+		return
+	}
+	refresh := func() { updateStatusBarInfoFor(gv) }
+	gv.AddSelectionCallback(func([]graph.IItem) { refresh() })
+	gv.SigZoomChanged(func(interface{}, float64) { refresh() })
+	if scene := gv.Scene(); scene != nil {
+		scene.SigItemAttached(func(interface{}, graph.IItem, graph.IItem) { refresh() })
+		scene.SigItemDetached(func(interface{}, graph.IItem, graph.IItem) { refresh() })
+	}
+}
+
 // dismissWelcomeScreen removes the welcome screen from the center dock.
 func dismissWelcomeScreen() {
 	if welcomeScreen != nil && centerDock != nil {
@@ -1484,6 +1504,7 @@ func createPanels(mainFrame *gui.Frame) {
 			codePanel.BindGedView(gv)
 			bindWidgetHelpTo(gv)
 			bindPropertySheetTo(gv)
+			bindStatusBarTo(gv)
 		}
 		refreshTreeForCurrentView(dbgTree)
 
@@ -1499,6 +1520,9 @@ func createPanels(mainFrame *gui.Frame) {
 				bindWidgetHelpTo(gv)
 				// Rebind property-sheet selection listener
 				bindPropertySheetTo(gv)
+				// Rebind status bar listeners, then show this document's numbers
+				bindStatusBarTo(gv)
+				updateStatusBarInfoFor(gv)
 				// Update object inspector tree
 				scene := gv.GedScene()
 				if scene != nil {
@@ -1597,18 +1621,24 @@ func createPanels(mainFrame *gui.Frame) {
 	// Create mode selector sidebar on the far left
 	modeSelector = ged.NewModeSelector()
 	modeSelector.SigModeChanged(func(mode ged.DesignerMode) {
+		// currentViewMode drives the status bar's mode cell and was only
+		// written by the 设计/代码/分屏 menu buttons, so a sidebar click or
+		// Ctrl+1/Ctrl+2 left the cell showing the previous mode.
 		switch mode {
 		case ged.ModeDesign:
+			currentViewMode = ViewModeDesign
 			ged.SwitchToDesignMode()
 			if sb := mainFrame.StatusBar(); sb != nil {
 				sb.ShowMessage("已切换到设计模式")
 			}
 		case ged.ModeEdit:
+			currentViewMode = ViewModeCode
 			ged.SwitchToEditMode()
 			if sb := mainFrame.StatusBar(); sb != nil {
 				sb.ShowMessage("已切换到代码模式")
 			}
 		}
+		updateStatusBarInfo()
 	})
 	mainFrame.SetLeftSidebar(modeSelector)
 }
@@ -1723,10 +1753,16 @@ func createStatusBar(mainFrame *gui.Frame) {
 	statusBar.AddPermanentWidget(statusInfoLabel)
 }
 
-// updateStatusBarInfo refreshes the permanent status bar indicators.
+// updateStatusBarInfo refreshes the permanent status bar indicators from the
+// canvas that is currently active.
 func updateStatusBarInfo() {
-	gv := currentGedView()
+	updateStatusBarInfoFor(currentGedView())
+}
 
+// updateStatusBarInfoFor refreshes the indicators from gv. Split out so the
+// per-view signal hooks in bindStatusBarTo can name the view that changed
+// rather than going back through the frame's active-view lookup.
+func updateStatusBarInfoFor(gv *ged.GedView) {
 	// Zoom level
 	if statusZoomLabel != nil {
 		zoom := 100.0
@@ -1821,17 +1857,22 @@ func main() {
 	createPanels(mainFrame)
 	createStatusBar(mainFrame)
 
-	// Wire status bar updates into selection changes of the initial view
-	if gv := currentGedView(); gv != nil {
-		gv.AddSelectionCallback(func(items []graph.IItem) {
-			updateStatusBarInfo()
-		})
-	}
+	// createPanels wired the canvas signals into the status bar; show the
+	// starting values.
 	updateStatusBarInfo()
 
-	// Register Ctrl+1 / Ctrl+2 mode switching shortcuts
-	ged.SwitchToDesignCallback = func() { modeSelector.SetMode(ged.ModeDesign) }
-	ged.SwitchToEditCallback = func() { modeSelector.SetMode(ged.ModeEdit) }
+	// Ctrl+1 / Ctrl+2 mode switching, as advertised by the ModeSelector's
+	// sidebar labels. GedView.OnKeyDown only sees them while the canvas has
+	// focus, so they did nothing from the code editor; RegisterShortcut runs
+	// at the window layer ahead of focus routing, which is what makes a mode
+	// switch work from anywhere. The GedView callbacks stay wired for the
+	// case the window registry does not claim the key.
+	toDesign := func() { modeSelector.SetMode(ged.ModeDesign) }
+	toEdit := func() { modeSelector.SetMode(ged.ModeEdit) }
+	ged.SwitchToDesignCallback = toDesign
+	ged.SwitchToEditCallback = toEdit
+	gui.RegisterShortcut(gui.ModAction, '1', toDesign)
+	gui.RegisterShortcut(gui.ModAction, '2', toEdit)
 
 	// Register Ctrl+P quick file open
 	qo := ged.GetQuickOpen()
