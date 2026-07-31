@@ -67,3 +67,60 @@ func TestClipboardFormatsAreDistinctMimes(t *testing.T) {
 		seen[f] = true
 	}
 }
+
+// TestClipboardSetDataRejectsEmbeddedNUL pins the one text payload neither
+// backend can carry whole. syscall.UTF16FromString hands win32 back EINVAL and
+// nothing is copied; GLFW passes the string to C as a NUL-terminated buffer,
+// so glfwSetClipboardString stores only the head and SetData still reports
+// ("text/plain", nil) — copying a selection out of a file with an embedded
+// 0x00 silently truncated the clipboard on one platform and failed on the
+// other. Both refuse now, with the same error, and both refuse before they
+// look for a window so the payload alone decides.
+func TestClipboardSetDataRejectsEmbeddedNUL(t *testing.T) {
+	format, err := Clipboard.SetData("a\x00b")
+	if err != errClipboardTextNUL {
+		t.Fatalf("SetData(text with a NUL) = %q, %v; want the %v both backends share", format, err, errClipboardTextNUL)
+	}
+	if format != "" {
+		t.Fatalf("SetData(text with a NUL) format = %q; want an empty format alongside the error", format)
+	}
+	if err := clipboardTextErr("ab"); err != nil {
+		t.Fatalf("clipboardTextErr(%q) = %v; want nil — only an embedded NUL is unencodable", "ab", err)
+	}
+}
+
+// TestClipboardEmptyPayloadReadsAsAbsent pins the rule Data and Formats share.
+// GLFW's GetClipboardString returns "" both for an empty clipboard and for a
+// zero-length string, so it can only report that absent. win32 can tell them
+// apart — IsClipboardFormatAvailable(CF_UNICODETEXT) is true for a zero-length
+// CF_UNICODETEXT — and used to return ("", nil), a successful read, where GLFW
+// returned an error for the very same clipboard state.
+func TestClipboardEmptyPayloadReadsAsAbsent(t *testing.T) {
+	if clipboardPayloadPresent("") {
+		t.Fatal(`clipboardPayloadPresent("") = true; empty text must read as absent, the only answer GLFW can give`)
+	}
+	if !clipboardPayloadPresent("x") {
+		t.Fatal(`clipboardPayloadPresent("x") = false; want non-empty text reported as present`)
+	}
+	if !clipboardPayloadPresent([]byte{}) {
+		t.Fatal("clipboardPayloadPresent([]byte{}) = false; the empty-means-absent rule covers text payloads only")
+	}
+}
+
+// TestClipboardClearWithoutWindowDoesNotSucceed stops a windowless Clear from
+// destroying the user's clipboard behind their back. With no window
+// AnyWindowId() is 0, and win32's OpenClipboard(NULL) still succeeds against
+// the calling thread: EmptyClipboard() then wiped the real system clipboard
+// and Clear() reported nil, while GLFW — which cannot touch the clipboard at
+// all in that state — refused and left it alone.
+//
+// Only the win32 backend can fail this; GLFW has always refused. It runs on
+// every GOOS because the contract belongs to both.
+func TestClipboardClearWithoutWindowDoesNotSucceed(t *testing.T) {
+	if AnyWindowId() != 0 {
+		t.Skip("a window exists, so the windowless contract does not apply")
+	}
+	if err := Clipboard.Clear(); err != errNoClipboardWindow {
+		t.Fatalf("Clear() with no window = %v; want %v", err, errNoClipboardWindow)
+	}
+}

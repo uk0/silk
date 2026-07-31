@@ -36,10 +36,10 @@ func (this *clipBoard) Formats() (formats []string, err error) {
 	clipboardMu.Unlock()
 	gw := getAnyGLFWWindow()
 	if gw == nil {
-		return formats, core.StrErr("no window available")
+		return formats, errNoClipboardWindow
 	}
 	text := gw.GetClipboardString()
-	if text != "" {
+	if clipboardPayloadPresent(text) {
 		formats = append(formats, "text/plain")
 	}
 	return
@@ -57,10 +57,10 @@ func (this *clipBoard) Data(format string) (data interface{}, err error) {
 	if format == "text/plain" {
 		gw := getAnyGLFWWindow()
 		if gw == nil {
-			return nil, core.StrErr("no window available")
+			return nil, errNoClipboardWindow
 		}
 		text := gw.GetClipboardString()
-		if text != "" {
+		if clipboardPayloadPresent(text) {
 			return text, nil
 		}
 	}
@@ -82,9 +82,16 @@ func (this *clipBoard) SetData(data interface{}) (format string, err error) {
 		clipboardMu.Unlock()
 		return "application/x-silk-persist", nil
 	case string:
+		// Vet the text before hunting for a window, the way win32 vets it
+		// before it opens the clipboard: SetClipboardString hands GLFW a C
+		// string, so an embedded NUL would put a silently truncated copy on
+		// the clipboard and still report success.
+		if err := clipboardTextErr(x); err != nil {
+			return "", err
+		}
 		gw := getAnyGLFWWindow()
 		if gw == nil {
-			return "", core.StrErr("no window available")
+			return "", errNoClipboardWindow
 		}
 		gw.SetClipboardString(x)
 		return "text/plain", nil
@@ -104,7 +111,7 @@ func (this *clipBoard) Clear() error {
 	clipboardMu.Unlock()
 	gw := getAnyGLFWWindow()
 	if gw == nil {
-		return core.StrErr("no window available")
+		return errNoClipboardWindow
 	}
 	gw.SetClipboardString("")
 	return nil

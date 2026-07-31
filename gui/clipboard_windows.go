@@ -31,8 +31,7 @@ var clipboardFormats = []clipboardFormat{
 }
 
 func (this *clipBoard) Formats() (formats []string, err error) {
-	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		err = clipboardError("OpenClipboard failed")
+	if err = openClipboard(); err != nil {
 		return
 	}
 	defer win32.CloseClipboard()
@@ -45,7 +44,10 @@ func (this *clipBoard) Formats() (formats []string, err error) {
 	id := win32.EnumClipboardFormats(0)
 	for id != 0 {
 		f := clipboardIdToFormat(win32.CLIPFORMAT(id))
-		if f != "" && !seen[f] {
+		// GetClipboardData makes an owner render a delayed format, so the
+		// content guard runs last — only the three ids silk has a mime for
+		// are ever fetched.
+		if f != "" && !seen[f] && clipboardHasData(win32.CLIPFORMAT(id)) {
 			seen[f] = true
 			formats = append(formats, f)
 		}
@@ -54,10 +56,25 @@ func (this *clipBoard) Formats() (formats []string, err error) {
 	return
 }
 
+// clipboardHasData reports whether an offered format really carries a payload.
+// Data() has to read a zero-length string as absent to answer the way GLFW is
+// forced to, so Formats() must hide the same ids or it advertises a format the
+// very next Data() call refuses.
+func clipboardHasData(id win32.CLIPFORMAT) bool {
+	hBuf := win32.HGLOBAL(win32.GetClipboardData(uint(id)))
+	if hBuf == 0 {
+		return false
+	}
+	v, err := decodeClipFormat(hBuf, id)
+	if err != nil {
+		return false
+	}
+	return clipboardPayloadPresent(v)
+}
+
 // 读剪贴板数据
 func (this *clipBoard) Data(format string) (data interface{}, err error) {
-	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		err = clipboardError("OpenClipboard failed")
+	if err = openClipboard(); err != nil {
 		return
 	}
 	defer win32.CloseClipboard()
@@ -65,7 +82,19 @@ func (this *clipBoard) Data(format string) (data interface{}, err error) {
 		if fp.format == format && win32.IsClipboardFormatAvailable(uint(fp.id)) {
 			hBuf := win32.HGLOBAL(win32.GetClipboardData(uint(fp.id)))
 			if hBuf != 0 {
-				return decodeClipFormat(hBuf, fp.id)
+				v, derr := decodeClipFormat(hBuf, fp.id)
+				if derr != nil {
+					return nil, derr
+				}
+				// IsClipboardFormatAvailable answers true for a
+				// zero-length CF_UNICODETEXT, which GLFW cannot tell
+				// from an empty clipboard; handing it back as a
+				// successful read answers one clipboard state two
+				// different ways, so keep looking instead.
+				if clipboardPayloadPresent(v) {
+					return v, nil
+				}
+				continue
 			}
 			err = clipboardError("GetClipboardData failed")
 		}
@@ -84,14 +113,21 @@ func (this *clipBoard) SetData(data interface{}) (format string, err error) {
 	if err != nil {
 		return format, err
 	}
-	err = setClipboardData(hGlobal, id)
-	return format, err
+	if err = setClipboardData(hGlobal, id); err != nil {
+		// The system only takes the block once SetClipboardData accepts it,
+		// and the window guard now rejects before we ever get that far, so
+		// the buffer is still ours to release. The format goes with it:
+		// GLFW reports "" on every failure and callers read the pair.
+		win32.GlobalFree(hGlobal)
+		return "", err
+	}
+	return format, nil
 }
 
 // 清除剪贴板数据
 func (this *clipBoard) Clear() error {
-	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		return clipboardError("OpenClipboard failed")
+	if err := openClipboard(); err != nil {
+		return err
 	}
 	defer win32.CloseClipboard()
 	if !win32.EmptyClipboard() {
@@ -122,10 +158,26 @@ func clipboardError(what string) error {
 	return core.StrErr(what)
 }
 
+// openClipboard associates the clipboard with one of silk's windows.
+// OpenClipboard(NULL) would succeed against the calling thread instead, which
+// lets a process with no window left empty and rewrite the user's real
+// clipboard — something the GLFW backend cannot do at all, and reports as
+// errNoClipboardWindow.
+func openClipboard() error {
+	id := AnyWindowId()
+	if id == 0 {
+		return errNoClipboardWindow
+	}
+	if !win32.OpenClipboard(win32.HWND(id)) {
+		return clipboardError("OpenClipboard failed")
+	}
+	return nil
+}
+
 func setClipboardData(hBuf win32.HGLOBAL, id win32.CLIPFORMAT) error {
 
-	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		return clipboardError("OpenClipboard failed")
+	if err := openClipboard(); err != nil {
+		return err
 	}
 	defer win32.CloseClipboard()
 
@@ -174,6 +226,12 @@ func encodeClipFormat(data interface{}) (win32.HGLOBAL, string, win32.CLIPFORMAT
 		}
 		return a, "application/x-silk-persist", CF_PERSIST, nil
 	case string:
+		// UTF16FromString would reject an embedded NUL on its own, but with
+		// EINVAL — the GLFW backend refuses the same text and both have to
+		// say so the same way.
+		if err := clipboardTextErr(x); err != nil {
+			return 0, "", 0, err
+		}
 		id := win32.CF_UNICODETEXT
 		utf16, err := syscall.UTF16FromString(x)
 		if err != nil {
