@@ -159,3 +159,79 @@ func TestGoExecutableIsAbsoluteWhenFound(t *testing.T) {
 		t.Errorf("goExecutable() = %q, which is not an executable file", got)
 	}
 }
+
+// TestFindModuleRootWalksUp covers the search itself, including the case that
+// used to be silently papered over with ".".
+func TestFindModuleRootWalksUp(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := findModuleRoot(deep); got != root {
+		t.Errorf("findModuleRoot(%q) = %q, want %q", deep, got, root)
+	}
+	if got := findModuleRoot(root); got != root {
+		t.Errorf("findModuleRoot on the root itself = %q, want %q", got, root)
+	}
+
+	// Nothing above a bare temp dir carries a go.mod, and reporting that
+	// honestly is the point: "." sent the build to a directory outside any
+	// module, where it failed with "no required module provides package".
+	bare := t.TempDir()
+	if got := findModuleRoot(bare); got != "" {
+		t.Errorf("findModuleRoot(%q) = %q, want \"\" — unless a go.mod really sits above the temp dir", bare, got)
+	}
+}
+
+// TestSilkModuleRootPrefersTheExecutable is the regression guard for a Run
+// failure that only appeared when the designer was launched from a shortcut:
+// a GUI process inherits the launcher's working directory, so resolving the
+// module from the cwd found nothing and the preview build ran outside the
+// module entirely.
+func TestSilkModuleRootPrefersTheExecutable(t *testing.T) {
+	body := funcBody(t, "design.go", "func silkModuleRoot() string {")
+	exe := strings.Index(body, "os.Executable()")
+	cwd := strings.Index(body, "os.Getwd()")
+	if exe < 0 {
+		t.Fatal("silkModuleRoot no longer looks at the executable; a shortcut-launched designer cannot build")
+	}
+	if cwd >= 0 && cwd < exe {
+		t.Error("silkModuleRoot consults the cwd before the executable; the launcher's directory would win")
+	}
+}
+
+// TestPreviewAppGetsARunnableEnvironment guards the last step of Run: the
+// program is built into a temp directory, so nothing there can resolve the
+// cairo libraries silk links, and it died with STATUS_DLL_NOT_FOUND the moment
+// the designer's own working directory was outside the source tree.
+func TestPreviewAppGetsARunnableEnvironment(t *testing.T) {
+	body := funcBody(t, "design.go", "func onRun() {")
+	if !strings.Contains(body, "runCmd.Env = runAppEnv()") {
+		t.Error("the preview program inherits the designer's PATH unchanged; it cannot find its runtime libraries")
+	}
+	if !strings.Contains(body, "runCmd.Dir = moduleRoot") {
+		t.Error("the preview program inherits the designer's working directory, which may be anywhere")
+	}
+
+	env := runAppEnv()
+	var path string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = kv[len("PATH="):]
+		}
+	}
+	if path == "" {
+		t.Fatal("runAppEnv did not set PATH")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("cannot locate the test binary")
+	}
+	if dirs := filepath.SplitList(path); len(dirs) == 0 || dirs[0] != filepath.Dir(exe) {
+		t.Errorf("PATH does not lead with the program's own directory: %q", path)
+	}
+}

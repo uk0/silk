@@ -11,6 +11,7 @@ import (
 	"math"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -189,7 +190,12 @@ const wndPanicVerboseLimit = 5
 func reportWndProcPanic(hWnd win32.HWND, msg uint32, wParam, lParam uintptr, e interface{}) {
 	if wndPanicVerbose < wndPanicVerboseLimit {
 		wndPanicVerbose++
-		core.Warn(fmt.Sprintf("Recover wndProcFunc(%X, %d, %d, %d) : %v ", hWnd, msg, wParam, lParam, e))
+		// Without the stack these reports name the message and nothing else,
+		// which is how a nil dereference in the drag-cursor code read for a
+		// long time as "the palette just doesn't drag". The count is already
+		// capped above, so this cannot flood the log.
+		core.Warn(fmt.Sprintf("Recover wndProcFunc(%X, %d, %d, %d) : %v \n%s",
+			hWnd, msg, wParam, lParam, e, debug.Stack()))
 		if wndPanicVerbose == wndPanicVerboseLimit {
 			core.Warn("wndProcFunc: further panics will be summarised once per second")
 		}

@@ -287,6 +287,17 @@ func GenerateDropCursors(content paint.Pixmap) (curs []*Cursor) {
 	}
 
 	for _, arrow := range dndCursorData {
+		// LoadCursorData above leaves a zero CursorData behind whenever the
+		// cursor resources are missing — which is every install that does not
+		// ship a "cursor" directory next to the binary. Dereferencing that nil
+		// Pixmap panicked inside the WM_MOUSEMOVE handler, and since wndProcFunc
+		// recovers, the only visible symptom was that nothing in the widget
+		// palette could be dragged. Fall back to the plain arrow, exactly as
+		// the GLFW backend already did.
+		if arrow.Pixmap == nil {
+			curs = append(curs, cursorArrow)
+			continue
+		}
 		w := content.Width()
 		h := content.Height()
 		hotX := w / 2

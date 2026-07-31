@@ -567,19 +567,37 @@ func (this *dropTarget) release() HRESULT {
 	return HRESULT(lockDec(unsafe.Pointer(this)))
 }
 
+// decodePointL unpacks the POINTL that IDropTarget's methods take *by value*.
+//
+// Two LONGs fit in one machine word on amd64, so COM hands the whole struct
+// over in a single argument slot. Declaring it as two int32 parameters — which
+// is what 32-bit stdcall really does — shifted every following argument down by
+// one slot, so pdwEffect held whatever happened to sit past the end of the
+// call frame. Dereferencing it faulted the process (0xC0000005) the instant a
+// drag entered a window, which is why nothing could be dropped anywhere.
+//
+// windows/amd64 is the only Windows target this project builds; a 32-bit port
+// would need the original two-parameter form back.
+func decodePointL(pt uintptr) (x, y int32) {
+	return int32(uint32(pt)), int32(uint32(pt >> 32))
+}
+
 func (this *dropTarget) dragEnter(pDataObj *IDataObject,
-	grfKeyState uint32, x int32, y int32, pdwEffect *uint32) HRESULT {
+	grfKeyState uint32, pt uintptr, pdwEffect *uint32) HRESULT {
+	x, y := decodePointL(pt)
 	return this.iface.DragEnter(pDataObj, grfKeyState, x, y, pdwEffect)
 }
 func (this *dropTarget) dragOver(grfKeyState uint32,
-	x int32, y int32, pdwEffect *uint32) HRESULT {
+	pt uintptr, pdwEffect *uint32) HRESULT {
+	x, y := decodePointL(pt)
 	return this.iface.DragOver(grfKeyState, x, y, pdwEffect)
 }
 func (this *dropTarget) dragLeave() HRESULT {
 	return this.iface.DragLeave()
 }
 func (this *dropTarget) drop(pDataObj *IDataObject,
-	grfKeyState uint32, x int32, y int32, pdwEffect *uint32) HRESULT {
+	grfKeyState uint32, pt uintptr, pdwEffect *uint32) HRESULT {
+	x, y := decodePointL(pt)
 	return this.iface.Drop(pDataObj, grfKeyState, x, y, pdwEffect)
 }
 

@@ -695,23 +695,40 @@ func onExportCode() {
 // Run
 // ---------------------------------------------------------------------------
 
-// silkModuleRoot returns the silk module root: the nearest ancestor of the
-// working directory that contains a go.mod. It falls back to "." so the build
-// still runs from the process cwd when no go.mod is found. Used as the build
-// working directory so preview builds don't depend on where the designer
-// process was launched.
+// silkModuleRoot returns the silk module root — the nearest ancestor holding a
+// go.mod — used as the working directory for preview builds. Empty when there
+// is none to be found.
+//
+// It searches from the designer executable before the process cwd. A GUI
+// program's working directory is wherever it happened to be started from: a
+// desktop shortcut leaves it in the user's profile, which has no go.mod above
+// it, and the preview build then ran outside the module and failed with
+// "no required module provides package github.com/uk0/silk/gui". The binary,
+// on the other hand, sits in the tree it was built from.
 func silkModuleRoot() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "."
+	if exe, err := os.Executable(); err == nil {
+		if root := findModuleRoot(filepath.Dir(exe)); root != "" {
+			return root
+		}
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		if root := findModuleRoot(cwd); root != "" {
+			return root
+		}
+	}
+	return ""
+}
+
+// findModuleRoot walks up from dir to the first directory containing a go.mod,
+// or "" when it reaches the filesystem root without finding one.
+func findModuleRoot(dir string) string {
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "."
+			return ""
 		}
 		dir = parent
 	}
@@ -760,6 +777,14 @@ func onRun() {
 	// painted "(Not Responding)" over the designer. Do it on a goroutine and
 	// come back through gui.Post, which runs the continuation on the event
 	// loop where every widget below is safe to touch.
+	// Without the module the build can only fail, and it fails with a message
+	// about a missing package rather than the real problem.
+	moduleRoot := silkModuleRoot()
+	if moduleRoot == "" {
+		reportRunFailure("找不到 silk 模块根目录 (go.mod)。请在 silk 源码目录下运行设计器。")
+		return
+	}
+
 	runBusy = true
 	setRunStatus("正在编译...")
 	go func() {
@@ -768,33 +793,14 @@ func onRun() {
 		// set. Run from the silk module root so silk/* imports resolve
 		// regardless of the designer process's cwd.
 		cmd := exec.Command(goExecutable(), "build", "-o", appPath, goFile)
-		cmd.Dir = silkModuleRoot()
+		cmd.Dir = moduleRoot
 		cmd.Env = append(os.Environ(), "PATH="+buildToolPath())
 		output, err := cmd.CombinedOutput()
 
 		gui.Post(func() {
 			runBusy = false
 			if err != nil {
-				// Show output in BuildOutput panel if available
-				if buildOutput != nil {
-					buildOutput.SetOutput(buildFailureDetail(output, err))
-					// Switch to the output tab in the right dock
-					if rightDockRef != nil {
-						idx := rightDockRef.IndexOfView(buildOutput)
-						if idx >= 0 {
-							rightDockRef.SetActiveIndex(idx)
-						}
-					}
-					// Pass compile errors to the active CodeEditor for inline markers
-					if editorTabs != nil {
-						if editor := editorTabs.ActiveEditor(); editor != nil {
-							editor.SetErrors(buildOutput.ErrorMap())
-						}
-					}
-				} else {
-					gui.ShowMessageDialog(gui.DefaultFrame(), "编译错误", buildFailureDetail(output, err))
-				}
-				setRunStatus("编译失败")
+				reportRunFailure(buildFailureDetail(output, err))
 				return
 			}
 
@@ -811,12 +817,10 @@ func onRun() {
 			// Run. A failed spawn used to be swallowed, so the status bar
 			// claimed success while nothing had started.
 			runCmd := exec.Command(appPath)
+			runCmd.Dir = moduleRoot
+			runCmd.Env = runAppEnv()
 			if err := runCmd.Start(); err != nil {
-				if buildOutput != nil {
-					buildOutput.SetOutput("启动失败: " + err.Error() + "\n")
-				} else {
-					gui.ShowMessageDialog(gui.DefaultFrame(), "启动失败", err.Error())
-				}
+				reportRunFailure("启动失败: " + err.Error())
 				setRunStatus("启动失败")
 				return
 			}
@@ -834,6 +838,32 @@ func setRunStatus(msg string) {
 	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
 		sb.ShowMessage(msg)
 	}
+}
+
+// reportRunFailure puts detail where the user can act on it: the build-output
+// pane if one exists, a dialog if not, and the log either way. The log copy is
+// what makes a failed Run diagnosable after the fact — a message that only ever
+// lived in a panel had to be read off a screenshot.
+func reportRunFailure(detail string) {
+	core.Warn("run: " + detail)
+	if buildOutput == nil {
+		gui.ShowMessageDialog(gui.DefaultFrame(), "编译错误", detail)
+		setRunStatus("编译失败")
+		return
+	}
+	buildOutput.SetOutput(detail)
+	if rightDockRef != nil {
+		if idx := rightDockRef.IndexOfView(buildOutput); idx >= 0 {
+			rightDockRef.SetActiveIndex(idx)
+		}
+	}
+	// Compile errors also become inline markers in the active editor.
+	if editorTabs != nil {
+		if editor := editorTabs.ActiveEditor(); editor != nil {
+			editor.SetErrors(buildOutput.ErrorMap())
+		}
+	}
+	setRunStatus("编译失败")
 }
 
 // buildToolPath is the PATH the Run build should use.
@@ -860,6 +890,30 @@ func buildToolPath() string {
 		}
 	}
 	return prependPath(os.Getenv("PATH"), extra)
+}
+
+// runAppEnv is the environment for the freshly built preview program.
+//
+// The binary lands in a temp directory, and Windows resolves a DLL against the
+// program's own directory, the system directories, the working directory and
+// PATH — none of which hold the cairo libraries silk links. Started from a
+// designer whose working directory was outside the source tree, the preview
+// died instantly with STATUS_DLL_NOT_FOUND (0xC0000135) and no window ever
+// appeared, while the designer reported it had launched. Point PATH at the
+// directories that do carry those libraries: the designer's own directory in a
+// packaged install, and the MSYS2 bin directory in a source checkout.
+func runAppEnv() []string {
+	var dirs []string
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	if dir := findToolDir(cToolDirs(), "gcc"); dir != "" {
+		dirs = append(dirs, dir)
+	}
+	if len(dirs) == 0 {
+		return os.Environ()
+	}
+	return append(os.Environ(), "PATH="+prependPath(os.Getenv("PATH"), dirs))
 }
 
 // goExecutable is the Go binary the Run build should launch.
