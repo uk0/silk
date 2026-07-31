@@ -159,6 +159,37 @@ const animFrameInterval = time.Second / 60
 
 var lastAnimFrame time.Time
 
+// wndProc panic reporting state. UI-thread only.
+var (
+	wndPanicVerbose    int // full reports still allowed
+	wndPanicSuppressed int // collapsed since the last summary
+	wndPanicLastReport time.Time
+)
+
+const wndPanicVerboseLimit = 5
+
+// reportWndProcPanic logs a recovered wndProc panic without letting the logging
+// itself become the outage. The first few are reported in full — those name the
+// message and the failure — after which repeats are counted and summarised at
+// most once a second.
+func reportWndProcPanic(hWnd win32.HWND, msg uint32, wParam, lParam uintptr, e interface{}) {
+	if wndPanicVerbose < wndPanicVerboseLimit {
+		wndPanicVerbose++
+		core.Warn(fmt.Sprintf("Recover wndProcFunc(%X, %d, %d, %d) : %v ", hWnd, msg, wParam, lParam, e))
+		if wndPanicVerbose == wndPanicVerboseLimit {
+			core.Warn("wndProcFunc: further panics will be summarised once per second")
+		}
+		return
+	}
+	wndPanicSuppressed++
+	if now := time.Now(); now.Sub(wndPanicLastReport) >= time.Second {
+		wndPanicLastReport = now
+		core.Warn(fmt.Sprintf("wndProcFunc: %d recovered panics in the last second (latest msg=%d: %v)",
+			wndPanicSuppressed, msg, e))
+		wndPanicSuppressed = 0
+	}
+}
+
 // appIconResourceID is the icon ordinal a packaged silk .exe is expected to
 // carry in its resource section (the conventional first icon). Absent — a plain
 // `go build` embeds no resources — LoadIcon returns 0 and the caller falls back
@@ -342,9 +373,59 @@ func (this *Window) create(p *Window, wt WindowType) error {
 }
 
 func (this *Window) destroy() {
-	this.widget = nil
+	// Order matters. This used to clear the widget FIRST, but DestroyWindow
+	// dispatches WM_DESTROY synchronously and the queue can still hold input
+	// for this window, so every handler that starts with win.widget.Bounds()
+	// — on_WM_MOUSEMOVE does — hit a nil interface and panicked:
+	//
+	//	Recover wndProcFunc(..., 512, ...): invalid memory address or nil
+	//	pointer dereference        (512 = WM_MOUSEMOVE)
+	//
+	// Destroy first (OnDestroy unregisters the window), then drop the widget.
+	forgetWidgetsOfWindow(this)
 	win32.DestroyWindow(this.hWnd)
 	this.hWnd = 0
+	this.widget = nil
+}
+
+// forgetWidgetsOfWindow drops the package-level widget pointers that belong to
+// a window being destroyed.
+//
+// These outlive the window otherwise: lastMouseWidget and mouseHoverWidget are
+// only reassigned while the mouse is over a live widget, so once they point
+// into a destroyed tree EVERY later WM_MOUSEMOVE dereferences freed state and
+// panics. wndProcFunc recovers each time, but the handler aborts halfway —
+// leaving mouse capture unbalanced — and writes a warning to the log file per
+// mouse move, which on its own is enough to make the UI look frozen.
+func forgetWidgetsOfWindow(win *Window) {
+	if win == nil {
+		return
+	}
+	belongs := func(iw IWidget) bool {
+		if iw == nil {
+			return false
+		}
+		// A widget already detached from any window reports nil; treat that as
+		// stale too, since it can no longer be mapped or hit-tested.
+		w := iw.Window()
+		return w == win || w == nil
+	}
+	if belongs(lastMouseWidget) {
+		lastMouseWidget = nil
+	}
+	if belongs(mouseHoverWidget) {
+		mouseHoverWidget = nil
+	}
+	if belongs(focusWidget) {
+		focusWidget = nil
+	}
+	for i := 0; i < len(captureStack); {
+		if belongs(captureStack[i]) {
+			captureStack = append(captureStack[:i], captureStack[i+1:]...)
+			continue
+		}
+		i++
+	}
 }
 
 func (this *Window) getBackBuffer(s0 paint.Surface, width, height int) (backPainter paint.Painter, backBuffer paint.Pixmap) {
@@ -1029,13 +1110,25 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 	//core.Debug("wndProcFunc, hWnd=", fmt.Sprintf("%08X", hWnd))
 	defer func() {
 		if e := recover(); e != nil {
-			core.Warn(fmt.Sprintf("Recover wndProcFunc(%X, %d, %d, %d) : %v ", hWnd, msg, wParam, lParam, e))
+			// Rate-limited: a panic in a mouse handler repeats on every single
+			// WM_MOUSEMOVE, and writing a warning to the log FILE hundreds of
+			// times a second is itself enough to freeze the UI — the log
+			// becomes the hang. Report the first few in full, then one summary
+			// per second.
+			reportWndProcPanic(hWnd, msg, wParam, lParam, e)
 			ret = win32.DefWindowProc(hWnd, msg, wParam, lParam)
 		}
 	}()
 
 	win := winMap[hWnd]
 	if win == nil {
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	}
+	// A window mid-teardown keeps its map entry until WM_DESTROY unregisters
+	// it, but its widget is already gone. Nearly every handler below starts by
+	// dereferencing win.widget, so let only WM_DESTROY — which still has to
+	// unregister — through.
+	if win.widget == nil && msg != win32.WM_DESTROY {
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	}
 
