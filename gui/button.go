@@ -5,7 +5,6 @@ import (
 	"github.com/uk0/silk/gv"
 	"github.com/uk0/silk/paint"
 	"math"
-	"time"
 )
 
 func (this *Button) EnumProperties(list core.IPropertyList) {
@@ -32,7 +31,7 @@ type Button struct {
 	//iconVisible bool
 	action     IAction
 	subPopup   IWidget
-	syncTime   time.Time
+	syncRev    uint64
 	cbSubPopup func(IButton)
 
 	// SizeHints cache. Validity is determined by comparing the captured key
@@ -42,16 +41,16 @@ type Button struct {
 	// dominates layout cost when many buttons are children of an HBox/VBox.
 	//
 	// Cache key inputs:
-	//   hintActionMTime — covers SetText/SetIcon/SetEnabled/SetChecked
+	//   hintActionRev — covers SetText/SetIcon/SetEnabled/SetChecked
 	//   hintTextVis     — covers SetTextVisible (does not flow through Action)
 	//   hintParent      — covers IsInPopupMenu transitions on reparent
 	//   hintThemeRev    — covers SetThemeMode font/margin changes
-	cachedHints     SizeHints
-	hintActionMTime time.Time
-	hintParent      IWidget
-	hintThemeRev    uint64
-	hintTextVis     bool
-	hintsValid      bool
+	cachedHints   SizeHints
+	hintActionRev uint64
+	hintParent    IWidget
+	hintThemeRev  uint64
+	hintTextVis   bool
+	hintsValid    bool
 }
 
 func init() {
@@ -192,11 +191,11 @@ func (this *Button) SizeHints() SizeHints {
 	// Resolved IsTextVisible / IsIconVisible / IsInPopupMenu collapse to
 	// (action state, textVisible, parent), so the cache key above is closed.
 	if this.hintsValid {
-		var mtime time.Time
+		var rev uint64
 		if this.action != nil {
-			mtime = this.action.MTime()
+			rev = this.action.Rev()
 		}
-		if mtime.Equal(this.hintActionMTime) &&
+		if rev == this.hintActionRev &&
 			this.hintThemeRev == themeRev &&
 			this.hintParent == this.parent &&
 			this.hintTextVis == this.textVisible {
@@ -207,9 +206,9 @@ func (this *Button) SizeHints() SizeHints {
 	hints := this.computeSizeHints()
 
 	if this.action != nil {
-		this.hintActionMTime = this.action.MTime()
+		this.hintActionRev = this.action.Rev()
 	} else {
-		this.hintActionMTime = time.Time{}
+		this.hintActionRev = 0
 	}
 	this.hintThemeRev = themeRev
 	this.hintParent = this.parent
@@ -386,9 +385,9 @@ func (this *Button) asButton() {
 
 func (this *Button) OnIdle() {
 	a := this.Action()
-	if this.syncTime.Before(a.MTime()) {
+	if rev := a.Rev(); rev != this.syncRev {
 		this.Update()
-		this.syncTime = time.Now()
+		this.syncRev = rev
 	}
 }
 

@@ -9,16 +9,21 @@ import (
 // TestNewItemDir: a directory entry creates into itself, a file entry
 // creates into its parent, and a nil entry (empty-space right-click)
 // creates into the explorer root.
+// The result is handed to os.Create / os.Mkdir, so it carries the platform's
+// own separator; spelling the expectations with FromSlash keeps the case
+// readable while letting them hold on Windows, where filepath.Dir answers
+// "\proj\pkg".
 func TestNewItemDir(t *testing.T) {
-	root := "/proj"
-	dirEntry := &fileEntry{path: "/proj/pkg", isDir: true}
-	fileEntry := &fileEntry{path: "/proj/pkg/main.go", isDir: false}
+	root := filepath.FromSlash("/proj")
+	dirEntry := &fileEntry{path: filepath.FromSlash("/proj/pkg"), isDir: true}
+	fileEntry := &fileEntry{path: filepath.FromSlash("/proj/pkg/main.go"), isDir: false}
+	wantDir := filepath.FromSlash("/proj/pkg")
 
-	if got := newItemDir(dirEntry, root); got != "/proj/pkg" {
-		t.Errorf("dir entry: got %q, want /proj/pkg", got)
+	if got := newItemDir(dirEntry, root); got != wantDir {
+		t.Errorf("dir entry: got %q, want %q", got, wantDir)
 	}
-	if got := newItemDir(fileEntry, root); got != "/proj/pkg" {
-		t.Errorf("file entry: got %q, want /proj/pkg (parent dir)", got)
+	if got := newItemDir(fileEntry, root); got != wantDir {
+		t.Errorf("file entry: got %q, want %q (parent dir)", got, wantDir)
 	}
 	if got := newItemDir(nil, root); got != root {
 		t.Errorf("nil entry: got %q, want %q", got, root)

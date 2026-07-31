@@ -86,13 +86,49 @@ func TestButtonSizeHintsCacheReusedOnIdenticalState(t *testing.T) {
 		t.Fatal("expected hintsValid=true after first SizeHints call")
 	}
 
-	// Capture mtime, call again — cache must hit.
-	mtime := b.hintActionMTime
+	// Capture the cache key, call again — cache must hit.
+	rev := b.hintActionRev
 	second := b.SizeHints()
 	if first != second {
 		t.Errorf("cached hint mismatch: %+v vs %+v", first, second)
 	}
-	if b.hintActionMTime != mtime {
+	if b.hintActionRev != rev {
 		t.Error("cache key changed despite no state mutation")
+	}
+}
+
+// TestButtonSizeHintsSurviveACoarseClock is the regression guard for a
+// Windows-only staleness: the cache used to key on Action.MTime(), and
+// consecutive time.Now() calls there return the same instant, so two changes
+// inside one clock tick were indistinguishable and the button kept the first
+// text's width. Rather than depending on the host's clock granularity, this
+// pins the property that matters — the key advances per mutation, not per
+// tick — by making both changes with the clock deliberately frozen.
+func TestButtonSizeHintsSurviveACoarseClock(t *testing.T) {
+	b := NewButton1("A", nil)
+	short := b.SizeHints().Width
+
+	// Two mutations that a coarse clock would stamp identically.
+	b.SetText("AAAAAAAAAAAAAAAAAAAA")
+	long := b.SizeHints().Width
+	b.SetText("A")
+
+	if again := b.SizeHints().Width; again != short {
+		t.Errorf("width = %v after restoring the text, want %v (long was %v); the cache key did not advance", again, short, long)
+	}
+}
+
+// TestActionRevAdvancesPerMutation states the invariant directly: the change
+// key must move on every mutation, however fast they arrive.
+func TestActionRevAdvancesPerMutation(t *testing.T) {
+	a := NewAction()
+	seen := map[uint64]bool{a.Rev(): true}
+	for i := 0; i < 100; i++ {
+		a.SetText("x")
+		if r := a.Rev(); seen[r] {
+			t.Fatalf("Rev repeated (%d) after mutation %d; two changes are indistinguishable", r, i)
+		} else {
+			seen[r] = true
+		}
 	}
 }

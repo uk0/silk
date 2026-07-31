@@ -8,7 +8,7 @@ import (
 )
 
 var (
-//	currentToolView IView
+// currentToolView IView
 )
 
 type ITool interface {
@@ -60,6 +60,9 @@ type Tool struct {
 	curY      float64 // mm
 	dragStart bool
 	mtime     time.Time
+	// rev pairs with mtime for cache keys; see gui.Action.Rev — a timestamp
+	// cannot separate two changes that land in the same clock tick.
+	rev uint64
 }
 
 func (this *Tool) Init(self ITool) {
@@ -393,9 +396,10 @@ func (this *Tool) ActivePart() IPart {
 
 func (this *Tool) updateMTime() {
 	this.mtime = time.Now()
+	this.rev++
 }
 
-//////////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////////
 type actionForTool struct {
 	tool *Tool
 }
@@ -468,6 +472,10 @@ func (this *actionForTool) BindAction(a gui.IAction) {
 
 func (this *actionForTool) MTime() (ret time.Time) {
 	return this.tool.mtime
+}
+
+func (this *actionForTool) Rev() uint64 {
+	return this.tool.rev
 }
 
 func (this *actionForTool) Trigger(sender interface{}) {

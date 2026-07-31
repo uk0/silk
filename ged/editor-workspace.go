@@ -1,6 +1,9 @@
 package ged
 
-import "path/filepath"
+import (
+	"path"
+	"strings"
+)
 
 // This file implements the *editor workspace* — the split-group model Qt
 // Creator (and VS Code) put under their editor area, and the piece
@@ -129,12 +132,19 @@ func NewWorkspace() *Workspace {
 // hand in absolute paths (EditorTabs.OpenFile already resolves them);
 // cleaning here only collapses "a/./b" and "a/x/../b" spellings so the
 // same file cannot end up as two identities. The empty path is kept
-// empty — filepath.Clean would turn it into ".".
-func normDocPath(path string) string {
-	if path == "" {
+// empty — cleaning would turn it into ".".
+//
+// The key is slash-formed on every platform. This is an identity, not a
+// path handed to the filesystem, and it has to agree with the spellings
+// the rest of the IDE produces: the Go toolchain, gopls and dlv all answer
+// in slashes even on Windows, so a filepath.Clean here made the same file
+// arrive as "\p\a.go" from one component and "/p/a.go" from another and
+// opened it twice.
+func normDocPath(p string) string {
+	if p == "" {
 		return ""
 	}
-	return filepath.Clean(path)
+	return path.Clean(strings.ReplaceAll(p, `\`, "/"))
 }
 
 // newPane mints a pane with the next free ID.

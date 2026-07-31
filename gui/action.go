@@ -38,6 +38,7 @@ type IAction interface {
 	IsChecked() bool
 	SetChecked(b bool)
 	MTime() time.Time
+	Rev() uint64
 	Trigger(sender interface{})
 
 	BindFunc(fn func(IAction, interface{}))
@@ -61,6 +62,12 @@ type Action struct {
 	disabled bool
 	checked  bool
 	mtime    time.Time
+	// rev counts mutations. It is what caches key on, not mtime: two calls to
+	// time.Now() a few microseconds apart return the same instant on Windows,
+	// so two changes inside one clock tick were indistinguishable and anything
+	// keyed on MTime went stale — a button whose text was set twice in a frame
+	// kept the first text's size hints and never repainted for the second.
+	rev uint64
 
 	targetAction IAction
 	cbAction     func(IAction, interface{})
@@ -72,13 +79,13 @@ func (this *Action) ObjName() string {
 
 func (this *Action) SetObjName(objname string) {
 	this.objname = objname
-	this.mtime = time.Now()
+	this.touch()
 }
 
 //func (this *Action) Bind(dst interface{}) {
 //	this.Callback.Bind(dst)
 //	this.targetAction, _ = dst.(IAction)
-//	this.mtime = time.Now()
+//	this.touch()
 //}
 
 // Text returns the action's display text, or the empty string when no
@@ -103,7 +110,7 @@ func (this *Action) SetText(text string) {
 		return
 	}
 	this.text = text
-	this.mtime = time.Now()
+	this.touch()
 }
 
 func (this *Action) Icon() paint.Icon {
@@ -122,7 +129,7 @@ func (this *Action) SetIcon(icon paint.Icon) {
 		return
 	}
 	this.icon = icon
-	this.mtime = time.Now()
+	this.touch()
 }
 
 func (this *Action) IsEnabled() bool {
@@ -138,7 +145,7 @@ func (this *Action) SetEnabled(b bool) {
 		return
 	}
 	this.disabled = !b
-	this.mtime = time.Now()
+	this.touch()
 }
 
 func (this *Action) IsChecked() bool {
@@ -154,7 +161,23 @@ func (this *Action) SetChecked(b bool) {
 		return
 	}
 	this.checked = b
+	this.touch()
+}
+
+// touch records a mutation. mtime stays for anything that wants to display a
+// change time; rev is the ordering-safe half.
+func (this *Action) touch() {
 	this.mtime = time.Now()
+	this.rev++
+}
+
+// Rev is the change counter for cache keys. Bound actions fold both sides in:
+// either one advancing changes the sum, which is all a key needs.
+func (this *Action) Rev() uint64 {
+	if this.targetAction == nil {
+		return this.rev
+	}
+	return this.rev + this.targetAction.Rev()
 }
 
 func (this *Action) MTime() time.Time {
@@ -171,7 +194,7 @@ func (this *Action) MTime() time.Time {
 
 func (this *Action) BindFunc(fn func(IAction, interface{})) {
 	this.cbAction = fn
-	this.mtime = time.Now()
+	this.touch()
 }
 
 func (this *Action) BindFunc0(fn func()) {
@@ -188,7 +211,7 @@ func (this *Action) BindFunc1(fn func(IAction)) {
 
 func (this *Action) BindAction(a IAction) {
 	this.targetAction = a
-	this.mtime = time.Now()
+	this.touch()
 }
 
 func (this *Action) Trigger(sender interface{}) {
