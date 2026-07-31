@@ -140,40 +140,11 @@ func (this *Window) DoDragDrop(from interface{},
 
 		// Find the widget under the cursor
 		targetWidget := FindWidgetGlobal(mx, my)
-
-		// Walk up the widget tree to find the nearest IOnDrop handler
-		var dropTarget IWidget
-		for w := targetWidget; w != nil; w = w.Parent() {
-			if _, ok := w.(IOnDrop); ok {
-				dropTarget = w
-				break
-			}
+		wx, wy := 0.0, 0.0
+		if targetWidget != nil {
+			wx, wy = targetWidget.MapFromGlobal(mx, my)
 		}
-
-		// Handle drag enter/move/leave transitions
-		if dropTarget != lastDropWidget {
-			// Left the previous drop target
-			if lastDropWidget != nil {
-				if il, ok := lastDropWidget.(IOnDragLeave); ok {
-					il.OnDragLeave()
-				}
-			}
-			// Entered a new drop target
-			if dropTarget != nil {
-				if id, ok := dropTarget.(IOnDrop); ok {
-					ctx.SetAction(DndIgnore)
-					wx, wy := dropTarget.MapFromGlobal(mx, my)
-					id.OnDragEnter(wx, wy, ctx)
-				}
-			}
-			lastDropWidget = dropTarget
-		} else if dropTarget != nil {
-			// Still over the same drop target - send move
-			if id, ok := dropTarget.(IOnDrop); ok {
-				wx, wy := dropTarget.MapFromGlobal(mx, my)
-				id.OnDragMove(wx, wy, ctx)
-			}
-		}
+		lastDropWidget = dndDragOver(targetWidget, lastDropWidget, wx, wy, ctx)
 
 		// Update cursor based on current action
 		if len(cursors) >= 4 {
@@ -190,14 +161,14 @@ func (this *Window) DoDragDrop(from interface{},
 		}
 
 		// Check if mouse button released = drop (only once!)
-		if !IsMouseLeftDown() && dragging {
+		if !IsMouseLeftDown() {
 			dragging = false
-			if dropTarget != nil && ctx.Action() != DndIgnore {
-				if id, ok := dropTarget.(IOnDrop); ok {
-					wx, wy := dropTarget.MapFromGlobal(mx, my)
-					id.OnDrop(wx, wy, ctx)
-					result = ctx.Action()
-				}
+			// OLE only reaches IDropTarget::Drop when the last DragOver accepted;
+			// gate the drop the same way so releasing over a target that refused
+			// the drag does nothing here either.
+			if ctx.Action() != DndIgnore {
+				dndDrop(targetWidget, wx, wy, ctx)
+				result = ctx.Action()
 			}
 		}
 
@@ -218,11 +189,7 @@ func (this *Window) DoDragDrop(from interface{},
 	}
 
 	// Clean up drag leave on the last target
-	if lastDropWidget != nil {
-		if il, ok := lastDropWidget.(IOnDragLeave); ok {
-			il.OnDragLeave()
-		}
-	}
+	dndDragLeave(lastDropWidget)
 
 	SetOverrideCursor(nil)
 	privateDndData = nil

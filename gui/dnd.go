@@ -50,3 +50,71 @@ type IOnDrop interface {
 type IOnDragLeave interface {
 	OnDragLeave()
 }
+
+// dndDragLeave tells w the drag has left it; w may be nil.
+func dndDragLeave(w IWidget) {
+	if i, ok := w.(IOnDragLeave); ok {
+		i.OnDragLeave()
+	}
+}
+
+// dndDragOver offers the drag at (x, y) — widget's own coordinates — to widget
+// and then to each of its ancestors, and returns the widget that now holds the
+// drag, nil when none of them takes it. The accepted action is left in ctx.
+//
+// A widget that refuses the drag has to fall through to its parent: Dock
+// deliberately refuses near its own border so the enclosing Frame can take the
+// drag and dock the view to the frame edge, and Frame refuses outside its root
+// brick. Offering the drag only to the innermost IOnDrop under the cursor makes
+// edge docking impossible. Both backends share this walk instead of each
+// keeping its own copy of the rule.
+func dndDragOver(widget, last IWidget, x, y float64, ctx IDndContext) IWidget {
+	for widget != nil {
+		i, ok := widget.(IOnDrop)
+		if ok && widget == last {
+			ctx.SetAction(DndIgnore)
+			i.OnDragMove(x, y, ctx)
+			if ctx.Action() != DndIgnore {
+				return widget
+			}
+		} else if ok {
+			ctx.SetAction(DndIgnore)
+			i.OnDragEnter(x, y, ctx)
+			if ctx.Action() != DndIgnore {
+				dndDragLeave(last)
+				last = nil
+				ctx.SetAction(DndIgnore)
+				i.OnDragMove(x, y, ctx)
+				if ctx.Action() != DndIgnore {
+					return widget
+				}
+				dndDragLeave(widget)
+			}
+		}
+		x += widget.X()
+		y += widget.Y()
+		widget = widget.Parent()
+	}
+	dndDragLeave(last)
+	// Nobody took the drag: drop the action the last accepting target left
+	// behind, or the feedback cursor keeps offering a drop over dead space.
+	ctx.SetAction(DndIgnore)
+	return nil
+}
+
+// dndDrop hands the drop at (x, y) — widget's own coordinates — to the first
+// widget from widget up the tree that claims it by setting an action.
+func dndDrop(widget IWidget, x, y float64, ctx IDndContext) {
+	ctx.SetAction(DndIgnore)
+	for widget != nil {
+		if i, ok := widget.(IOnDrop); ok {
+			i.OnDrop(x, y, ctx)
+			if ctx.Action() != DndIgnore {
+				return
+			}
+		}
+		x += widget.X()
+		y += widget.Y()
+		widget = widget.Parent()
+	}
+}

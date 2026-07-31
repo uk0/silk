@@ -109,10 +109,13 @@ func (this *Window) DragEnter(pDataObj *win32.IDataObject,
 	}
 	this.lastDndWidget = nil
 	this.dndContext = newDndContext(pDataObj, DndAction(*pdwEffect))
-	return win32.S_OK
+	// Report the effect the widget under the cursor would apply, not the one the
+	// source proposed: OLE shows that effect until the first DragOver, and it is
+	// also what decides whether a release without any motion reaches Drop at all.
+	return this.DragOver(grfKeyState, x0, y0, pdwEffect)
 }
 
-//E_UNEXPECTED, E_INVALIDARG, E_OUTOFMEMORY
+// E_UNEXPECTED, E_INVALIDARG, E_OUTOFMEMORY
 func (this *Window) DragOver(grfKeyState uint32,
 	x0, y0 int32, pdwEffect *uint32) win32.HRESULT {
 	//core.Debug("DragOver")
@@ -131,101 +134,46 @@ func (this *Window) DragOver(grfKeyState uint32,
 	if widget != nil {
 		x, y = widget.MapFromWindow(x1, y1)
 	}
+	this.lastDndWidget = dndDragOver(widget, this.lastDndWidget, x, y, this.dndContext)
 
-	for widget != nil {
-		i, ok := widget.(IOnDrop)
-		if widget == this.lastDndWidget {
-			this.dndContext.SetAction(0)
-			i.OnDragMove(x, y, this.dndContext)
-			if this.dndContext.Action() != 0 {
-				*pdwEffect = uint32(this.dndContext.Action())
-				return win32.S_OK
-			}
-		} else if ok {
-			this.dndContext.SetAction(0)
-			i.OnDragEnter(x, y, this.dndContext)
-			if this.dndContext.Action() != 0 {
-				i2, ok := this.lastDndWidget.(IOnDragLeave)
-				if ok {
-					i2.OnDragLeave()
-				}
-				this.lastDndWidget = widget
-				this.dndContext.SetAction(0)
-				i.OnDragMove(x, y, this.dndContext)
-				if this.dndContext.Action() != 0 {
-					*pdwEffect = uint32(this.dndContext.Action())
-					return win32.S_OK
-				}
-				i1, ok := widget.(IOnDragLeave)
-				if ok {
-					i1.OnDragLeave()
-				}
-				this.lastDndWidget = nil
-
-			}
-		}
-		x += widget.X()
-		y += widget.Y()
-		widget = widget.Parent()
-	}
-
-	if this.lastDndWidget != nil {
-		i, ok := this.lastDndWidget.(IOnDragLeave)
-		if ok {
-			i.OnDragLeave()
-		}
-		this.lastDndWidget = nil
-	}
-
-	*pdwEffect = 0
+	*pdwEffect = uint32(this.dndContext.Action())
 	return win32.S_OK
 }
 
 // E_OUTOFMEMORY
 func (this *Window) DragLeave() win32.HRESULT {
 	this.dndContext = nil
-	if this.lastDndWidget != nil {
-		i, ok := this.lastDndWidget.(IOnDragLeave)
-		if ok {
-			i.OnDragLeave()
-		}
-		this.lastDndWidget = nil
-	}
+	dndDragLeave(this.lastDndWidget)
+	this.lastDndWidget = nil
 	return win32.S_OK
 }
 
-//E_UNEXPECTED, E_INVALIDARG, E_OUTOFMEMORY
+// E_UNEXPECTED, E_INVALIDARG, E_OUTOFMEMORY
 func (this *Window) Drop(pDataObj *win32.IDataObject,
 	grfKeyState uint32, x0, y0 int32, pdwEffect *uint32) win32.HRESULT {
 	if pdwEffect == nil {
 		return win32.E_INVALIDARG
 	}
 
-	if pDataObj != this.dndContext.do || this.dndContext == nil {
+	// The nil test has to come first: OLE calls Drop with no live context after
+	// a DragLeave, and reading dndContext.do to compare the data object faults
+	// the process.
+	if this.dndContext == nil || pDataObj != this.dndContext.do {
 		return win32.E_UNEXPECTED
 	}
 
-	this.dndContext.SetAction(0)
 	x1, y1 := this.mapFromGlobal(float64(x0), float64(y0))
 	widget := this.widget.FindWidgetAt(x1, y1)
 	x, y := 0.0, 0.0
 	if widget != nil {
 		x, y = widget.MapFromWindow(x1, y1)
 	}
-	for widget != nil {
-		i, ok := widget.(IOnDrop)
-		if ok {
-			i.OnDrop(x, y, this.dndContext)
-			if this.dndContext.Action() != 0 {
-				break
-			}
-		}
-		x += widget.X()
-		y += widget.Y()
-		widget = widget.Parent()
-	}
+	dndDrop(widget, x, y, this.dndContext)
 
 	*pdwEffect = uint32(this.dndContext.Action())
+	// OLE sends no DragLeave after a drop, and the target that highlighted
+	// itself during the drag only clears that highlight in OnDragLeave.
+	dndDragLeave(this.lastDndWidget)
 	this.dndContext = nil
 	this.lastDndWidget = nil
 	return win32.S_OK
@@ -296,7 +244,14 @@ func (this *Window) DoDragDrop(from interface{},
 				SetCursor(cursors[3])
 			}
 		})
-	acts := uint32(availableActions & 0x03)
+	// DndLink belongs in the mask: DROPEFFECT_* and DndAction share their values,
+	// the feedback closure above already draws a link cursor, and dropping the
+	// bit here left a link-only drag with no allowed effect at all.
+	acts := uint32(availableActions & (DndCopy | DndMove | DndLink))
+	// No re-entrancy guard here, unlike dndActive on the GLFW side: OLE runs its
+	// own modal loop with the mouse captured and swallows every mouse and key
+	// message, so no widget handler runs until DoDragDrop returns. The GLFW
+	// backend pumps events itself inside its drag loop and does need the guard.
 	effect, err := win32.DoDragDrop(do, ds, acts)
 	privateDndData = nil
 	if err != nil {
