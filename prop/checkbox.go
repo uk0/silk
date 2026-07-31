@@ -31,6 +31,11 @@ func (this *CheckBox) UpdateValue() {
 }
 
 func (this *CheckBox) UpdateConfig() {
+	// A read-only property must not look editable: PropertyItem.SetValue drops
+	// the write, so an enabled box flips its tick and then shows a value the
+	// object never took. gui.CheckBox gates its click and key paths on
+	// IsEnabled. Mirrors TextEdit.UpdateConfig's SetReadOnly.
+	this.SetEnabled(!this.item.IsReadOnly())
 }
 
 func (this *CheckBox) Activate() {

@@ -140,15 +140,36 @@ func (prop Property) GetValue() interface{} {
 	return prop.get.Call([]reflect.Value{})[0].Interface()
 }
 
+// parsePropertyValue converts the text shown in the property sheet into a
+// value of type typ.
+//
+// Strings are taken verbatim. The sheet renders them with core.VisualString
+// (plain fmt.Sprint, unquoted) but used to commit them through
+// core.PersistSscan, whose string scanner wants a quoted Go literal and
+// otherwise token-scans: "Hello World" came back as "Hello" and an emptied
+// box failed outright, so a text property could neither hold a space nor be
+// cleared. Every other type still goes through the persistence scanner, which
+// is what rejects garbage typed into a numeric property.
+func parsePropertyValue(typ reflect.Type, s string) (interface{}, error) {
+	v := reflect.New(typ)
+	if typ.Kind() == reflect.String {
+		v.Elem().SetString(s)
+		return v.Elem().Interface(), nil
+	}
+	if _, err := core.PersistSscan(s, v.Interface()); err != nil {
+		return nil, err
+	}
+	return v.Elem().Interface(), nil
+}
+
 // 设置字符串形式的属性的值, 如果设置失败, 此函数返回错误信息
 // 如果是合并后的属性, 此方法会为所有对象设置新值
 func (prop Property) SetValueStr(s string) error {
-	v := reflect.New(prop.Type())
-	_, err := core.PersistSscan(s, v.Interface())
+	val, err := parsePropertyValue(prop.Type(), s)
 	if err != nil {
 		return err
 	}
-	prop.SetValue(v.Elem().Interface())
+	prop.SetValue(val)
 	return nil
 }
 
@@ -377,12 +398,11 @@ func (this *PropertyItem) SetValue(a interface{}) {
 // 设置字符串形式的属性的值, 如果设置失败, 此函数返回错误信息
 // 如果是合并后的属性, 此方法会为所有对象设置新值
 func (this *PropertyItem) SetValueStr(s string) error {
-	v := reflect.New(this.prop.Type())
-	_, err := core.PersistSscan(s, v.Interface())
+	val, err := parsePropertyValue(this.prop.Type(), s)
 	if err != nil {
 		return err
 	}
-	this.SetValue(v.Elem().Interface())
+	this.SetValue(val)
 	return nil
 }
 
@@ -701,6 +721,22 @@ func categoryOfPropID(id string) string {
 	return "general"
 }
 
+// propMatchesFilter reports whether a row survives the filter box: a blank
+// query keeps everything, otherwise the query must appear as a
+// case-insensitive substring of the row's display label or of its raw
+// property id. Both are checked because a config file may relabel a property,
+// and the user types what the sheet shows — this is the rule the widget
+// palette applies to its friendly and factory names (ged/widget-list.go).
+// Pure, so the layout and its test agree on what "matching" means.
+func propMatchesFilter(label, id, filter string) bool {
+	f := strings.ToLower(strings.TrimSpace(filter))
+	if f == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(label), f) ||
+		strings.Contains(strings.ToLower(id), f)
+}
+
 // 属性表视图的实现
 type PropertySheet struct {
 	gui.ScrollArea
@@ -720,7 +756,18 @@ type PropertySheet struct {
 	// Category support
 	categories     map[string]*propertyCategory
 	categoryLayout []categoryLayoutEntry // ordered layout entries for drawing
+
+	// 属性过滤
+	filter    string
+	searchBox *gui.SearchBox
 }
+
+// filterBoxHeight and filterBoxMargin size the filter box band at the top of
+// the sheet; property rows start below it.
+const (
+	filterBoxHeight = 24.0
+	filterBoxMargin = 4.0
+)
 
 // categoryLayoutEntry is either a category header or a property item in the layout.
 type categoryLayoutEntry struct {
@@ -742,6 +789,40 @@ func (this *PropertySheet) Init(iw gui.IWidget) {
 			expanded: true,
 		}
 	}
+
+	this.searchBox = gui.NewSearchBox()
+	this.searchBox.SetParent(iw)
+	this.searchBox.SetPlaceholder("过滤属性...")
+	this.searchBox.SigTextChanged(func(s string) {
+		this.SetFilter(s)
+	})
+}
+
+// SetFilter narrows the sheet to the properties whose label or id matches text
+// (case-insensitive substring); empty text restores every row. A category
+// header goes away with its last matching child and comes back with it. The
+// filter is a view setting and survives Bind/Clear, like the widget palette's
+// (ged/widget-list.go).
+func (this *PropertySheet) SetFilter(text string) {
+	if this.filter == text {
+		return
+	}
+	this.filter = text
+	// Keep the box in step when the filter is set programmatically. SetText
+	// re-enters here through SigTextChanged; the guard above ends the loop.
+	this.searchBox.SetText(text)
+	this.Layout()
+}
+
+// Filter returns the active filter text ("" when unfiltered).
+func (this *PropertySheet) Filter() string {
+	return this.filter
+}
+
+// contentTop is the y of the first property row: the filter box owns the band
+// above it.
+func (this *PropertySheet) contentTop() float64 {
+	return filterBoxHeight + filterBoxMargin*2
 }
 
 func NewPropertySheet() *PropertySheet {
@@ -916,15 +997,30 @@ func (this *PropertySheet) Layout() {
 	this.vlist = nil
 	this.categoryLayout = nil
 
-	// Group properties by category
+	this.searchBox.SetBounds(filterBoxMargin, filterBoxMargin,
+		this.Width()-filterBoxMargin*2, filterBoxHeight)
+
+	// Group properties by category. Rows the filter rejects are dropped here
+	// rather than skipped further down, so a category whose children all fail
+	// emits no header at all. Their editors are absolutely positioned child
+	// widgets: hiding them explicitly is what stops a filtered-out control
+	// from painting on top of the rows that survived.
 	catItems := make(map[string][]*PropertyItem)
 	for _, p := range this.rlist {
+		if !propMatchesFilter(p.Label(), p.Id(), this.filter) {
+			p.vrow = -1
+			control := p.Control()
+			if control != nil {
+				control.SetVisible(false)
+			}
+			continue
+		}
 		cat := categoryOfPropID(p.Id())
 		catItems[cat] = append(catItems[cat], p)
 	}
 
 	vrow := 0
-	ypos := 0.0
+	ypos := this.contentTop()
 
 	for _, catKey := range categoryOrder {
 		items := catItems[catKey]
@@ -1112,7 +1208,7 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 	xedit := this.vertSplitPx()
 
 	g.SetPen1(gui.Theme().BorderColor, 1)
-	g.Line(xedit, 0, xedit, this.Height())
+	g.Line(xedit, this.contentTop(), xedit, this.Height())
 	g.Stroke()
 
 	font := gui.Theme().Font
@@ -1138,8 +1234,10 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 		}
 	}
 
-	// If no category layout (empty), fall back to flat rendering
-	if len(this.categoryLayout) == 0 {
+	// If no category layout (empty), fall back to flat rendering.
+	// A filter that matches nothing legitimately empties the layout, and the
+	// fallback would redraw every label the user just filtered out.
+	if len(this.categoryLayout) == 0 && this.filter == "" {
 		g.SetBrush1(gui.Theme().TextColor)
 		for _, p := range this.rlist {
 			labelRect := this.getItemRect(p, pitemLabel)
