@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"reflect"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -68,7 +69,7 @@ var (
 	lastMouseTime    time.Time
 	mouseMoving      bool
 	focusWidget      IWidget
-	debugUIThreadId  uintptr
+	uiThreadId       uint32
 	idleTimer        Timer
 	idleSkip         int
 	idleFlag         bool
@@ -102,7 +103,20 @@ type Window struct {
 }
 
 func init() {
-	debugUIThreadId = uintptr(win32.GetCurrentThread())
+	// Win32 UI objects have hard thread affinity: a window's messages only
+	// reach the queue of the thread that created it, SetTimer(NULL, ...) arms
+	// a timer on the calling thread, and GetMessage drains nothing but the
+	// calling thread's own queue. Go's main goroutine is free to migrate to
+	// another OS thread at any scheduling point — one cgo call into cairo is
+	// enough — and once it does, the pump sits in GetMessage on a thread that
+	// owns no windows: it blocks forever on an empty queue while the real
+	// window's queue backs up. That is the black client area with
+	// "(Not Responding)" in the title bar and flat CPU. Package init runs on
+	// the main goroutine, so locking here pins class registration, the idle
+	// timer, window creation and MainLoop to one thread for the whole
+	// process. window_glfw.go does the same for the GLFW backend.
+	runtime.LockOSThread()
+	uiThreadId = win32.GetCurrentThreadId()
 	registerWndClasses()
 	idleTimer.Start(47, onIdleTimer)
 	screenDpi = float64(win32.GetDeviceCaps(0, win32.LOGPIXELSX))
@@ -1584,6 +1598,12 @@ func MainLoop() {
 
 	if !core.IsDebugOn() {
 		HideConsoleWindow()
+	}
+
+	// Nothing below can work off the thread that owns the windows, and the
+	// failure mode is a silent hang rather than an error, so say so loudly.
+	if id := win32.GetCurrentThreadId(); id != uiThreadId {
+		core.Warn(fmt.Sprintf("ui: message pump is on thread %d but the windows belong to thread %d; no message will ever arrive", id, uiThreadId))
 	}
 
 	msg := win32.MSG{}

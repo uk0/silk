@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -725,6 +726,13 @@ func onRun() {
 	if scene == nil {
 		return
 	}
+	// The build below no longer blocks the UI, so the button stays clickable
+	// while it runs. Without this a few impatient clicks would race several
+	// compilers onto the same output path.
+	if runBusy {
+		setRunStatus("正在编译...")
+		return
+	}
 
 	// Export to temp file
 	tmpDir := os.TempDir() + "/silk_run"
@@ -738,54 +746,229 @@ func onRun() {
 		return
 	}
 
-	// Compile. Cairo resolves via pkg-config (the cairo package declares
-	// "#cgo pkg-config: cairo"), so no machine-specific include path is set.
-	// Run from the silk module root so silk/* imports resolve regardless of
-	// the designer process's cwd.
-	cmd := exec.Command("go", "build", "-o", tmpDir+"/app", goFile)
-	cmd.Dir = silkModuleRoot()
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Show output in BuildOutput panel if available
-		if buildOutput != nil {
-			buildOutput.SetOutput(string(output))
-			// Switch to the output tab in the right dock
-			if rightDockRef != nil {
-				idx := rightDockRef.IndexOfView(buildOutput)
-				if idx >= 0 {
-					rightDockRef.SetActiveIndex(idx)
+	// Windows refuses to CreateProcess a path without an extension, so the
+	// artifact has to be named app.exe there — "go build -o app" writes
+	// exactly the name it is given and appends nothing.
+	appPath := tmpDir + "/app"
+	if runtime.GOOS == "windows" {
+		appPath += ".exe"
+	}
+
+	// Compiling takes tens of seconds — minutes for a cold cgo/cairo build on
+	// Windows with a resident antivirus — and it used to run right here on the
+	// UI thread, so the message pump stopped for the whole build and Windows
+	// painted "(Not Responding)" over the designer. Do it on a goroutine and
+	// come back through gui.Post, which runs the continuation on the event
+	// loop where every widget below is safe to touch.
+	runBusy = true
+	setRunStatus("正在编译...")
+	go func() {
+		// Cairo resolves via pkg-config (the cairo package declares
+		// "#cgo pkg-config: cairo"), so no machine-specific include path is
+		// set. Run from the silk module root so silk/* imports resolve
+		// regardless of the designer process's cwd.
+		cmd := exec.Command(goExecutable(), "build", "-o", appPath, goFile)
+		cmd.Dir = silkModuleRoot()
+		cmd.Env = append(os.Environ(), "PATH="+buildToolPath())
+		output, err := cmd.CombinedOutput()
+
+		gui.Post(func() {
+			runBusy = false
+			if err != nil {
+				// Show output in BuildOutput panel if available
+				if buildOutput != nil {
+					buildOutput.SetOutput(buildFailureDetail(output, err))
+					// Switch to the output tab in the right dock
+					if rightDockRef != nil {
+						idx := rightDockRef.IndexOfView(buildOutput)
+						if idx >= 0 {
+							rightDockRef.SetActiveIndex(idx)
+						}
+					}
+					// Pass compile errors to the active CodeEditor for inline markers
+					if editorTabs != nil {
+						if editor := editorTabs.ActiveEditor(); editor != nil {
+							editor.SetErrors(buildOutput.ErrorMap())
+						}
+					}
+				} else {
+					gui.ShowMessageDialog(gui.DefaultFrame(), "编译错误", buildFailureDetail(output, err))
 				}
+				setRunStatus("编译失败")
+				return
 			}
-			// Pass compile errors to the active CodeEditor for inline markers
+
+			// Build succeeded -- show success message and clear error markers
+			if buildOutput != nil {
+				buildOutput.SetOutput("Build successful\n")
+			}
 			if editorTabs != nil {
 				if editor := editorTabs.ActiveEditor(); editor != nil {
-					editor.SetErrors(buildOutput.ErrorMap())
+					editor.ClearErrors()
 				}
 			}
-		} else {
-			gui.ShowMessageDialog(gui.DefaultFrame(), "编译错误", string(output))
-		}
-		return
-	}
 
-	// Build succeeded -- show success message and clear error markers
-	if buildOutput != nil {
-		buildOutput.SetOutput("Build successful\n")
-	}
-	if editorTabs != nil {
-		if editor := editorTabs.ActiveEditor(); editor != nil {
-			editor.ClearErrors()
-		}
-	}
+			// Run. A failed spawn used to be swallowed, so the status bar
+			// claimed success while nothing had started.
+			runCmd := exec.Command(appPath)
+			if err := runCmd.Start(); err != nil {
+				if buildOutput != nil {
+					buildOutput.SetOutput("启动失败: " + err.Error() + "\n")
+				} else {
+					gui.ShowMessageDialog(gui.DefaultFrame(), "启动失败", err.Error())
+				}
+				setRunStatus("启动失败")
+				return
+			}
+			setRunStatus("程序已启动: " + appPath)
+		})
+	}()
+}
 
-	// Run
-	runCmd := exec.Command(tmpDir + "/app")
-	runCmd.Start()
+// runBusy is true while a background build started by onRun is still going.
+// UI-thread only: onRun runs on the event loop and so does the gui.Post
+// continuation that clears it, so no lock is needed.
+var runBusy bool
 
-	// Update status bar
+func setRunStatus(msg string) {
 	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-		sb.ShowMessage("程序已启动: " + tmpDir + "/app")
+		sb.ShowMessage(msg)
 	}
+}
+
+// buildToolPath is the PATH the Run build should use.
+//
+// A GUI process started from Explorer, a shortcut or a scheduled task inherits
+// only the persistent machine/user PATH — not whatever a developer's terminal
+// has arranged. On Windows that PATH almost never carries MSYS2's compiler
+// directory, and often not the Go install either, so "go build" fails before
+// the toolchain even starts: CombinedOutput returns nothing and the user is
+// told "编译失败" with no explanation anywhere. Look the tools up ourselves and
+// put wherever they really live in front.
+func buildToolPath() string {
+	var extra []string
+	if _, err := exec.LookPath("go"); err != nil {
+		if dir := findToolDir(goToolDirs(), "go"); dir != "" {
+			extra = append(extra, dir)
+		}
+	}
+	// silk links cairo through cgo, so a C compiler is as much a requirement
+	// as the Go toolchain; pkg-config ships beside it in every MSYS2 layout.
+	if _, err := exec.LookPath("gcc"); err != nil {
+		if dir := findToolDir(cToolDirs(), "gcc"); dir != "" {
+			extra = append(extra, dir)
+		}
+	}
+	return prependPath(os.Getenv("PATH"), extra)
+}
+
+// goExecutable is the Go binary the Run build should launch.
+//
+// exec.Command resolves a bare command name against the *parent* process's
+// PATH and records the failure right there — handing the child a repaired PATH
+// through cmd.Env comes too late and changes nothing. So a designer started
+// from Explorer, where Go is not on PATH, never launched the toolchain at all:
+// the build "failed" in the first millisecond with no compiler output to show
+// for it. Name the binary outright instead. buildToolPath still matters for
+// the child, because the go tool looks up gcc and pkg-config in its own env.
+func goExecutable() string {
+	if path, err := exec.LookPath("go"); err == nil {
+		return path
+	}
+	if dir := findToolDir(goToolDirs(), "go"); dir != "" {
+		name := "go"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		return filepath.Join(dir, name)
+	}
+	return "go" // nothing found; let exec report it
+}
+
+// goToolDirs lists the places a Go installation usually lands.
+func goToolDirs() []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			`C:\Program Files\Go\bin`,
+			`C:\Go\bin`,
+			`C:\go\bin`,
+			filepath.Join(os.Getenv("LOCALAPPDATA"), `Programs`, `Go`, `bin`),
+		}
+	}
+	return []string{"/usr/local/go/bin", "/opt/homebrew/bin", "/usr/local/bin"}
+}
+
+// cToolDirs lists the places the cgo C toolchain usually lands. UCRT64 comes
+// first because that is the MSYS2 environment this project builds with.
+func cToolDirs() []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			`C:\msys64\ucrt64\bin`,
+			`C:\msys64\mingw64\bin`,
+			`C:\mingw64\bin`,
+		}
+	}
+	return nil
+}
+
+// findToolDir returns the first directory in dirs holding the named
+// executable, or "" when none does.
+func findToolDir(dirs []string, tool string) string {
+	name := tool
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(dir, name)); err == nil && !st.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
+// prependPath puts dirs in front of path.
+func prependPath(path string, dirs []string) string {
+	if len(dirs) == 0 {
+		return path
+	}
+	sep := string(os.PathListSeparator)
+	head := strings.Join(dirs, sep)
+	if path == "" {
+		return head
+	}
+	return head + sep + path
+}
+
+// missingBuildTools names the executables the build needs and still cannot
+// find after buildToolPath has done its search.
+func missingBuildTools() []string {
+	dirs := filepath.SplitList(buildToolPath())
+	var missing []string
+	for _, tool := range []string{"go", "gcc", "pkg-config"} {
+		if findToolDir(dirs, tool) == "" {
+			missing = append(missing, tool)
+		}
+	}
+	return missing
+}
+
+// buildFailureDetail turns a failed build into something actionable. A
+// compiler that ran and rejected the code explains itself on stdout/stderr; a
+// toolchain that never started leaves nothing but err, and dropping it is what
+// reduced a missing compiler to a bare "编译失败".
+func buildFailureDetail(output []byte, err error) string {
+	if text := strings.TrimSpace(string(output)); text != "" {
+		return text + "\n"
+	}
+	detail := "编译失败: " + err.Error()
+	if missing := missingBuildTools(); len(missing) > 0 {
+		detail += "\n找不到构建工具: " + strings.Join(missing, ", ")
+		detail += "\n请安装 Go 与 MSYS2 UCRT64 工具链 (mingw-w64-ucrt-x86_64-toolchain, mingw-w64-ucrt-x86_64-cairo)，或将它们加入 PATH。"
+	}
+	return detail + "\n"
 }
 
 // ---------------------------------------------------------------------------

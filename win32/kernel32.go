@@ -19,6 +19,7 @@ var (
 	procMulDiv                     = modkernel32.NewProc("MulDiv")
 	procGetConsoleWindow           = modkernel32.NewProc("GetConsoleWindow")
 	procGetCurrentThread           = modkernel32.NewProc("GetCurrentThread")
+	procGetCurrentThreadId         = modkernel32.NewProc("GetCurrentThreadId")
 	procGetLogicalDrives           = modkernel32.NewProc("GetLogicalDrives")
 	procGetUserDefaultLCID         = modkernel32.NewProc("GetUserDefaultLCID")
 	procLstrlen                    = modkernel32.NewProc("lstrlenW")
@@ -93,6 +94,15 @@ func GetCurrentThread() HANDLE {
 	ret, _, _ := procGetCurrentThread.Call()
 
 	return HANDLE(ret)
+}
+
+// GetCurrentThreadId returns the id of the calling thread. Unlike
+// GetCurrentThread, which hands back a pseudo-handle that is the same constant
+// on every thread, this is a real identity and can be compared: Win32 windows,
+// timers and message queues all belong to one specific thread.
+func GetCurrentThreadId() uint32 {
+	ret, _, _ := procGetCurrentThreadId.Call()
+	return uint32(ret)
 }
 
 func GetLogicalDrives() uint32 {
