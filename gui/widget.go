@@ -398,6 +398,7 @@ func (this *Widget) Draw(g paint.Painter) {
 }
 
 func (this *Widget) Update() {
+	assertUIThread("Widget.Update") // debug-only; see uithread.go
 	// TODO: 优化
 	x := 0.0
 	y := 0.0

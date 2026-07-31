@@ -35,6 +35,7 @@ var (
 	procDispatchMessage               = moduser32.NewProc("DispatchMessageW")
 	procSendMessage                   = moduser32.NewProc("SendMessageW")
 	procPostMessage                   = moduser32.NewProc("PostMessageW")
+	procPostThreadMessage             = moduser32.NewProc("PostThreadMessageW")
 	procWaitMessage                   = moduser32.NewProc("WaitMessage")
 	procSetWindowText                 = moduser32.NewProc("SetWindowTextW")
 	procGetWindowTextLength           = moduser32.NewProc("GetWindowTextLengthW")
@@ -296,6 +297,23 @@ func SendMessage(hwnd HWND, msg uint32, wParam, lParam uintptr) uintptr {
 func PostMessage(hwnd HWND, msg uint32, wParam, lParam uintptr) bool {
 	ret, _, _ := procPostMessage.Call(
 		uintptr(hwnd),
+		uintptr(msg),
+		wParam,
+		lParam)
+
+	return ret != 0
+}
+
+// PostThreadMessage posts a message to a thread's queue instead of a window's,
+// which is what lets a worker goroutine wake a blocked GetMessage without
+// owning (or racing) any window handle. The message arrives with a NULL Hwnd
+// and is therefore never dispatched to a window procedure.
+//
+// Fails when the target thread has no message queue yet: a queue is created
+// lazily on the thread's first user32 call that needs one.
+func PostThreadMessage(threadId uint32, msg uint32, wParam, lParam uintptr) bool {
+	ret, _, _ := procPostThreadMessage.Call(
+		uintptr(threadId),
 		uintptr(msg),
 		wParam,
 		lParam)

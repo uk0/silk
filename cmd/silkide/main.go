@@ -2352,30 +2352,40 @@ func runProjectWithCoverage(canvas *ged.GedView) {
 		if runErr != nil && text == "" {
 			text = runErr.Error()
 		}
-		reportBuildOutput(text)
-		if globalTestResults != nil {
-			globalTestResults.SetOutput(text)
-		}
+		// UI mutation only, same split as runProjectTests: the toolchain run
+		// and the profile parsing stay on this worker, the panes / editors /
+		// toast go back to the main thread. applyCoverageToOpenEditors also
+		// ranges openEditors, which the main thread writes.
+		onUI(func() {
+			reportBuildOutput(text)
+			if globalTestResults != nil {
+				globalTestResults.SetOutput(text)
+			}
+		})
 
 		data, readErr := os.ReadFile(coverageTempFile)
 		if readErr != nil {
-			reportBuildOutput(fmt.Sprintf("coverage: read profile: %v", readErr))
-			silkideToast(i18n.T("Coverage failed"), gui.ToastError)
+			onUI(func() {
+				reportBuildOutput(fmt.Sprintf("coverage: read profile: %v", readErr))
+				silkideToast(i18n.T("Coverage failed"), gui.ToastError)
+			})
 			return
 		}
 		_, blocks, parseErr := core.ParseCoverage(string(data))
-		if parseErr != nil {
-			// Non-fatal: ParseCoverage returns the blocks it managed to
-			// recover alongside the error, so still render what we got.
-			reportBuildOutput(fmt.Sprintf("coverage: %v", parseErr))
-		}
 		fileCov := core.BuildFileCoverage(blocks)
-		applyCoverageToOpenEditors(fileCov)
-		if runErr != nil {
-			silkideToast(i18n.T("Coverage failed"), gui.ToastError)
-		} else {
-			silkideToast(i18n.T("Coverage applied"), gui.ToastSuccess)
-		}
+		onUI(func() {
+			if parseErr != nil {
+				// Non-fatal: ParseCoverage returns the blocks it managed to
+				// recover alongside the error, so still render what we got.
+				reportBuildOutput(fmt.Sprintf("coverage: %v", parseErr))
+			}
+			applyCoverageToOpenEditors(fileCov)
+			if runErr != nil {
+				silkideToast(i18n.T("Coverage failed"), gui.ToastError)
+			} else {
+				silkideToast(i18n.T("Coverage applied"), gui.ToastSuccess)
+			}
+		})
 	}()
 }
 
@@ -2743,19 +2753,24 @@ func runSingleTest(canvas *ged.GedView, name string) {
 		if err != nil && text == "" {
 			text = err.Error()
 		}
-		reportBuildOutput(text)
-		if globalTestResults != nil {
-			globalTestResults.SetOutput(text)
-		}
-		_, failed, _ := testResultCounts()
-		if err != nil || failed > 0 {
+		// UI mutation only — the dispatch runProjectTests does and the doc
+		// comment above already claims. The counts read has to stay inside the
+		// same closure: it reads panel state SetOutput just rewrote.
+		onUI(func() {
+			reportBuildOutput(text)
 			if globalTestResults != nil {
-				dockSetActiveView(globalBottomDock, globalTestResults)
+				globalTestResults.SetOutput(text)
 			}
-			silkideToast(i18n.T("Tests failed"), gui.ToastError)
-		} else {
-			silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
-		}
+			_, failed, _ := testResultCounts()
+			if err != nil || failed > 0 {
+				if globalTestResults != nil {
+					dockSetActiveView(globalBottomDock, globalTestResults)
+				}
+				silkideToast(i18n.T("Tests failed"), gui.ToastError)
+			} else {
+				silkideToast(i18n.T("Tests passed"), gui.ToastSuccess)
+			}
+		})
 	}()
 }
 
@@ -3024,16 +3039,16 @@ func startReloader(canvas *ged.GedView) {
 	}
 	r, err := hotreload.New(
 		func(path string, _ *decl.Node) error {
-			scene := canvas.GedScene()
-			if scene == nil {
-				return nil
-			}
-			// Reload on the watcher goroutine. silk's render loop
-			// polls glfw events; OpenFile's internal Update() fires
-			// the next paint pass off whatever pixels we land. Not
-			// ideal cross-thread but matches how every other silk
-			// callback (fswatch, signal-slot) behaves.
-			_ = scene.OpenFile(path)
+			// This runs on the hot-reload watcher's goroutine, which may not
+			// touch the scene: OpenFile rebuilds every item and repaints, and
+			// widgets have no locking, so doing it here corrupts whatever the
+			// UI thread is drawing at that instant. Reading the scene inside
+			// the post also picks up a canvas the user retargeted meanwhile.
+			onUI(func() {
+				if scene := canvas.GedScene(); scene != nil {
+					_ = scene.OpenFile(path)
+				}
+			})
 			return nil
 		},
 		func(path string, err error) {

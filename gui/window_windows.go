@@ -24,6 +24,10 @@ const (
 	formClassName  = "SILK_GUI_FORM"
 	popupClassName = "SILK_GUI_POPUP"
 	WM_END_MODAL   = 0x8677
+	// WM_UI_WAKEUP carries no payload: it exists so a gui.Post from a worker
+	// goroutine makes GetMessage return. MainLoop and the modal loop both route
+	// it through handleNonUIMessages, which treats it as a no-op.
+	WM_UI_WAKEUP = 0x8678
 )
 
 type WindowType int
@@ -118,6 +122,22 @@ func init() {
 	// process. window_glfw.go does the same for the GLFW backend.
 	runtime.LockOSThread()
 	uiThreadId = win32.GetCurrentThreadId()
+
+	// Let an off-thread gui.Post nudge the pump: GetMessage blocks until this
+	// thread's queue has something in it, so without a wakeup a posted task
+	// waited for the next 47ms WM_TIMER — and waited forever if that timer was
+	// ever stopped. A thread-targeted post is the only kind a worker may make:
+	// window handles belong to this thread and must not be touched from
+	// another. OS-owned modal loops (menu tracking, a move/size drag, a native
+	// file dialog) discard thread messages, so the idle timer stays as the
+	// backstop there. window_glfw.go installs glfw.PostEmptyEvent for the same
+	// reason.
+	SetUIWakeup(func() { win32.PostThreadMessage(uiThreadId, WM_UI_WAKEUP, 0, 0) })
+
+	// Off-thread widget mutation is silent corruption in this framework;
+	// under SILK_DEBUG, name the offender (see uithread.go).
+	uiThreadOwner = func() bool { return win32.GetCurrentThreadId() == uiThreadId }
+
 	registerWndClasses()
 	idleTimer.Start(47, onIdleTimer)
 	screenDpi = float64(win32.GetDeviceCaps(0, win32.LOGPIXELSX))
@@ -139,8 +159,9 @@ func init() {
 // SCADA tag updates) and the animation engine. The Win32 pump used to do
 // neither, so on Windows a posted task was queued forever and animations never
 // advanced. The 47ms idle timer (SetTimer → WM_TIMER) keeps the pump turning
-// while the user is idle, which matches the GLFW backend's 47ms idle wait, so
-// no extra wakeup hook is needed.
+// while the user is idle, which matches the GLFW backend's 47ms idle wait; the
+// WM_UI_WAKEUP hook installed in init() makes a posted task run immediately
+// rather than at the timer's mercy.
 func serviceUIFrame() {
 	uiHeartbeat()
 	drainUITasks()
@@ -1513,6 +1534,10 @@ func handleNonUIMessages(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 			f()
 			return 0
 		}
+	case WM_UI_WAKEUP:
+		// Nothing to do: getting here already means GetMessage returned, and
+		// the caller runs serviceUIFrame (drainUITasks) right after.
+		return 0
 	}
 	return win32.DefWindowProc(0, msg, wParam, lParam)
 }

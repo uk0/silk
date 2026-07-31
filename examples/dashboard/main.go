@@ -106,7 +106,10 @@ func main() {
 	updateCount.SetParent(form)
 	updateCount.SetBounds(20, 190, 200, 22)
 
-	// Timer goroutine to update values
+	// Timer goroutine to update values. Binding.Set runs its watchers inline,
+	// so setting a binding from here would mutate the bars and labels on this
+	// goroutine — widgets are UI-thread-only. Roll the dice off-thread and hand
+	// every mutation to the event loop with gui.Post.
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -115,17 +118,20 @@ func main() {
 			count++
 			// Simulate CPU: random fluctuations
 			cpu := 0.1 + rand.Float64()*0.7
-			cpuBinding.Set(cpu)
 
 			// Simulate Memory: gradual changes around 40-70%
 			mem := 0.3 + rand.Float64()*0.4
-			memBinding.Set(mem)
 
 			// Simulate Disk: slow drift around 50-70%
 			disk := 0.5 + rand.Float64()*0.2
-			diskBinding.Set(disk)
 
-			updateCount.SetText(fmt.Sprintf("Updates: %d", count))
+			n := count
+			gui.Post(func() {
+				cpuBinding.Set(cpu)
+				memBinding.Set(mem)
+				diskBinding.Set(disk)
+				updateCount.SetText(fmt.Sprintf("Updates: %d", n))
+			})
 		}
 	}()
 
