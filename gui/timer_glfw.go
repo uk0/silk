@@ -69,11 +69,20 @@ func processTimers() {
 	// batch may have stopped a timer later in it, and Stop() has to mean no
 	// further callback. Win32 gets that for free — it looks the id up in
 	// timerMap as each WM_TIMER is dispatched.
+	//
+	// Presence alone is not enough, hence the lastFire check. processTimers has
+	// a second call site in modalLoop (window_glfw.go), so a callback that
+	// opens a modal runs a whole nested pass inside this loop; a sibling still
+	// due here can be fired there first. lastFire is compared as identity, not
+	// as an instant: only the collect above writes it, so a value other than
+	// the one this batch stamped means another pass already ran this timer and
+	// re-armed it.
 	for _, id := range due {
 		timerMu.Lock()
 		entry := timerMap[id]
+		stale := entry == nil || entry.lastFire != now
 		timerMu.Unlock()
-		if entry == nil {
+		if stale {
 			continue
 		}
 		func() {

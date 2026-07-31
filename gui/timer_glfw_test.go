@@ -2,7 +2,10 @@
 
 package gui
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestProcessTimersSkipsATimerStoppedInTheSameBatch pins the rule that Stop()
 // means no further callback, even for a timer that was already due when the
@@ -62,5 +65,63 @@ func TestProcessTimersRefiresARepeatingTimer(t *testing.T) {
 
 	if fired != 2 {
 		t.Errorf("fired = %d after two passes, want 2 (a repeating timer stopped repeating)", fired)
+	}
+}
+
+// TestProcessTimersDoesNotRefireATimerFiredByANestedLoop covers the other way a
+// due timer can go stale between the batch and the fire: not Stop(), but a
+// nested pass that already ran it. processTimers has two call sites — MainLoop
+// and modalLoop (window_glfw.go) — and a callback that opens a modal runs the
+// second one inside the first one's fire loop. Presence in timerMap is then not
+// enough: a sibling still due when the batch began can be fired by the nested
+// loop and fired again the moment the modal closes, two callbacks a few
+// microseconds apart on a timer with a multi-second interval.
+//
+// Time is moved by hand rather than slept: the outer pass has to see both
+// timers due, the nested pass has to see exactly the sibling due, and a real
+// sleep would make the interval the test's tolerance budget. Both callbacks
+// enter the "modal" so the assertion does not depend on map iteration order —
+// whichever of the two the batch happens to fire first, each must run once.
+func TestProcessTimersDoesNotRefireATimerFiredByANestedLoop(t *testing.T) {
+	saved := timerMap
+	timerMap = make(map[uintptr]*timerEntry)
+	defer func() { timerMap = saved }()
+
+	const interval = 2 * time.Second
+	const elapse = 3 * time.Second // > interval, so a backdated timer reads as due
+
+	backdate := func(tm Timer) {
+		timerMu.Lock()
+		defer timerMu.Unlock()
+		if e := timerMap[uintptr(tm)]; e != nil {
+			e.lastFire = e.lastFire.Add(-elapse)
+		}
+	}
+
+	var a, b Timer
+	aFired, bFired := 0, 0
+	entered := false
+	// Stands in for a callback that opens a modal dialog: elapse enough time
+	// for the sibling to come due again, then run the modal loop's own
+	// processTimers. Only the first callback nests; a real modal loop keeps
+	// pumping, but one nested pass is all the double fire needs.
+	enterModal := func(sibling Timer) {
+		if entered {
+			return
+		}
+		entered = true
+		backdate(sibling)
+		processTimers()
+	}
+
+	a.Start(uint32(interval/time.Millisecond), func() { aFired++; enterModal(b) })
+	b.Start(uint32(interval/time.Millisecond), func() { bFired++; enterModal(a) })
+	backdate(a)
+	backdate(b)
+
+	processTimers()
+
+	if aFired != 1 || bFired != 1 {
+		t.Errorf("aFired = %d, bFired = %d, want 1 and 1: a timer already fired by the nested loop fired again when the outer batch resumed", aFired, bFired)
 	}
 }

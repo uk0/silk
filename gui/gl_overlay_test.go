@@ -97,17 +97,21 @@ func TestGLOverlaySeamMatchesAcrossBackends(t *testing.T) {
 	}
 }
 
-// windowMethodSigs maps each `func (this *Window) Name(...)` in file to its
+// windowMethodSigs maps each `func (<recv> *Window) Name(...)` in file to its
 // normalized parameter and result text. Parameter names count as part of the
 // signature: the two overlay files are meant to read as mirrors, so a rename
-// on one side alone is worth flagging.
+// on one side alone is worth flagging. The receiver name deliberately does not
+// — `win` and `this` are both live *Window receivers in this package
+// (window_windows.go uses `win` throughout), and pinning one of them here would
+// make a method with the other name invisible to both loops above, which is a
+// silent PASS on exactly the broken seam this test exists to catch.
 func windowMethodSigs(t *testing.T, file string) map[string]string {
 	t.Helper()
 	src, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatalf("cannot read %s: %v", file, err)
 	}
-	re := regexp.MustCompile(`(?m)^func \(this \*Window\) (\w+)\(([^)]*)\)([^{]*)\{`)
+	re := regexp.MustCompile(`(?m)^func \(\w+ \*Window\) (\w+)\(([^)]*)\)([^{]*)\{`)
 	sigs := make(map[string]string)
 	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
 		sigs[m[1]] = strings.Join(strings.Fields(m[2]+" "+m[3]), " ")
