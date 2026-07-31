@@ -1175,8 +1175,23 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 
 	switch msg {
 	case win32.WM_KEYDOWN:
+		// The window-level key layer existed only in the GLFW backend, so on
+		// Windows every gui.RegisterShortcut was inert — the IDE's Ctrl+S,
+		// Ctrl+Z and mode switches never reached their handlers — and Tab did
+		// not move focus. Both have to run ahead of focus routing: a focused
+		// CodeEditor would otherwise eat Ctrl+Z for its own undo first.
+		repeat := 0x40000000&lParam != 0
+		if !repeat && dispatchShortcut(int(wParam)) {
+			return 0
+		}
+		if wParam == win32.VK_TAB && win.widget != nil {
+			if next := nextFocusable(win.widget, focusWidget, !IsKeyDown(KeyShift)); next != nil {
+				next.SetFocus()
+			}
+			return 0
+		}
 		if i, ok := focusWidget.(IEventKeyDown); ok {
-			i.OnKeyDown(int(wParam), 0x40000000&lParam != 0)
+			i.OnKeyDown(int(wParam), repeat)
 		}
 
 	case win32.WM_KEYUP:

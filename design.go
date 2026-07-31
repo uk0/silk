@@ -1273,6 +1273,18 @@ func switchViewMode(mode ViewMode) {
 		return
 	}
 	currentViewMode = mode
+	// Keep the sidebar selector in step. SetMode early-returns when its own
+	// cached mode already matches, so a menu-driven switch that left it stale
+	// turned the next Ctrl+1/Ctrl+2 into a dead key — the accelerator resolved
+	// to a mode the selector already believed it was in.
+	if modeSelector != nil {
+		switch mode {
+		case ViewModeDesign:
+			modeSelector.SetMode(ged.ModeDesign)
+		case ViewModeCode:
+			modeSelector.SetMode(ged.ModeEdit)
+		}
+	}
 
 	switch mode {
 	case ViewModeDesign:
@@ -1867,8 +1879,12 @@ func main() {
 	// at the window layer ahead of focus routing, which is what makes a mode
 	// switch work from anywhere. The GedView callbacks stay wired for the
 	// case the window registry does not claim the key.
-	toDesign := func() { modeSelector.SetMode(ged.ModeDesign) }
-	toEdit := func() { modeSelector.SetMode(ged.ModeEdit) }
+	// Go through switchViewMode rather than the selector: it performs the
+	// switch unconditionally, so the accelerator works whatever the selector
+	// currently believes, including after a 分屏 switch that has no selector
+	// equivalent at all.
+	toDesign := func() { switchViewMode(ViewModeDesign) }
+	toEdit := func() { switchViewMode(ViewModeCode) }
 	ged.SwitchToDesignCallback = toDesign
 	ged.SwitchToEditCallback = toEdit
 	gui.RegisterShortcut(gui.ModAction, '1', toDesign)
