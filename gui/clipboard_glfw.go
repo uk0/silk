@@ -26,19 +26,22 @@ func getAnyGLFWWindow() *glfw.Window {
 }
 
 func (this *clipBoard) Formats() (formats []string, err error) {
-	gw := getAnyGLFWWindow()
-	if gw == nil {
-		return nil, core.StrErr("no window available")
-	}
-	text := gw.GetClipboardString()
-	if text != "" {
-		formats = append(formats, "text/plain")
-	}
+	// Local formats need no window and Data serves them in that state, so
+	// list them before the window check rather than hiding data we can
+	// still hand out.
 	clipboardMu.Lock()
 	for k := range clipboardLocalData {
 		formats = append(formats, k)
 	}
 	clipboardMu.Unlock()
+	gw := getAnyGLFWWindow()
+	if gw == nil {
+		return formats, core.StrErr("no window available")
+	}
+	text := gw.GetClipboardString()
+	if text != "" {
+		formats = append(formats, "text/plain")
+	}
 	return
 }
 
@@ -70,37 +73,39 @@ func (this *clipBoard) SetData(data interface{}) (format string, err error) {
 		if x == nil {
 			return "", core.StrErr("nil pointer")
 		}
-		s := ((*core.TDoc)(x)).String()
-		gw := getAnyGLFWWindow()
-		if gw != nil {
-			gw.SetClipboardString(s)
-		}
+		// The serialised document deliberately stays out of the OS text
+		// clipboard: Windows keeps it under the private CF_PERSIST format,
+		// and mirroring it into text/plain here made Ctrl+V in any text
+		// field paste a whole TDoc dump on non-Windows only.
 		clipboardMu.Lock()
-		clipboardLocalData["application/x-silk-persist"] = s
+		clipboardLocalData["application/x-silk-persist"] = ((*core.TDoc)(x)).String()
 		clipboardMu.Unlock()
 		return "application/x-silk-persist", nil
 	case string:
 		gw := getAnyGLFWWindow()
-		if gw != nil {
-			gw.SetClipboardString(x)
+		if gw == nil {
+			return "", core.StrErr("no window available")
 		}
+		gw.SetClipboardString(x)
 		return "text/plain", nil
 	default:
-		// Store locally for non-standard types
-		clipboardMu.Lock()
-		clipboardLocalData["application/octet-stream"] = data
-		clipboardMu.Unlock()
-		return "application/octet-stream", nil
+		// The Windows backend rejects these outright; storing them in a
+		// process-local slot nothing reads only made a copy look like it
+		// succeeded on one platform.
+		return "", core.StrErr("unsupported format")
 	}
 }
 
 func (this *clipBoard) Clear() error {
-	gw := getAnyGLFWWindow()
-	if gw != nil {
-		gw.SetClipboardString("")
-	}
+	// Drop the local formats first so a windowless Clear still discards
+	// what Data would otherwise keep serving.
 	clipboardMu.Lock()
 	clipboardLocalData = make(map[string]interface{})
 	clipboardMu.Unlock()
+	gw := getAnyGLFWWindow()
+	if gw == nil {
+		return core.StrErr("no window available")
+	}
+	gw.SetClipboardString("")
 	return nil
 }

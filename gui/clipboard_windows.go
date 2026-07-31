@@ -32,15 +32,23 @@ var clipboardFormats = []clipboardFormat{
 
 func (this *clipBoard) Formats() (formats []string, err error) {
 	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		err = syscall.GetLastError()
+		err = clipboardError("OpenClipboard failed")
 		return
 	}
 	defer win32.CloseClipboard()
 
+	// Windows enumerates ids silk has no mime for (CF_LOCALE, CF_OEMTEXT,
+	// ...) and synthesises CF_TEXT alongside CF_UNICODETEXT, so the raw
+	// list yields "" entries and text/plain twice — neither of which the
+	// GLFW backend can ever produce.
+	seen := make(map[string]bool)
 	id := win32.EnumClipboardFormats(0)
 	for id != 0 {
 		f := clipboardIdToFormat(win32.CLIPFORMAT(id))
-		formats = append(formats, f)
+		if f != "" && !seen[f] {
+			seen[f] = true
+			formats = append(formats, f)
+		}
 		id = win32.EnumClipboardFormats(id)
 	}
 	return
@@ -49,7 +57,7 @@ func (this *clipBoard) Formats() (formats []string, err error) {
 // 读剪贴板数据
 func (this *clipBoard) Data(format string) (data interface{}, err error) {
 	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		err = syscall.GetLastError()
+		err = clipboardError("OpenClipboard failed")
 		return
 	}
 	defer win32.CloseClipboard()
@@ -59,8 +67,13 @@ func (this *clipBoard) Data(format string) (data interface{}, err error) {
 			if hBuf != 0 {
 				return decodeClipFormat(hBuf, fp.id)
 			}
-			err = syscall.GetLastError()
+			err = clipboardError("GetClipboardData failed")
 		}
+	}
+	if err == nil {
+		// An absent format must not report success: Edit.paste type-asserts
+		// the result whenever err is nil, and (nil, nil) panics it.
+		err = core.StrErr("format not available: " + format)
 	}
 	return
 }
@@ -78,11 +91,11 @@ func (this *clipBoard) SetData(data interface{}) (format string, err error) {
 // 清除剪贴板数据
 func (this *clipBoard) Clear() error {
 	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		return syscall.GetLastError()
+		return clipboardError("OpenClipboard failed")
 	}
 	defer win32.CloseClipboard()
 	if !win32.EmptyClipboard() {
-		return syscall.GetLastError()
+		return clipboardError("EmptyClipboard failed")
 	}
 	return nil
 }
@@ -97,15 +110,36 @@ func clipboardIdToFormat(id win32.CLIPFORMAT) string {
 	return ""
 }
 
+// clipboardError reports why a win32 clipboard call failed. The thread
+// error code is best-effort — syscall.GetLastError yields nil when the
+// code is 0 and the runtime may clobber it before we read it — so a
+// context string always backs it up. A failure path that returns a nil
+// error is what hands Data() callers a (nil, nil) pair.
+func clipboardError(what string) error {
+	if err := syscall.GetLastError(); err != nil {
+		return err
+	}
+	return core.StrErr(what)
+}
+
 func setClipboardData(hBuf win32.HGLOBAL, id win32.CLIPFORMAT) error {
 
 	if !win32.OpenClipboard(win32.HWND(AnyWindowId())) {
-		return syscall.GetLastError()
+		return clipboardError("OpenClipboard failed")
 	}
 	defer win32.CloseClipboard()
 
+	// SetClipboardData only accepts data from the clipboard owner, and
+	// ownership is what EmptyClipboard hands us. Without it a SetData that
+	// is not preceded by Clear — TestResultsPanel.clipboardWrite does
+	// exactly that — fails whenever another app owns the clipboard, while
+	// the GLFW backend just replaces the content.
+	if !win32.EmptyClipboard() {
+		return clipboardError("EmptyClipboard failed")
+	}
+
 	if win32.SetClipboardData(uint(id), win32.HANDLE(hBuf)) == 0 {
-		return syscall.GetLastError()
+		return clipboardError("SetClipboardData failed")
 	}
 	return nil
 }
@@ -114,11 +148,11 @@ func bufToHGlobal(buf []byte) (win32.HGLOBAL, error) {
 	length := len(buf)
 	hBuf := win32.HGLOBAL(win32.GlobalAlloc(win32.GMEM_MOVEABLE, uint32(length)))
 	if hBuf == 0 {
-		return 0, syscall.GetLastError()
+		return 0, clipboardError("GlobalAlloc failed")
 	}
 	p := win32.GlobalLock(hBuf)
 	if p == nil {
-		err := syscall.GetLastError()
+		err := clipboardError("GlobalLock failed")
 		win32.GlobalFree(hBuf)
 		return 0, err
 	}
@@ -164,7 +198,14 @@ func getDataFromBuf(id win32.CLIPFORMAT, buf unsafe.Pointer, length int) interfa
 	switch id {
 	case win32.CF_TEXT:
 		bytes := (*[1 << 30]byte)(buf)[0:length]
-		return string(bytes)
+		// GlobalSize rounds the block up, so the tail holds the NUL
+		// terminator plus slack; the GLFW backend never yields those, and
+		// keeping them pastes NUL runs into the editor buffer.
+		n := 0
+		for n < length && bytes[n] != 0 {
+			n++
+		}
+		return string(bytes[0:n])
 	case CF_PERSIST:
 		fallthrough
 	case win32.CF_UNICODETEXT:
@@ -183,7 +224,7 @@ func decodeClipFormat(hGlobal win32.HGLOBAL, id win32.CLIPFORMAT) (data interfac
 	}
 	buf := win32.GlobalLock(hGlobal)
 	if buf == nil {
-		err = syscall.GetLastError()
+		err = clipboardError("GlobalLock failed")
 		return
 	}
 	data = getDataFromBuf(id, buf, win32.GlobalSize(hGlobal))
