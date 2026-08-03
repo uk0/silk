@@ -204,6 +204,15 @@ func (this *NumberInput) OnKeyDown(key int, repeat bool) {
 			this.StepUp()
 		case KeyDown:
 			this.StepDown()
+		case KeyPageUp:
+			// 10*step is the page jump SpinBox documents as its default.
+			this.SetValue(this.value + this.step*10)
+		case KeyPageDown:
+			this.SetValue(this.value - this.step*10)
+		case KeyHome:
+			this.SetValue(this.min)
+		case KeyEnd:
+			this.SetValue(this.max)
 		}
 		return
 	}

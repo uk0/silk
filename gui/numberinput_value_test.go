@@ -91,6 +91,33 @@ func TestNumberInputTypedValueQuantized(t *testing.T) {
 	}
 }
 
+// TestNumberInputPageAndHomeEndKeys: a bounded numeric field answers the page
+// keys and Home/End everywhere else (see SpinBox.OnKeyDown, Slider.OnKeyDown);
+// only Up/Down were wired here, so the other four keys did nothing.
+func TestNumberInputPageAndHomeEndKeys(t *testing.T) {
+	ni := NewNumberInput()
+	ni.SetRange(0, 100)
+	ni.SetStep(2)
+	ni.SetValue(50)
+
+	ni.OnKeyDown(KeyPageUp, false)
+	if ni.Value() != 70 {
+		t.Errorf("PageUp with step 2: Value() = %v, want 70", ni.Value())
+	}
+	ni.OnKeyDown(KeyPageDown, false)
+	if ni.Value() != 50 {
+		t.Errorf("PageDown with step 2: Value() = %v, want 50", ni.Value())
+	}
+	ni.OnKeyDown(KeyHome, false)
+	if ni.Value() != 0 {
+		t.Errorf("Home: Value() = %v, want the minimum 0", ni.Value())
+	}
+	ni.OnKeyDown(KeyEnd, false)
+	if ni.Value() != 100 {
+		t.Errorf("End: Value() = %v, want the maximum 100", ni.Value())
+	}
+}
+
 // TestNumberInputDisabledIgnoresInput: a disabled field must ignore the step
 // buttons, the arrow keys and typed characters, not merely paint differently.
 // Widget-level enablement is not enforced by the event dispatcher — every
