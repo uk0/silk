@@ -355,6 +355,9 @@ func (this *ComboBox) setActiveIndex(idx int) {
 // Home/End jump to the first/last item, and a printable character performs a
 // single-character type-ahead jump to the next matching item.
 func (this *ComboBox) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
 	n := this.Count()
 	open := this.IsSubPopupVisible()
 

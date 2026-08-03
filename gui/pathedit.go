@@ -70,9 +70,16 @@ type PathEdit struct {
 func NewPathEdit() *PathEdit {
 	p := new(PathEdit)
 	p.Init(p)
-	p.mode = PathFile
-	p.openFn = defaultPathEditOpenFn
 	return p
+}
+
+// Init installs the defaults. They belong here and not in NewPathEdit because
+// the designer palette and the form loader build widgets through core.New,
+// which only calls Init — a nil openFn leaves the browse button dead.
+func (this *PathEdit) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.mode = PathFile
+	this.openFn = defaultPathEditOpenFn
 }
 
 // Text returns the current path string.

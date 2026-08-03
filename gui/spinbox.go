@@ -285,6 +285,9 @@ func (this *SpinBox) OnMouseMove(x, y float64) {
 }
 
 func (this *SpinBox) OnLeftDown(x, y float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	this.SetFocus()
 	part := this.hitTest(x, y)
 	this.hoverPart = part
@@ -304,6 +307,9 @@ func (this *SpinBox) OnLeftUp(x, y float64) {
 }
 
 func (this *SpinBox) OnMouseWheel(x, y, z float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	if z > 0 {
 		this.SetValue(this.value + this.step)
 	} else if z < 0 {
@@ -342,10 +348,13 @@ func (this *SpinBox) OnKeyDown(key int, repeat bool) {
 func (this *SpinBox) SizeHints() SizeHints {
 	t := Theme()
 	fe := t.Font.FontExtents()
-	text := fmt.Sprintf("%d%s", this.max, this.suffix)
-	ext := t.Font.TextExtents(text)
+	// Both bounds must be measured: Draw clips the text to the strip left of
+	// the buttons, and a negative minimum ("-1000000") is far wider than the
+	// maximum it is paired with.
+	textW := t.Font.TextExtents(fmt.Sprintf("%d%s", this.max, this.suffix)).Width
+	textW = math.Max(textW, t.Font.TextExtents(fmt.Sprintf("%d%s", this.min, this.suffix)).Width)
 	bw := math.Max(fe.Height*1.2, 16)
-	w := ext.Width + bw + 12
+	w := textW + bw + 12
 	if w < 80 {
 		w = 80
 	}

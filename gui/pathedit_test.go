@@ -295,3 +295,20 @@ func TestPathEditFactoryRegistered(t *testing.T) {
 	}
 	t.Fatalf("factory %q not registered", "gui.PathEdit")
 }
+
+// TestPathEditFactoryHasDialogDriver: the factory only calls Init, so
+// defaults parked in NewPathEdit never reach a designer-placed widget.
+// With a nil openFn the browse button is dead — OnLeftDown returns
+// without popping anything.
+func TestPathEditFactoryHasDialogDriver(t *testing.T) {
+	p, ok := core.New("gui.PathEdit").(*PathEdit)
+	if !ok {
+		t.Fatal("gui.PathEdit factory did not produce a *PathEdit")
+	}
+	if p.openFn == nil {
+		t.Error("factory-built PathEdit has no openFn: the browse button does nothing")
+	}
+	if p.Mode() != PathFile {
+		t.Errorf("factory-built PathEdit Mode() = %v, want PathFile", p.Mode())
+	}
+}

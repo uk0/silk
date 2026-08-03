@@ -39,11 +39,19 @@ var (
 func NewNumberInput() *NumberInput {
 	p := new(NumberInput)
 	p.Init(p)
-	p.min = 0
-	p.max = 100
-	p.step = 1
-	p.decimals = 2
 	return p
+}
+
+// Init installs the defaults. They belong here and not in NewNumberInput
+// because the designer palette and the form loader build widgets through
+// core.New, which only calls Init: with max and step left at zero every
+// SetValue clamps to 0 and the field cannot be moved by any click or key.
+func (this *NumberInput) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.min = 0
+	this.max = 100
+	this.step = 1
+	this.decimals = 2
 }
 
 func (this *NumberInput) Value() float64 {
@@ -51,6 +59,7 @@ func (this *NumberInput) Value() float64 {
 }
 
 func (this *NumberInput) SetValue(v float64) {
+	v = quantizeToDecimals(v, this.decimals)
 	v = math.Max(this.min, math.Min(this.max, v))
 	if v != this.value {
 		this.value = v
@@ -69,7 +78,29 @@ func (this *NumberInput) Decimals() int { return this.decimals }
 func (this *NumberInput) SetMin(v float64)  { this.min = v; this.SetValue(this.value) }
 func (this *NumberInput) SetMax(v float64)  { this.max = v; this.SetValue(this.value) }
 func (this *NumberInput) SetStep(v float64) { this.step = v }
-func (this *NumberInput) SetDecimals(n int) { this.decimals = n; this.Self().Update() }
+
+// SetDecimals changes the displayed precision and re-seats the current value on
+// the new grid, so Value() keeps agreeing with the text on screen.
+func (this *NumberInput) SetDecimals(n int) {
+	this.decimals = n
+	this.SetValue(this.value)
+	this.Self().Update()
+}
+
+// quantizeToDecimals rounds v onto the grid the field actually displays by
+// round-tripping it through the same textual form formatValue produces.
+// Without it a fractional step accumulates binary error: ten StepUp()s of 0.1
+// from 0 land on 0.9999999999999999, so a maximum of 1 is never reached and
+// Value() no longer parses back out of the text the user is reading.
+// A negative precision means "shortest exact form" for both, so it round-trips
+// unchanged.
+func quantizeToDecimals(v float64, decimals int) float64 {
+	q, err := strconv.ParseFloat(strconv.FormatFloat(v, 'f', decimals, 64), 64)
+	if err != nil {
+		return v
+	}
+	return q
+}
 
 func (this *NumberInput) SetRange(min, max float64) {
 	this.min = min
@@ -121,6 +152,9 @@ func (this *NumberInput) OnMouseMove(x, y float64) {
 }
 
 func (this *NumberInput) OnLeftDown(x, y float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	w, h := this.Size()
 	btnW := 20.0
 
@@ -161,6 +195,9 @@ func (this *NumberInput) commitEdit() {
 }
 
 func (this *NumberInput) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
 	if !this.editing {
 		switch key {
 		case KeyUp:
@@ -195,7 +232,7 @@ func (this *NumberInput) OnKeyDown(key int, repeat bool) {
 // digits / dot / minus of the committed text and drops any other rune,
 // preserving the numeric-only filter of the old per-char handler.
 func (this *NumberInput) OnTextInput(s string) {
-	if !this.editing {
+	if !this.IsEnabled() || !this.editing {
 		return
 	}
 	// allow digits, dot, minus

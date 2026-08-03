@@ -30,6 +30,54 @@ var (
 	_ IEventTextInput = (*SearchBox)(nil)
 )
 
+// Geometry shared by Draw and the mouse hit tests. The text origin has to be
+// the same number in both or a click lands on the wrong character, so it lives
+// here rather than as a local in Draw.
+const (
+	searchBoxPad      = 8.0
+	searchBoxIconSize = 16.0
+	searchBoxTextX    = searchBoxPad + searchBoxIconSize + 6
+	// searchBoxClearW is the width of the right-hand strip holding the clear
+	// button; a click inside it clears instead of moving the caret.
+	searchBoxClearW = 24.0
+)
+
+// searchBoxCaretX returns the x offset, measured from the text origin, of the
+// caret sitting after the first n runes: the pen advance of that prefix. The
+// ink box (Width+XBearing) is deliberately not used — a prefix ending in a
+// space has no ink past the previous glyph, so it would report a caret several
+// pixels left of where the next character actually starts.
+func searchBoxCaretX(text string, font paint.Font, n int) float64 {
+	runes := []rune(text)
+	if n <= 0 || len(runes) == 0 {
+		return 0
+	}
+	if n > len(runes) {
+		n = len(runes)
+	}
+	return font.TextExtents(string(runes[:n])).XAdvance
+}
+
+// searchBoxCaretIndex maps an x offset, measured from the text origin, to the
+// rune index whose caret offset is nearest — so a click on the right half of a
+// glyph lands after it. Pure: no widget state, so it stays testable without a
+// window.
+func searchBoxCaretIndex(text string, font paint.Font, x float64) int {
+	runes := []rune(text)
+	if x <= 0 || len(runes) == 0 {
+		return 0
+	}
+	prev := 0.0
+	for i := 1; i <= len(runes); i++ {
+		cur := font.TextExtents(string(runes[:i])).XAdvance
+		if x < (prev+cur)*0.5 {
+			return i - 1
+		}
+		prev = cur
+	}
+	return len(runes)
+}
+
 func NewSearchBox() *SearchBox {
 	p := new(SearchBox)
 	p.Init(p)
@@ -90,7 +138,7 @@ func (this *SearchBox) OnMouseLeave() {
 
 func (this *SearchBox) OnMouseMove(x, y float64) {
 	w, _ := this.Size()
-	clearZone := w - 24
+	clearZone := w - searchBoxClearW
 	wasHover := this.hoverClear
 	this.hoverClear = x >= clearZone && this.text != ""
 	if wasHover != this.hoverClear {
@@ -99,8 +147,11 @@ func (this *SearchBox) OnMouseMove(x, y float64) {
 }
 
 func (this *SearchBox) OnLeftDown(x, y float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	w, _ := this.Size()
-	clearZone := w - 24
+	clearZone := w - searchBoxClearW
 
 	// click clear button
 	if x >= clearZone && this.text != "" {
@@ -110,6 +161,7 @@ func (this *SearchBox) OnLeftDown(x, y float64) {
 
 	this.SetFocus()
 	this.focused = true
+	this.cursorPos = searchBoxCaretIndex(this.text, Theme().Font, x-searchBoxTextX)
 	this.Self().Update()
 }
 
@@ -124,6 +176,9 @@ func (this *SearchBox) OnFocusOut() {
 }
 
 func (this *SearchBox) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
 	runes := []rune(this.text)
 	switch key {
 	case KeyBackSpace:
@@ -168,7 +223,7 @@ func (this *SearchBox) OnKeyDown(key int, repeat bool) {
 // here (already stripped of control chars by onChar). Each rune is inserted
 // at the caret and advances it, matching the old per-char handler.
 func (this *SearchBox) OnTextInput(s string) {
-	if s == "" {
+	if !this.IsEnabled() || s == "" {
 		return
 	}
 	runes := []rune(this.text)
@@ -188,9 +243,9 @@ func (this *SearchBox) OnTextInput(s string) {
 func (this *SearchBox) Draw(g paint.Painter) {
 	t := Theme()
 	w, h := this.Size()
-	iconSize := 16.0
-	pad := 8.0
-	textStartX := pad + iconSize + 6
+	iconSize := searchBoxIconSize
+	pad := searchBoxPad
+	textStartX := searchBoxTextX
 
 	// background with rounded corners
 	r := h / 2
@@ -264,9 +319,7 @@ func (this *SearchBox) Draw(g paint.Painter) {
 
 		// cursor
 		if this.focused {
-			prefix := string([]rune(this.text)[:this.cursorPos])
-			ext := t.Font.TextExtents(prefix)
-			cx := textStartX + ext.Width + ext.XBearing
+			cx := textStartX + searchBoxCaretX(this.text, t.Font, this.cursorPos)
 			g.MoveTo(cx, (h-fe.Height)/2)
 			g.LineTo(cx, (h+fe.Height)/2)
 			g.SetPen1(t.TextColor, 1)

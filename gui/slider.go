@@ -34,6 +34,15 @@ func NewSlider(min, max float64) *Slider {
 	return p
 }
 
+// Init installs a default range. NewSlider takes its bounds as arguments, but
+// the designer palette and the form loader build widgets through core.New,
+// which only calls Init — a min == max == 0 slider clamps every SetValue to 0
+// and cannot be dragged anywhere.
+func (this *Slider) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.max = 100
+}
+
 func (this *Slider) Value() float64 {
 	return this.value
 }

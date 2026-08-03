@@ -279,6 +279,9 @@ func (this *Edit) OnMouseLeave() {
 }
 
 func (this *Edit) OnLeftDown(x, y float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	//	this.prepare()
 	m := this.padding
 	sx, sy := this.ScrollPos()
@@ -375,7 +378,12 @@ func (this *Edit) OnMouseStop(x, y float64) {
 }
 
 func (this *Edit) OnTextInput(s string) {
-	if this.readonly {
+	// Disabled is checked alongside read-only on every input entry point:
+	// the event dispatcher routes keys to the focus widget without consulting
+	// IsEnabled, so a greyed-out field would otherwise keep editing. The wheel
+	// handler is deliberately left open — scrolling a multi-line field to read
+	// it changes nothing.
+	if this.readonly || !this.IsEnabled() {
 		return
 	}
 	// MaxLength gate (typing path only): when the buffer is already at
@@ -510,6 +518,9 @@ func (this *Edit) refreshCompleter() {
 }
 
 func (this *Edit) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
+	}
 	switch key {
 	case KeyBackSpace:
 		if this.readonly {
