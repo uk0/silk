@@ -100,10 +100,35 @@ func (this *GedScene) DrawSelf(g paint.Painter) {
 	// Draw subtle form size indicator at bottom-right
 	g.Save()
 	sizeLabel := fmt.Sprintf("%.0f x %.0f mm", w, h)
-	g.SetFont(paint.NewFont("", 7, false, false))
+	labelFont := paint.NewFont("", sizeLabelFontSize, false, false)
+	g.SetFont(labelFont)
 	g.SetBrush1(paint.Color{160, 160, 170, 140})
-	g.DrawText1(x0+w-25, y0+h-1.5, sizeLabel)
+	g.DrawText1(sizeLabelX(x0, w, labelFont.TextExtents(sizeLabel).XAdvance, sizeLabelInset),
+		y0+h-sizeLabelInset, sizeLabel)
 	g.Restore()
+}
+
+// sizeLabelFontSize is the form-size readout's font size. The painter draws
+// the scene in millimetres, so this is 7mm of line height, not 7 points.
+const sizeLabelFontSize = 7
+
+// sizeLabelInset is the gap (mm) between the readout and the form's bottom-
+// right corner.
+const sizeLabelInset = 1.5
+
+// sizeLabelX returns the x where the form-size readout starts so that it ends
+// `inset` inside the form's right edge. textWidth is the measured advance of
+// the string: DrawAll clips every item to its own bounds, so laying the label
+// out from a fixed offset silently cut it in half whenever the string was
+// wider than that offset. Clamped to the form's left edge so a form narrower
+// than its own readout shows the leading digits instead of starting outside
+// the form.
+func sizeLabelX(x0, w, textWidth, inset float64) float64 {
+	x := x0 + w - inset - textWidth
+	if x < x0 {
+		return x0
+	}
+	return x
 }
 
 func (this *GedScene) Layout() {

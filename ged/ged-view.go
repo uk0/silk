@@ -1969,7 +1969,10 @@ func (this *GedView) Draw(g paint.Painter) {
 	// transform GraphView.Draw uses for the scene) so both overlays honour the
 	// current pan/zoom.
 	g.Save()
-	pw, ph := this.PageSizePx(true, this.ZoomFactor())
+	// Margins are hidden on the designer canvas, so the page rect is the
+	// scene rect; asking for the margin-inclusive size here would clip a
+	// margin's worth of padding region in as well.
+	pw, ph := this.PageSizePx(this.IsPageMarginVisible(), this.ZoomFactor())
 	pLeft, pTop := this.PageOriginPx()
 	g.Rectangle(pLeft-this.ScrollX(), pTop-this.ScrollY(), pw, ph)
 	g.Clip()

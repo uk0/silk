@@ -417,7 +417,12 @@ _AGAIN:
 	}
 
 	scrollWidthPx, scrollHeightPx = this.requireScrollSizePx(zoom)
-	pageWidthPx, pageHeightPx = this.PageSizePx(true, zoom)
+	// The page must be measured the same way the scroll extent is, or the
+	// alignment below centres a rectangle wider than anything the scrollbars
+	// can reach: with the margin hidden the page came out a full margin too
+	// wide and the page origin went negative, parking the left edge of the
+	// form outside the widget with no scroll range to bring it back.
+	pageWidthPx, pageHeightPx = this.PageSizePx(this.showPageMargin, zoom)
 	//	core.Debug("scrollWidthPx, scrollHeightPx = ", scrollWidthPx, scrollHeightPx)
 	//	core.Debug("viewWidthPx, viewHeightPx = ", viewWidthPx, viewHeightPx)
 	vertRangePx = scrollHeightPx - viewHeightPx
@@ -471,7 +476,7 @@ _AGAIN:
 		default:
 			fallthrough
 		case gui.VA_TOP:
-			this.pageTopPx = this.padLeftPx
+			this.pageTopPx = this.padTopPx
 			break
 		case gui.VA_CENTER:
 			this.pageTopPx = (viewHeightPx - pageHeightPx) * 0.5
@@ -481,7 +486,7 @@ _AGAIN:
 			break
 		}
 	} else {
-		this.pageTopPx = this.padLeftPx
+		this.pageTopPx = this.padTopPx
 	}
 
 	// 计算场景原点位置
@@ -544,7 +549,7 @@ func (this *GraphView) Draw(g paint.Painter) {
 	g.Translate(this.pageLeftPx-this.ScrollX(), this.pageTopPx-this.ScrollY())
 
 	// 画页面
-	pw, ph := this.PageSizePx(true, this.ZoomFactor())
+	pw, ph := this.PageSizePx(this.showPageMargin, this.ZoomFactor())
 	g.Rectangle(0, 0, pw, ph)
 	g.SetBrush1(paint.Color{255, 255, 255, 255})
 	g.FillPreserve()
@@ -1129,6 +1134,13 @@ func (this *GraphView) Save() bool {
 func (this *GraphView) SetPageMarginVisible(b bool) {
 	this.showPageMargin = b
 	this.Layout()
+}
+
+// IsPageMarginVisible reports whether the page margin is part of the page.
+// Subclasses that paint their own page-sized overlay need it to size that
+// overlay exactly like Draw sizes the page.
+func (this *GraphView) IsPageMarginVisible() bool {
+	return this.showPageMargin
 }
 
 func (this *GraphView) GetPropertyView() prop.IPropertyView {
