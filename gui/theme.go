@@ -32,6 +32,10 @@ func ThemeRev() uint64 { return themeRev }
 func SetThemeMode(mode ThemeMode) {
 	currentThemeMode = mode
 	defaultThemeSingleton = nil // Force re-creation
+	// The snapshot describes the instance being discarded, so it must go with
+	// it: holding on to it made ResetStyleSheet restore the previous mode's
+	// palette over the newly built theme.
+	themeDefaultsSnapshot = nil
 	themeRev++
 }
 
@@ -71,6 +75,12 @@ type defaultTheme struct {
 	SeparatorSize float64
 	//VMenuMargin    Margin
 	ButtonMargin Margin
+
+	// Hover face of a normal (non-menu) button. Per-mode because the light
+	// tint is near-white: reused as-is in dark mode it left the label, drawn
+	// in TextColor, at 1.17:1 against it.
+	ButtonHoverBGColor     paint.Color
+	ButtonHoverBorderColor paint.Color
 
 	MenuBorderColor     paint.Color
 	MenuBGColor         paint.Color
@@ -164,6 +174,9 @@ func Theme() *defaultTheme {
 		t.MenuItemMargin = Margin{8, 12, 4, 4}
 		t.ButtonMargin = Margin{12, 12, 7, 7}
 
+		t.ButtonHoverBGColor = paint.Color{239, 246, 255, 255}     // blue-50
+		t.ButtonHoverBorderColor = paint.Color{147, 197, 253, 255} // blue-300
+
 		// Button and scrollbar drawing is now programmatic; only tab faces still use pixmaps
 		t.TabFace = newPixmapFace(core.ResourceDir() + `/theme/default/tab.png`)
 		t.TabHoverFace = newPixmapFace(core.ResourceDir() + `/theme/default/tab-hover.png`)
@@ -208,7 +221,9 @@ func Theme() *defaultTheme {
 			t.MenuGrayTextColor = paint.Color{113, 113, 122, 255} // zinc-500
 			t.SeperatorColor = paint.Color{63, 63, 70, 160}       // zinc-700, hairline alpha
 			t.TabActiveTextColor = paint.Color{255, 255, 255, 255}
-			t.TabTextColor = paint.Color{161, 161, 170, 255} // zinc-400
+			t.TabTextColor = paint.Color{161, 161, 170, 255}          // zinc-400
+			t.ButtonHoverBGColor = paint.Color{39, 39, 42, 255}       // zinc-800
+			t.ButtonHoverBorderColor = paint.Color{59, 130, 246, 255} // blue-500
 		}
 	}
 	return defaultThemeSingleton
@@ -526,11 +541,12 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.SetPen1(paint.Color{29, 78, 216, 255}, 1) // blue-700
 			g.Stroke()
 		} else if btn.IsPushed() || btn.IsHover() {
-			// Hover: light blue tint
+			// Hover: subtle tint. The label keeps TextColor here, so the fill
+			// has to come from the theme or it inverts in dark mode.
 			roundedRect(g, 0, 0, w, h, radius)
-			g.SetBrush1(paint.Color{239, 246, 255, 255}) // blue-50
+			g.SetBrush1(t.ButtonHoverBGColor)
 			g.FillPreserve()
-			g.SetPen1(paint.Color{147, 197, 253, 255}, 1) // blue-300
+			g.SetPen1(t.ButtonHoverBorderColor, 1)
 			g.Stroke()
 		}
 
@@ -622,10 +638,20 @@ func (t *defaultTheme) DrawEditFrame(c paint.Painter,
 	x, y, width, height float64, focus, hover, readonly bool) {
 	radius := 4.0
 	roundedRect(c, x, y, width, height, radius)
-	// Fill with white background
-	c.SetBrush1(paint.Color{255, 255, 255, 255})
+	// This fill lands on top of the background every caller has just painted,
+	// so it has to agree with the theme: a fixed white erased the read-only
+	// tint and, in dark mode, blanked the field out from under TextColor.
+	if readonly {
+		c.SetBrush1(t.FormColor)
+	} else {
+		c.SetBrush1(t.ViewBGColor)
+	}
 	c.FillPreserve()
-	if focus && !readonly {
+	// The focus ring is drawn even when read-only: a read-only field is still
+	// in the Tab chain (see isTabFocusable), so without it a keyboard user
+	// loses track of focus entirely. Hover stays suppressed — it advertises an
+	// editing affordance the field does not offer.
+	if focus {
 		c.SetPen1(t.Accent, 2) // accent-colored focus ring
 	} else if hover && !readonly {
 		c.SetPen1(paint.Color{147, 197, 253, 255}, 1) // blue-300 on hover

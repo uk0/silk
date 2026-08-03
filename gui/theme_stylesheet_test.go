@@ -124,6 +124,29 @@ func TestThemeLoadStyleSheetMalformedStillAppliesGood(t *testing.T) {
 	}
 }
 
+// TestThemeSetThemeModeDropsStyleSheetSnapshot: switching mode throws the
+// theme instance away and builds a new one, so the snapshot taken from the old
+// instance describes a palette that no longer exists. Keeping it made
+// ResetStyleSheet paint the *previous* mode's colours over the current theme.
+func TestThemeSetThemeModeDropsStyleSheetSnapshot(t *testing.T) {
+	orig := CurrentThemeMode()
+	t.Cleanup(func() { SetThemeMode(orig); resetThemeForTest(t) })
+
+	SetThemeMode(ThemeLight)
+	resetThemeForTest(t)
+	if err := Theme().LoadStyleSheet(`Frame { background: #112233; }`); err != nil {
+		t.Fatalf("LoadStyleSheet returned unexpected error: %v", err)
+	}
+
+	SetThemeMode(ThemeDark)
+	want := Theme().FormColor // pristine dark chrome
+	Theme().ResetStyleSheet()
+	if got := Theme().FormColor; got != want {
+		t.Errorf("FormColor after ResetStyleSheet = %v, want the dark default %v "+
+			"(a snapshot from the light theme was restored)", got, want)
+	}
+}
+
 func TestThemeResetStyleSheetRestoresDefaults(t *testing.T) {
 	resetThemeForTest(t)
 	defer resetThemeForTest(t)
