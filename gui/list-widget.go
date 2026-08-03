@@ -64,6 +64,7 @@ func (this *ListWidget) Init(iw IWidget) {
 	this.ScrollArea.Init(iw)
 	this.padding = Theme().EditPadding
 	this.activeIndex = -1
+	this.hoverIndex = -1
 	this.showSelect = true
 }
 
@@ -281,8 +282,14 @@ func (this *ListWidget) Append(a ListItem) {
 }
 
 func (this *ListWidget) Insert(idx int, a ListItem) {
-	v := append(append(this.items[:idx], a), this.items[idx:]...)
-	this.items = v
+	// 先整体扩一位再右移, 不能写成append(append(this.items[:idx], a), this.items[idx:]...):
+	// 内层append直接写进了共享的底层数组, 把第idx项覆盖成a, 外层再把已被污染的
+	// 尾部接回来, 结果是丢一项、插入项重复一份.
+	this.items = append(this.items, ListItem{})
+	copy(this.items[idx+1:], this.items[idx:])
+	this.items[idx] = a
+	this.activeIndex = indexAfterInsert(this.activeIndex, idx)
+	this.hoverIndex = indexAfterInsert(this.hoverIndex, idx)
 	this.Layout()
 }
 
@@ -291,25 +298,25 @@ func (this *ListWidget) Remove(idx int) ListItem {
 	this.items[idx] = ListItem{}
 	v := append(this.items[:idx], this.items[idx+1:]...)
 	this.items = v
+	this.activeIndex = indexAfterRemove(this.activeIndex, idx, len(this.items))
+	this.hoverIndex = indexAfterRemove(this.hoverIndex, idx, len(this.items))
 	this.Layout()
 	return ret
 }
 
 func (this *ListWidget) RemoveLast() ListItem {
-	idx := len(this.items) - 1
-	ret := this.items[idx]
-	this.items[idx] = ListItem{}
-	this.items = this.items[:idx-1]
-	this.Layout()
-	return ret
+	return this.Remove(len(this.items) - 1)
 }
 
 func (this *ListWidget) Clear() {
 	this.items = nil
+	this.activeIndex = -1
+	this.hoverIndex = -1
 	this.Layout()
 }
 
 func (this *ListWidget) ItemList() (ret []ListItem) {
+	ret = make([]ListItem, len(this.items))
 	copy(ret, this.items)
 	return
 }
@@ -330,9 +337,15 @@ func (this *ListWidget) Count() int {
 func (this *ListWidget) HitTest(x, y float64) (row, col int) {
 	sx, sy := this.ScrollPos()
 	rh := this.RowHeight()
-	row = int((y-this.padding.T)/rh + sy)
-	if row < 0 || row >= this.Count() {
-		row = -1
+	// Draw先平移padding.T再画第0行, 所以padding.T以上是边框而不是行.
+	// 少了这道下界, (y-padding.T)/rh的截断会把这条边框带算成"视口顶行的上一行" ——
+	// 列表一旦滚动过, 那一行根本不在屏幕上.
+	row = -1
+	if y >= this.padding.T {
+		row = int((y-this.padding.T)/rh + sy)
+		if row < 0 || row >= this.Count() {
+			row = -1
+		}
 	}
 
 	xIcon := 0.0
@@ -426,7 +439,9 @@ func (this *ListWidget) OnLeftUp(x, y float64) {
 	row, col := this.HitTest(x, y)
 	switch col {
 	case 1:
-		if this.downCol == 1 && this.downRow == row {
+		// HitTest的列只看x, 行不存在时(空列表/首行之上/末行之下)照样报col==1,
+		// 此时row与downRow同为-1, 少了row>=0这道闸就会去索引items[-1].
+		if row >= 0 && this.downCol == 1 && this.downRow == row {
 			this.items[row].Checked = !this.items[row].Checked
 			this.emitCheckChanged(row)
 			this.Layout()
@@ -613,6 +628,33 @@ func (this *ListWidget) scrollRowIntoView(r int) {
 	if r >= top+per {
 		this.SetScrollY(float64(r - per + 1))
 	}
+}
+
+// indexAfterRemove 把一个跨越"删除第removed行"这次改动保留下来的下标, 映射到
+// 删除后(共count项)的新下标. 被删行之前的下标不变; 之后的下标上移一位; 被删行
+// 自身的下标由顶上来的那一行接管, 顶不上时退回最后一行, 列表清空则返回-1.
+// 这里返回-1而不是夹住, 是因为"选中项被删掉了"就是"没有选中项" —— 宿主拿
+// ActiveIndex()去索引自己的平行数组, 留一个越界下标迟早会崩.
+func indexAfterRemove(idx, removed, count int) int {
+	if idx < 0 || count <= 0 {
+		return -1
+	}
+	if idx > removed {
+		return idx - 1
+	}
+	if idx == removed && idx >= count {
+		return count - 1
+	}
+	return idx
+}
+
+// indexAfterInsert 把保留下来的下标映射过"在inserted处插入一行"这次改动:
+// 插入点及其之后的行整体下移一位.
+func indexAfterInsert(idx, inserted int) int {
+	if idx >= 0 && idx >= inserted {
+		return idx + 1
+	}
+	return idx
 }
 
 // pageStepIndex 计算PageUp/PageDown后落到的行下标: 从cur沿dir方向移动page行,

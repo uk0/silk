@@ -650,8 +650,15 @@ func (this *Table) columnIsNumericModel(col int) bool {
 // Every model-row read or write that starts from a display position (drawing,
 // inline editing) goes through here so a view-side sort reorders rows on screen
 // without touching the model.
+//
+// A permutation whose length no longer matches the model's row count was built
+// against a row set that is gone: its entries can name rows past the end of the
+// model, and the view has no change notification to rebuild it from. Falling
+// back to identity keeps the table unsorted until the next header click rather
+// than handing a model an index it never had.
 func (this *Table) dispRow(r int) int {
-	if this.displayOrder != nil && r >= 0 && r < len(this.displayOrder) {
+	if this.displayOrder != nil && r >= 0 && r < len(this.displayOrder) &&
+		this.model != nil && len(this.displayOrder) == this.model.RowCount() {
 		return this.displayOrder[r]
 	}
 	return r

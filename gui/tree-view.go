@@ -310,6 +310,12 @@ func (this *TreeView) expand(row *TreeViewRow) {
 	copy(newRows[row.ri+1+rc:], this.rows[row.ri+1:])
 	this.rows = newRows
 
+	// 展开点在当前行上方时, 当前行整体被推下rc行. 高亮标记挂在行对象上会跟着走,
+	// currentRow这个下标不跟着走的话, 两者就指向不同的行了.
+	if this.currentRow > row.ri {
+		this.currentRow += rc
+	}
+
 	row.expanded = true
 
 	for _, v := range rs {
@@ -340,6 +346,11 @@ func (this *TreeView) collapse(row *TreeViewRow) {
 	}
 	h := y - y0
 	if rc > 0 {
+		// 被折叠的行仍留在rmap里, 下次展开原样取回, 所以selected必须在这里清掉,
+		// 否则重新展开后会多出一条没人认领的高亮行.
+		for i := row.ri + 1; i <= row.ri+rc; i++ {
+			this.rows[i].selected = false
+		}
 		for i := row.ri + 1; i < len(this.rows)-rc; i++ {
 			this.rows[i] = this.rows[i+rc]
 			this.rows[i].ypos -= h
@@ -348,6 +359,18 @@ func (this *TreeView) collapse(row *TreeViewRow) {
 		this.rows = this.rows[:len(this.rows)-rc]
 	}
 	row.expanded = false
+	if rc > 0 {
+		// 当前行落在刚被隐藏的子树里时, 把它上移到被折叠的结点本身(仿Qt);
+		// 落在子树下方时整体上移rc行. 不处理的话currentRow仍是折叠前的下标,
+		// 折叠后指向一个不相干的行(回车就会激活它), 甚至越出行表.
+		switch {
+		case this.currentRow > row.ri+rc:
+			this.currentRow -= rc
+		case this.currentRow > row.ri:
+			this.currentRow = -1 // 让setCurrentRow走完整流程, 而不是被旧下标短路
+			this.setCurrentRow(row.ri)
+		}
+	}
 	this.Layout()
 }
 
@@ -550,8 +573,11 @@ func (this *TreeView) rowAt(ypos float64) *TreeViewRow {
 
 // 显示的行号[-1, size]
 func (this *TreeView) rowIndexAtScrolled(ypos float64) int {
+	// rowBottom(i)是第i行的开区间下边界, 第i行占[ypos_i, rowBottom(i)),
+	// 所以判定必须用严格大于: 用>=时, 正好落在行边界上的那个像素会被判给上一行,
+	// 行高每整除一次就有一次点击选错行.
 	return sort.Search(len(this.rows), func(i int) bool {
-		return this.rowBottom(i) >= ypos
+		return this.rowBottom(i) > ypos
 	})
 }
 
