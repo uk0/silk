@@ -24,8 +24,29 @@ func NewLink(text, url string) *Link {
 	p.Init(p)
 	p.text = text
 	p.url = url
-	p.color = paint.Color{66, 133, 244, 255} // blue
 	return p
+}
+
+// Init carries the colour, not NewLink: the designer and the .tdoc loader
+// build widgets through the core factory, which reflects on Init and never
+// sees the constructor. Draw paints the text with this.color, so a zero
+// colour draws it fully transparent.
+func (this *Link) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.color = paint.Color{66, 133, 244, 255} // blue
+}
+
+// linkHoverColor brightens the link for the hover state. The blue channel
+// widens to int before the bump because the old uint8 arithmetic wrapped —
+// the default blue (B=244) came out at 28, so hovering darkened the link
+// instead of lifting it, and the "> 255" guard could never fire on a uint8.
+func linkHoverColor(c paint.Color) paint.Color {
+	b := int(c.B) + 40
+	if b > 255 {
+		b = 255
+	}
+	c.B = uint8(b)
+	return c
 }
 
 func (this *Link) Text() string       { return this.text }
@@ -103,17 +124,7 @@ func (this *Link) Draw(g paint.Painter) {
 
 	// text color
 	if this.hover {
-		// lighter color on hover
-		hoverColor := paint.Color{
-			R: this.color.R,
-			G: this.color.G,
-			B: this.color.B + 40,
-			A: this.color.A,
-		}
-		if this.color.B+40 > 255 {
-			hoverColor.B = 255
-		}
-		g.SetBrush1(hoverColor)
+		g.SetBrush1(linkHoverColor(this.color))
 	} else {
 		g.SetBrush1(this.color)
 	}

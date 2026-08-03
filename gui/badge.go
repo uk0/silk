@@ -24,9 +24,16 @@ func init() {
 func NewBadge() *Badge {
 	p := new(Badge)
 	p.Init(p)
-	p.color = paint.Color{239, 68, 68, 255} // red
-	p.maxCount = 99
 	return p
+}
+
+// Init carries the defaults, not NewBadge: the designer and the .tdoc loader
+// build widgets through the core factory, which reflects on Init and never
+// sees the constructor. A zero maxCount also turns every count into "0+".
+func (this *Badge) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.color = paint.Color{239, 68, 68, 255} // red
+	this.maxCount = 99
 }
 
 func (this *Badge) Count() int    { return this.count }
@@ -81,10 +88,16 @@ func (this *Badge) displayText() string {
 
 // --- Drawing ---
 
-func (this *Badge) Draw(g paint.Painter) {
-	w, _ := this.Size()
+// Draw paints nothing. The framework's order is Draw, then the children,
+// then DrawOverlay, and Layout hands the content child the whole widget
+// rect — a marker drawn here disappears the moment the content paints
+// anything opaque over that corner. Overriding Draw is still required:
+// Widget.Draw puts a debug error cross on any widget that doesn't.
+func (this *Badge) Draw(g paint.Painter) {}
 
-	// content is drawn by the framework as a child
+// DrawOverlay paints the count pill / dot above the content child.
+func (this *Badge) DrawOverlay(g paint.Painter) {
+	w, _ := this.Size()
 
 	if this.count <= 0 && !this.dot {
 		// Designer placeholder: draw a small gray circle with "0"

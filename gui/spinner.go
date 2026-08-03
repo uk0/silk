@@ -55,13 +55,21 @@ type Spinner struct {
 func NewSpinner() *Spinner {
 	s := new(Spinner)
 	s.Init(s)
-	s.color = Theme().HighLightColor
-	s.dotCount = 8
-	s.cycle = time.Second
 	s.busy = true
 	s.startTime = time.Now()
 	s.startAnim()
 	return s
+}
+
+// Init carries the defaults, not NewSpinner: the designer and the .tdoc
+// loader build widgets through the core factory, which reflects on Init and
+// never sees the constructor. Draw bails below 3 dots, so a factory spinner
+// left at zero could not render even once SetBusy(true) armed it.
+func (this *Spinner) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.color = Theme().HighLightColor
+	this.dotCount = 8
+	this.cycle = time.Second
 }
 
 // SetColor overrides the dot colour. Defaults to the theme accent so

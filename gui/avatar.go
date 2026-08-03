@@ -32,10 +32,18 @@ func init() {
 func NewAvatar() *Avatar {
 	p := new(Avatar)
 	p.Init(p)
-	p.bgColor = paint.Color{66, 133, 244, 255}
-	p.shape = AvatarCircle
-	p.size = 40
 	return p
+}
+
+// Init carries the defaults, not NewAvatar: the designer and the .tdoc
+// loader build widgets through the core factory, which reflects on Init and
+// never sees the constructor. A zero size makes SizeHints 0x0 and collapses
+// the avatar to a point.
+func (this *Avatar) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.bgColor = paint.Color{66, 133, 244, 255}
+	this.shape = AvatarCircle
+	this.size = 40
 }
 
 func (this *Avatar) SetPixmap(pm paint.Pixmap) { this.pixmap = pm; this.Self().Update() }
@@ -60,6 +68,11 @@ func (this *Avatar) SetShape(s AvatarShape) {
 }
 
 func (this *Avatar) SetAvatarSize(s float64) {
+	// A negative size reaches SizeHints as a negative extent and Draw as a
+	// negative arc radius; the property sheet can feed it either.
+	if s < 0 {
+		s = 0
+	}
 	this.size = s
 	this.Self().Update()
 }

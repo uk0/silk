@@ -25,9 +25,18 @@ type Rating struct {
 func NewRating() *Rating {
 	p := new(Rating)
 	p.Init(p)
-	p.maxStars = 5
-	p.hoverValue = -1
 	return p
+}
+
+// Init carries the defaults, not NewRating: the designer and the .tdoc
+// loader build widgets through the core factory, which reflects on Init and
+// never sees the constructor. At zero stars the draw loop never runs and
+// SetValue clamps everything to 0; at hoverValue 0 the "is hovered" test
+// (hoverValue >= 0) is true before the mouse has arrived.
+func (this *Rating) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.maxStars = 5
+	this.hoverValue = -1
 }
 
 // Value returns the current rating (0 to maxStars).
@@ -88,6 +97,35 @@ const (
 	ratingSpacing = 4.0
 )
 
+// ratingStarGeometry returns the star radius and the gap between stars for a
+// w x h widget, shrinking both so the row still fits when the widget is laid
+// out below its size hint. Draw and hitTestStar must both measure with it:
+// while the hit test used the unscaled constants, a click on a shrunken star
+// selected whichever star the full-size layout would have put under the
+// cursor — on a half-width widget, star 5 set the rating to 3.
+func ratingStarGeometry(w, h float64, maxStars int) (radius, spacing float64) {
+	radius, spacing = ratingRadius, ratingSpacing
+	if maxStars > 0 {
+		maxR := w / (float64(maxStars)*2 + float64(maxStars-1)*(ratingSpacing/(ratingRadius*2))*2)
+		if maxR < radius {
+			radius = maxR
+		}
+		maxRH := (h - 4) / 2
+		if maxRH < radius {
+			radius = maxRH
+		}
+	}
+	// A widget shorter than the vertical padding drives maxRH negative, and
+	// a negative radius reaches cairo as an Arc it cannot draw.
+	if radius < 0 {
+		radius = 0
+	}
+	if radius < ratingRadius {
+		spacing = spacing * radius / ratingRadius
+	}
+	return
+}
+
 func (this *Rating) Draw(g paint.Painter) {
 	w, h := this.Size()
 	cy := h * 0.5
@@ -101,22 +139,7 @@ func (this *Rating) Draw(g paint.Painter) {
 	emptyColor := paint.Color{200, 200, 200, 255} // light gray
 	hoverColor := paint.Color{255, 215, 0, 180}   // gold with alpha
 
-	// Dynamic radius based on widget bounds so stars fit
-	dynRadius := ratingRadius
-	if this.maxStars > 0 {
-		maxR := w / (float64(this.maxStars)*2 + float64(this.maxStars-1)*(ratingSpacing/(ratingRadius*2))*2)
-		if maxR < dynRadius {
-			dynRadius = maxR
-		}
-		maxRH := (h - 4) / 2
-		if maxRH < dynRadius {
-			dynRadius = maxRH
-		}
-	}
-	dynSpacing := ratingSpacing
-	if dynRadius < ratingRadius {
-		dynSpacing = dynSpacing * dynRadius / ratingRadius
-	}
+	dynRadius, dynSpacing := ratingStarGeometry(w, h, this.maxStars)
 
 	for i := 0; i < this.maxStars; i++ {
 		cx := dynRadius + float64(i)*(dynRadius*2+dynSpacing)
@@ -175,9 +198,11 @@ func (this *Rating) OnLeftDown(x, y float64) {
 }
 
 func (this *Rating) hitTestStar(x float64) int {
+	w, h := this.Size()
+	radius, spacing := ratingStarGeometry(w, h, this.maxStars)
 	for i := 0; i < this.maxStars; i++ {
-		cx := ratingRadius + float64(i)*(ratingRadius*2+ratingSpacing)
-		if x >= cx-ratingRadius && x <= cx+ratingRadius {
+		cx := radius + float64(i)*(radius*2+spacing)
+		if x >= cx-radius && x <= cx+radius {
 			return i + 1
 		}
 	}

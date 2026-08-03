@@ -21,13 +21,30 @@ func init() {
 	core.RegisterFactory("gui.Tag", core.TypeOf((*Tag)(nil)))
 }
 
+// tagTextPadding is the room the pill keeps either side of the label;
+// tagCloseWidth is the slot on the right the close cross owns. SizeHints
+// reserves both, Draw clips the label to what is left of them and
+// OnMouseMove treats the slot as the close hit region — they have to stay
+// one number or a squeezed tag runs its text through the cross.
+const (
+	tagTextPadding = 8.0
+	tagCloseWidth  = 18.0
+)
+
 func NewTag(text string) *Tag {
 	p := new(Tag)
 	p.Init(p)
 	p.text = text
-	p.color = paint.Color{66, 133, 244, 255}      // blue
-	p.textColor = paint.Color{255, 255, 255, 255} // white
 	return p
+}
+
+// Init carries the visual defaults, not NewTag: the designer and the .tdoc
+// loader build widgets through the core factory, which reflects on Init and
+// never sees the constructor. Colours left in NewTag render a transparent tag.
+func (this *Tag) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.color = paint.Color{66, 133, 244, 255}      // blue
+	this.textColor = paint.Color{255, 255, 255, 255} // white
 }
 
 func (this *Tag) Text() string       { return this.text }
@@ -76,7 +93,7 @@ func (this *Tag) OnMouseMove(x, y float64) {
 	}
 	w, _ := this.Size()
 	was := this.hoverClose
-	this.hoverClose = x >= w-18
+	this.hoverClose = x >= w-tagCloseWidth
 	if was != this.hoverClose {
 		this.Self().Update()
 	}
@@ -116,16 +133,28 @@ func (this *Tag) Draw(g paint.Painter) {
 	g.SetBrush1(this.color)
 	g.Fill()
 
-	// text
+	// text, bounded by the room SizeHints asked for so a tag laid out
+	// below its hint loses the tail of the label instead of painting it
+	// through the close cross
 	f := t.Font
 	g.SetFont(f)
 	ext := f.TextExtents(this.text)
-	tx := 8.0
+	tx := tagTextPadding
 	ty := 0.5*(h+ext.YBearing) - ext.YBearing
+	textW := w - tx - tagTextPadding
+	if this.closeable {
+		textW = w - tx - tagCloseWidth
+	}
+	if textW < 0 {
+		textW = 0
+	}
+	g.Save()
+	g.Rectangle(tx, 0, textW, h)
+	g.Clip()
 	g.SetBrush1(this.textColor)
 	g.Translate(tx-ext.XBearing, ty)
 	g.DrawText(this.text)
-	g.Translate(-(tx - ext.XBearing), -ty)
+	g.Restore()
 
 	// close button
 	if this.closeable {
@@ -152,9 +181,9 @@ func (this *Tag) SizeHints() SizeHints {
 	t := Theme()
 	fe := t.Font.FontExtents()
 	ext := t.Font.TextExtents(this.text)
-	w := ext.Width + 16
+	w := ext.Width + tagTextPadding*2
 	if this.closeable {
-		w += 18
+		w += tagCloseWidth
 	}
 	h := fe.Height + 8
 	return SizeHints{Width: w, Height: h, Policy: 0}

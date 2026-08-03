@@ -39,10 +39,18 @@ func init() {
 func NewProgressBar() *ProgressBar {
 	p := new(ProgressBar)
 	p.Init(p)
-	p.barColor = paint.Color{66, 133, 244, 255} // blue
-	p.bgColor = paint.Color{220, 220, 220, 255} // light gray
-	p.showText = true
 	return p
+}
+
+// Init carries the defaults, not NewProgressBar: the designer and the .tdoc
+// loader build widgets through the core factory, which reflects on Init and
+// never sees the constructor. Colours left in the constructor paint a
+// transparent fill over a transparent track.
+func (this *ProgressBar) Init(self IWidget) {
+	this.Widget.Init(self)
+	this.barColor = paint.Color{66, 133, 244, 255} // blue
+	this.bgColor = paint.Color{220, 220, 220, 255} // light gray
+	this.showText = true
 }
 
 func (this *ProgressBar) Value() float64 {
