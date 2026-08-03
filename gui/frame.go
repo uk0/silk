@@ -957,10 +957,26 @@ func (this *Frame) ActiveView() (IWidget, IDock) {
 	return w, dock
 }
 
+// isDocumentView reports whether view, docked in dock, may stand for the
+// frame's current document.
+func (this *Frame) isDocumentView(view IWidget, dock IDock) bool {
+	return view != nil && !this.IsToolView(view) && (dock == nil || dock.IsMainDock())
+}
+
 func (this *Frame) CurrentDocView() (IWidget, IDock) {
 
+	// The active view counts as the current document only when it sits in a
+	// document dock. IsToolView on its own asks a weaker question — whether
+	// somebody remembered to register the panel — and a host that docks a side
+	// panel with a plain AddView, as the designer does for its widget palette,
+	// leaves that panel indistinguishable from a document. Pressing the mouse
+	// in the palette made it the active view, this returned it, every caller's
+	// type assertion to its own document type failed, and Run, Preview and Save
+	// silently did nothing until the user clicked back into the canvas. Which
+	// docks hold documents is already expressed by IsMainDock: SuggestDocDock
+	// resolves to a main dock, SuggestToolDock to a tool dock.
 	view, dock := this.ActiveView()
-	if view != nil && !this.IsToolView(view) {
+	if this.isDocumentView(view, dock) {
 		return view, dock
 	}
 

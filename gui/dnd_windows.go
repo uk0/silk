@@ -253,10 +253,46 @@ func (this *Window) DoDragDrop(from interface{},
 	// message, so no widget handler runs until DoDragDrop returns. The GLFW
 	// backend pumps events itself inside its drag loop and does need the guard.
 	effect, err := win32.DoDragDrop(do, ds, acts)
+	forgetMouseAfterModalLoop(this)
 	privateDndData = nil
 	if err != nil {
 		core.Warn(err)
 		return 0
 	}
 	return DndAction(effect)
+}
+
+// forgetMouseAfterModalLoop drops the mouse tracking the Win32 backend carries
+// between messages.
+//
+// OLE's DoDragDrop runs its own message loop, so our window procedure sees
+// neither the moves during the drag nor the button-up that ends it. What is
+// left behind is a lie: lastMouseWidget still points at the widget the drag
+// started from, and the capture bookkeeping still says a button is down.
+// on_WM_LBUTTONDOWN only re-resolves lastMouseWidget when it is nil, so the
+// next press went to the drag source rather than to whatever was clicked —
+// after dropping a widget onto the canvas, the toolbar stopped responding, and
+// a second click did not recover it either.
+//
+// The capture stack matters most: OLE takes the mouse for itself and hands it
+// back when the drag ends, but silk's own stack still holds whatever was
+// captured when the drag began, and a non-nil curCapture() sends
+// on_WM_MOUSEMOVE down its redirect branch — the branch that never reassigns
+// lastMouseWidget. Clearing the pointers without clearing the stack therefore
+// achieves nothing: they are re-resolved by exactly the code the stale capture
+// keeps from running.
+//
+// This reconciles state that is demonstrably stale after the modal loop. It is
+// not the cause of the "Run does nothing after a drop" report — that turned out
+// to be Frame.CurrentDocView treating an unregistered side panel as a document.
+func forgetMouseAfterModalLoop(win *Window) {
+	captureStack = captureStack[:0]
+	releaseCapture()
+	setMouseHoverWidget(nil)
+	lastMouseWidget = nil
+	mouseMoving = false
+	if win != nil {
+		win.autoCaptured = false
+		win.toCapture = false
+	}
 }
