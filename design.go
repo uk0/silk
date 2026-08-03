@@ -1034,8 +1034,73 @@ func onAbout() {
 }
 
 // ---------------------------------------------------------------------------
+// Command enablement
+// ---------------------------------------------------------------------------
+
+// selectionCommand is a command whose applicability is decided entirely by the
+// size of the canvas selection: aligning needs two items, distributing three,
+// breaking a layout exactly one.
+type selectionCommand struct {
+	action gui.IAction
+	min    int
+	max    int // 0 = no upper bound
+}
+
+var selectionCommands []selectionCommand
+
+// needSelection records that btn's command applies only to a selection of
+// between min and max items, and returns the button's action so the handler can
+// be bound in the same expression. Each of those handlers already returns early
+// on a wrong-sized selection; registering it here is what turns that silent
+// no-op into a button the user can see is unavailable.
+func needSelection(btn *gui.Button, min, max int) gui.IAction {
+	selectionCommands = append(selectionCommands, selectionCommand{btn.Action(), min, max})
+	return btn.Action()
+}
+
+// updateActionStates greys out the registered commands the current selection
+// cannot satisfy. SetEnabled is called only on a real change because it bumps
+// the action's revision and Button.OnIdle repaints whenever that moves — writing
+// the same value back would repaint every registered button on every refresh.
+func updateActionStates(gv *ged.GedView) {
+	count := 0
+	if gv != nil {
+		if sel := gv.Selection(); sel != nil {
+			count = sel.Count()
+		}
+	}
+	for _, c := range selectionCommands {
+		enabled := count >= c.min && (c.max == 0 || count <= c.max)
+		if enabled != c.action.IsEnabled() {
+			c.action.SetEnabled(enabled)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Menu bar construction
 // ---------------------------------------------------------------------------
+
+// populateRecentMenu rebuilds the 最近文件 submenu from the recent-files list.
+// Split out of the popup callback because that callback can only run against a
+// live popup window, which puts the empty case out of reach of a test.
+func populateRecentMenu(sub *gui.Menu) {
+	sub.Clear()
+	if len(recentFiles) == 0 {
+		// A placeholder, not a command: disabled so it cannot take a click and
+		// silently do nothing.
+		sub.AddButton1("(无)", nil).Action().SetEnabled(false)
+		return
+	}
+	for _, rf := range recentFiles {
+		path := rf
+		base := filepath.Base(path)
+		b := sub.AddButton1(base, nil)
+		b.Action().BindFunc0(func() {
+			openDesignFile(path)
+		})
+	}
+}
 
 func createMenuBar(mainFrame *gui.Frame) {
 	mainMenu := mainFrame.MainMenu()
@@ -1052,21 +1117,7 @@ func createMenuBar(mainFrame *gui.Frame) {
 	// ---- 最近文件 ----
 	recentMenu, recentBtn := fileMenu.AddSubMenu("最近文件", nil, nil)
 	recentBtn.SetSubPopupCallback(func(btn gui.IButton) {
-		sub := btn.SubPopup().(*gui.Menu)
-		sub.Clear()
-		if len(recentFiles) == 0 {
-			empty := sub.AddButton1("(无)", nil)
-			_ = empty
-			return
-		}
-		for _, rf := range recentFiles {
-			path := rf
-			base := filepath.Base(path)
-			b := sub.AddButton1(base, nil)
-			b.Action().BindFunc0(func() {
-				openDesignFile(path)
-			})
-		}
+		populateRecentMenu(btn.SubPopup().(*gui.Menu))
 	})
 	_ = recentMenu
 
@@ -1171,25 +1222,25 @@ func createMenuBar(mainFrame *gui.Frame) {
 
 	// ---- 布局 (Layout) ----
 	layoutMenu, _ := mainMenu.AddSubMenu("布局", nil, nil)
-	layoutMenu.AddButton1("应用水平布局 (HBox)", nil).Action().BindFunc0(applyHBoxLayout)
-	layoutMenu.AddButton1("应用垂直布局 (VBox)", nil).Action().BindFunc0(applyVBoxLayout)
-	layoutMenu.AddButton1("应用网格布局 (Grid)", nil).Action().BindFunc0(applyGridLayout)
+	needSelection(layoutMenu.AddButton1("应用水平布局 (HBox)", nil), 2, 0).BindFunc0(applyHBoxLayout)
+	needSelection(layoutMenu.AddButton1("应用垂直布局 (VBox)", nil), 2, 0).BindFunc0(applyVBoxLayout)
+	needSelection(layoutMenu.AddButton1("应用网格布局 (Grid)", nil), 2, 0).BindFunc0(applyGridLayout)
 	layoutMenu.AddWidget(gui.NewSeparator())
-	layoutMenu.AddButton1("打破布局", nil).Action().BindFunc0(breakLayout)
+	needSelection(layoutMenu.AddButton1("打破布局", nil), 1, 1).BindFunc0(breakLayout)
 
 	// ---- 排列 (Arrange) ----
 	arrangeMenu, _ := mainMenu.AddSubMenu("排列", nil, nil)
 
-	arrangeMenu.AddButton1("左对齐    Alt+L", nil).Action().BindFunc0(alignLeft)
-	arrangeMenu.AddButton1("右对齐    Alt+R", nil).Action().BindFunc0(alignRight)
-	arrangeMenu.AddButton1("顶对齐    Alt+T", nil).Action().BindFunc0(alignTop)
-	arrangeMenu.AddButton1("底对齐    Alt+B", nil).Action().BindFunc0(alignBottom)
+	needSelection(arrangeMenu.AddButton1("左对齐    Alt+L", nil), 2, 0).BindFunc0(alignLeft)
+	needSelection(arrangeMenu.AddButton1("右对齐    Alt+R", nil), 2, 0).BindFunc0(alignRight)
+	needSelection(arrangeMenu.AddButton1("顶对齐    Alt+T", nil), 2, 0).BindFunc0(alignTop)
+	needSelection(arrangeMenu.AddButton1("底对齐    Alt+B", nil), 2, 0).BindFunc0(alignBottom)
 	arrangeMenu.AddWidget(gui.NewSeparator())
-	arrangeMenu.AddButton1("水平居中    Alt+C", nil).Action().BindFunc0(alignCenterH)
-	arrangeMenu.AddButton1("垂直居中    Alt+M", nil).Action().BindFunc0(alignCenterV)
+	needSelection(arrangeMenu.AddButton1("水平居中    Alt+C", nil), 2, 0).BindFunc0(alignCenterH)
+	needSelection(arrangeMenu.AddButton1("垂直居中    Alt+M", nil), 2, 0).BindFunc0(alignCenterV)
 	arrangeMenu.AddWidget(gui.NewSeparator())
-	arrangeMenu.AddButton1("水平分布    Alt+H", nil).Action().BindFunc0(distributeH)
-	arrangeMenu.AddButton1("垂直分布    Alt+V", nil).Action().BindFunc0(distributeV)
+	needSelection(arrangeMenu.AddButton1("水平分布    Alt+H", nil), 3, 0).BindFunc0(distributeH)
+	needSelection(arrangeMenu.AddButton1("垂直分布    Alt+V", nil), 3, 0).BindFunc0(distributeV)
 
 	// ---- Mode buttons: 设计/代码/分屏 ----
 	mainMenu.AddWidget(gui.NewSeparator())
@@ -1555,6 +1606,12 @@ func createPanels(mainFrame *gui.Frame) {
 						sb.ShowMessage(fmt.Sprintf("Selected: %d items", count))
 					}
 				}
+			} else {
+				// A tab with no canvas behind it: the permanent indicators are
+				// left showing the document you switched away from, but the
+				// canvas commands must not stay lit — there is nothing for them
+				// to act on.
+				updateActionStates(nil)
 			}
 			// Update code outline when switching to editor tabs
 			if codeOutline != nil && editorTabs != nil {
@@ -1695,32 +1752,41 @@ func refreshTreeForCurrentView(dbgTree *graph.DbgTreeView) {
 // Toolbar construction (Qt Creator-style quick access toolbar)
 // ---------------------------------------------------------------------------
 
+// addToolBarAction adds an icon-only toolbar button carrying hover text. The
+// toolbar paints no labels, so the tooltip is the only place the name of a
+// command — and the shortcut its menu entry advertises — can be read.
+func addToolBarAction(tb *gui.ToolBar, icon, tip string, fn func()) *gui.Button {
+	btn := tb.AddAction("", gui.LoadIcon(icon), fn)
+	gui.SetToolTip(btn, tip)
+	return btn
+}
+
 func createToolBar(mainFrame *gui.Frame) {
 	tb := gui.NewToolBar()
 
 	// File operations (icon-only, like Qt Creator)
-	tb.AddAction("", gui.LoadIcon("document"), onFileNew)
-	tb.AddAction("", gui.LoadIcon("folder"), onFileOpen)
-	tb.AddAction("", gui.LoadIcon("save"), onFileSave)
+	addToolBarAction(tb, "document", "新建", onFileNew)
+	addToolBarAction(tb, "folder", "打开", onFileOpen)
+	addToolBarAction(tb, "save", "保存 (Ctrl+S)", onFileSave)
 
 	tb.AddSeparator()
 
 	// Edit operations
-	tb.AddAction("", gui.LoadIcon("edit-undo"), onUndo)
-	tb.AddAction("", gui.LoadIcon("edit-redo"), onRedo)
+	addToolBarAction(tb, "edit-undo", "撤销 (Ctrl+Z)", onUndo)
+	addToolBarAction(tb, "edit-redo", "重做 (Ctrl+Y)", onRedo)
 
 	tb.AddSeparator()
 
 	// Preview & Run
-	tb.AddAction("", gui.LoadIcon("preview"), onPreview)
-	tb.AddAction("", gui.LoadIcon("run"), onRun)
+	addToolBarAction(tb, "preview", "预览 (Ctrl+R)", onPreview)
+	addToolBarAction(tb, "run", "运行 (F5)", onRun)
 
 	tb.AddSeparator()
 
 	// Alignment tools
-	tb.AddAction("", gui.LoadIcon("align-left"), alignLeft)
-	tb.AddAction("", gui.LoadIcon("align-center"), alignCenterH)
-	tb.AddAction("", gui.LoadIcon("align-right"), alignRight)
+	needSelection(addToolBarAction(tb, "align-left", "左对齐 (Alt+L)", alignLeft), 2, 0)
+	needSelection(addToolBarAction(tb, "align-center", "水平居中 (Alt+C)", alignCenterH), 2, 0)
+	needSelection(addToolBarAction(tb, "align-right", "右对齐 (Alt+R)", alignRight), 2, 0)
 
 	mainFrame.SetToolBar(tb)
 }
@@ -1805,9 +1871,16 @@ func updateStatusBarInfoFor(gv *ged.GedView) {
 		}
 	}
 
-	// Selected widget info
-	if statusInfoLabel != nil && gv != nil {
-		sel := gv.Selection()
+	// Selected widget info. Every path has to write the cell. The zoom and
+	// count cells above already reset themselves when there is no canvas, and
+	// this one did not: it kept the last document's "3 selected" beside a
+	// "0 widgets" count. Compute the text first, then write it once.
+	if statusInfoLabel != nil {
+		info := ""
+		var sel *graph.Selection
+		if gv != nil {
+			sel = gv.Selection()
+		}
 		if sel != nil && sel.Count() == 1 {
 			item := sel.ItemList()[0]
 			if fw, ok := item.(*ged.FakeWidget); ok {
@@ -1815,14 +1888,18 @@ func updateStatusBarInfoFor(gv *ged.GedView) {
 				if idx := strings.LastIndex(name, "."); idx >= 0 {
 					name = name[idx+1:]
 				}
-				statusInfoLabel.SetText(fmt.Sprintf("%s (%.0f,%.0f)", name, fw.X(), fw.Y()))
+				info = fmt.Sprintf("%s (%.0f,%.0f)", name, fw.X(), fw.Y())
 			}
 		} else if sel != nil && sel.Count() > 1 {
-			statusInfoLabel.SetText(fmt.Sprintf("%d selected", sel.Count()))
-		} else {
-			statusInfoLabel.SetText("")
+			info = fmt.Sprintf("%d selected", sel.Count())
 		}
+		statusInfoLabel.SetText(info)
 	}
+
+	// The commands that need a multi-item selection change availability on
+	// exactly the events that bring us here — selection, document switch, mode
+	// switch — so they ride along rather than duplicating the wiring.
+	updateActionStates(gv)
 }
 
 // ---------------------------------------------------------------------------
