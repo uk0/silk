@@ -53,11 +53,11 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "容器/布局 (Layout)",
-		names: []string{"gui.VBox", "gui.HBox", "gui.GridLayout", "gui.FormLayout", "gui.Splitter", "gui.StackedWidget", "gui.TabWidget", "gui.Card", "gui.Accordion"},
+		names: []string{"gui.VBox", "gui.HBox", "gui.GridLayout", "gui.FormLayout", "gui.FlexWrap", "gui.Splitter", "gui.StackedWidget", "gui.TabWidget", "gui.Card", "gui.Accordion"},
 	},
 	{
 		name:  "数据视图 (Data)",
-		names: []string{"gui.ListWidget", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination", "gui.DiffView"},
+		names: []string{"gui.ListWidget", "gui.VirtualList", "gui.TreeView", "gui.Table", "gui.NotificationPanel", "gui.Pagination", "gui.DiffView"},
 	},
 	{
 		name:  "图表 (Charts)",
@@ -69,31 +69,21 @@ var categoryDefs = []struct {
 	},
 	{
 		name:  "对话框/窗口 (Window)",
-		names: []string{"gui.Form", "gui.Dialog"},
+		names: []string{"gui.Form", "gui.Dialog", "gui.ToolBar", "gui.StatusBar", "gui.CodeEditor"},
 	},
 }
 
 func (this *WidgetList) Init(self gui.IWidget) {
 	this.ListWidget.Init(self)
 
-	// Internal/system widgets that should NOT appear in the widget list
-	excluded := map[string]bool{
-		"ged.WidgetList": true, "ged.CodePanel": true,
-		"ged.FileExplorer": true, "ged.EditorTabs": true,
-		"gui.Dock": true, "gui.Frame": true, "gui.Menu": true,
-		"gui.TabBar": true, "gui.ScrollBar": true, "gui.Space": true,
-		"gui.Action": true, "gui.Separator": true, "gui.ButtonBox": true,
-		"gui.tooltipWindow": true, "gui.HeaderView": true,
-		"gui.ScrollArea":     true,
-		"prop.PropertySheet": true, "prop.control.CheckBox": true,
-		"prop.control.TextEdit": true,
-		"graph.DbgTreeView":     true, "graph.GraphView": true,
-	}
-
-	// Build a set of available widget factory names
+	// Build the set of placeable factory names. Placeability is decided by
+	// codegen (see ged/widget-registry.go): this used to be a blocklist, which
+	// meant every factory registered after the list was written — all the
+	// ged.* IDE panels included — showed up here and generated a program that
+	// panicked on startup.
 	available := map[string]bool{}
 	for _, v := range core.AllFactories() {
-		if excluded[v.Name()] {
+		if !isPlaceable(v.Name()) {
 			continue
 		}
 		p := v.New()
@@ -106,8 +96,9 @@ func (this *WidgetList) Init(self gui.IWidget) {
 		}
 	}
 
-	// Build categories from the definition list
-	categorized := map[string]bool{}
+	// Build categories from the definition list. No "other" bucket: a mapping
+	// with no category fails TestCodegenMappingIsOfferedByPalette, so every
+	// placeable widget has a home here.
 	for _, cd := range categoryDefs {
 		cat := widgetCategory{name: cd.name}
 		for _, name := range cd.names {
@@ -116,27 +107,11 @@ func (this *WidgetList) Init(self gui.IWidget) {
 					Text: widgetFriendlyName(name),
 					Data: name,
 				})
-				categorized[name] = true
 			}
 		}
 		if len(cat.items) > 0 {
 			this.categories = append(this.categories, cat)
 		}
-	}
-
-	// Collect any remaining uncategorized widgets into an "其他 (Other)" category
-	var other widgetCategory
-	other.name = "其他 (Other)"
-	for name := range available {
-		if !categorized[name] {
-			other.items = append(other.items, gui.ListItem{
-				Text: widgetFriendlyName(name),
-				Data: name,
-			})
-		}
-	}
-	if len(other.items) > 0 {
-		this.categories = append(this.categories, other)
 	}
 
 	// Populate the underlying ListWidget items from the expanded categories

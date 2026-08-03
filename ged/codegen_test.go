@@ -63,10 +63,10 @@ func TestGenerateCodeWithWidgets(t *testing.T) {
 	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "MyAppUI"})
 
 	// Check struct fields
-	if !strings.Contains(code, "BtnOK *gui.Button") {
+	if !hasStructField(code, "BtnOK", "*gui.Button") {
 		t.Error("missing BtnOK field")
 	}
-	if !strings.Contains(code, "LblTitle *gui.Label") {
+	if !hasStructField(code, "LblTitle", "*gui.Label") {
 		t.Error("missing LblTitle field")
 	}
 

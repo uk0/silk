@@ -158,6 +158,11 @@ func TestCodeGenAllFactoryWidgets(t *testing.T) {
 	if addedCount < 40 {
 		t.Errorf("only %d/%d factory widgets added successfully, expected at least 40", addedCount, len(factoryMap))
 	}
+
+	// Type-check the result. Asserting the goType string appears only proves
+	// the field was declared; vet proves every mapping's constructor call is
+	// real, which is the half that silently rots as constructors change.
+	vetGeneratedCode(t, code)
 }
 
 // vetGeneratedCode writes generated Go source into a throwaway module

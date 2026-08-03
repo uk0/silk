@@ -48,11 +48,19 @@ func TestGenerateCodeTagBinding(t *testing.T) {
 
 	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "HMIUI"})
 
+	fields := []struct{ name, goType string }{
+		{"Services", "*scada.Services"},
+		{"Tags", "*core.TagDB"},  // alias field kept for compatibility
+		{"Tank1", "*gui.Tank"},   // factoryMap types industrial widgets concretely
+		{"Valve1", "*gui.Valve"}, // so the SetTagName calls compile
+	}
+	for _, f := range fields {
+		if !hasStructField(code, f.name, f.goType) {
+			t.Errorf("generated code missing struct field:\n  %s %s\n----\n%s", f.name, f.goType, code)
+		}
+	}
+
 	want := []string{
-		"Services *scada.Services",
-		"Tags *core.TagDB", // alias field kept for compatibility
-		"Tank1 *gui.Tank",  // factoryMap types industrial widgets concretely so
-		"Valve1 *gui.Valve", // the SetTagName calls compile
 		"func (ui *HMIUI) BindServices(s *scada.Services) error",
 		`ui.Tank1.SetTagName("level")`,
 		`ui.Valve1.SetTagName("pump")`,

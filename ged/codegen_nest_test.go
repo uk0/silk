@@ -41,13 +41,13 @@ func TestGenerateCodeNestedContainer(t *testing.T) {
 	// Field names are exported-capitalised by sanitizeIdentifier
 	// (box→Box, btnA→BtnA, lblB→LblB). Struct fields exist for the
 	// container AND both nested children.
-	for _, want := range []string{
-		"Box *gui.VBox",
-		"BtnA *gui.Button",
-		"LblB *gui.Label",
+	for _, want := range []struct{ name, goType string }{
+		{"Box", "*gui.VBox"},
+		{"BtnA", "*gui.Button"},
+		{"LblB", "*gui.Label"},
 	} {
-		if !strings.Contains(code, want) {
-			t.Errorf("missing struct field %q\n--- code ---\n%s", want, code)
+		if !hasStructField(code, want.name, want.goType) {
+			t.Errorf("missing struct field %s %s\n--- code ---\n%s", want.name, want.goType, code)
 		}
 	}
 

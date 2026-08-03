@@ -2,15 +2,22 @@ package ged
 
 import (
 	"fmt"
+	"go/format"
 	"math"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/graph"
 )
+
+// interfaceGoType is the field type codegen falls back to for a factory it has
+// no mapping for. Such a field can be assigned and reparented and nothing
+// else — no widget-specific call may be emitted against it.
+const interfaceGoType = "gui.IWidget"
 
 // simpleAddContainers are factory names whose Go type exposes a
 // single-argument AddWidget(iw) — so codegen can place a nested child
@@ -100,12 +107,23 @@ var factoryMap = map[string]widgetMapping{
 	"gui.Rating":            {goType: "*gui.Rating", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewRating()`},
 	"gui.DropdownButton":    {goType: "*gui.DropdownButton", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDropdownButton()`},
 	"gui.SwitchGroup":       {goType: "*gui.SwitchGroup", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSwitchGroup()`},
-	"gui.Link":              {goType: "*gui.Link", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLink()`},
-	"gui.LabelSeparator":    {goType: "*gui.LabelSeparator", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLabelSeparator()`},
-	"gui.Placeholder":       {goType: "*gui.Placeholder", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPlaceholder()`},
+	"gui.Link":              {goType: "*gui.Link", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLink("", "")`},
+	"gui.LabelSeparator":    {goType: "*gui.LabelSeparator", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewLabelSeparator("")`},
+	"gui.Placeholder":       {goType: "*gui.Placeholder", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPlaceholder("")`},
 	"gui.Timeline":          {goType: "*gui.Timeline", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTimeline()`},
 	"gui.NotificationPanel": {goType: "*gui.NotificationPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewNotificationPanel()`},
 	"gui.CodeEditor":        {goType: "*gui.CodeEditor", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCodeEditor()`},
+	"gui.TextArea":          {goType: "*gui.TextArea", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTextArea()`},
+	"gui.PathEdit":          {goType: "*gui.PathEdit", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPathEdit()`},
+	"gui.Calendar":          {goType: "*gui.Calendar", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCalendar()`},
+	"gui.TimePicker":        {goType: "*gui.TimePicker", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewTimePicker()`},
+	"gui.Spinner":           {goType: "*gui.Spinner", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewSpinner()`},
+	"gui.Alert":             {goType: "*gui.Alert", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewAlert(gui.AlertInfo, "")`},
+	"gui.Pagination":        {goType: "*gui.Pagination", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewPagination()`},
+	"gui.DiffView":          {goType: "*gui.DiffView", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewDiffView()`},
+	"gui.VirtualList":       {goType: "*gui.VirtualList", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewVirtualList()`},
+	"gui.FlexWrap":          {goType: "*gui.FlexWrap", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewFlexWrap()`},
+	"gui.CalcPanel":         {goType: "*gui.CalcPanel", importPath: "github.com/uk0/silk/gui", constructor: `gui.NewCalcPanel()`},
 	// SCADA backend-bound widgets: alarm + the five operator panels live in gui;
 	// the field-device component lives in device. scada.BindScreen wires all of
 	// them from a shared scada.Services (see codegen_services.go).
@@ -139,7 +157,13 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// emission helpers can share it.
 	var fields []fieldInfo
 	nameCount := make(map[string]int)
-	usedNames := make(map[string]bool) // every field identifier emitted, for collision-free uniqueness
+	// Every field identifier emitted, for collision-free uniqueness. Seeded
+	// with the identifiers the struct declares itself: a widget the user names
+	// "Form" used to emit a second Form field (a duplicate-field compile
+	// error) and retarget every ui.Form call in the constructor. Services and
+	// Tags are reserved unconditionally so adding a SCADA widget to a design
+	// cannot rename the fields the rest of it already uses.
+	usedNames := map[string]bool{"Form": true, "Services": true, "Tags": true}
 
 	// collect walks the scene tree depth-first, appending a field for
 	// every FakeWidget and recursing into container children. parentField
@@ -187,7 +211,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				constructor = mapping.constructor
 				imports[mapping.importPath] = true
 			} else {
-				goType = "gui.IWidget"
+				goType = interfaceGoType
 				constructor = fmt.Sprintf(`core.New("%s").(gui.IWidget)`, factoryName)
 				imports["github.com/uk0/silk/gui"] = true
 				imports["github.com/uk0/silk/core"] = true
@@ -337,9 +361,17 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				emitEventBinding(&buf, imports, f.factoryName, f.name, evt, handlerName)
 			}
 		}
-		// Generate event handler bindings from the eventHandlers map
+		// Generate event handler bindings from the eventHandlers map, by
+		// event name — map order would reshuffle the bindings of a
+		// multi-event widget on every regeneration.
 		if len(f.eventHandlers) > 0 && handlerName == "" {
-			for evtName, handler := range f.eventHandlers {
+			evtNames := make([]string, 0, len(f.eventHandlers))
+			for evtName := range f.eventHandlers {
+				evtNames = append(evtNames, evtName)
+			}
+			sort.Strings(evtNames)
+			for _, evtName := range evtNames {
+				handler := f.eventHandlers[evtName]
 				if !emitEventBinding(&buf, imports, f.factoryName, f.name, evtName, handler) {
 					// Unknown (factory, event) pair. The codegen
 					// switch is a hand-maintained table of
@@ -359,24 +391,20 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		buf.WriteString("\n")
 	}
 
-	// Set default text/content for widgets that have it
+	// Reproduce each widget's designed caption. The setter is chosen by asking
+	// the live widget what it implements rather than by matching on the Go
+	// type name, which only ever covered six widget kinds and silently dropped
+	// the caption of every other one (a dragged Card reads "Card Title" in the
+	// designer and came out blank).
 	for _, f := range fields {
-		if f.defaultText != "" {
-			switch {
-			case strings.Contains(f.goType, "Button"):
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetText(%q)\n", f.name, f.defaultText))
-			case strings.Contains(f.goType, "Label"):
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetText(%q)\n", f.name, f.defaultText))
-			case strings.Contains(f.goType, "Edit"):
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetText(%q)\n", f.name, f.defaultText))
-			case strings.Contains(f.goType, "CheckBox"):
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetText(%q)\n", f.name, f.defaultText))
-			case strings.Contains(f.goType, "RadioButton"):
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetText(%q)\n", f.name, f.defaultText))
-			case strings.Contains(f.goType, "GroupBox"):
-				buf.WriteString(fmt.Sprintf("\tui.%s.SetTitle(%q)\n", f.name, f.defaultText))
-			}
+		if f.defaultText == "" || f.goType == interfaceGoType {
+			continue
 		}
+		setter := textSetterFor(f.widget)
+		if setter == "" || hasDesignProp(f.factoryName, setter) {
+			continue
+		}
+		fmt.Fprintf(&buf, "\tui.%s.%s(%q)\n", f.name, setter, f.defaultText)
 	}
 	buf.WriteString("\n")
 
@@ -492,9 +520,29 @@ func main() {
 		}
 	}
 
-	// Rebuild imports string with all detected packages
+	// Everything after the discarded first import block is the file body.
+	full := buf.String()
+	var body string
+	if structIdx := strings.Index(full, fmt.Sprintf("type %s struct", opts.TypeName)); structIdx >= 0 {
+		body = full[structIdx:]
+	}
+
+	// Keep only the imports the body actually references, sorted. The running
+	// set is deliberately optimistic — core goes in for main()'s event loop
+	// before the package name is known, and the stdlib scan above matches a
+	// bare substring — and an import Go cannot see used is a compile error.
+	impList := make([]string, 0, len(imports))
+	for imp := range imports {
+		if referencesPackage(body, imp[strings.LastIndex(imp, "/")+1:]) {
+			impList = append(impList, imp)
+		}
+	}
+	sort.Strings(impList)
+
 	var result strings.Builder
-	result.WriteString("// Code generated by Silk Designer Editor.\n")
+	// The canonical form of this line (the trailing "DO NOT EDIT." included)
+	// is what marks the file as machine-written to gofmt, gopls and vet.
+	result.WriteString("// Code generated by Silk Designer Editor. DO NOT EDIT.\n")
 	// When the caller wired in a module path (typically via
 	// GenerateCodeWithMod feeding core.LoadGoMod into ModulePath),
 	// surface it so the developer can tell at a glance which module
@@ -505,20 +553,85 @@ func main() {
 	}
 	result.WriteString(fmt.Sprintf("package %s\n\n", opts.PackageName))
 	result.WriteString("import (\n")
-	for imp := range imports {
+	for _, imp := range impList {
 		result.WriteString(fmt.Sprintf("\t%q\n", imp))
 	}
 	result.WriteString(")\n\n")
+	result.WriteString(body)
 
-	// Get everything after the old import block
-	full := buf.String()
-	// Find struct definition start
-	structIdx := strings.Index(full, fmt.Sprintf("type %s struct", opts.TypeName))
-	if structIdx >= 0 {
-		result.WriteString(full[structIdx:])
+	src := result.String()
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		// The only thing that can be malformed here is the user's own handler
+		// code. Hand back the unformatted source so they can see and fix it,
+		// rather than swallowing their work.
+		return src
 	}
+	return string(formatted)
+}
 
-	return result.String()
+// referencesPackage reports whether src qualifies an identifier with pkg
+// ("pkg."). The scan is lexical but boundary-aware: matching a bare substring
+// counted the word "runtime." in a generated comment as a use of "time" and
+// dragged an unused import into the file.
+func referencesPackage(src, pkg string) bool {
+	needle := pkg + "."
+	for i := 0; i < len(src); {
+		j := strings.Index(src[i:], needle)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		if at == 0 || !isIdentByte(src[at-1]) {
+			return true
+		}
+		i = at + len(needle)
+	}
+	return false
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' ||
+		b >= 'a' && b <= 'z' ||
+		b >= 'A' && b <= 'Z' ||
+		b >= '0' && b <= '9'
+}
+
+// textSetterFor returns the setter that reproduces a widget's designed
+// caption, or "" when the widget has no matching one (a ProgressBar reports a
+// Text() but has nothing to set it with). Text() is preferred over Title() to
+// mirror the order GenerateCode read the caption in — a widget with both would
+// otherwise be handed the wrong string.
+//
+// The probe runs against the live designed widget, whose dynamic type is the
+// field's static type, so the returned setter always type-checks. That holds
+// only while the field is concretely typed; callers must skip fields left as
+// interfaceGoType.
+func textSetterFor(widget interface{}) string {
+	if _, ok := widget.(interface{ Text() string }); ok {
+		if _, ok := widget.(interface{ SetText(string) }); ok {
+			return "SetText"
+		}
+		return ""
+	}
+	if _, ok := widget.(interface{ Title() string }); ok {
+		if _, ok := widget.(interface{ SetTitle(string) }); ok {
+			return "SetTitle"
+		}
+	}
+	return ""
+}
+
+// hasDesignProp reports whether the industrial design-property table already
+// owns this setter for the factory. A Gauge's title is reachable from both
+// paths, and emitting it twice is noise.
+func hasDesignProp(factoryName, setter string) bool {
+	for _, p := range industrialDesignProps[factoryName] {
+		if p.setter == setter {
+			return true
+		}
+	}
+	return false
 }
 
 // GenerateCodeFile writes the generated code to a file.
