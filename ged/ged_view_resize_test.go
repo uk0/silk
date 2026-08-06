@@ -23,7 +23,7 @@ func TestResizeSelectionGrowsFromTopLeft(t *testing.T) {
 	view.Selection().Clear()
 	view.Selection().Add(fake)
 
-	dw, dh, handled := nudgeDelta(gui.KeyRight, false, 1, nudgeGridStep)
+	dw, dh, handled := nudgeDelta(gui.KeyRight, false, 1, view.coarseNudgeStep())
 	if !handled || dw != 1 || dh != 0 {
 		t.Fatalf("nudgeDelta(Right) = (%g, %g, %v), want (1, 0, true)", dw, dh, handled)
 	}
@@ -42,21 +42,25 @@ func TestResizeSelectionGrowsFromTopLeft(t *testing.T) {
 }
 
 // TestResizeSelectionGrowsHeight: Ctrl+Down grows height only, so the two axes
-// cannot be transposed by a future edit to the delta mapping.
+// cannot be transposed by a future edit to the delta mapping. The coarse step
+// is the scene's grid pitch, set here to a non-default value so a resize wired
+// back to a fixed constant cannot pass.
 func TestResizeSelectionGrowsHeight(t *testing.T) {
 	view := NewGedView()
 	scene := view.GedScene()
+	view.SetGridStep(8)
 
 	fake := addFakeAt(t, scene, "btn", 40, 30, 10, 4)
 	view.Selection().Clear()
 	view.Selection().Add(fake)
 
-	dw, dh, _ := nudgeDelta(gui.KeyDown, true, 1, nudgeGridStep)
+	step := view.coarseNudgeStep()
+	dw, dh, _ := nudgeDelta(gui.KeyDown, true, 1, step)
 	view.resizeSelection(dw, dh)
 
 	_, _, w, h := fake.Bounds()
-	if w != 10 || h != 4+nudgeGridStep {
-		t.Errorf("after Shift+Ctrl+Down: size = (%g, %g), want (10, %g)", w, h, 4+nudgeGridStep)
+	if w != 10 || h != 4+step {
+		t.Errorf("after Shift+Ctrl+Down: size = (%g, %g), want (10, %g)", w, h, 4+step)
 	}
 }
 

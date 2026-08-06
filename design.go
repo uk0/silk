@@ -1122,6 +1122,21 @@ func updateActionStates(gv *ged.GedView) {
 }
 
 // ---------------------------------------------------------------------------
+// Design operations
+// ---------------------------------------------------------------------------
+
+// onFormSettings opens 表单设置 for the active canvas: form title and size, plus
+// the grid pitch / visibility / snap the canvas, the drag snap and the coarse
+// keyboard nudge all read.
+func onFormSettings() {
+	gv := currentGedView()
+	if gv == nil {
+		return
+	}
+	ged.ShowFormSettingsDialog(gui.DefaultFrame(), gv)
+}
+
+// ---------------------------------------------------------------------------
 // Menu bar construction
 // ---------------------------------------------------------------------------
 
@@ -1308,6 +1323,11 @@ func createMenuBar(mainFrame *gui.Frame) {
 	arrangeMenu.AddWidget(gui.NewSeparator())
 	needSelection(arrangeMenu.AddButton1("置于顶层", nil), 1, 0).BindFunc0(bringToFront)
 	needSelection(arrangeMenu.AddButton1("置于底层", nil), 1, 0).BindFunc0(sendToBack)
+
+	// ---- 设计 (Design) ----
+	designMenu, _ := mainMenu.AddSubMenu("设计", nil, nil)
+	btnFormSettings := designMenu.AddButton1("表单设置...", nil)
+	btnFormSettings.Action().BindFunc0(onFormSettings)
 
 	// ---- Mode buttons: 设计/代码/分屏 ----
 	mainMenu.AddWidget(gui.NewSeparator())

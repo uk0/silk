@@ -68,9 +68,7 @@ type SelectionCallback func(items []graph.IItem)
 type GedView struct {
 	graph.GraphView
 	selCallbacks []SelectionCallback
-	snapEnabled  bool
-	gridSize     float64
-	showGrid     bool // paint the faint background grid overlay
+	showGrid     bool // paint the faint background dot overlay on top of the page
 
 	// Alignment guide state for drag operations
 	alignGuides []alignGuide
@@ -109,8 +107,6 @@ func (this *GedView) AddSelectionCallback(cb SelectionCallback) {
 
 func (this *GedView) Init(self gui.IWidget) {
 	this.GraphView.Init(self)
-	this.snapEnabled = true
-	this.gridSize = 5.0
 	this.showGuides = true
 	this.SetScene(NewGedScene())
 	this.SetZoomFactor(1)
@@ -179,61 +175,85 @@ func snapToGrid(v, step float64) float64 {
 // snapToGrid rounds a scene point to the nearest grid intersection when snap
 // is enabled, routing each axis through the pure snapToGrid helper above.
 func (this *GedView) snapToGrid(x, y float64) (float64, float64) {
-	if !this.snapEnabled {
+	g := this.gridModel()
+	if !g.Snap {
 		return x, y
 	}
-	return snapToGrid(x, this.gridSize), snapToGrid(y, this.gridSize)
+	return snapToGrid(x, g.Pitch), snapToGrid(y, g.Pitch)
+}
+
+// gridModel returns the grid of the scene under the view. GraphView.SetScene
+// accepts any IScene, so the accessors below fall back to the defaults rather
+// than assuming a GedScene is attached.
+func (this *GedView) gridModel() GridModel {
+	if s := this.GedScene(); s != nil {
+		return s.Grid()
+	}
+	return defaultGridModel()
+}
+
+// setGridModel writes the grid back onto the scene. A view without a GedScene
+// has nowhere to store it, so the change is dropped rather than cached here —
+// caching would resurrect the view-local copy the model replaced.
+func (this *GedView) setGridModel(g GridModel) {
+	if s := this.GedScene(); s != nil {
+		s.SetGrid(g)
+	}
 }
 
 // SetSnapEnabled toggles snap-to-grid behavior.
 func (this *GedView) SetSnapEnabled(enabled bool) {
-	this.snapEnabled = enabled
+	g := this.gridModel()
+	g.Snap = enabled
+	this.setGridModel(g)
 }
 
 // SnapEnabled returns whether snap-to-grid is active.
 func (this *GedView) SnapEnabled() bool {
-	return this.snapEnabled
+	return this.gridModel().Snap
 }
 
 // SetSnapToGrid toggles snap-to-grid (alias of SetSnapEnabled, matching the
 // Qt Designer "Grid → Snap to grid" wording the toolbar/menu uses).
 func (this *GedView) SetSnapToGrid(enabled bool) {
-	this.snapEnabled = enabled
+	this.SetSnapEnabled(enabled)
 }
 
 // IsSnapToGrid reports whether dragged/dropped widgets snap to the grid.
 func (this *GedView) IsSnapToGrid() bool {
-	return this.snapEnabled
+	return this.SnapEnabled()
 }
 
-// SetShowGrid toggles the faint background grid overlay drawn on the page.
+// SetShowGrid toggles the faint background dot overlay drawn on the page. This
+// is the overlay's own opt-in, on top of the scene's grid visibility.
 func (this *GedView) SetShowGrid(show bool) {
 	this.showGrid = show
 }
 
-// IsShowGrid reports whether the background grid overlay is drawn.
+// IsShowGrid reports whether the background dot overlay is opted in.
 func (this *GedView) IsShowGrid() bool {
 	return this.showGrid
 }
 
-// SetGridSize sets the snap grid spacing in mm.
+// SetGridSize sets the grid spacing in mm.
 func (this *GedView) SetGridSize(size float64) {
-	if size > 0 {
-		this.gridSize = size
+	if size <= 0 {
+		return
 	}
+	g := this.gridModel()
+	g.Pitch = size
+	this.setGridModel(g)
 }
 
-// SetGridStep sets the grid spacing in mm (alias of SetGridSize; the grid
-// overlay and the snap rounding share this single step).
+// SetGridStep sets the grid spacing in mm (alias of SetGridSize; the canvas
+// grid, the snap rounding and the coarse nudge share this single step).
 func (this *GedView) SetGridStep(step float64) {
-	if step > 0 {
-		this.gridSize = step
-	}
+	this.SetGridSize(step)
 }
 
-// GridSize returns the current snap grid spacing in mm.
+// GridSize returns the current grid spacing in mm.
 func (this *GedView) GridSize() float64 {
-	return this.gridSize
+	return this.gridModel().Pitch
 }
 
 func (this *GedView) OnDragEnter(x, y float64, dnd gui.IDndContext) {
@@ -1418,10 +1438,10 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		this.beginGesture(repeat)
 		// The arrow→delta mapping is identical for moving and resizing, so the
 		// nudge helper does double duty here rather than being copied.
-		dw, dh, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, nudgeGridStep)
+		dw, dh, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, this.coarseNudgeStep())
 		this.resizeSelection(dw, dh)
 
-	// Arrow keys nudge the selection by 1mm (nudgeGridStep mm with Shift).
+	// Arrow keys nudge the selection by 1mm (one grid cell with Shift).
 	// Goes through the UndoStack so a stray arrow press in the middle of a
 	// layout can be reversed with Cmd+Z. Designer-tool muscle memory: every
 	// IDE from Qt Creator to Figma binds the arrow keys to a "fine move" of
@@ -1433,7 +1453,7 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 			return
 		}
 		this.beginGesture(repeat)
-		dx, dy, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, nudgeGridStep)
+		dx, dy, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, this.coarseNudgeStep())
 		this.nudgeSelection(dx, dy)
 
 	case ctrl && (key == 'Z' || key == 'z'):
@@ -1623,10 +1643,14 @@ func (this *GedView) beginGesture(repeat bool) {
 // minWidgetSize is the floor (in mm) a keyboard resize will not shrink past.
 const minWidgetSize = 1.0
 
-// nudgeGridStep is the larger Shift+arrow step (in mm). Qt Designer and
-// every IDE bind plain arrows to a 1-unit "fine move" and Shift+arrow to a
-// coarse grid-sized jump; 10 mm matches the coarse-grid muscle memory.
-const nudgeGridStep = 10.0
+// coarseNudgeStep is the larger Shift+arrow move/resize step (in mm). Qt
+// Designer and every IDE bind plain arrows to a 1-unit "fine move" and
+// Shift+arrow to a coarse grid-sized jump, so this reads the scene's grid
+// pitch: it used to be a 10mm constant that ignored the grid the designer had
+// actually configured.
+func (this *GedView) coarseNudgeStep() float64 {
+	return this.gridModel().Pitch
+}
 
 // nudgeDelta maps an arrow key plus the Shift modifier to a movement delta.
 // step is the fine (un-shifted) move; gridStep is the coarse Shift move.
@@ -1775,9 +1799,9 @@ func (this *GedView) PasteItems() {
 	if len(clipboard) == 0 {
 		return
 	}
-	step := this.gridSize
+	step := this.gridModel().Pitch
 	if step <= 0 {
-		step = 5
+		step = defaultGridPitch
 	}
 	// Track names already present in the scene plus names handed out
 	// earlier in this same paste so a multi-item paste doesn't collide
@@ -1971,9 +1995,9 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 // the dot spacing tracks the pan/zoom the canvas already applied. Dots are
 // drawn with a tiny zero-width-pen cross per intersection rather than filled
 // circles to stay cheap and crisp at any zoom; only the visible page rect is
-// walked so the loop count scales with page size / gridSize, not the canvas.
+// walked so the loop count scales with page size / grid pitch, not the canvas.
 func (this *GedView) drawGrid(g paint.Painter) {
-	step := this.gridSize
+	step := this.gridModel().Pitch
 	if step <= 0 {
 		return
 	}
@@ -2019,7 +2043,10 @@ func (this *GedView) drawAlignGuides(g paint.Painter) {
 func (this *GedView) Draw(g paint.Painter) {
 	this.GraphView.Draw(g)
 
-	wantGrid := this.showGrid && this.gridSize > 0
+	// The scene's visibility flag is the master switch for every grid the
+	// canvas paints; showGrid is this overlay's own extra opt-in on top of it.
+	grid := this.gridModel()
+	wantGrid := this.showGrid && grid.Visible && grid.Pitch > 0
 	manual := this.activeGuides()
 	wantGuides := !manual.isEmpty() || this.guideDrag.active
 	if wantGrid || wantGuides || len(this.alignGuides) > 0 {
@@ -2144,11 +2171,14 @@ func (this *GedView) OnLeftUp(x, y float64) {
 // directly (mutate + Update) like alignSelection / reorderSelection — it tidies
 // the post-drag resting place rather than introducing its own move command.
 func (this *GedView) snapSelectionToGrid() {
-	if !this.snapEnabled {
+	// grid.Snap is the one master switch for drop/nudge snapping; manual
+	// guides ride under it too, so 表单设置 turns every snap off in one place.
+	grid := this.gridModel()
+	if !grid.Snap {
 		return
 	}
 	guides := this.activeGuides()
-	if this.gridSize <= 0 && guides.isEmpty() {
+	if grid.Pitch <= 0 && guides.isEmpty() {
 		return
 	}
 	for _, item := range this.Selection().ItemList() {
@@ -2160,12 +2190,12 @@ func (this *GedView) snapSelectionToGrid() {
 		if d, ok := snapOffsetToGuides(x, x+item.Width(), guides.V, alignTolerance); ok {
 			nx = x + d
 		} else {
-			nx = snapToGrid(x, this.gridSize)
+			nx = snapToGrid(x, grid.Pitch)
 		}
 		if d, ok := snapOffsetToGuides(y, y+item.Height(), guides.H, alignTolerance); ok {
 			ny = y + d
 		} else {
-			ny = snapToGrid(y, this.gridSize)
+			ny = snapToGrid(y, grid.Pitch)
 		}
 		if nx != x || ny != y {
 			item.SetPos(nx, ny)

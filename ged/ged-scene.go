@@ -35,6 +35,7 @@ type GedScene struct {
 	title    string
 	// User-placed ruler guides, saved with the design (see guides.go).
 	guides sceneGuides
+	grid   GridModel
 }
 
 func NewGedScene() *GedScene {
@@ -50,6 +51,21 @@ func (this *GedScene) Init(self graph.IItem) {
 	this.SetSelectable(true)
 	this.SetSize(100, 100)
 	this.title = "Form"
+	this.grid = defaultGridModel()
+}
+
+// Grid returns the scene's grid model — the single source the canvas painting,
+// the drag/drop/paste snap and the coarse keyboard nudge all read.
+func (this *GedScene) Grid() GridModel {
+	return this.grid
+}
+
+// SetGrid replaces the grid model, clamping the pitch into its legal range so
+// no caller (dialog, loader, or a hand-edited document) can install a pitch
+// that paints a smear or disables snapping by accident.
+func (this *GedScene) SetGrid(g GridModel) {
+	g.Pitch = clampGridPitch(g.Pitch)
+	this.grid = g
 }
 
 //func (this *GedScene) Form() *FakeWidget {
@@ -63,41 +79,42 @@ func (this *GedScene) DrawSelf(g paint.Painter) {
 
 	x0, y0, w, h := this.Bounds()
 
-	// Two-tier alignment grid for design-mode rulers:
+	// Two-tier alignment grid for design-mode rulers, both pitches derived
+	// from the scene's grid model:
 	//
-	//   - Minor lines every 5mm in light grey (230, 230, 235, 220) at
+	//   - Minor lines every pitch mm in light grey (230, 230, 235, 220) at
 	//     0.1mm pen width — visible enough to align widgets against
 	//     without overpowering the design itself.
-	//   - Major lines every 50mm in slightly darker (200, 210, 220, 240)
-	//     at 0.15mm — give the eye an "every 10 squares" anchor for
-	//     judging form size without counting cells.
+	//   - Major lines every majorGridRatio cells in slightly darker
+	//     (200, 210, 220, 240) at 0.15mm — give the eye an "every 10
+	//     squares" anchor for judging form size without counting cells.
 	//
 	// Both tiers paint the same path system as the original single-
 	// tier grid; the only cost is one extra Stroke pass, well below
 	// the per-frame budget.
-	g.SetPen1(paint.Color{230, 230, 235, 220}, 0.1)
-	const minorStep = 5.0
-	for x := x0; x <= x0+w; x += minorStep {
-		g.MoveTo(x, y0)
-		g.LineTo(x, y0+h)
-	}
-	for y := y0; y <= y0+h; y += minorStep {
-		g.MoveTo(x0, y)
-		g.LineTo(x0+w, y)
-	}
-	g.Stroke()
+	if minorStep, majorStep, wantGrid := gridTiers(this.grid); wantGrid {
+		g.SetPen1(paint.Color{230, 230, 235, 220}, 0.1)
+		for x := x0; x <= x0+w; x += minorStep {
+			g.MoveTo(x, y0)
+			g.LineTo(x, y0+h)
+		}
+		for y := y0; y <= y0+h; y += minorStep {
+			g.MoveTo(x0, y)
+			g.LineTo(x0+w, y)
+		}
+		g.Stroke()
 
-	g.SetPen1(paint.Color{200, 210, 220, 240}, 0.15)
-	const majorStep = 50.0
-	for x := x0; x <= x0+w; x += majorStep {
-		g.MoveTo(x, y0)
-		g.LineTo(x, y0+h)
+		g.SetPen1(paint.Color{200, 210, 220, 240}, 0.15)
+		for x := x0; x <= x0+w; x += majorStep {
+			g.MoveTo(x, y0)
+			g.LineTo(x, y0+h)
+		}
+		for y := y0; y <= y0+h; y += majorStep {
+			g.MoveTo(x0, y)
+			g.LineTo(x0+w, y)
+		}
+		g.Stroke()
 	}
-	for y := y0; y <= y0+h; y += majorStep {
-		g.MoveTo(x0, y)
-		g.LineTo(x0+w, y)
-	}
-	g.Stroke()
 
 	// Draw subtle form size indicator at bottom-right
 	g.Save()
@@ -161,6 +178,9 @@ func (this *GedScene) SaveDesign() *core.TDoc {
 	if s := encodeGuides(this.guides); s != "" {
 		doc.WriteAttr("guides", s)
 	}
+	doc.WriteAttr("grid_pitch", this.grid.Pitch)
+	doc.WriteAttr("grid_visible", this.grid.Visible)
+	doc.WriteAttr("grid_snap", this.grid.Snap)
 	if this.HasChildren() {
 		child := core.NewTDoc()
 		child.SetKey("children")
@@ -213,6 +233,15 @@ func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	var guides string
 	doc.ReadAttr("guides", &guides)
 	this.guides = decodeGuides(guides)
+	// The grid attrs arrived after the format shipped. Seeding from the
+	// defaults (rather than reading onto whatever the previous design left
+	// in place) is what makes a document without them open with the grid the
+	// designer has always drawn, no matter what was loaded before it.
+	grid := defaultGridModel()
+	doc.ReadAttr("grid_pitch", &grid.Pitch)
+	doc.ReadAttr("grid_visible", &grid.Visible)
+	doc.ReadAttr("grid_snap", &grid.Snap)
+	this.SetGrid(grid)
 	for _, v := range this.Children() {
 		v.Detach()
 	}

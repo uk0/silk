@@ -7,8 +7,9 @@ import (
 )
 
 // TestNudgeDelta checks the pure (key,shift)→(dx,dy) mapping for all four
-// arrows, both with and without Shift, plus a non-arrow key. step=1,
-// gridStep=10 mirror the values OnKeyDown feeds in.
+// arrows, both with and without Shift, plus a non-arrow key. step=1 mirrors
+// the fine move OnKeyDown feeds in; gridStep is arbitrary here because the
+// coarse value OnKeyDown passes is the scene's grid pitch.
 func TestNudgeDelta(t *testing.T) {
 	const step, gridStep = 1.0, 10.0
 
@@ -70,10 +71,13 @@ func TestNudgeViaOnKeyDownRight(t *testing.T) {
 // test harness can't set the global Shift key state OnKeyDown reads, so the
 // Shift modifier is injected into nudgeDelta directly and the resulting delta
 // is applied through nudgeSelection — exactly the path OnKeyDown takes when
-// Shift is held. The widget must move by nudgeGridStep (10 mm) on Y.
+// Shift is held. The widget must move by one grid cell on Y; the grid is set
+// to a non-default pitch so a coarse step wired back to a fixed constant
+// cannot pass.
 func TestNudgeShiftDownMovesByGridStep(t *testing.T) {
 	view := NewGedView()
 	scene := view.GedScene()
+	view.SetGridStep(8)
 
 	fake := addFakeAt(t, scene, "btn", 40, 30, 10, 4)
 	view.Selection().Clear()
@@ -85,15 +89,19 @@ func TestNudgeShiftDownMovesByGridStep(t *testing.T) {
 		t.Fatalf("after Right: x = %g, want 41", x)
 	}
 
-	// Then a Shift+Down: +gridStep on Y, X unchanged.
-	dx, dy, handled := nudgeDelta(gui.KeyDown, true, 1, nudgeGridStep)
-	if !handled || dx != 0 || dy != nudgeGridStep {
+	// Then a Shift+Down: +one grid cell on Y, X unchanged.
+	step := view.coarseNudgeStep()
+	if step != 8 {
+		t.Fatalf("coarseNudgeStep() = %g, want 8 (the configured grid pitch)", step)
+	}
+	dx, dy, handled := nudgeDelta(gui.KeyDown, true, 1, step)
+	if !handled || dx != 0 || dy != step {
 		t.Fatalf("nudgeDelta(Down, shift) = (%g, %g, %v), want (0, %g, true)",
-			dx, dy, handled, nudgeGridStep)
+			dx, dy, handled, step)
 	}
 	view.nudgeSelection(dx, dy)
 
-	if x, y := fake.Pos(); x != 41 || y != 30+nudgeGridStep {
-		t.Errorf("after Shift+Down: pos = (%g, %g), want (41, %g)", x, y, 30+nudgeGridStep)
+	if x, y := fake.Pos(); x != 41 || y != 30+step {
+		t.Errorf("after Shift+Down: pos = (%g, %g), want (41, %g)", x, y, 30+step)
 	}
 }
