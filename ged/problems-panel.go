@@ -51,17 +51,21 @@ type Problem struct {
 	// diagnostic. A load-skipped widget has none either: the loader never
 	// built it, so there is nothing in the scene to select.
 	Item graph.IItem
+	// Source is who filed the row, and so who is allowed to replace it. Set
+	// by MergeProblems rather than by the writer; see problem-sources.go.
+	Source ProblemSource
 }
 
-// parseProblems turns raw compiler output into structured Problem rows
+// ParseProblems turns raw compiler output into structured Problem rows
 // by delegating to the shared buildissues engine and mapping each
 // buildissues.Issue onto the panel's Problem type. Routing through the
 // one tested parser means the Problems pane and the Build Output pane
 // agree on every corner case — "file:line:col:" and "file:line:" shapes,
 // "# pkg" context headers, warning classification, and Windows
 // drive-letter paths (C:\...:line:col). It is kept as a free function so
-// it needs no GL context or live widget.
-func parseProblems(output string) []Problem {
+// it needs no GL context or live widget, and exported so a caller that
+// files the rows under a source can parse without going through the panel.
+func ParseProblems(output string) []Problem {
 	var problems []Problem
 	for _, is := range buildissues.Parse(output) {
 		problems = append(problems, Problem{
@@ -116,7 +120,7 @@ func (this *ProblemsPanel) Init(self gui.IWidget) {
 
 // SetOutput parses raw compiler output and replaces the problem list.
 func (this *ProblemsPanel) SetOutput(output string) {
-	this.SetProblems(parseProblems(output))
+	this.SetProblems(ParseProblems(output))
 }
 
 // Problems returns the current problem rows in display order.

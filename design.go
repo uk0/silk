@@ -205,10 +205,13 @@ func reportLoadProblems(scene *ged.GedScene) {
 		return
 	}
 	missing := scene.MissingWidgets()
+	// Filed even when there is nothing missing: opening the same design again
+	// after registering the widget has to take the previous open's rows away
+	// with it, or the pane goes on warning about a widget that is now there.
+	showProblemsFrom(ged.LoadSource(docKey(scene)), ged.LoadProblems(missing))
 	if len(missing) == 0 {
 		return
 	}
-	showProblems(ged.LoadProblems(missing))
 	setStatus(fmt.Sprintf("载入时跳过了 %d 个未知控件, 详见「问题」", len(missing)))
 }
 
@@ -219,10 +222,12 @@ func reportLoadProblems(scene *ged.GedScene) {
 // the file on disk and the running program looked finished.
 func reportDesignProblems(scene *ged.GedScene, action string) bool {
 	problems := ged.DesignProblems(scene)
+	// Filed before the count is tested, so a design that has since been fixed
+	// clears its own rows the next time it is previewed, exported or run.
+	showProblemsFrom(ged.DesignSource(docKey(scene)), problems)
 	if len(problems) == 0 {
 		return false
 	}
-	showProblems(problems)
 	names := make([]string, 0, len(problems))
 	for _, p := range problems {
 		names = append(names, p.File)
@@ -869,24 +874,10 @@ func onRun() {
 		gui.Post(func() {
 			runBusy = false
 			if err != nil {
-				reportFailure("编译失败", buildFailureDetail(output, err))
+				reportBuildFailure(buildFailureDetail(output, err))
 				return
 			}
-
-			// Build succeeded -- show success message and clear error markers
-			if buildOutput != nil {
-				buildOutput.SetOutput("Build successful\n")
-			}
-			// A build that succeeded contradicts every row in the pane,
-			// including the load warnings: those were reported when the file
-			// opened, and rows that outlive the design they describe are the
-			// next version of the same lie.
-			showProblems(nil)
-			if editorTabs != nil {
-				if editor := editorTabs.ActiveEditor(); editor != nil {
-					editor.ClearErrors()
-				}
-			}
+			reportBuildSuccess()
 
 			// Run. A failed spawn used to be swallowed, so the status bar
 			// claimed success while nothing had started.
@@ -900,6 +891,35 @@ func onRun() {
 			setStatus("程序已启动: " + appPath)
 		})
 	}()
+}
+
+// reportBuildFailure files the compiler's own output as this build's rows,
+// then reports the failure. The two halves are separate because reportFailure
+// is reached by failures that are not compiler output at all, and letting it
+// decide the pane's contents is what erased the rows of designs that were
+// still open. reportFailure runs last so the 输出 pane, which has the whole
+// text, is the one left in front.
+func reportBuildFailure(detail string) {
+	setProblemsFrom(ged.BuildSource, ged.ParseProblems(detail))
+	reportFailure("编译失败", detail)
+}
+
+// reportBuildSuccess retires the rows and the inline markers of the build that
+// just passed. It says nothing about the designs that are open: a build proves
+// the generated code compiles, not that the design it came from still has
+// every widget it was saved with — the widgets a load dropped are missing from
+// the design in memory exactly as before, and the generated code compiles
+// precisely because they are not in it.
+func reportBuildSuccess() {
+	if buildOutput != nil {
+		buildOutput.SetOutput("Build successful\n")
+	}
+	setProblemsFrom(ged.BuildSource, nil)
+	if editorTabs != nil {
+		if editor := editorTabs.ActiveEditor(); editor != nil {
+			editor.ClearErrors()
+		}
+	}
 }
 
 // runBusy is true while a background build started by onRun is still going.
@@ -930,11 +950,17 @@ func reportDeclined(reason string) {
 	setStatus(reason)
 }
 
-// reportFailure puts detail where the user can act on it: the 输出 pane and the
-// 问题 rows parsed out of it if they exist, a dialog if not, and the log either
-// way. The log copy is what makes a failure diagnosable after the fact — a
-// message that only ever lived in a panel had to be read off a screenshot.
-// title doubles as the status-bar summary and the dialog caption.
+// reportFailure puts detail where the user can act on it: the 输出 pane, a
+// dialog when there is no pane, and the log either way. The log copy is what
+// makes a failure diagnosable after the fact — a message that only ever lived
+// in a panel had to be read off a screenshot. title doubles as the status-bar
+// summary and the dialog caption.
+//
+// It deliberately writes no 问题 rows. Every failure used to be parsed into
+// rows that replaced the whole pane, and a failure that is not compiler output
+// parses to none: opening a file that did not exist erased the load warning of
+// a different design that was still open and still missing a widget. The
+// compiler-output path files its own rows; see reportBuildFailure.
 func reportFailure(title, detail string) {
 	core.Warn(title + ": " + detail)
 	setStatus(title)
@@ -943,11 +969,6 @@ func reportFailure(title, detail string) {
 		return
 	}
 	buildOutput.SetOutput(detail)
-	// The same text, parsed into rows. The 输出 pane comes forward rather than
-	// 问题 because a failure that is not a compiler dump has no rows at all.
-	if problemsPanel != nil {
-		problemsPanel.SetOutput(detail)
-	}
 	if rightDockRef != nil {
 		if idx := rightDockRef.IndexOfView(buildOutput); idx >= 0 {
 			rightDockRef.SetActiveIndex(idx)
@@ -1458,20 +1479,60 @@ var buildOutput *ged.BuildOutput
 // selects the widget at fault instead of a log line nobody reads.
 var problemsPanel *ged.ProblemsPanel
 
-// showProblems replaces the 问题 rows and brings the pane forward when there is
-// something to see. Called with nil after a clean build, so rows from the
-// previous one cannot go on describing a design that has since been fixed.
-func showProblems(list []ged.Problem) {
+// setProblemsFrom replaces the rows src filed last time and leaves every other
+// source's rows where they are. Whoever writes here is making a statement
+// about their own subject only: a build says nothing about whether a design
+// that is still open is still missing the widget its load could not build.
+func setProblemsFrom(src ged.ProblemSource, list []ged.Problem) {
 	if problemsPanel == nil {
 		return
 	}
-	problemsPanel.SetProblems(list)
-	if len(list) == 0 || rightDockRef == nil {
+	problemsPanel.SetProblems(ged.MergeProblems(problemsPanel.Problems(), src, list))
+}
+
+// showProblemsFrom is setProblemsFrom plus bringing the pane forward, for the
+// writers whose status line or dialog tells the user to go and look at it.
+func showProblemsFrom(src ged.ProblemSource, list []ged.Problem) {
+	setProblemsFrom(src, list)
+	if len(list) == 0 || problemsPanel == nil || rightDockRef == nil {
 		return
 	}
 	if idx := rightDockRef.IndexOfView(problemsPanel); idx >= 0 {
 		rightDockRef.SetActiveIndex(idx)
 	}
+}
+
+// dropDocProblems takes away the rows a design left behind when it closed.
+// They described widgets in a document that is no longer open, which the user
+// can neither see nor fix, and the pane has no way to say so.
+func dropDocProblems(doc string) {
+	if problemsPanel == nil {
+		return
+	}
+	problemsPanel.SetProblems(ged.DropDocProblems(problemsPanel.Problems(), doc))
+}
+
+// docKey is the identity a design's rows are filed against. The filename is
+// what makes reopening a file replace the rows of the open before it; a scene
+// pointer would file every reload under a new key and leave the old rows for
+// ever. A design that has never been saved has no filename and shares the
+// empty key with any other unsaved design.
+func docKey(scene *ged.GedScene) string {
+	if scene == nil {
+		return ""
+	}
+	return scene.Filename()
+}
+
+// onDesignViewClosed drops the rows of a design the dock has just closed. Set
+// as ged.DocClosedCallback, which every close path reaches: the tab's × and
+// 文件/关闭 both end in gui.PromptSaveClose, and Dock.CloseIndex in the view's
+// Close().
+func onDesignViewClosed(gv *ged.GedView) {
+	if gv == nil {
+		return
+	}
+	dropDocProblems(docKey(gv.GedScene()))
 }
 
 // selectDesignItem brings item's own canvas forward and selects it there,
@@ -2204,6 +2265,9 @@ func main() {
 	// Register F5 run callback and Ctrl+R preview callback
 	ged.RunCallback = onRun
 	ged.PreviewCallback = onPreview
+
+	// A design's 问题 rows go when the design does, whichever way it was closed
+	ged.DocClosedCallback = onDesignViewClosed
 
 	// Double-click on canvas widget → switch to code panel tab
 	ged.ShowCodePanelCallback = func() {

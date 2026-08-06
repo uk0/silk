@@ -37,6 +37,7 @@ var commandHandlers = []string{
 var reporters = map[string]bool{
 	"reportDeclined":       true,
 	"reportFailure":        true,
+	"reportBuildFailure":   true, // files the build's 问题 rows, then reportFailure
 	"reportLostWork":       true,
 	"reportDesignProblems": true,
 	"setStatus":            true,

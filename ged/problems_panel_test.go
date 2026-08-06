@@ -9,7 +9,7 @@ import (
 // errors with column info, one go-vet-style warning, a "file:line:"
 // error with no column, and two lines that are not diagnostics at all
 // (a banner and a bare summary). It exercises every branch of
-// parseProblems in one fixture.
+// ParseProblems in one fixture.
 const sampleBuild = `# silk/ged
 ged/foo.go:12:5: undefined: Bar
 ged/baz.go:7:1: missing return at end of function
@@ -17,12 +17,12 @@ ged/foo.go:30: syntax error: unexpected }
 ged/qux.go:9:2: warning: result of fmt.Sprintf call not used
 Build finished with errors`
 
-// TestParseProblemsStructs checks that parseProblems extracts the right
+// TestParseProblemsStructs checks that ParseProblems extracts the right
 // File / Line / Col / Severity / Message for each recognised line and
 // drops the two non-matching lines. This is the testable core the rest
 // of the panel is built on, so it is asserted field-by-field.
 func TestParseProblemsStructs(t *testing.T) {
-	got := parseProblems(sampleBuild)
+	got := ParseProblems(sampleBuild)
 
 	want := []Problem{
 		{File: "ged/foo.go", Line: 12, Col: 5, Severity: SeverityError, Message: "undefined: Bar"},
@@ -32,7 +32,7 @@ func TestParseProblemsStructs(t *testing.T) {
 	}
 
 	if len(got) != len(want) {
-		t.Fatalf("parseProblems returned %d problems, want %d: %+v", len(got), len(want), got)
+		t.Fatalf("ParseProblems returned %d problems, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -44,7 +44,7 @@ func TestParseProblemsStructs(t *testing.T) {
 // TestParseProblemsNoColumn verifies the "file:line:" form (no column)
 // parses with Col == 0 while keeping the full message.
 func TestParseProblemsNoColumn(t *testing.T) {
-	got := parseProblems("main.go:42: cannot use x (type int) as type string")
+	got := ParseProblems("main.go:42: cannot use x (type int) as type string")
 	if len(got) != 1 {
 		t.Fatalf("got %d problems, want 1: %+v", len(got), got)
 	}
@@ -65,7 +65,7 @@ func TestParseProblemsNoColumn(t *testing.T) {
 // Problem rows.
 func TestParseProblemsIgnoresNonMatching(t *testing.T) {
 	in := "# silk/ged\n\nBuild finished\nsome random text without a locator\n"
-	got := parseProblems(in)
+	got := ParseProblems(in)
 	if len(got) != 0 {
 		t.Fatalf("expected no problems, got %d: %+v", len(got), got)
 	}
@@ -85,7 +85,7 @@ func TestParseProblemsSeverity(t *testing.T) {
 		{"a.go:1:1: this is a WARNING about something", SeverityError},
 	}
 	for _, c := range cases {
-		got := parseProblems(c.line)
+		got := ParseProblems(c.line)
 		if len(got) != 1 {
 			t.Fatalf("%q: got %d problems", c.line, len(got))
 		}

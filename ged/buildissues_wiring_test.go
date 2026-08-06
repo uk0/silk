@@ -14,13 +14,13 @@ const wiringSample = "# github.com/uk0/silk/ged\n" +
 	"C:\\src\\a.go:3:2: expected declaration\n" +
 	"Compiling package ged"
 
-// TestProblemsPanelWiredToBuildissues proves ProblemsPanel's parseProblems
+// TestProblemsPanelWiredToBuildissues proves ProblemsPanel's ParseProblems
 // now routes through the shared buildissues engine: the "# pkg" header and
 // the plain log line drop out, the no-column line yields Col 0, the
 // "warning:" line is a Warning, and the Windows drive-letter path is
 // parsed intact instead of being discarded.
 func TestProblemsPanelWiredToBuildissues(t *testing.T) {
-	got := parseProblems(wiringSample)
+	got := ParseProblems(wiringSample)
 	want := []Problem{
 		{File: "main.go", Line: 10, Col: 6, Severity: SeverityError, Message: "undefined: Foo"},
 		{File: "util.go", Line: 5, Col: 0, Severity: SeverityError, Message: "missing return at end of function"},
@@ -28,7 +28,7 @@ func TestProblemsPanelWiredToBuildissues(t *testing.T) {
 		{File: `C:\src\a.go`, Line: 3, Col: 2, Severity: SeverityError, Message: "expected declaration"},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("parseProblems returned %d rows, want %d: %+v", len(got), len(want), got)
+		t.Fatalf("ParseProblems returned %d rows, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {

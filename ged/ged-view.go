@@ -41,6 +41,11 @@ var QuickOpenCallback func()
 // so the user can see and edit the widget's event handler code.
 var ShowCodePanelCallback func()
 
+// DocClosedCallback is called with a design view the dock has just closed. Set
+// by the host application, which is where anything keyed on an open document
+// has to be retired; see GedView.Close.
+var DocClosedCallback func(*GedView)
+
 // alignGuide represents a single alignment guide line shown during drag.
 type alignGuide struct {
 	x1, y1, x2, y2 float64
@@ -2283,6 +2288,20 @@ func uniqueWidgetName(base string, exists func(string) bool) string {
 
 func (this *GedView) OpenFile(filename string) error {
 	return this.GedScene().OpenFile(filename)
+}
+
+// Close is what the dock calls as this document's tab goes away, and the only
+// notice the host application gets that a design is no longer open. Both close
+// paths look for it: Dock.CloseIndex and gui.PromptSaveClose each type-assert
+// the view for a Close() method, so the tab's × and 文件/关闭 arrive here alike.
+//
+// Anything the host keyed on the document — the 问题 rows filed against it, for
+// one — outlives the design without this, and goes on describing a canvas the
+// user cannot open, let alone fix.
+func (this *GedView) Close() {
+	if DocClosedCallback != nil {
+		DocClosedCallback(this)
+	}
 }
 
 // ---------------------------------------------------------------------------
