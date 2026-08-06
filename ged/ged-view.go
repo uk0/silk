@@ -840,6 +840,19 @@ func (this *GedView) reorderSelection(op func(graph.IItem)) {
 	this.Self().Update()
 }
 
+// BringSelectionToFront and SendSelectionToBack expose the canvas context
+// menu's Z-order path to the host application's 排列 menu. Exported wrappers
+// rather than a second implementation in package main: the undo here is an
+// index snapshot walked back through Raise/Lower, and a menu that restacked
+// items on its own would either skip undo or drift from that inverse.
+func (this *GedView) BringSelectionToFront() {
+	this.reorderSelection(graph.IItem.BringToFront)
+}
+
+func (this *GedView) SendSelectionToBack() {
+	this.reorderSelection(graph.IItem.SendToBack)
+}
+
 // alignMode selects an align-or-distribute operation for a multi-selection.
 // The first six entries reposition every rect onto a shared edge or centre
 // line; the last two even out the gaps between rects along one axis.
@@ -1666,6 +1679,23 @@ func (this *GedView) resizeSelection(dw, dh float64) {
 	}
 	cmd.SetMergeToken(this.gestureSeq)
 	this.Scene().UndoStack().Push(cmd)
+	this.Self().Update()
+}
+
+// SameSizeSelection resizes every selected item onto the last-selected item's
+// width and/or height, keeping each item's position. Exported because the host
+// application owns the 排列 menu but not minWidgetSize — routing the menu back
+// through here keeps one floor value behind every resize path instead of a
+// second copy in package main.
+//
+// One press is one undo step: no merge token, because a menu command is not a
+// repeating gesture the way a held Ctrl+arrow is.
+func (this *GedView) SameSizeSelection(mode graph.SameSizeMode) {
+	cmd := this.Selection().GenerateSameSizeCommand(mode, minWidgetSize)
+	if cmd == nil {
+		return
+	}
+	this.Scene().PushCommand(cmd)
 	this.Self().Update()
 }
 

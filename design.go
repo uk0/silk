@@ -495,6 +495,50 @@ func distributeV() {
 }
 
 // ---------------------------------------------------------------------------
+// Same-size and Z-order operations
+// ---------------------------------------------------------------------------
+
+// sameWidth, sameHeight and sameSize resize every selected widget onto the LAST
+// selected one, keeping each widget's own position. The reference is the widget
+// picked most recently — marquee-select the group, then click the widget whose
+// size should win. The geometry (including the min-size floor shared with the
+// Ctrl+arrow resize) lives in graph.Selection.GenerateSameSizeCommand; these are
+// only the menu glue.
+func sameWidth() { sameSizeSelection(graph.SameSizeWidth) }
+
+func sameHeight() { sameSizeSelection(graph.SameSizeHeight) }
+
+func sameSize() { sameSizeSelection(graph.SameSizeBoth) }
+
+func sameSizeSelection(mode graph.SameSizeMode) {
+	gv := currentGedView()
+	if gv == nil {
+		return
+	}
+	gv.SameSizeSelection(mode)
+}
+
+// bringToFront and sendToBack go through the canvas's own undoable Z-order
+// path, the one the right-click 层叠顺序 menu uses. Calling graph.IItem's
+// BringToFront directly from here would restack the widgets with nothing on the
+// UndoStack, leaving Ctrl+Z unable to put the order back.
+func bringToFront() {
+	gv := currentGedView()
+	if gv == nil {
+		return
+	}
+	gv.BringSelectionToFront()
+}
+
+func sendToBack() {
+	gv := currentGedView()
+	if gv == nil {
+		return
+	}
+	gv.SendSelectionToBack()
+}
+
+// ---------------------------------------------------------------------------
 // Layout operations (Feature 3: Qt Creator-style layout tools)
 // ---------------------------------------------------------------------------
 
@@ -1241,6 +1285,16 @@ func createMenuBar(mainFrame *gui.Frame) {
 	arrangeMenu.AddWidget(gui.NewSeparator())
 	needSelection(arrangeMenu.AddButton1("水平分布    Alt+H", nil), 3, 0).BindFunc0(distributeH)
 	needSelection(arrangeMenu.AddButton1("垂直分布    Alt+V", nil), 3, 0).BindFunc0(distributeV)
+	arrangeMenu.AddWidget(gui.NewSeparator())
+	// No Alt+ suffix on these three: every accelerator printed above is a real
+	// binding dispatched from GedView.OnKeyDown, and a label advertising a
+	// shortcut nothing listens for is worse than no label at all.
+	needSelection(arrangeMenu.AddButton1("相同宽度", nil), 2, 0).BindFunc0(sameWidth)
+	needSelection(arrangeMenu.AddButton1("相同高度", nil), 2, 0).BindFunc0(sameHeight)
+	needSelection(arrangeMenu.AddButton1("相同大小", nil), 2, 0).BindFunc0(sameSize)
+	arrangeMenu.AddWidget(gui.NewSeparator())
+	needSelection(arrangeMenu.AddButton1("置于顶层", nil), 1, 0).BindFunc0(bringToFront)
+	needSelection(arrangeMenu.AddButton1("置于底层", nil), 1, 0).BindFunc0(sendToBack)
 
 	// ---- Mode buttons: 设计/代码/分屏 ----
 	mainMenu.AddWidget(gui.NewSeparator())

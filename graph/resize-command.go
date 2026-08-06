@@ -30,6 +30,35 @@ func resizeExtent(extent, delta, minSize float64) float64 {
 	return math.Max(extent+delta, math.Min(extent, minSize))
 }
 
+// SameSizeMode selects which extents a same-size command copies from its
+// reference item.
+type SameSizeMode int
+
+const (
+	SameSizeWidth SameSizeMode = iota
+	SameSizeHeight
+	SameSizeBoth
+)
+
+// sameSizeRect returns rect carrying ref's width and/or height, anchored at
+// rect's own top-left corner so the item keeps its position.
+//
+// It expresses the absolute size as a delta and defers to resizeRectBy so the
+// min-size floor stays the one the keyboard resize uses. Clamping the result up
+// to minSize instead would make a same-size press GROW every widget that
+// already sits below the floor — the same failure resizeExtent was fixed for on
+// the shrink key, and a sub-floor reference would inflate the whole selection.
+func sameSizeRect(rect, ref geom.Rect, mode SameSizeMode, minSize float64) geom.Rect {
+	var dw, dh float64
+	if mode != SameSizeHeight {
+		dw = ref.Width - rect.Width
+	}
+	if mode != SameSizeWidth {
+		dh = ref.Height - rect.Height
+	}
+	return resizeRectBy(rect, dw, dh, minSize)
+}
+
 type resizeRecord struct {
 	item IItem
 	rect geom.Rect

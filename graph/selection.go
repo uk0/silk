@@ -305,6 +305,46 @@ func (s *Selection) GenerateResizeCommand(dw, dh, minSize float64) *ResizeComman
 	return cmd
 }
 
+// GenerateSameSizeCommand resizes every selected item onto the width and/or
+// height of the LAST selected item, each item keeping its own X/Y. Add appends,
+// so the last item is the one the designer picked most recently — the reference
+// convention every form designer uses for "make same size".
+//
+// Same exclusions and same nil contract as GenerateResizeCommand: a size-locked
+// or ancestor-selected item is left out, and nothing left to do returns nil so
+// the caller forwards a quiet no-op instead of pushing an empty command. The
+// reference needs no special case — resizing it onto its own size is not a
+// change, so the unchanged-rect filter drops it.
+func (s *Selection) GenerateSameSizeCommand(mode SameSizeMode, minSize float64) *ResizeCommand {
+	if s.Count() < 2 {
+		return nil
+	}
+
+	ref := s.last.item.Bounds1()
+	cmd := NewResizeCommand()
+	for p := s.first; p != nil; p = p.next {
+		item := p.item
+		if item.IsLockSize() {
+			continue
+		}
+
+		if s.isItemAncestorSelected(item) {
+			continue
+		}
+		rect := item.Bounds1()
+		newRect := sameSizeRect(rect, ref, mode, minSize)
+		if newRect == rect {
+			continue
+		}
+		cmd.AddItem(item, newRect)
+
+	}
+	if cmd.Count() == 0 {
+		return nil
+	}
+	return cmd
+}
+
 func (s *Selection) FindHandleAt(xMm, yMm float64) (decor IDecor, handle int) {
 	// 和绘图方向相反, 从后往前找
 	for p := s.last; p != nil; p = p.prev {
