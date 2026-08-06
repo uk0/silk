@@ -93,7 +93,7 @@ func TestArrowBurstDoesNotMergeIntoEarlierMove(t *testing.T) {
 	if drag == nil {
 		t.Fatal("GenerateMoveCommand returned nil for a non-empty selection")
 	}
-	view.Scene().UndoStack().Push(drag)
+	view.Scene().PushCommand(drag)
 	if x, _ := fake.Pos(); x != 45 {
 		t.Fatalf("after the stand-in drag: x = %g, want 45", x)
 	}

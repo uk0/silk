@@ -48,7 +48,7 @@ func (this *MovePart) OnLeftUp(x, y float64) {
 	if dx != 0 || dy != 0 {
 		cmd := this.View().Selection().GenerateMoveCommand(dx, dy)
 		if cmd != nil {
-			this.Scene().UndoStack().Push(cmd)
+			this.Scene().PushCommand(cmd)
 		}
 	}
 	this.View().Update()

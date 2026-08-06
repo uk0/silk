@@ -101,6 +101,11 @@ func (this *SceneItem) UndoStack() gui.IUndoStack {
 	return this.undoStack
 }
 
+// PushCommand is the one door every design mutation goes through: it is the
+// only place in the tree allowed to touch UndoStack().Push, so a scene that
+// overrides it (ged.GedScene, which announces the change) sees every command.
+// Pushing onto the stack directly from a tool or a view compiles and undoes
+// correctly while leaving every listener showing the pre-edit design.
 func (this *SceneItem) PushCommand(cmd gui.ICommand) {
 	this.UndoStack().Push(cmd)
 }

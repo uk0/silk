@@ -565,7 +565,7 @@ func (this *ResizeDecor) OnEndMoveHandle(handle int, x, y float64) {
 
 	}
 	if cmd.Count() > 0 {
-		this.Scene().UndoStack().Push(cmd)
+		this.Scene().PushCommand(cmd)
 	}
 
 }

@@ -2051,7 +2051,7 @@ func (this *GedView) nudgeSelection(dx, dy float64) {
 		return
 	}
 	cmd.SetMergeToken(this.gestureSeq)
-	this.Scene().UndoStack().Push(cmd)
+	this.Scene().PushCommand(cmd)
 	this.Self().Update()
 }
 
@@ -2070,7 +2070,7 @@ func (this *GedView) resizeSelection(dw, dh float64) {
 		return
 	}
 	cmd.SetMergeToken(this.gestureSeq)
-	this.Scene().UndoStack().Push(cmd)
+	this.Scene().PushCommand(cmd)
 	this.Self().Update()
 }
 

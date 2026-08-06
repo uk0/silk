@@ -43,7 +43,7 @@ func (this *RectPart) OnLeftUp(x, y float64) {
 		//p.SetParent(this.Scene())
 		cmd := NewAddCommand()
 		cmd.AddItem(p, this.Scene())
-		this.Scene().UndoStack().Push(cmd)
+		this.Scene().PushCommand(cmd)
 		selection.Clear()
 		selection.Add(p)
 	}

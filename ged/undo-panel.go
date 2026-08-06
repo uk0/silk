@@ -135,6 +135,10 @@ func (this *UndoPanel) syncFromStack() {
 // GoTo moves the bound stack to position pos, walking there one command at a
 // time through Undo/Redo. Every command still runs its own Undo/Redo in order;
 // re-seating the position any other way would skip the work the commands do.
+//
+// Walking the stack pushes nothing, so the jump has to report the change itself
+// — the same reason GedView.Undo does. A click here can rewind a dozen edits;
+// without the report every listener keeps rendering the design they replaced.
 func (this *UndoPanel) GoTo(pos int) {
 	if this.scene == nil {
 		return
@@ -149,11 +153,15 @@ func (this *UndoPanel) GoTo(pos int) {
 	if pos > stack.Count() {
 		pos = stack.Count()
 	}
+	start := stack.Current()
 	for stack.Current() > pos && stack.CanUndo() {
 		stack.Undo()
 	}
 	for stack.Current() < pos && stack.CanRedo() {
 		stack.Redo()
+	}
+	if stack.Current() != start {
+		this.scene.NotifyDesignChanged()
 	}
 	this.Rebuild()
 }
