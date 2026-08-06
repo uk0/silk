@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/uk0/silk/core"
@@ -175,6 +176,23 @@ func TestClosingTheDesignDropsItsRows(t *testing.T) {
 
 	if got := paneRows(); !sameRows(got, "main.go") {
 		t.Errorf("after closing the design the pane reads %v, want its rows gone and the build's kept", got)
+	}
+}
+
+// TestRunReportsThroughTheBuildReporters: onRun hands its build result to a
+// gui.Post closure no test can enter — it wants a live frame, a scene and a
+// toolchain — so the two reporters exercised above are reached only if onRun
+// still calls them. Writing the pane inline there is how the success path came
+// to clear rows that were never the build's to clear.
+func TestRunReportsThroughTheBuildReporters(t *testing.T) {
+	body := funcBody(t, "design.go", "func onRun() {")
+	for _, want := range []string{"reportBuildFailure(", "reportBuildSuccess()"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("onRun no longer calls %s; its build result is reported some other way", want)
+		}
+	}
+	if strings.Contains(body, "problemsPanel") {
+		t.Error("onRun writes the 问题 pane directly; only the reporters know which rows the build owns")
 	}
 }
 
