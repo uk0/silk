@@ -654,18 +654,21 @@ func (this *GedView) OnRightUp(x, y float64) {
 			this.renameItem(item)
 		})
 
-		// "Lock/Unlock" menu item
-		if isFake {
-			lockLabel := "锁定"
-			if fake.IsLocked() {
-				lockLabel = "解锁"
-			}
-			btnLock := menu.AddButton1(lockLabel, nil)
-			btnLock.Action().BindFunc0(func() {
-				fake.SetLocked(!fake.IsLocked())
-				this.Self().Update()
-			})
-		}
+		// Lock toggles. Position and size are separate guards in graph — a
+		// move skips IsLockPos items, a resize skips IsLockSize ones — so
+		// pinning a widget's place while still sizing it is a state the old
+		// all-or-nothing 锁定 entry could not express. Both act on the whole
+		// selection and read their state at build time, which is safe because
+		// the menu is rebuilt on every right-click.
+		lockPos, lockSize := selectionLockState(this.Selection().ItemList())
+		btnLockPos := menu.AddButton1(lockMenuLabel("锁定位置", lockPos), nil)
+		btnLockPos.Action().BindFunc0(func() {
+			this.setSelectionLockPos(!lockPos)
+		})
+		btnLockSize := menu.AddButton1(lockMenuLabel("锁定尺寸", lockSize), nil)
+		btnLockSize.Action().BindFunc0(func() {
+			this.setSelectionLockSize(!lockSize)
+		})
 
 		menu.AddSeparator()
 
@@ -720,6 +723,69 @@ func (this *GedView) bindEvent(item graph.IItem, eventName string) {
 			fake.SetEventHandlerChecked(eventName, name)
 		}
 	}
+}
+
+// lockMenuLabel marks a toggle entry's current state. A popup-menu button
+// never renders Action.SetChecked — the theme's popup branch reads only hover
+// and sub-popup state — so the check has to live in the text, the way the
+// bound-event entries mark a binding. The pad keeps both states aligned.
+func lockMenuLabel(text string, on bool) string {
+	if on {
+		return "✓ " + text
+	}
+	return "  " + text
+}
+
+// selectionLockState reports whether EVERY item carries the position / size
+// lock. A mixed selection reads as unlocked, so the next click locks all of it
+// rather than releasing the half that was already locked.
+func selectionLockState(items []graph.IItem) (pos, size bool) {
+	if len(items) == 0 {
+		return false, false
+	}
+	pos, size = true, true
+	for _, item := range items {
+		if !item.IsLockPos() {
+			pos = false
+		}
+		if !item.IsLockSize() {
+			size = false
+		}
+	}
+	return
+}
+
+// setSelectionLockPos pins (or releases) the position of every selected item.
+// Deliberately not undoable: a lock guards future edits instead of changing the
+// design, so Ctrl+Z stays aimed at the last real edit.
+func (this *GedView) setSelectionLockPos(lock bool) {
+	for _, item := range this.Selection().ItemList() {
+		item.SetLockPos(lock)
+	}
+	this.reseatSelection()
+}
+
+// setSelectionLockSize pins (or releases) the size of every selected item.
+// Not undoable, for the same reason as setSelectionLockPos.
+func (this *GedView) setSelectionLockSize(lock bool) {
+	for _, item := range this.Selection().ItemList() {
+		item.SetLockSize(lock)
+	}
+	this.reseatSelection()
+}
+
+// reseatSelection re-selects the current items so their decors are rebuilt
+// against the flags they carry now. Not cosmetic: decors are generated once,
+// when an item is selected (graph emitItemSelected -> GenDecors), and GenDecors
+// hands a locked item no handles — but an item locked while it was already
+// selected keeps the handles it was given, and ResizeDecor.OnEndMoveHandle
+// resizes its own item without consulting the lock.
+func (this *GedView) reseatSelection() {
+	sel := this.Selection()
+	items := sel.ItemList()
+	sel.Clear()
+	sel.AddMulti(items)
+	this.Self().Update()
 }
 
 // DeleteSelectedItems removes all currently selected items from the scene as a
@@ -1504,16 +1570,11 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		this.CopySelected()
 		this.DeleteSelectedItems()
 
-	// Cmd+D / Ctrl+D: duplicate selection in place. Re-uses the
-	// CopySelected → PasteItems pipeline rather than introducing a
-	// separate "duplicate" command — PasteItems already offsets the
-	// new copies so they don't sit directly on top of the originals,
-	// and the round-trip puts them on the UndoStack the same way an
-	// explicit Cmd+C; Cmd+V would. Designer-tool muscle memory: Figma,
-	// JetBrains, and Sketch all bind Cmd+D this way.
+	// Cmd+D / Ctrl+D: duplicate the selection in place. Designer-tool muscle
+	// memory: Figma, JetBrains, and Sketch all bind Cmd+D this way. Shares the
+	// entry point with the 编辑 → 创建副本 menu command.
 	case ctrl && (key == 'D' || key == 'd'):
-		this.CopySelected()
-		this.PasteItems()
+		this.DuplicateSelection()
 
 	case ctrl && (key == 'P' || key == 'p'):
 		if QuickOpenCallback != nil {
@@ -1842,6 +1903,17 @@ func (this *GedView) PasteItems() {
 		sel.Add(item)
 	}
 	this.Self().Update()
+}
+
+// DuplicateSelection copies the selection and pastes it straight back, the
+// one-step Ctrl+D / 编辑 → 创建副本 command. It is the copy/paste pipeline
+// rather than a second one beside it: PasteItems already offsets each copy by
+// one grid pitch, hands it a unique name and leaves the selection on the new
+// items. Like every Cmd+D built this way it overwrites the clipboard — the
+// price of not carrying a second serializer.
+func (this *GedView) DuplicateSelection() {
+	this.CopySelected()
+	this.PasteItems()
 }
 
 // sceneWidgetNames returns the set of non-empty widget names currently

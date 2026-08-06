@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/uk0/silk/ged"
@@ -231,5 +232,40 @@ func TestRecentMenuPlaceholderIsNotAcommand(t *testing.T) {
 		if !b.IsEnabled() {
 			t.Errorf("recent file entry %q is disabled", b.Text())
 		}
+	}
+}
+
+// TestDuplicateCommandFollowsSelection covers the 创建副本 entry: Ctrl+D was
+// reachable only from the canvas keyboard, so the 编辑 menu listed 复制 and
+// 粘贴 with no sign that duplicating in one step existed. It needs something
+// selected, so it greys out on an empty selection like the align commands.
+func TestDuplicateCommandFollowsSelection(t *testing.T) {
+	newStatusBarLabels()
+	f := buildChrome(t)
+
+	gv := ged.NewGedView()
+	dropWidget(t, gv, "gui.Button")
+	items := gv.Scene().Children()
+
+	var dup *gui.Button
+	for _, b := range submenuButtons(t, f.MainMenu(), "编辑") {
+		if strings.HasPrefix(b.Text(), "创建副本") {
+			dup = b
+		}
+	}
+	if dup == nil {
+		t.Fatal("编辑 menu carries no 创建副本 entry")
+	}
+
+	gv.Selection().Clear()
+	updateStatusBarInfoFor(gv)
+	if dup.IsEnabled() {
+		t.Errorf("%q is enabled with an empty selection", dup.Text())
+	}
+
+	gv.Selection().Add(items[0])
+	updateStatusBarInfoFor(gv)
+	if !dup.IsEnabled() {
+		t.Errorf("%q is disabled with one widget selected", dup.Text())
 	}
 }

@@ -50,3 +50,32 @@ func TestDuplicateAddsNewItemOffsetFromOriginal(t *testing.T) {
 		t.Errorf("duplicate is at the original's position (%g, %g)", dx, dy)
 	}
 }
+
+// TestDuplicateSelectionOffsetsByOneGridPitch drives the Ctrl+D entry point
+// itself (the keystroke and the 编辑 menu share it): the copy lands one grid
+// pitch down-right of the original and the selection follows it, so a second
+// Ctrl+D walks down the canvas instead of stacking copies in place.
+func TestDuplicateSelectionOffsetsByOneGridPitch(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+	view.SetGridStep(5)
+
+	fake := addFakeAt(t, scene, "btn", 10, 20, 30, 12)
+	view.Selection().Add(fake)
+
+	view.DuplicateSelection()
+
+	if n := len(scene.Children()); n != 2 {
+		t.Fatalf("after duplicate: scene has %d children, want 2", n)
+	}
+	sel := view.Selection().ItemList()
+	if len(sel) != 1 {
+		t.Fatalf("after duplicate: %d selected, want 1 (the copy)", len(sel))
+	}
+	if sel[0] == fake {
+		t.Fatal("selection stayed on the original")
+	}
+	if x, y := sel[0].Pos(); x != 15 || y != 25 {
+		t.Errorf("copy at (%g, %g), want (15, 25) — one 5 mm pitch off the original", x, y)
+	}
+}

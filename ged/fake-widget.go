@@ -365,13 +365,10 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		g.Scale(scaleX, scaleY) // restore pixel space for subsequent drawing
 	}
 
-	// Draw lock icon overlay if widget is locked
-	if this.IsLocked() {
+	// Draw lock icon overlay if either lock is set
+	if lx, ly, lockSize, ok := lockGlyphBox(this.IsLockPos(), this.IsLockSize(), this.Width(), this.Height()); ok {
 		g.Scale(1.0/scaleX, 1.0/scaleY) // back to mm space
 		g.SetBrush(paint.Color{255, 165, 0, 180})
-		lockSize := 2.5 // mm
-		lx := this.Width() - lockSize - 0.5
-		ly := 0.5
 		// Small lock indicator rectangle
 		g.Rectangle(lx, ly, lockSize, lockSize)
 		g.Fill()
@@ -393,6 +390,27 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		g.LineTo(cx+sw*0.5, cy)
 		g.Stroke()
 	}
+}
+
+const (
+	lockGlyphSize = 2.5 // mm — the badge is a square this wide
+	lockGlyphPad  = 0.5 // mm — inset from the top and right edges
+)
+
+// lockGlyphBox places the designer's lock badge in the item's top-right corner
+// and reports whether to draw it at all. Either lock earns a badge: position
+// and size are independent guards, and a widget that resists dragging with no
+// visible reason is the thing this marker exists to prevent. A widget too small
+// to carry the badge gets none — covering a 3 mm widget with a lock icon hides
+// the widget instead of annotating it.
+func lockGlyphBox(lockPos, lockSize bool, w, h float64) (x, y, size float64, ok bool) {
+	if !lockPos && !lockSize {
+		return 0, 0, 0, false
+	}
+	if need := lockGlyphSize + 2*lockGlyphPad; w < need || h < need {
+		return 0, 0, 0, false
+	}
+	return w - lockGlyphSize - lockGlyphPad, lockGlyphPad, lockGlyphSize, true
 }
 
 // MarkDirty forces the cached offscreen pixmap to be recreated on the next draw.
@@ -481,9 +499,15 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 	doc.SetValue(this.factoryName)
 	doc.WriteAttr("bounds", this.Bounds1())
 	doc.WriteAttr("name", this.WidgetName())
-	// Persist lock state
-	if this.IsLocked() {
-		doc.WriteAttr("locked", true)
+	// Persist lock state. One attribute per flag: they are set independently
+	// from the canvas, and the single "locked" attribute this used to write
+	// could only record the both-locked case, so a position-only lock was
+	// dropped on save.
+	if this.IsLockPos() {
+		doc.WriteAttr("lockpos", true)
+	}
+	if this.IsLockSize() {
+		doc.WriteAttr("locksize", true)
 	}
 	// Persist event handler code
 	if this.code != "" {
@@ -597,11 +621,21 @@ func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *int) {
 	this.SetBounds1(rect)
 	doc.ReadAttr("name", &this.name)
 	doc.ReadAttr("code", &this.code)
-	// Restore lock state
+	// Restore lock state. "locked" is the pre-split spelling meaning both
+	// flags; designs written before the split still carry it.
 	var locked bool
 	doc.ReadAttr("locked", &locked)
 	if locked {
 		this.SetLocked(true)
+	}
+	var lockPos, lockSize bool
+	doc.ReadAttr("lockpos", &lockPos)
+	doc.ReadAttr("locksize", &lockSize)
+	if lockPos {
+		this.SetLockPos(true)
+	}
+	if lockSize {
+		this.SetLockSize(true)
 	}
 	// Load event handlers from child nodes under "events"
 	evtDoc := doc.ChildByKey("events", false)

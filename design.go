@@ -298,6 +298,12 @@ func onPaste() {
 	}
 }
 
+func onDuplicate() {
+	if gv := currentGedView(); gv != nil {
+		gv.DuplicateSelection()
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Alignment operations (Feature 1)
 // ---------------------------------------------------------------------------
@@ -1231,6 +1237,10 @@ func createMenuBar(mainFrame *gui.Frame) {
 	btnCopy.Action().BindFunc0(onCopy)
 	btnPaste := editMenu.AddButton1("粘贴    Ctrl+V", nil)
 	btnPaste.Action().BindFunc0(onPaste)
+	// 创建副本 is copy+paste in one step, so it belongs to this group. It needs
+	// something selected — with nothing selected the copy stage has nothing to
+	// take and the command silently does nothing.
+	needSelection(editMenu.AddButton1("创建副本    Ctrl+D", nil), 1, 0).BindFunc0(onDuplicate)
 
 	// ---- 视图 ----
 	viewMenu, viewBtn := mainMenu.AddSubMenu("视图", nil, nil)
