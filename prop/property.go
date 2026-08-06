@@ -94,6 +94,26 @@ type Property struct {
 	get reflect.Value
 	set []reflect.Value
 
+	// getAll is the getter every bound object declared for this id with typ;
+	// get is getAll[0]. A merged property spans the whole selection, so the
+	// sheet has to read each object separately to tell "they all agree" from
+	// "多值" — and a read-only object (no setter) still has to be compared.
+	getAll []reflect.Value
+
+	// setGet[i] reads back the object that contributed set[i]. Undo needs one
+	// old value per object; the single get above belongs to the first object
+	// only, and replaying it into every setter overwrites the rest of the
+	// selection with that object's value.
+	setGet []reflect.Value
+
+	// owners counts the distinct bound objects that declared this id with typ,
+	// and mixedType records one that declared it with another type. Both feed
+	// classifyRow, which decides whether the row survives a multi-object bind.
+	owners    int
+	lastOwner int
+
+	mixedType bool
+
 	//cfgReadOnly bool
 }
 
@@ -140,6 +160,75 @@ func (prop Property) GetValue() interface{} {
 	return prop.get.Call([]reflect.Value{})[0].Interface()
 }
 
+// values reads the current value of every object that declared this property.
+func (prop Property) values() []interface{} {
+	vals := make([]interface{}, len(prop.getAll))
+	for i, g := range prop.getAll {
+		vals[i] = g.Call([]reflect.Value{})[0].Interface()
+	}
+	return vals
+}
+
+// setValues reads the current value of every object that contributed a setter,
+// in the same order as set, so restoreValues can put each one back.
+func (prop Property) setValues() []interface{} {
+	vals := make([]interface{}, len(prop.setGet))
+	for i, g := range prop.setGet {
+		vals[i] = g.Call([]reflect.Value{})[0].Interface()
+	}
+	return vals
+}
+
+// restoreValues writes vals back through the matching setters. vals must come
+// from setValues on the same property, which is what keeps the indexes paired.
+func (prop Property) restoreValues(vals []interface{}) {
+	for i, v := range prop.set {
+		v.Call([]reflect.Value{reflect.ValueOf(vals[i])})
+	}
+}
+
+// multiValueText is the placeholder shown for a row whose bound objects hold
+// different values.
+const multiValueText = "多值"
+
+// rowState is what a property id merged across a selection may do.
+type rowState int
+
+const (
+	// rowDrop: the row cannot speak for the whole selection and is not shown.
+	rowDrop rowState = iota
+	// rowSame: every object holds the same value; the row shows it.
+	rowSame
+	// rowMulti: every object has the property but the values differ; the row
+	// shows the 多值 placeholder over an empty editor.
+	rowMulti
+)
+
+// classifyRow decides the fate of one property id after every bound object has
+// enumerated its properties. objCount is the number of objects bound, owners
+// the number of them that declared the id with the row's value type, mixedType
+// records that some object declared the same id with a different type, and
+// values holds the current value of each owner.
+//
+// A single object keeps every row unconditionally: binding one object must
+// behave exactly as it did before intersection existed.
+func classifyRow(objCount, owners int, mixedType bool, values []interface{}) rowState {
+	if objCount <= 1 {
+		return rowSame
+	}
+	// Not shared by all, or shared under two different types: an edit here
+	// would reach only part of the selection.
+	if mixedType || owners < objCount {
+		return rowDrop
+	}
+	for i := 1; i < len(values); i++ {
+		if !reflect.DeepEqual(values[i], values[0]) {
+			return rowMulti
+		}
+	}
+	return rowSame
+}
+
 // parsePropertyValue converts the text shown in the property sheet into a
 // value of type typ.
 //
@@ -181,8 +270,13 @@ func (prop Property) GetValueStr() string {
 
 // 修改属性的命令
 type PropertyCommand struct {
-	prop   *Property
-	val    interface{}
+	prop *Property
+	val  interface{}
+
+	// old holds one previous value per setter, captured on Redo. A merged
+	// property covers a whole selection whose objects may each hold a
+	// different value, so a single old value is not enough to undo the edit.
+	old    []interface{}
 	isUndo bool
 }
 
@@ -197,9 +291,8 @@ func (cmd *PropertyCommand) Redo() {
 	if cmd.isUndo {
 		panic("irregal Redo()")
 	}
-	oldVal := cmd.prop.GetValue()
+	cmd.old = cmd.prop.setValues()
 	cmd.prop.SetValue(cmd.val)
-	cmd.val = oldVal
 	cmd.isUndo = true
 }
 
@@ -207,9 +300,7 @@ func (cmd *PropertyCommand) Undo() {
 	if !cmd.isUndo {
 		panic("irregal Undo()")
 	}
-	oldVal := cmd.prop.GetValue()
-	cmd.prop.SetValue(cmd.val)
-	cmd.val = oldVal
+	cmd.prop.restoreValues(cmd.old)
 	cmd.isUndo = false
 }
 
@@ -368,14 +459,42 @@ type PropertyItem struct {
 	// configFile可以为空, 表示配置是由程序内部指定的, 不是从配置文件读取
 	configFile *PropertyConfigFile
 
+	// multiValue marks a row whose bound objects hold different values.
+	// Decided by classifyRow at Bind time.
+	multiValue bool
+
 	updatingControl bool
 }
 
+// IsMultiValue reports whether the bound objects hold different values for this
+// property. Such a row shows multiValueText over an empty editor.
+func (this *PropertyItem) IsMultiValue() bool {
+	return this.multiValue
+}
+
+// MultiValueHint is the text a control shows in place of a value when the
+// bound objects disagree, and "" when they agree.
+func (this *PropertyItem) MultiValueHint() string {
+	if this.multiValue {
+		return multiValueText
+	}
+	return ""
+}
+
 func (this *PropertyItem) GetValue() interface{} {
+	// Hand the control a zero value instead of the first object's: a sheet
+	// showing one member of a disagreeing selection reads as "already right",
+	// and the next edit silently rewrites the others.
+	if this.multiValue {
+		return reflect.Zero(this.prop.Type()).Interface()
+	}
 	return this.prop.GetValue()
 }
 
 func (this *PropertyItem) GetValueStr() string {
+	if this.multiValue {
+		return ""
+	}
 	return this.prop.GetValueStr()
 }
 
@@ -383,6 +502,8 @@ func (this *PropertyItem) SetValue(a interface{}) {
 	if this.IsReadOnly() {
 		return
 	}
+	// Every object just took a, so the row is no longer 多值.
+	this.multiValue = false
 	if ii, ok := this.sheet.objOwner.(interface {
 		PushCommand(cmd gui.ICommand)
 	}); ok {
@@ -756,6 +877,14 @@ func categoryOfPropID(id string) string {
 	return "general"
 }
 
+// categoryHiddenForSelection reports whether a category must stay off screen
+// for a selection of objCount objects. An 事件 row names the one handler one
+// widget calls; pointing N widgets at a single handler is a different feature,
+// so the category only appears while exactly one object is bound.
+func categoryHiddenForSelection(catKey string, objCount int) bool {
+	return objCount > 1 && catKey == "events"
+}
+
 // propMatchesFilter reports whether a row survives the filter box: a blank
 // query keeps everything, otherwise the query must appear as a
 // case-insensitive substring of the row's display label or of its raw
@@ -795,6 +924,13 @@ type PropertySheet struct {
 	// 属性过滤
 	filter    string
 	searchBox *gui.SearchBox
+
+	// objCount is how many bound objects enumerated properties in the last
+	// Bind, and bindIndex which of them is enumerating right now. Together they
+	// let AddProperty tell "declared by every object" from "declared twice by
+	// one object".
+	objCount  int
+	bindIndex int
 }
 
 // filterBoxHeight and filterBoxMargin size the filter box band at the top of
@@ -900,6 +1036,8 @@ func (this *PropertySheet) Clear(owner interface{}) {
 	this.vlist = nil
 	this.rlist = nil
 	this.categoryLayout = nil
+	this.objCount = 0
+	this.bindIndex = 0
 }
 
 // IsValidPropId reports whether s is usable as a property id. In this codebase
@@ -934,22 +1072,39 @@ func (this *PropertySheet) AddProperty(id string, get, set interface{}) (item *P
 		return
 	}
 
+	getMethod := reflect.ValueOf(get)
+	if getMethod.Type().Kind() != reflect.Func || getMethod.Type().NumIn() != 0 || getMethod.Type().NumOut() != 1 {
+		core.Warn(`Prop "`+id+`" : irregal get-method: `, getMethod.Type())
+		return
+	}
+
 	p, added := this.propMap[id]
 	if !added {
 		prop := new(Property)
 		prop.id = id
 
-		prop.get = reflect.ValueOf(get)
-		if prop.get.Type().Kind() != reflect.Func || prop.get.Type().NumIn() != 0 || prop.get.Type().NumOut() != 1 {
-			core.Warn(`Prop "`+id+`" : irregal get-method: `, prop.get.Type())
-			return
-		}
-		prop.typ = prop.get.Type().Out(0)
+		prop.get = getMethod
+		prop.typ = getMethod.Type().Out(0)
+		prop.lastOwner = -1
 		p = new(PropertyItem)
 		p.prop = prop
 		p.sheet = this
 		p.loadConfig()
 		this.propMap[id] = p
+	}
+
+	// Record how this id merges across the bound objects. A getter of another
+	// type cannot join the row — the merged property carries exactly one type —
+	// so it is remembered as a conflict rather than silently ignored, which is
+	// what used to leave a row that edited only part of a selection.
+	if getMethod.Type().Out(0) != p.prop.typ {
+		p.prop.mixedType = true
+	} else {
+		if p.prop.lastOwner != this.bindIndex {
+			p.prop.lastOwner = this.bindIndex
+			p.prop.owners++
+		}
+		p.prop.getAll = append(p.prop.getAll, getMethod)
 	}
 
 	if set != nil {
@@ -961,6 +1116,7 @@ func (this *PropertySheet) AddProperty(id string, get, set interface{}) (item *P
 				p.prop.get.Type().String() + `" and "` + setMethod.Type().String() + `"`)
 		} else {
 			p.prop.set = append(p.prop.set, setMethod)
+			p.prop.setGet = append(p.prop.setGet, getMethod)
 		}
 	}
 	return p, !added
@@ -1004,19 +1160,36 @@ func (this *PropertySheet) Bind(objs []interface{}, configName string, owner int
 
 	adapter := &propertyListAdapter{sheet: this}
 	for _, obj := range objs {
+		// Objects that enumerate nothing are skipped below and must not count
+		// towards the intersection, or one of them would empty the sheet.
+		this.bindIndex = this.objCount
 		// Check prop.IEnumProperties first (original interface)
 		if x, ok := obj.(IEnumProperties); ok {
 			x.EnumProperties(this)
+			this.objCount++
 			continue
 		}
 		// Check core.IEnumProperties (gui widgets use this to avoid import cycle)
 		if x, ok := obj.(core.IEnumProperties); ok {
 			x.EnumProperties(adapter)
+			this.objCount++
 			continue
 		}
 	}
 
+	// Keep the rows that speak for the whole selection: same id, same type, on
+	// every object. The rest would edit only part of what the user selected.
+	multi := this.objCount > 1
 	for _, v := range this.propMap {
+		var values []interface{}
+		if multi {
+			values = v.prop.values()
+		}
+		state := classifyRow(this.objCount, v.prop.owners, v.prop.mixedType, values)
+		if state == rowDrop {
+			continue
+		}
+		v.multiValue = state == rowMulti
 		this.rlist = append(this.rlist, v)
 	}
 
@@ -1043,7 +1216,9 @@ func (this *PropertySheet) Layout() {
 	// survived.
 	catItems := make(map[string][]*PropertyItem)
 	for _, p := range this.rlist {
-		if !p.IsVisible() || !propMatchesFilter(p.Label(), p.Id(), this.filter) {
+		cat := categoryOfPropID(p.Id())
+		if !p.IsVisible() || !propMatchesFilter(p.Label(), p.Id(), this.filter) ||
+			categoryHiddenForSelection(cat, this.objCount) {
 			p.vrow = -1
 			control := p.Control()
 			if control != nil {
@@ -1051,7 +1226,6 @@ func (this *PropertySheet) Layout() {
 			}
 			continue
 		}
-		cat := categoryOfPropID(p.Id())
 		catItems[cat] = append(catItems[cat], p)
 	}
 
