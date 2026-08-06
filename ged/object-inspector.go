@@ -20,11 +20,17 @@ func init() {
 }
 
 // inspectorItem represents one row in the object inspector tree.
+//
+// lockPos/lockSize are the item's own lock flags, read once per rebuild. They
+// are not re-derived from anything: the canvas badge reads the same two flags
+// (see lockGlyphBox), so a row and the widget it stands for can never disagree.
 type inspectorItem struct {
 	item     graph.IItem
 	name     string
 	typeName string
 	depth    int
+	lockPos  bool
+	lockSize bool
 }
 
 // ObjectInspector is a tool panel that shows the widget hierarchy as a tree,
@@ -33,6 +39,7 @@ type inspectorItem struct {
 type ObjectInspector struct {
 	gui.Widget
 	scene       *GedScene
+	view        *GedView
 	items       []inspectorItem
 	selectedIdx int
 	hoverIdx    int
@@ -40,10 +47,14 @@ type ObjectInspector struct {
 	rowHeight   float64
 	cbSelect    func(graph.IItem)
 
-	// --- Drag Reorder ---
+	filterBox  *gui.SearchBox
+	filterText string
+
+	// --- Drag Reorder / Re-parent ---
 	dragging   bool
 	dragIdx    int
 	dropIdx    int
+	dropInto   int // row to nest the drag into, -1 when the drop reorders instead
 	dragStartY float64
 }
 
@@ -58,12 +69,69 @@ func (this *ObjectInspector) Init(self gui.IWidget) {
 	this.rowHeight = 24
 	this.selectedIdx = -1
 	this.hoverIdx = -1
+	this.dropInto = -1
+
+	this.filterBox = gui.NewSearchBox()
+	this.filterBox.SetParent(self)
+	this.filterBox.SetPlaceholder("过滤控件…")
+	this.filterBox.SigTextChanged(func(s string) {
+		this.SetFilter(s)
+	})
+}
+
+// inspectorHeaderH is the title strip, inspectorFilterH the filter box under
+// it. Every row calculation goes through contentTop so the two strips are
+// declared once — a second copy of the offset is how a panel ends up selecting
+// the row above the one you clicked.
+const (
+	inspectorHeaderH = 22.0
+	inspectorFilterH = 26.0
+)
+
+func (this *ObjectInspector) contentTop() float64 {
+	return inspectorHeaderH + inspectorFilterH
+}
+
+func (this *ObjectInspector) Layout() {
+	w, _ := this.Size()
+	this.filterBox.SetBounds(4, inspectorHeaderH+2, w-8, inspectorFilterH-5)
 }
 
 // SetScene binds the inspector to a GedScene and rebuilds the item list.
+//
+// The canvas view comes with it: GraphView.SetScene records itself on the
+// scene, and the tree needs it for the two operations that reach back out — a
+// row press sets the canvas selection, and a drag re-parent reuses the command
+// that selection generates. A scene nobody is showing yields a read-only tree.
 func (this *ObjectInspector) SetScene(scene *GedScene) {
 	this.scene = scene
+	this.view = nil
+	if scene != nil {
+		this.view, _ = scene.View().(*GedView)
+	}
 	this.Rebuild()
+}
+
+// SetFilter narrows the tree to rows whose widget name or type contains text
+// (case-insensitive), following the widget palette's convention: while a
+// filter is active the matches are listed flat, without the hierarchy they
+// normally hang in. Empty text restores the tree.
+func (this *ObjectInspector) SetFilter(text string) {
+	if text == this.filterText {
+		return
+	}
+	this.filterText = text
+	this.Rebuild()
+}
+
+// RowNames returns the name of every visible row, top to bottom. It is the
+// panel's content in the only form a caller without a painter can read.
+func (this *ObjectInspector) RowNames() []string {
+	names := make([]string, 0, len(this.items))
+	for _, it := range this.items {
+		names = append(names, it.name)
+	}
+	return names
 }
 
 // SigSelect registers a callback that fires when the user selects an item.
@@ -71,26 +139,39 @@ func (this *ObjectInspector) SigSelect(fn func(graph.IItem)) {
 	this.cbSelect = fn
 }
 
-// Rebuild walks the scene tree and populates the flat items list.
+// Rebuild walks the scene tree and populates the flat items list. The
+// highlight follows the selected ITEM across the rebuild — a re-parent or a
+// filter moves rows around, and a row index kept as-is would end up
+// highlighting whichever widget inherited the slot.
 func (this *ObjectInspector) Rebuild() {
+	selected := this.SelectedItem()
 	this.items = nil
 	if this.scene == nil {
+		this.selectedIdx = -1
+		this.Self().Update()
 		return
 	}
 
-	// Root row: the form itself
-	this.items = append(this.items, inspectorItem{
-		item:     this.scene,
-		name:     this.scene.FormTitle(),
-		typeName: "GedScene",
-		depth:    0,
-	})
+	if filter := strings.ToLower(strings.TrimSpace(this.filterText)); filter != "" {
+		// Filter mode, as the widget palette does it: the containers that
+		// organise the list step aside and every match is listed flat.
+		this.appendMatches(this.scene.Children(), filter)
+	} else {
+		// Root row: the form itself
+		this.items = append(this.items, inspectorItem{
+			item:     this.scene,
+			name:     this.scene.FormTitle(),
+			typeName: "GedScene",
+			depth:    0,
+		})
 
-	// Walk the tree so widgets nested inside layout containers show
-	// indented under their parent (depth grows per level), not as a flat
-	// scene-level list.
-	this.appendChildren(this.scene.Children(), 1)
+		// Walk the tree so widgets nested inside layout containers show
+		// indented under their parent (depth grows per level), not as a flat
+		// scene-level list.
+		this.appendChildren(this.scene.Children(), 1)
+	}
 
+	this.selectedIdx = this.rowOfItem(selected)
 	this.Self().Update()
 }
 
@@ -99,30 +180,87 @@ func (this *ObjectInspector) Rebuild() {
 // scene's container nesting.
 func (this *ObjectInspector) appendChildren(items []graph.IItem, depth int) {
 	for _, child := range items {
-		name := ""
-		typeName := ""
-		if fake, ok := child.(*FakeWidget); ok {
-			name = fake.WidgetName()
-			factoryName := fake.WidgetFactoryName()
-			if idx := strings.LastIndex(factoryName, "."); idx >= 0 {
-				typeName = factoryName[idx+1:]
-			} else {
-				typeName = factoryName
-			}
-			if name == "" {
-				name = strings.ToLower(typeName)
-			}
-		}
-		this.items = append(this.items, inspectorItem{
-			item:     child,
-			name:     name,
-			typeName: typeName,
-			depth:    depth,
-		})
+		this.items = append(this.items, newInspectorItem(child, depth))
 		if child.HasChildren() {
 			this.appendChildren(child.Children(), depth+1)
 		}
 	}
+}
+
+// appendMatches walks the same tree but emits only the rows that match, all at
+// depth 0: with the non-matching ancestors gone the indentation would describe
+// a hierarchy that is no longer on screen.
+func (this *ObjectInspector) appendMatches(items []graph.IItem, filter string) {
+	for _, child := range items {
+		row := newInspectorItem(child, 0)
+		if inspectorRowMatches(row.name, row.typeName, filter) {
+			this.items = append(this.items, row)
+		}
+		if child.HasChildren() {
+			this.appendMatches(child.Children(), filter)
+		}
+	}
+}
+
+// newInspectorItem reads one row's display state off the item: the widget's
+// own name (falling back to the lower-cased type when it has none), the type
+// as secondary text, and the two lock flags the canvas badges.
+func newInspectorItem(child graph.IItem, depth int) inspectorItem {
+	name := ""
+	typeName := ""
+	if fake, ok := child.(*FakeWidget); ok {
+		factoryName := fake.WidgetFactoryName()
+		if idx := strings.LastIndex(factoryName, "."); idx >= 0 {
+			typeName = factoryName[idx+1:]
+		} else {
+			typeName = factoryName
+		}
+		name = fake.WidgetName()
+		if name == "" {
+			name = strings.ToLower(typeName)
+		}
+	}
+	return inspectorItem{
+		item:     child,
+		name:     name,
+		typeName: typeName,
+		depth:    depth,
+		lockPos:  child.IsLockPos(),
+		lockSize: child.IsLockSize(),
+	}
+}
+
+// inspectorRowMatches reports whether a row survives the filter. filter is
+// already lower-cased and trimmed; matching runs against the widget name and
+// the type, the same two strings the palette matches on.
+func inspectorRowMatches(name, typeName, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), filter) ||
+		strings.Contains(strings.ToLower(typeName), filter)
+}
+
+// SelectedItem returns the scene item the highlighted row stands for, nil when
+// no row is highlighted.
+func (this *ObjectInspector) SelectedItem() graph.IItem {
+	if this.selectedIdx < 0 || this.selectedIdx >= len(this.items) {
+		return nil
+	}
+	return this.items[this.selectedIdx].item
+}
+
+// rowOfItem returns the row listing item, or -1 when it is not on screen.
+func (this *ObjectInspector) rowOfItem(item graph.IItem) int {
+	if item == nil {
+		return -1
+	}
+	for i, it := range this.items {
+		if it.item == item {
+			return i
+		}
+	}
+	return -1
 }
 
 // Draw renders the object inspector tree.
@@ -136,7 +274,7 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 	g.Fill()
 
 	// Header
-	headerH := 22.0
+	headerH := inspectorHeaderH
 	g.SetBrush1(paint.Color{235, 238, 245, 255})
 	g.Rectangle(0, 0, w, headerH)
 	g.Fill()
@@ -153,11 +291,12 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 	font := paint.NewFont(t.Font.Family(), 12, false, false)
 	boldFont := paint.NewFont(t.Font.Family(), 12, true, false)
 	rh := this.rowHeight
-	startY := headerH - this.scrollY
+	top := this.contentTop()
+	startY := top - this.scrollY
 
 	for i, item := range this.items {
 		rowY := startY + float64(i)*rh
-		if rowY+rh < headerH || rowY > h {
+		if rowY+rh < top || rowY > h {
 			continue
 		}
 
@@ -232,6 +371,13 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 			g.DrawText1(typeX, textY, typeText)
 		}
 
+		// Lock badge, in the canvas's own glyph: a widget that refuses to move
+		// must say so wherever it is listed, not only where it is drawn.
+		if item.lockPos || item.lockSize {
+			sz := rh - 10
+			drawLockGlyph(g, w-sz-8, rowY+5, sz, 1)
+		}
+
 		// Bottom separator
 		if i != this.selectedIdx {
 			g.SetPen1(paint.Color{230, 230, 235, 100}, 0.5)
@@ -241,8 +387,14 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 		}
 	}
 
-	// Draw blue insertion line at drop position during drag
-	if this.dragging && this.dropIdx > 0 {
+	// Drop feedback: a frame around the row the drag would nest into, or the
+	// insertion line where it would land between siblings.
+	if this.dragging && this.dropInto >= 0 {
+		intoY := startY + float64(this.dropInto)*rh
+		g.SetPen1(paint.Color{51, 120, 215, 255}, 2)
+		g.Rectangle(1, intoY+1, w-2, rh-2)
+		g.Stroke()
+	} else if this.dragging && this.dropIdx > 0 {
 		dropY := startY + float64(this.dropIdx)*rh
 		g.SetPen1(paint.Color{51, 120, 215, 255}, 2)
 		g.MoveTo(12, dropY)
@@ -257,22 +409,47 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 	}
 }
 
+// rowAt maps a panel y coordinate to a row index and how far down that row the
+// point sits (0 at its top edge, approaching 1 at its bottom). Pure, so the
+// band arithmetic below can be tested without a live panel.
+func rowAt(y, top, scrollY, rowHeight float64) (idx int, frac float64) {
+	if rowHeight <= 0 {
+		return -1, 0
+	}
+	pos := (y - top + scrollY) / rowHeight
+	idx = int(math.Floor(pos))
+	return idx, pos - float64(idx)
+}
+
+// dropIsInto reports whether a drop at this depth into a row nests into it
+// rather than settling between siblings. The middle half of a row is the
+// "into" target and the two quarters at its edges are the gaps around it —
+// the same split every tree with drag re-parenting uses, and the reason a
+// re-parent gesture and a reorder gesture can share one drag.
+func dropIsInto(frac float64) bool {
+	return frac >= 0.25 && frac < 0.75
+}
+
 // OnLeftDown handles click selection and begins drag tracking.
 func (this *ObjectInspector) OnLeftDown(x, y float64) {
-	headerH := 22.0
-	if y < headerH {
+	top := this.contentTop()
+	if y < top {
 		return
 	}
-	idx := int(math.Floor((y - headerH + this.scrollY) / this.rowHeight))
+	idx, _ := rowAt(y, top, this.scrollY, this.rowHeight)
 	if idx >= 0 && idx < len(this.items) {
 		this.selectedIdx = idx
+		this.selectOnCanvas(this.items[idx].item)
 		if this.cbSelect != nil {
 			this.cbSelect(this.items[idx].item)
 		}
-		// Start potential drag (only for depth-1 items, not the root)
-		if idx > 0 && this.items[idx].depth == 1 {
+		// Start a potential drag on any row but the form root. Filtered rows
+		// are listed flat, so neither the sibling arithmetic in reorderItems
+		// nor a nesting target means anything while a filter is on.
+		if idx > 0 && this.filterText == "" {
 			this.dragIdx = idx
 			this.dropIdx = idx
+			this.dropInto = -1
 			this.dragStartY = y
 		}
 	}
@@ -281,7 +458,7 @@ func (this *ObjectInspector) OnLeftDown(x, y float64) {
 
 // OnMouseMove handles hover highlighting and drag indicator.
 func (this *ObjectInspector) OnMouseMove(x, y float64) {
-	headerH := 22.0
+	top := this.contentTop()
 
 	// Check if we should start dragging (threshold = 5px)
 	if this.dragIdx > 0 && !this.dragging {
@@ -293,28 +470,22 @@ func (this *ObjectInspector) OnMouseMove(x, y float64) {
 
 	// Update drop target while dragging
 	if this.dragging {
-		idx := int(math.Floor((y - headerH + this.scrollY) / this.rowHeight))
-		if idx < 1 {
-			idx = 1 // cannot drop above root (index 0)
-		}
-		if idx >= len(this.items) {
-			idx = len(this.items)
-		}
-		if idx != this.dropIdx {
-			this.dropIdx = idx
+		into, before := this.dropTargetAt(y)
+		if into != this.dropInto || before != this.dropIdx {
+			this.dropInto, this.dropIdx = into, before
 			this.Self().Update()
 		}
 		return
 	}
 
-	if y < headerH {
+	if y < top {
 		if this.hoverIdx != -1 {
 			this.hoverIdx = -1
 			this.Self().Update()
 		}
 		return
 	}
-	idx := int(math.Floor((y - headerH + this.scrollY) / this.rowHeight))
+	idx, _ := rowAt(y, top, this.scrollY, this.rowHeight)
 	if idx < 0 || idx >= len(this.items) {
 		idx = -1
 	}
@@ -324,15 +495,113 @@ func (this *ObjectInspector) OnMouseMove(x, y float64) {
 	}
 }
 
-// OnLeftUp completes drag-reorder if active.
+// dropTargetAt resolves a drag position into either a row to nest into
+// (into >= 0) or a sibling slot to insert before (into == -1). A row that
+// cannot take the dragged item as a child falls back to the slot above it, so
+// the gesture always has somewhere to land.
+func (this *ObjectInspector) dropTargetAt(y float64) (into, before int) {
+	idx, frac := rowAt(y, this.contentTop(), this.scrollY, this.rowHeight)
+	if idx >= 0 && idx < len(this.items) && dropIsInto(frac) &&
+		this.canNestInto(this.dragIdx, idx) {
+		return idx, -1
+	}
+	if frac >= 0.5 {
+		idx++
+	}
+	if idx < 1 {
+		idx = 1 // cannot drop above root (index 0)
+	}
+	if idx > len(this.items) {
+		idx = len(this.items)
+	}
+	return -1, idx
+}
+
+// canNestInto reports whether the row at target can adopt the row at drag: the
+// form root always can, a container widget can, and nothing may be dropped
+// into itself, into its current parent (a no-op) or into its own subtree.
+func (this *ObjectInspector) canNestInto(drag, target int) bool {
+	if drag < 0 || drag >= len(this.items) || target < 0 || target >= len(this.items) {
+		return false
+	}
+	item, parent := this.items[drag].item, this.items[target].item
+	if item == nil || parent == nil || item == parent {
+		return false
+	}
+	if item.Parent() == parent.Self() {
+		return false
+	}
+	for p := parent; p != nil; p = p.Parent() {
+		if p == item {
+			return false // a cycle; SetParentAt has no guard against one
+		}
+	}
+	return target == 0 || isContainerItem(parent)
+}
+
+// OnLeftUp completes the drag: a drop onto a row re-parents, a drop between
+// rows reorders siblings.
 func (this *ObjectInspector) OnLeftUp(x, y float64) {
-	if this.dragging && this.scene != nil && this.dragIdx != this.dropIdx {
-		this.reorderItems(this.dragIdx, this.dropIdx)
+	if this.dragging && this.scene != nil {
+		if this.dropInto >= 0 {
+			this.reparentInto(this.dropInto)
+		} else if this.dragIdx != this.dropIdx {
+			this.reorderItems(this.dragIdx, this.dropIdx)
+		}
 	}
 	this.dragging = false
 	this.dragIdx = 0
 	this.dropIdx = 0
+	this.dropInto = -1
 	this.dragStartY = 0
+	this.Self().Update()
+}
+
+// reparentInto nests the dragged widget into the row's item, routed through
+// the canvas's own re-parent so one undo step covers a tree drag exactly as it
+// covers a canvas drag: GedView.reparentSelection builds the ReparentCommand
+// (parent + sibling slot + position) and pushes it on the scene's undo stack.
+//
+// It works on the view's selection, which the row press has just set to the
+// dragged widget. A host that bound only a scene has no selection to move, so
+// the drag stays a no-op there rather than mutating the tree behind the undo
+// stack's back.
+func (this *ObjectInspector) reparentInto(row int) {
+	if this.view == nil || row < 0 || row >= len(this.items) {
+		return
+	}
+	target := this.items[row].item
+	if target == nil {
+		return
+	}
+	if target == graph.IItem(this.scene) {
+		target = nil // the form root, spelled the way a canvas drop spells it
+	}
+	this.view.reparentSelection(target)
+	this.Rebuild()
+}
+
+// selectOnCanvas mirrors a row press onto the canvas selection, so the widget
+// picks up its handles and every selection-driven panel (property sheet,
+// code panel, status bar) follows the tree.
+func (this *ObjectInspector) selectOnCanvas(item graph.IItem) {
+	if this.view == nil || item == nil || item == graph.IItem(this.scene) {
+		return
+	}
+	sel := this.view.Selection()
+	sel.Clear()
+	sel.Add(item)
+	this.view.Update()
+}
+
+// SyncSelection points the highlight at the canvas selection. A multi-item
+// selection has no single row to stand for it, so the highlight clears.
+func (this *ObjectInspector) SyncSelection(items []graph.IItem) {
+	if len(items) == 1 {
+		this.SelectItem(items[0])
+		return
+	}
+	this.selectedIdx = -1
 	this.Self().Update()
 }
 
@@ -424,6 +693,7 @@ func (this *ObjectInspector) OnMouseLeave() {
 		this.dragging = false
 		this.dragIdx = 0
 		this.dropIdx = 0
+		this.dropInto = -1
 		changed = true
 	}
 	if changed {
@@ -434,7 +704,7 @@ func (this *ObjectInspector) OnMouseLeave() {
 // OnMouseWheel handles scrolling.
 func (this *ObjectInspector) OnMouseWheel(x, y, z float64) {
 	this.scrollY -= z * 3
-	maxScroll := float64(len(this.items))*this.rowHeight - (this.Height() - 22)
+	maxScroll := float64(len(this.items))*this.rowHeight - (this.Height() - this.contentTop())
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -447,13 +717,10 @@ func (this *ObjectInspector) OnMouseWheel(x, y, z float64) {
 	this.Self().Update()
 }
 
-// SelectItem programmatically selects the given scene item in the inspector.
+// SelectItem highlights the row standing for item. An item with no row on
+// screen — filtered out, or belonging to another document — clears the
+// highlight rather than leaving it on an unrelated row.
 func (this *ObjectInspector) SelectItem(item graph.IItem) {
-	for i, it := range this.items {
-		if it.item == item {
-			this.selectedIdx = i
-			this.Self().Update()
-			return
-		}
-	}
+	this.selectedIdx = this.rowOfItem(item)
+	this.Self().Update()
 }

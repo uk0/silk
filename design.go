@@ -1255,6 +1255,11 @@ var propSheet *prop.PropertySheet
 // in it. Aimed at a document by bindHistoryPanelTo.
 var historyPanel *ged.UndoPanel
 
+// objectTree is the 对象树: the active document's widget hierarchy by name and
+// type, with the selection running both ways. Bound to each canvas view via
+// bindObjectTreeTo.
+var objectTree *ged.ObjectInspector
+
 // centerDock holds the design canvas and code panel tabs.
 var centerDock *gui.Dock
 
@@ -1500,8 +1505,12 @@ func createPanels(mainFrame *gui.Frame) {
 		codePanel = ged.NewCodePanel()
 		rightDockI.AddView(codePanel)
 
-		dbgTree := graph.NewDbgTreeView()
-		rightDockI.AddView(dbgTree)
+		// The object tree goes in after ToolViewActions() above has synced the
+		// registry into this frame: that is what lets AddView claim the panel as
+		// the frame's "ged.ObjectInspector" tool view, and so keeps
+		// CurrentDocView from ever handing it back as the current document.
+		objectTree = ged.NewObjectInspector()
+		rightDockI.AddView(objectTree)
 
 		buildOutput = ged.NewBuildOutput()
 		rightDockI.AddView(buildOutput)
@@ -1550,8 +1559,8 @@ func createPanels(mainFrame *gui.Frame) {
 			bindPropertySheetTo(gv)
 			bindHistoryPanelTo(gv)
 			bindStatusBarTo(gv)
+			bindObjectTreeTo(gv)
 		}
-		refreshTreeForCurrentView(dbgTree)
 
 		// ─── Tab change listener: rebind dependent panels ───
 		centerDock.SetTabChangedCallback(func(idx int) {
@@ -1570,11 +1579,9 @@ func createPanels(mainFrame *gui.Frame) {
 				// Rebind status bar listeners, then show this document's numbers
 				bindStatusBarTo(gv)
 				updateStatusBarInfoFor(gv)
-				// Update object inspector tree
+				// Rebind the object tree onto this document
+				bindObjectTreeTo(gv)
 				scene := gv.GedScene()
-				if scene != nil {
-					dbgTree.SetRootItems(scene.Children())
-				}
 				// Update window title from scene title (set to filename base on load)
 				title := ""
 				if scene != nil {
@@ -1696,40 +1703,27 @@ func createPanels(mainFrame *gui.Frame) {
 	mainFrame.SetLeftSidebar(modeSelector)
 }
 
-// refreshTreeForCurrentView sets up the DbgTreeView to show items from the
-// current GedView, and re-syncs whenever the scene changes.
-func refreshTreeForCurrentView(dbgTree *graph.DbgTreeView) {
-	syncTree := func() {
-		gv := currentGedView()
-		if gv == nil {
-			dbgTree.SetRootItems(nil)
-			return
-		}
-		scene := gv.GedScene()
-		if scene == nil {
-			dbgTree.SetRootItems(nil)
-			return
-		}
-		dbgTree.SetRootItems(scene.Children())
+// bindObjectTreeTo points the object tree at gv and keeps it in step with that
+// document: the tree drives the canvas selection and follows it back, and every
+// structural change rebuilds the rows.
+//
+// It is called again on tab change, like every other panel. Its predecessor was
+// called once at createPanels time and hooked whichever view happened to be
+// current then, so a second document only ever refreshed the tree at the moment
+// its tab came forward — drop a widget into it and the tree showed the document
+// you were no longer editing.
+//
+// The view's attach/detach signals are used rather than the scene's because
+// bindStatusBarTo already owns the scene-level pair and both are
+// single-callback slots.
+func bindObjectTreeTo(gv *ged.GedView) {
+	if gv == nil || objectTree == nil {
+		return
 	}
-
-	// Initial sync
-	syncTree()
-
-	// Hook into the GedView lifecycle: refresh tree when selection changes
-	// (which implies items may have been added/removed).
-	// We also refresh on item attach/detach via a periodic idle check
-	// by wrapping into the existing SigSelectionChanged.
-	if gv := currentGedView(); gv != nil {
-		origCb := gv.Selection() // ensure selection is initialized
-		_ = origCb
-		gv.SigItemAttached(func(s interface{}, item, parent graph.IItem) {
-			syncTree()
-		})
-		gv.SigItemDetached(func(s interface{}, item, parent graph.IItem) {
-			syncTree()
-		})
-	}
+	objectTree.SetScene(gv.GedScene())
+	gv.AddSelectionCallback(func(items []graph.IItem) { objectTree.SyncSelection(items) })
+	gv.SigItemAttached(func(interface{}, graph.IItem, graph.IItem) { objectTree.Rebuild() })
+	gv.SigItemDetached(func(interface{}, graph.IItem, graph.IItem) { objectTree.Rebuild() })
 }
 
 // ---------------------------------------------------------------------------

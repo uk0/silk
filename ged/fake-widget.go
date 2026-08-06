@@ -368,28 +368,37 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 	// Draw lock icon overlay if either lock is set
 	if lx, ly, lockSize, ok := lockGlyphBox(this.IsLockPos(), this.IsLockSize(), this.Width(), this.Height()); ok {
 		g.Scale(1.0/scaleX, 1.0/scaleY) // back to mm space
-		g.SetBrush(paint.Color{255, 165, 0, 180})
-		// Small lock indicator rectangle
-		g.Rectangle(lx, ly, lockSize, lockSize)
-		g.Fill()
-		// Lock symbol: outline
-		g.SetPen1(paint.Color{255, 255, 255, 220}, 0.15)
-		cx := lx + lockSize*0.5
-		cy := ly + lockSize*0.5
-		// Lock body
-		bw := lockSize * 0.6
-		bh := lockSize * 0.4
-		g.Rectangle(cx-bw*0.5, cy, bw, bh)
-		g.Stroke()
-		// Lock shackle (arc-like shape using lines)
-		sw := lockSize * 0.35
-		sh := lockSize * 0.3
-		g.MoveTo(cx-sw*0.5, cy)
-		g.LineTo(cx-sw*0.5, cy-sh)
-		g.LineTo(cx+sw*0.5, cy-sh)
-		g.LineTo(cx+sw*0.5, cy)
-		g.Stroke()
+		drawLockGlyph(g, lx, ly, lockSize, 0.15)
 	}
+}
+
+// drawLockGlyph paints the designer's lock badge — an amber square with a
+// padlock on it — as a size-by-size box at (x, y), stroking the padlock with
+// penW. Callers work in their own units (the canvas in mm, a list row in
+// pixels), which is all penW is for. The object tree draws the same badge from
+// here so a row and the widget it lists cannot drift apart visually.
+func drawLockGlyph(g paint.Painter, x, y, size, penW float64) {
+	g.SetBrush(paint.Color{255, 165, 0, 180})
+	// Small lock indicator rectangle
+	g.Rectangle(x, y, size, size)
+	g.Fill()
+	// Lock symbol: outline
+	g.SetPen1(paint.Color{255, 255, 255, 220}, penW)
+	cx := x + size*0.5
+	cy := y + size*0.5
+	// Lock body
+	bw := size * 0.6
+	bh := size * 0.4
+	g.Rectangle(cx-bw*0.5, cy, bw, bh)
+	g.Stroke()
+	// Lock shackle (arc-like shape using lines)
+	sw := size * 0.35
+	sh := size * 0.3
+	g.MoveTo(cx-sw*0.5, cy)
+	g.LineTo(cx-sw*0.5, cy-sh)
+	g.LineTo(cx+sw*0.5, cy-sh)
+	g.LineTo(cx+sw*0.5, cy)
+	g.Stroke()
 }
 
 const (
