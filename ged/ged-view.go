@@ -13,15 +13,13 @@ import (
 	"time"
 )
 
-// clipItem stores copied widget info for paste operations.
-type clipItem struct {
-	factoryName string
-	x, y, w, h  float64
-	name        string
-}
-
-// clipboard holds the items from the most recent copy operation.
-var clipboard []clipItem
+// clipboard holds one serialized subtree per root of the most recent copy, in
+// the very form SaveDesign writes to disk. Keeping the clipboard on the design
+// format rather than a hand-picked field list is what makes a copy carry the
+// widget's properties, event bindings and children: a second, smaller
+// serializer beside it would drift from the first and silently drop whatever it
+// had not learned about yet.
+var clipboard []*core.TDoc
 
 // RunCallback is called when F5 is pressed. Set by the host application.
 var RunCallback func()
@@ -1885,28 +1883,35 @@ func (this *GedView) selectAll() {
 	this.Self().Update()
 }
 
-// CopySelected stores info about the selected FakeWidgets into the clipboard.
+// CopySelected serializes every selected FakeWidget into the clipboard through
+// the same SaveDesign the file format uses, so a copy carries the whole widget:
+// its properties, its event bindings, its handler code and its children.
+//
+// A selected widget whose container is also selected is left out: it already
+// rides inside the container's subtree, and copying it as a second root would
+// paste it twice — once nested, once loose on the canvas.
 func (this *GedView) CopySelected() {
 	clipboard = nil
-	sel := this.Selection()
-	for _, item := range sel.ItemList() {
-		if fake, ok := item.(*FakeWidget); ok {
-			clipboard = append(clipboard, clipItem{
-				factoryName: fake.WidgetFactoryName(),
-				x:           fake.X(),
-				y:           fake.Y(),
-				w:           fake.Width(),
-				h:           fake.Height(),
-				name:        fake.WidgetName(),
-			})
+	items := this.Selection().ItemList()
+	selSet := make(map[graph.IItem]bool, len(items))
+	for _, item := range items {
+		if _, ok := item.(*FakeWidget); ok {
+			selSet[item] = true
 		}
+	}
+	for _, item := range items {
+		fake, ok := item.(*FakeWidget)
+		if !ok || hasSelectedAncestor(item, selSet) {
+			continue
+		}
+		clipboard = append(clipboard, fake.SaveDesign())
 	}
 }
 
-// PasteItems creates new FakeWidgets from the clipboard, offset by
-// one grid cell so the copies don't sit on top of the originals
-// after snap-rounding. With the default 5mm grid, a fixed (2, 2)
-// nudge plus snap actually rounded BACK to the original cell — the
+// PasteItems rebuilds each clipboard subtree through the design loader and
+// drops it on the canvas offset by one grid cell, so the copies don't sit on
+// top of the originals after snap-rounding. With the default 5mm grid, a fixed
+// (2, 2) nudge plus snap actually rounded BACK to the original cell — the
 // per-cell step here keeps the offset visible whatever the grid.
 func (this *GedView) PasteItems() {
 	if len(clipboard) == 0 {
@@ -1922,16 +1927,19 @@ func (this *GedView) PasteItems() {
 	taken := this.sceneWidgetNames()
 	sel := this.Selection()
 	sel.Clear()
-	for _, ci := range clipboard {
-		item, err := NewFakeWidgetFromFactory(ci.factoryName)
+	for _, doc := range clipboard {
+		var factoryName string
+		doc.Value(&factoryName)
+		item, err := NewFakeWidgetFromFactory(factoryName)
 		if err != nil {
 			continue
 		}
-		px, py := this.snapToGrid(ci.x+step, ci.y+step)
-		item.SetBounds(px, py, ci.w, ci.h)
-		name := uniqueWidgetName(ci.name, func(n string) bool { return taken[n] })
-		taken[name] = true
-		item.SetWidgetName(name)
+		// Deserializing through LoadDesign is what restores the geometry,
+		// properties, event bindings and children the entry carries.
+		item.LoadDesign(doc)
+		px, py := this.snapToGrid(item.X()+step, item.Y()+step)
+		offsetSubtree(item, px, py)
+		renameSubtreeUnique(item, taken)
 		item.Layout()
 
 		cmd := graph.NewAddCommand()
@@ -1955,17 +1963,62 @@ func (this *GedView) DuplicateSelection() {
 
 // sceneWidgetNames returns the set of non-empty widget names currently
 // present in the scene. Used to keep pasted/duplicated widget names
-// unique.
+// unique. It walks the whole tree, not just the scene's own children:
+// codegen declares one struct field per widget wherever it sits, so a name
+// nested inside a container collides just as hard as a top-level one.
 func (this *GedView) sceneWidgetNames() map[string]bool {
 	taken := map[string]bool{}
-	for _, item := range this.Scene().Children() {
-		if fake, ok := item.(*FakeWidget); ok {
-			if n := fake.WidgetName(); n != "" {
-				taken[n] = true
+	var walk func(items []graph.IItem)
+	walk = func(items []graph.IItem) {
+		for _, item := range items {
+			if fake, ok := item.(*FakeWidget); ok {
+				if n := fake.WidgetName(); n != "" {
+					taken[n] = true
+				}
 			}
+			walk(item.Children())
 		}
 	}
+	walk(this.Scene().Children())
 	return taken
+}
+
+// renameSubtreeUnique hands every FakeWidget in a pasted subtree a name that is
+// free in the document, recording each one in taken so the copy's own children
+// cannot collide with each other either. Same uniquifier the roots have always
+// used — the subtree just extends its reach.
+func renameSubtreeUnique(root *FakeWidget, taken map[string]bool) {
+	name := uniqueWidgetName(root.WidgetName(), func(n string) bool { return taken[n] })
+	if name != "" {
+		taken[name] = true
+	}
+	root.SetWidgetName(name)
+	for _, c := range root.Children() {
+		if fake, ok := c.(*FakeWidget); ok {
+			renameSubtreeUnique(fake, taken)
+		}
+	}
+}
+
+// offsetSubtree moves item to (x, y) and shifts everything below it by the same
+// delta. Child bounds are scene coordinates — ged never turns on local coords,
+// so moving a container does not carry its children (graph.Item.SetPos) — and
+// offsetting the container alone would leave the copied children sitting
+// exactly on top of the originals', which is the collision the paste offset
+// exists to prevent.
+func offsetSubtree(item graph.IItem, x, y float64) {
+	ox, oy := item.Pos()
+	dx, dy := x-ox, y-oy
+	item.SetPos(x, y)
+	var shift func(items []graph.IItem)
+	shift = func(items []graph.IItem) {
+		for _, c := range items {
+			cx, cy := c.Pos()
+			c.SetPos(cx+dx, cy+dy)
+			shift(c.Children())
+		}
+	}
+	shift(item.Children())
 }
 
 // uniqueWidgetName returns base if it is free, otherwise the first

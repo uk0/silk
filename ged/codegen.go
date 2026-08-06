@@ -492,11 +492,16 @@ func main() {
 		}
 	}
 
-	// Append user-written event handler code
+	// Append user-written event handler code, each distinct block once.
+	// Handlers are package-level declarations shared by name, and a copy of a
+	// widget carries its handler source along — emitting the block per widget
+	// would redeclare the func and the generated file would not compile.
 	hasHandlerCode := false
+	emitted := map[string]bool{}
 	for _, f := range fields {
 		code := strings.TrimSpace(f.code)
-		if code != "" {
+		if code != "" && !emitted[code] {
+			emitted[code] = true
 			if !hasHandlerCode {
 				buf.WriteString("\n// --- Event Handlers ---\n")
 				hasHandlerCode = true
