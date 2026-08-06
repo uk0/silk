@@ -7,12 +7,10 @@ import (
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/prop"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 )
 
@@ -308,196 +306,43 @@ func onDuplicate() {
 // Alignment operations (Feature 1)
 // ---------------------------------------------------------------------------
 
-func alignLeft() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		return
-	}
-	minX := items[0].X()
-	for _, it := range items[1:] {
-		if it.X() < minX {
-			minX = it.X()
-		}
-	}
-	cmd := graph.NewMoveCommand()
-	for _, it := range items {
-		cmd.AddItem(it, minX, it.Y())
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+// The 排列 menu, the toolbar and the Alt+ shortcuts are menu glue only: the
+// geometry lives in GedView.AlignSelection, the same entry the canvas's
+// right-click 对齐 submenu uses. Two copies used to disagree — this one spaced
+// the widgets' LEADING EDGES evenly, which leaves uneven gaps (and overlapping
+// widgets) whenever the widgets are not all the same width, while the canvas
+// menu equalised the gaps. One 水平分布 command, two results, depending on
+// which menu the designer reached for.
+//
+// Everything the reference frame decides (a lone widget aligning against its
+// form or container, 居中, the distribute minimum-gap clamp) therefore reaches
+// every entry point at once.
+func alignLeft() { alignSelection(ged.AlignLeft) }
 
-func alignRight() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		return
-	}
-	maxRight := items[0].X() + items[0].Width()
-	for _, it := range items[1:] {
-		r := it.X() + it.Width()
-		if r > maxRight {
-			maxRight = r
-		}
-	}
-	cmd := graph.NewMoveCommand()
-	for _, it := range items {
-		cmd.AddItem(it, maxRight-it.Width(), it.Y())
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+func alignRight() { alignSelection(ged.AlignRight) }
 
-func alignTop() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		return
-	}
-	minY := items[0].Y()
-	for _, it := range items[1:] {
-		if it.Y() < minY {
-			minY = it.Y()
-		}
-	}
-	cmd := graph.NewMoveCommand()
-	for _, it := range items {
-		cmd.AddItem(it, it.X(), minY)
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+func alignTop() { alignSelection(ged.AlignTop) }
 
-func alignBottom() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		return
-	}
-	maxBottom := items[0].Y() + items[0].Height()
-	for _, it := range items[1:] {
-		b := it.Y() + it.Height()
-		if b > maxBottom {
-			maxBottom = b
-		}
-	}
-	cmd := graph.NewMoveCommand()
-	for _, it := range items {
-		cmd.AddItem(it, it.X(), maxBottom-it.Height())
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+func alignBottom() { alignSelection(ged.AlignBottom) }
 
-func alignCenterH() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		return
-	}
-	// Find the average center X
-	var sumCx float64
-	for _, it := range items {
-		sumCx += it.X() + it.Width()/2
-	}
-	cx := sumCx / float64(len(items))
-	cmd := graph.NewMoveCommand()
-	for _, it := range items {
-		cmd.AddItem(it, math.Round(cx-it.Width()/2), it.Y())
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+func alignCenterH() { alignSelection(ged.AlignHCenter) }
 
-func alignCenterV() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 2 {
-		return
-	}
-	// Find the average center Y
-	var sumCy float64
-	for _, it := range items {
-		sumCy += it.Y() + it.Height()/2
-	}
-	cy := sumCy / float64(len(items))
-	cmd := graph.NewMoveCommand()
-	for _, it := range items {
-		cmd.AddItem(it, it.X(), math.Round(cy-it.Height()/2))
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+func alignCenterV() { alignSelection(ged.AlignVCenter) }
 
-func distributeH() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	items := gv.Selection().ItemList()
-	if len(items) < 3 {
-		return
-	}
-	// Sort by X position
-	sorted := make([]graph.IItem, len(items))
-	copy(sorted, items)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].X() < sorted[j].X()
-	})
-	first := sorted[0].X()
-	last := sorted[len(sorted)-1].X()
-	step := (last - first) / float64(len(sorted)-1)
-	cmd := graph.NewMoveCommand()
-	for i, it := range sorted {
-		cmd.AddItem(it, math.Round(first+float64(i)*step), it.Y())
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
-}
+// alignCenter centres the selection on both axes at once, in the container it
+// sits in or in the form when it sits at the root.
+func alignCenter() { alignSelection(ged.AlignCenter) }
 
-func distributeV() {
+func distributeH() { alignSelection(ged.DistributeH) }
+
+func distributeV() { alignSelection(ged.DistributeV) }
+
+func alignSelection(mode ged.AlignMode) {
 	gv := currentGedView()
 	if gv == nil {
 		return
 	}
-	items := gv.Selection().ItemList()
-	if len(items) < 3 {
-		return
-	}
-	// Sort by Y position
-	sorted := make([]graph.IItem, len(items))
-	copy(sorted, items)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Y() < sorted[j].Y()
-	})
-	first := sorted[0].Y()
-	last := sorted[len(sorted)-1].Y()
-	step := (last - first) / float64(len(sorted)-1)
-	cmd := graph.NewMoveCommand()
-	for i, it := range sorted {
-		cmd.AddItem(it, it.X(), math.Round(first+float64(i)*step))
-	}
-	gv.Scene().PushCommand(cmd)
-	gv.Self().Update()
+	gv.AlignSelection(mode)
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,7 +933,7 @@ func onAbout() {
 // ---------------------------------------------------------------------------
 
 // selectionCommand is a command whose applicability is decided entirely by the
-// size of the canvas selection: aligning needs two items, distributing three,
+// size of the canvas selection: aligning needs one item, distributing three,
 // breaking a layout exactly one.
 type selectionCommand struct {
 	action gui.IAction
@@ -1324,13 +1169,18 @@ func createMenuBar(mainFrame *gui.Frame) {
 	// ---- 排列 (Arrange) ----
 	arrangeMenu, _ := mainMenu.AddSubMenu("排列", nil, nil)
 
-	needSelection(arrangeMenu.AddButton1("左对齐    Alt+L", nil), 2, 0).BindFunc0(alignLeft)
-	needSelection(arrangeMenu.AddButton1("右对齐    Alt+R", nil), 2, 0).BindFunc0(alignRight)
-	needSelection(arrangeMenu.AddButton1("顶对齐    Alt+T", nil), 2, 0).BindFunc0(alignTop)
-	needSelection(arrangeMenu.AddButton1("底对齐    Alt+B", nil), 2, 0).BindFunc0(alignBottom)
+	// One selected widget is enough: with nothing else to align to, the six
+	// align commands measure against the widget's own container (the form, when
+	// it sits at the root) instead of doing nothing.
+	needSelection(arrangeMenu.AddButton1("左对齐    Alt+L", nil), 1, 0).BindFunc0(alignLeft)
+	needSelection(arrangeMenu.AddButton1("右对齐    Alt+R", nil), 1, 0).BindFunc0(alignRight)
+	needSelection(arrangeMenu.AddButton1("顶对齐    Alt+T", nil), 1, 0).BindFunc0(alignTop)
+	needSelection(arrangeMenu.AddButton1("底对齐    Alt+B", nil), 1, 0).BindFunc0(alignBottom)
 	arrangeMenu.AddWidget(gui.NewSeparator())
-	needSelection(arrangeMenu.AddButton1("水平居中    Alt+C", nil), 2, 0).BindFunc0(alignCenterH)
-	needSelection(arrangeMenu.AddButton1("垂直居中    Alt+M", nil), 2, 0).BindFunc0(alignCenterV)
+	needSelection(arrangeMenu.AddButton1("水平居中    Alt+C", nil), 1, 0).BindFunc0(alignCenterH)
+	needSelection(arrangeMenu.AddButton1("垂直居中    Alt+M", nil), 1, 0).BindFunc0(alignCenterV)
+	// No Alt+ suffix: nothing in GedView.OnKeyDown dispatches 居中.
+	needSelection(arrangeMenu.AddButton1("居中", nil), 1, 0).BindFunc0(alignCenter)
 	arrangeMenu.AddWidget(gui.NewSeparator())
 	needSelection(arrangeMenu.AddButton1("水平分布    Alt+H", nil), 3, 0).BindFunc0(distributeH)
 	needSelection(arrangeMenu.AddButton1("垂直分布    Alt+V", nil), 3, 0).BindFunc0(distributeV)
@@ -1922,9 +1772,9 @@ func createToolBar(mainFrame *gui.Frame) {
 	tb.AddSeparator()
 
 	// Alignment tools
-	needSelection(addToolBarAction(tb, "align-left", "左对齐 (Alt+L)", alignLeft), 2, 0)
-	needSelection(addToolBarAction(tb, "align-center", "水平居中 (Alt+C)", alignCenterH), 2, 0)
-	needSelection(addToolBarAction(tb, "align-right", "右对齐 (Alt+R)", alignRight), 2, 0)
+	needSelection(addToolBarAction(tb, "align-left", "左对齐 (Alt+L)", alignLeft), 1, 0)
+	needSelection(addToolBarAction(tb, "align-center", "水平居中 (Alt+C)", alignCenterH), 1, 0)
+	needSelection(addToolBarAction(tb, "align-right", "右对齐 (Alt+R)", alignRight), 1, 0)
 
 	mainFrame.SetToolBar(tb)
 }

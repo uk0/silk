@@ -84,10 +84,10 @@ func TestToolBarButtonsSayWhatTheyDo(t *testing.T) {
 }
 
 // TestSelectionCommandsFollowSelectionSize covers the commands that quietly did
-// nothing: 左对齐 and friends return immediately unless two items are selected,
-// 水平分布 unless three, 打破布局 unless exactly one — and all of them stayed
-// lit regardless, so clicking one on an empty canvas looked like a broken
-// button rather than an unavailable command.
+// nothing: 左对齐 and friends return immediately on an empty selection, 水平分布
+// unless three items are selected, 打破布局 unless exactly one — and all of them
+// stayed lit regardless, so clicking one on an empty canvas looked like a
+// broken button rather than an unavailable command.
 func TestSelectionCommandsFollowSelectionSize(t *testing.T) {
 	newStatusBarLabels()
 	f := buildChrome(t)
@@ -103,12 +103,15 @@ func TestSelectionCommandsFollowSelectionSize(t *testing.T) {
 
 	// menu label -> the selection sizes the command applies to
 	applies := map[string]func(n int) bool{
-		"左对齐    Alt+L":  func(n int) bool { return n >= 2 },
-		"右对齐    Alt+R":  func(n int) bool { return n >= 2 },
-		"顶对齐    Alt+T":  func(n int) bool { return n >= 2 },
-		"底对齐    Alt+B":  func(n int) bool { return n >= 2 },
-		"水平居中    Alt+C": func(n int) bool { return n >= 2 },
-		"垂直居中    Alt+M": func(n int) bool { return n >= 2 },
+		// One item is enough to align: the reference is then the widget's own
+		// container, or the form when it sits at the root.
+		"左对齐    Alt+L":  func(n int) bool { return n >= 1 },
+		"右对齐    Alt+R":  func(n int) bool { return n >= 1 },
+		"顶对齐    Alt+T":  func(n int) bool { return n >= 1 },
+		"底对齐    Alt+B":  func(n int) bool { return n >= 1 },
+		"水平居中    Alt+C": func(n int) bool { return n >= 1 },
+		"垂直居中    Alt+M": func(n int) bool { return n >= 1 },
+		"居中":            func(n int) bool { return n >= 1 },
 		"水平分布    Alt+H": func(n int) bool { return n >= 3 },
 		"垂直分布    Alt+V": func(n int) bool { return n >= 3 },
 		"相同宽度":          func(n int) bool { return n >= 2 },
@@ -149,8 +152,8 @@ func TestSelectionCommandsFollowSelectionSize(t *testing.T) {
 			}
 		}
 		for i, b := range tbAlign {
-			if got := b.IsEnabled(); got != (n >= 2) {
-				t.Errorf("%d selected: toolbar align button %d enabled=%v, want %v", n, i, got, n >= 2)
+			if got := b.IsEnabled(); got != (n >= 1) {
+				t.Errorf("%d selected: toolbar align button %d enabled=%v, want %v", n, i, got, n >= 1)
 			}
 		}
 	}

@@ -46,7 +46,7 @@ func alignBase() []geom.Rect {
 func TestAlignRects(t *testing.T) {
 	cases := []struct {
 		name string
-		mode alignMode
+		mode AlignMode
 		want []geom.Rect
 	}{
 		{
@@ -107,7 +107,7 @@ func TestAlignRects(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := alignRects(alignBase(), tc.mode)
+			got, _ := alignRects(alignBase(), tc.mode)
 			if !rectsEqual(got, tc.want) {
 				t.Errorf("alignRects(%s):\n got  %v\n want %v", tc.name, got, tc.want)
 			}
@@ -120,7 +120,7 @@ func TestAlignRects(t *testing.T) {
 func TestAlignRectsDoesNotMutateInput(t *testing.T) {
 	in := alignBase()
 	orig := alignBase()
-	_ = alignRects(in, AlignRight)
+	_, _ = alignRects(in, AlignRight)
 	if !rectsEqual(in, orig) {
 		t.Errorf("alignRects mutated its input:\n got  %v\n want %v", in, orig)
 	}
@@ -143,7 +143,7 @@ func TestDistributeH(t *testing.T) {
 		{X: 50, Y: 7, Width: 10, Height: 4},
 		{X: 100, Y: 9, Width: 10, Height: 4},
 	}
-	got := alignRects(in, DistributeH)
+	got, _ := alignRects(in, DistributeH)
 	if !rectsEqual(got, want) {
 		t.Errorf("DistributeH:\n got  %v\n want %v", got, want)
 	}
@@ -151,7 +151,7 @@ func TestDistributeH(t *testing.T) {
 
 // TestDistributeHUnsortedInput passes the same three rects out of X-order and
 // asserts each comes back in its ORIGINAL slot with the correct new X. This
-// locks in the sort-then-map-back contract alignSelection relies on.
+// locks in the sort-then-map-back contract AlignSelection relies on.
 func TestDistributeHUnsortedInput(t *testing.T) {
 	// Order: C, A, B (indices stay attached to their rects).
 	in := []geom.Rect{
@@ -164,7 +164,7 @@ func TestDistributeHUnsortedInput(t *testing.T) {
 		{X: 0, Y: 5, Width: 10, Height: 4},
 		{X: 50, Y: 7, Width: 10, Height: 4},
 	}
-	got := alignRects(in, DistributeH)
+	got, _ := alignRects(in, DistributeH)
 	if !rectsEqual(got, want) {
 		t.Errorf("DistributeH (unsorted):\n got  %v\n want %v", got, want)
 	}
@@ -187,7 +187,7 @@ func TestDistributeV(t *testing.T) {
 		{X: 2, Y: 50, Width: 4, Height: 6},
 		{X: 3, Y: 100, Width: 4, Height: 6},
 	}
-	got := alignRects(in, DistributeV)
+	got, _ := alignRects(in, DistributeV)
 	if !rectsEqual(got, want) {
 		t.Errorf("DistributeV:\n got  %v\n want %v", got, want)
 	}
@@ -204,7 +204,7 @@ func TestAlignRectsLessThanTwoNoOp(t *testing.T) {
 		for mode := AlignLeft; mode <= DistributeV; mode++ {
 			orig := make([]geom.Rect, n)
 			copy(orig, in)
-			got := alignRects(in, mode)
+			got, _ := alignRects(in, mode)
 			if !rectsEqual(got, orig) {
 				t.Errorf("alignRects(len=%d, mode=%d) changed a no-op input: got %v, want %v",
 					n, mode, got, orig)
@@ -221,10 +221,10 @@ func TestDistributeLessThanThreeNoOp(t *testing.T) {
 		{X: 0, Y: 0, Width: 10, Height: 5},
 		{X: 80, Y: 40, Width: 10, Height: 5},
 	}
-	for _, mode := range []alignMode{DistributeH, DistributeV} {
+	for _, mode := range []AlignMode{DistributeH, DistributeV} {
 		orig := make([]geom.Rect, len(in))
 		copy(orig, in)
-		got := alignRects(in, mode)
+		got, _ := alignRects(in, mode)
 		if !rectsEqual(got, orig) {
 			t.Errorf("distribute (mode=%d) with 2 rects changed input: got %v, want %v",
 				mode, got, orig)
@@ -248,7 +248,7 @@ func addFakeAt(t *testing.T, scene *GedScene, name string, x, y, w, h float64) *
 }
 
 // TestAlignSelectionLeftViaView exercises the context-menu glue: select three
-// widgets at different X, run alignSelection(AlignLeft), and confirm every
+// widgets at different X, run AlignSelection(AlignLeft), and confirm every
 // widget's X collapses to the min-left (0) while Y and size are preserved.
 func TestAlignSelectionLeftViaView(t *testing.T) {
 	view := NewGedView()
@@ -263,7 +263,7 @@ func TestAlignSelectionLeftViaView(t *testing.T) {
 	view.Selection().Add(b)
 	view.Selection().Add(c)
 
-	view.alignSelection(AlignLeft)
+	view.AlignSelection(AlignLeft)
 
 	for _, w := range []*FakeWidget{a, b, c} {
 		if x, _ := w.Pos(); x != 0 {
@@ -296,7 +296,7 @@ func TestAlignSelectionDistributeHViaView(t *testing.T) {
 	view.Selection().Add(b)
 	view.Selection().Add(c)
 
-	view.alignSelection(DistributeH)
+	view.AlignSelection(DistributeH)
 
 	if x, _ := a.Pos(); x != 0 {
 		t.Errorf("a.X after DistributeH = %g, want 0", x)
@@ -306,22 +306,5 @@ func TestAlignSelectionDistributeHViaView(t *testing.T) {
 	}
 	if x, _ := c.Pos(); x != 100 {
 		t.Errorf("c.X after DistributeH = %g, want 100", x)
-	}
-}
-
-// TestAlignSelectionSingleNoOp: a one-item selection must not move — align
-// has nothing to align against, so alignSelection short-circuits.
-func TestAlignSelectionSingleNoOp(t *testing.T) {
-	view := NewGedView()
-	scene := view.GedScene()
-
-	a := addFakeAt(t, scene, "a", 25, 35, 10, 5)
-	view.Selection().Clear()
-	view.Selection().Add(a)
-
-	view.alignSelection(AlignRight)
-
-	if x, y := a.Pos(); x != 25 || y != 35 {
-		t.Errorf("single-item AlignRight moved widget to (%g,%g), want (25,35)", x, y)
 	}
 }

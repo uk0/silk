@@ -614,35 +614,39 @@ func (this *GedView) OnRightUp(x, y float64) {
 		})
 
 		// Align submenu (Qt Designer's Form → Align). The six align entries act
-		// on the whole multi-selection; the two distribute entries even out the
-		// gaps between widgets. Each entry routes through alignSelection, which
-		// no-ops below its threshold (2 items for align, 3 for distribute) — the
-		// entries stay visible so the menu layout is stable regardless of count.
+		// on the whole multi-selection; 居中 centres it in its container; the two
+		// distribute entries even out the gaps between widgets. Each entry routes
+		// through AlignSelection, which no-ops below its threshold (3 items for
+		// distribute) — the entries stay visible so the menu layout is stable
+		// regardless of count.
 		aMenu, _ := menu.AddSubMenu("对齐", nil, nil)
 		aMenu.AddButton1("左对齐", nil).Action().BindFunc0(func() {
-			this.alignSelection(AlignLeft)
+			this.AlignSelection(AlignLeft)
 		})
 		aMenu.AddButton1("右对齐", nil).Action().BindFunc0(func() {
-			this.alignSelection(AlignRight)
+			this.AlignSelection(AlignRight)
 		})
 		aMenu.AddButton1("水平居中", nil).Action().BindFunc0(func() {
-			this.alignSelection(AlignHCenter)
+			this.AlignSelection(AlignHCenter)
 		})
 		aMenu.AddButton1("顶端对齐", nil).Action().BindFunc0(func() {
-			this.alignSelection(AlignTop)
+			this.AlignSelection(AlignTop)
 		})
 		aMenu.AddButton1("底端对齐", nil).Action().BindFunc0(func() {
-			this.alignSelection(AlignBottom)
+			this.AlignSelection(AlignBottom)
 		})
 		aMenu.AddButton1("垂直居中", nil).Action().BindFunc0(func() {
-			this.alignSelection(AlignVCenter)
+			this.AlignSelection(AlignVCenter)
+		})
+		aMenu.AddButton1("居中", nil).Action().BindFunc0(func() {
+			this.AlignSelection(AlignCenter)
 		})
 		aMenu.AddSeparator()
 		aMenu.AddButton1("水平分布", nil).Action().BindFunc0(func() {
-			this.alignSelection(DistributeH)
+			this.AlignSelection(DistributeH)
 		})
 		aMenu.AddButton1("垂直分布", nil).Action().BindFunc0(func() {
-			this.alignSelection(DistributeV)
+			this.AlignSelection(DistributeV)
 		})
 
 		// "Lay Out" — wrap the current multi-selection in a VBox/HBox
@@ -992,18 +996,21 @@ func (this *GedView) SendSelectionToBack() {
 	this.reorderSelection(graph.IItem.SendToBack)
 }
 
-// alignMode selects an align-or-distribute operation for a multi-selection.
-// The first six entries reposition every rect onto a shared edge or centre
-// line; the last two even out the gaps between rects along one axis.
-type alignMode int
+// AlignMode selects an align-or-distribute operation. The first six entries
+// reposition every rect onto a shared edge or centre line; AlignCenter centres
+// on both axes at once; the last two even out the gaps between rects along one
+// axis. Exported because the host application owns the 排列 menu and drives
+// these through GedView.AlignSelection.
+type AlignMode int
 
 const (
-	AlignLeft alignMode = iota
+	AlignLeft AlignMode = iota
 	AlignRight
 	AlignHCenter
 	AlignTop
 	AlignBottom
 	AlignVCenter
+	AlignCenter
 	DistributeH
 	DistributeV
 )
@@ -1019,11 +1026,20 @@ const (
 // fixed and re-space the interior ones (sorted along the axis) so consecutive
 // gaps are equal; with fewer than three rects there is nothing to even out, so
 // distribute is a no-op. Fewer than two rects is a no-op for every mode.
-func alignRects(rects []geom.Rect, mode alignMode) []geom.Rect {
-	out := make([]geom.Rect, len(rects))
+//
+// clamped reports that a distribute hit the minimum-gap guard (see
+// distributeAxis) — the caller says so on the status bar, because a distribute
+// that could not honour the requested span is not the result the user asked
+// for. It is always false for the align modes.
+//
+// AlignCenter is absent from the switch on purpose: centring has no meaning
+// against the selection's own extremes (it would pile every rect onto one
+// point). It is a frame-relative operation only — see frameAlignDelta.
+func alignRects(rects []geom.Rect, mode AlignMode) (out []geom.Rect, clamped bool) {
+	out = make([]geom.Rect, len(rects))
 	copy(out, rects)
 	if len(rects) < 2 {
-		return out
+		return out, false
 	}
 
 	switch mode {
@@ -1094,23 +1110,31 @@ func alignRects(rects []geom.Rect, mode alignMode) []geom.Rect {
 		}
 
 	case DistributeH:
-		distributeAxis(out, true)
+		clamped = distributeAxis(out, true)
 
 	case DistributeV:
-		distributeAxis(out, false)
+		clamped = distributeAxis(out, false)
 	}
 
-	return out
+	return out, clamped
 }
 
 // distributeAxis evens out the gaps between rects along one axis (horizontal
 // when horizontal is true, vertical otherwise). The leftmost/topmost and
 // rightmost/bottommost rects stay put; the interior rects are slid so every
 // consecutive gap is identical. Operates in place on out. No-op for <3 rects.
-func distributeAxis(out []geom.Rect, horizontal bool) {
+//
+// Returns true when the minimum-gap guard fired: rects whose combined extent
+// exceeds the span between the outer two yield a NEGATIVE even gap, which slid
+// the interior rects backwards over their neighbours — a "distribute" that
+// stacked widgets on top of each other. The gap is clamped at zero instead and
+// the rects pack edge to edge from the first one, which means the trailing rect
+// has to move as well: leaving it anchored is exactly what the rect before it
+// would run over.
+func distributeAxis(out []geom.Rect, horizontal bool) bool {
 	n := len(out)
 	if n < 3 {
-		return
+		return false
 	}
 
 	// Sort indices by leading edge along the chosen axis (insertion sort —
@@ -1150,9 +1174,15 @@ func distributeAxis(out []geom.Rect, horizontal bool) {
 		occupied += extent(i)
 	}
 	gap := (span - occupied) / float64(n-1)
+	clamped := gap < 0
+	end := n - 1
+	if clamped {
+		gap = 0
+		end = n
+	}
 
 	cursor := lead(first) + extent(first)
-	for k := 1; k < n-1; k++ {
+	for k := 1; k < end; k++ {
 		i := idx[k]
 		pos := cursor + gap
 		if horizontal {
@@ -1162,30 +1192,131 @@ func distributeAxis(out []geom.Rect, horizontal bool) {
 		}
 		cursor = pos + extent(i)
 	}
+	return clamped
 }
 
-// alignSelection reads the selected items' bounds, runs them through the
-// pure alignRects helper, and pushes the per-item moves onto the
-// UndoStack as a single MoveCommand. MoveCommand.AddItem takes absolute
-// (toX, toY) so per-item deltas need no composite — one command carries
-// every move and Ctrl+Z snaps everyone back to their original positions
-// (the nudgeSelection idiom, but with N distinct targets instead of one
-// shared delta).
+// frameRect returns parent's content rect expressed in the coordinate space
+// ITS CHILDREN's bounds use.
 //
-// Below the mode's threshold (2 items for align, 3 for distribute)
-// alignRects returns the bounds unchanged. We still build the command
-// only when at least one item is actually moving, so a no-op mode never
-// lands an empty MoveCommand on the stack.
-func (this *GedView) alignSelection(mode alignMode) {
+// A parent that hands its children a local coordinate system — graph.SceneItem,
+// i.e. the form itself — measures them from its own top-left, so its frame
+// starts at the origin whatever the form's own position is. Every other parent
+// (a container FakeWidget: VBox, GroupBox, Card, …) shares its own space with
+// its children, so the frame is simply its bounds. The designer places children
+// at raw coordinates with no inset — GedView.OnDrop parents a widget into the
+// container under the cursor without translating it — so a container's content
+// rect is its whole rect.
+func frameRect(parent graph.IItem) geom.Rect {
+	if parent.HasLocalCoord() {
+		w, h := parent.Size()
+		return geom.Rect{Width: w, Height: h}
+	}
+	return parent.Bounds1()
+}
+
+// alignFrame returns the rect the frame-relative operations measure against:
+// the content rect of the one parent every selected item shares — the
+// container when the selection sits inside one, the form when it sits at the
+// root.
+//
+// ok is false when the selection spans parents. The items' coordinates would
+// still be comparable (only the scene sets HasLocalCoord, so the whole design
+// shares one space), but the FRAMES would not be: half the selection would be
+// pushed against a container's edge and half against the form's. The caller
+// refuses instead, and says why.
+func alignFrame(items []graph.IItem) (geom.Rect, bool) {
+	if len(items) == 0 {
+		return geom.Rect{}, false
+	}
+	parent := items[0].Parent()
+	if parent == nil {
+		return geom.Rect{}, false
+	}
+	for _, it := range items[1:] {
+		if it.Parent() != parent {
+			return geom.Rect{}, false
+		}
+	}
+	return frameRect(parent), true
+}
+
+// frameAlignDelta returns the translation that puts box — the bounding box of
+// what is selected — against frame for mode. One shared delta, so a group keeps
+// its internal layout while landing where the command names.
+//
+// This is the reference frame the selection cannot provide for itself: a lone
+// widget has no min-left but its own, and centring is only meaningful against
+// something. The distribute modes have no frame meaning and translate by
+// nothing.
+func frameAlignDelta(box, frame geom.Rect, mode AlignMode) (dx, dy float64) {
+	fcx, fcy := frame.Center()
+	bcx, bcy := box.Center()
+	switch mode {
+	case AlignLeft:
+		dx = frame.Left() - box.Left()
+	case AlignRight:
+		dx = frame.Right() - box.Right()
+	case AlignHCenter:
+		dx = fcx - bcx
+	case AlignTop:
+		dy = frame.Top() - box.Top()
+	case AlignBottom:
+		dy = frame.Bottom() - box.Bottom()
+	case AlignVCenter:
+		dy = fcy - bcy
+	case AlignCenter:
+		dx, dy = fcx-bcx, fcy-bcy
+	}
+	return
+}
+
+// AlignSelection repositions the selection for mode as one undoable step.
+//
+// Two reference frames, and which one applies is decided by the selection, not
+// by the mode:
+//
+//   - Two or more items, edge/centre-line modes: the reference is the
+//     selection's own extremes (min-left, max-right, mean-centre, …) — the
+//     rule every form designer uses, and the one alignRects implements. The
+//     per-item targets go onto one MoveCommand; MoveCommand.AddItem takes
+//     absolute (toX, toY), so N distinct targets need no composite and Ctrl+Z
+//     snaps everyone back at once.
+//   - 居中 (AlignCenter), and any mode with a single item selected: there are
+//     no selection extremes worth aligning to, so the reference is the frame —
+//     the container the items live in, or the form when they sit at the root.
+//     That move is one shared delta, which is exactly what
+//     Selection.GenerateMoveCommand builds (and it skips position-locked and
+//     ancestor-selected items on the way, as every other move path does).
+//
+// Both paths push nothing when nothing would move, so a no-op command never
+// lands on the UndoStack.
+func (this *GedView) AlignSelection(mode AlignMode) {
 	items := this.Selection().ItemList()
-	if len(items) < 2 {
+	if len(items) == 0 {
 		return
 	}
 	rects := make([]geom.Rect, len(items))
 	for i, it := range items {
 		rects[i] = it.Bounds1()
 	}
-	aligned := alignRects(rects, mode)
+
+	if mode == AlignCenter || len(items) == 1 {
+		frame, ok := alignFrame(items)
+		if !ok {
+			this.showStatus("对齐：所选控件没有共同的容器，已跳过")
+			return
+		}
+		dx, dy := frameAlignDelta(boundingBoxOf(rects), frame, mode)
+		cmd := this.Selection().GenerateMoveCommand(dx, dy)
+		if cmd == nil {
+			return
+		}
+		this.Scene().PushCommand(cmd)
+		this.Self().Update()
+		return
+	}
+
+	aligned, clamped := alignRects(rects, mode)
 	cmd := graph.NewMoveCommand()
 	for i, it := range items {
 		oldX, oldY := it.Pos()
@@ -1198,6 +1329,15 @@ func (this *GedView) alignSelection(mode alignMode) {
 		return
 	}
 	this.Scene().PushCommand(cmd)
+	// The clamp changes what the command means — the widgets are packed, not
+	// spread — so it is reported rather than left to be discovered.
+	if clamped {
+		if mode == DistributeH {
+			this.showStatus("水平分布：控件总宽超出可分布范围，间距已压缩为 0")
+		} else {
+			this.showStatus("垂直分布：控件总高超出可分布范围，间距已压缩为 0")
+		}
+	}
 	this.Self().Update()
 }
 
@@ -1791,7 +1931,7 @@ func nudgeDelta(key int, shift bool, step, gridStep float64) (dx, dy float64, ha
 // move is wrapped in a MoveCommand so it lands on the UndoStack alongside
 // drag-moves — undo treats a Shift+Right press the same as a mouse drag.
 //
-// Note on undo: unlike alignSelection / reorderSelection (which mutate +
+// Note on undo: unlike AlignSelection / reorderSelection (which mutate +
 // Update with no command), nudge keeps the MoveCommand path. A clean move
 // command already exists here and the arrow-key contract is test-locked to
 // it (ged/nudge_test.go), so routing nudges through the UndoStack is the
@@ -2433,7 +2573,7 @@ func (this *GedView) reparentSelection(target graph.IItem) {
 // intersection. A guide wins because the user placed it deliberately; without
 // that precedence the grid would immediately drag the widget back off a guide
 // that does not sit on a grid line. No-op when snap is disabled. Applied
-// directly (mutate + Update) like alignSelection / reorderSelection — it tidies
+// directly (mutate + Update) like AlignSelection / reorderSelection — it tidies
 // the post-drag resting place rather than introducing its own move command.
 func (this *GedView) snapSelectionToGrid() {
 	// grid.Snap is the one master switch for drop/nudge snapping; manual

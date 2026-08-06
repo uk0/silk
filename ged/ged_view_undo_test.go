@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestAlignSelectionUndoRedo confirms that alignSelection pushes a single
+// TestAlignSelectionUndoRedo confirms that AlignSelection pushes a single
 // undoable MoveCommand: every selected widget snaps to the min-left on
 // AlignLeft, UndoStack().Undo() restores the originals exactly, and
 // Redo() re-applies the alignment. Mirrors the nudge/MoveCommand round-
@@ -29,7 +29,7 @@ func TestAlignSelectionUndoRedo(t *testing.T) {
 	view.Selection().Add(b)
 	view.Selection().Add(c)
 
-	view.alignSelection(AlignLeft)
+	view.AlignSelection(AlignLeft)
 
 	// All widgets aligned to the min-left = 0; Y untouched.
 	for w, p := range start {
