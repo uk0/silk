@@ -1881,6 +1881,12 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	// widgets use a literal Tab for their own input, so the window owns it.
 	// Only fires on press/repeat; Shift+Tab goes backward.
 	if vk == KeyTab && (action == glfw.Press || action == glfw.Repeat) {
+		// A focused widget may claim Tab for itself (see IWantsTab): the design
+		// canvas walks the widgets it is editing, which is the only keyboard
+		// route to one of them.
+		if i, ok := focusWidget.(IWantsTab); ok && i.WantsTab(IsKeyDown(KeyShift)) {
+			return
+		}
 		root := win.widget
 		if root != nil {
 			forward := !IsKeyDown(KeyShift)

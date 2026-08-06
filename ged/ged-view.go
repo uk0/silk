@@ -1916,6 +1916,26 @@ func (this *GedView) sortedWidgetList() []graph.IItem {
 	return walk(this.Scene().Children())
 }
 
+// WantsTab claims Tab for the canvas so it walks the widgets being designed.
+//
+// Without this the key never arrives: gui's window layer owns Tab for focus
+// traversal and spends it before OnKeyDown runs, moving focus to the next IDE
+// panel and taking it off the canvas — so the next Tab walks further away and
+// the widget is unreachable from the keyboard, which is the whole point of the
+// binding. Claimed only when the canvas has something to walk, so an empty
+// form still lets Tab leave the panel.
+func (this *GedView) WantsTab(shift bool) bool {
+	if len(this.sortedWidgetList()) == 0 {
+		return false
+	}
+	if shift {
+		this.selectPrevWidget()
+	} else {
+		this.selectNextWidget()
+	}
+	return true
+}
+
 // selectNextWidget selects the next widget on the canvas in tab order.
 func (this *GedView) selectNextWidget() {
 	sorted := this.sortedWidgetList()

@@ -84,6 +84,20 @@ type IEventKeyDown interface {
 	OnKeyDown(key int, repeat bool)
 }
 
+// IWantsTab lets a focused widget claim Tab before the window spends it on
+// focus traversal.
+//
+// The window layer owns Tab because no ordinary widget wants it. A design
+// canvas does: Tab there walks the widgets being designed, which is the only
+// way to reach one without a mouse. Without this seam the canvas never sees the
+// key — the window moves focus to the next panel and the canvas loses it, so
+// the next Tab walks further away.
+//
+// Returning true means "I handled it"; the window then leaves focus alone.
+type IWantsTab interface {
+	WantsTab(shift bool) bool
+}
+
 type IEventKeyUp interface {
 	OnKeyUp(key int)
 }
