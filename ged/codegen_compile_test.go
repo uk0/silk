@@ -210,6 +210,73 @@ func TestCodeGenAllFactoryWidgets(t *testing.T) {
 	vetGeneratedCode(t, code)
 }
 
+// TestCodeGenIndexedLinesSurviveFormatting proves the 生成代码 view's line map
+// against a file that compiles. The map cannot be counted during the walk: the
+// import block is rewritten afterwards and gofmt collapses the blank-line runs
+// the emitter leaves behind, both of which move every line below them. This
+// design has a widget with no caption and a widget with handler code, so both
+// of those shifts are in play, and vet proves the source the offsets index is
+// the real thing rather than a half-formed buffer.
+func TestCodeGenIndexedLinesSurviveFormatting(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
+
+	scene := NewGedScene()
+	scene.SetFormTitle("IndexCompile")
+	scene.SetSize(140, 120)
+
+	widgets := []struct{ factory, name string }{
+		{"gui.Button", "btnRun"},
+		{"gui.Label", "lblStatus"},
+		{"gui.Edit", "editPath"},
+		{"gui.VBox", "column"},
+		{"gui.Slider", "volume"},
+	}
+	fakes := make([]*FakeWidget, 0, len(widgets))
+	y := 5.0
+	for _, w := range widgets {
+		fake, err := NewFakeWidgetFromFactory(w.factory)
+		if err != nil {
+			t.Fatalf("create %s: %v", w.factory, err)
+		}
+		fake.SetWidgetName(w.name)
+		fake.SetBounds(5, y, 40, 8)
+		cmd := graph.NewAddCommand()
+		cmd.AddItem(fake, scene)
+		scene.PushCommand(cmd)
+		fakes = append(fakes, fake)
+		y += 12
+	}
+	// A handler block is appended below the constructor, so the file has both
+	// a package-level func and the stdlib import its body drags in.
+	fakes[0].SetCode("func onBtnRunClick() { fmt.Println(\"run\") }")
+
+	gen := scene.GenerateCodeIndexed(CodeGenOptions{PackageName: "main", TypeName: "IndexCompileUI"})
+	if gen.Err != nil {
+		t.Fatalf("unexpected generation error: %v", gen.Err)
+	}
+
+	lines := strings.Split(gen.Code, "\n")
+	for i, fake := range fakes {
+		at, ok := gen.Line(fake)
+		if !ok {
+			t.Errorf("%s: no line recorded", widgets[i].name)
+			continue
+		}
+		if at < 0 || at >= len(lines) {
+			t.Errorf("%s: line %d out of range (%d lines)", widgets[i].name, at, len(lines))
+			continue
+		}
+		want := constructorAnchor(sanitizeIdentifier(widgets[i].name))
+		if got := strings.TrimLeft(lines[at], " \t"); !strings.HasPrefix(got, want) {
+			t.Errorf("%s mapped to line %d = %q, want a line starting %q", widgets[i].name, at, got, want)
+		}
+	}
+
+	vetGeneratedCode(t, gen.Code)
+}
+
 // vetGeneratedCode writes generated Go source into a throwaway module
 // (with a replace directive pointing at the silk source tree) and runs
 // go vet over it. go vet type-checks without linking, so it catches

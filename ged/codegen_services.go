@@ -22,9 +22,10 @@ type fieldInfo struct {
 	tagName       string      // design-time SCADA/组态 tag bound to this widget's value
 	widget        interface{} // live designed widget, for reflecting design-time property values
 	eventHandlers map[string]string
-	code          string // user-written event handler code
-	parentField   string // owning container field; "" = top-level (ui.Form)
-	parentAdd     bool   // parent is a simple-AddWidget container
+	code          string      // user-written event handler code
+	parentField   string      // owning container field; "" = top-level (ui.Form)
+	parentAdd     bool        // parent is a simple-AddWidget container
+	fake          *FakeWidget // the designed item this field was collected from
 }
 
 // scadaServiceFactories are the factory names that, by themselves, make a design

@@ -164,6 +164,13 @@ type GenerateRunnable bool
 // compiles only alongside the user file that declares the handler methods (see
 // GenerateCodeFile).
 func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
+	return scene.GenerateCodeIndexed(opts).Code
+}
+
+// GenerateCodeIndexed is GenerateCode plus the two things a live view of the
+// generated file needs and a bare string cannot carry: the line each widget is
+// constructed on, and whether the output can be trusted at all.
+func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 	opts = defaultCodeGenOptions(scene, opts)
 
 	imports := make(map[string]bool)
@@ -190,6 +197,10 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// SetParent+SetBounds. Parents are appended before their children, so
 	// the constructor emission order guarantees a container exists before
 	// AddWidget is called on it.
+	// Widgets whose factory has no entry in factoryMap. Their fields degrade to
+	// gui.IWidget and every widget-specific call is dropped, so the output looks
+	// green while it is not the design — GenerateCodeIndexed reports them.
+	var unmapped []*FakeWidget
 	var collect func(items []graph.IItem, parentField string, parentAdd bool)
 	collect = func(items []graph.IItem, parentField string, parentAdd bool) {
 		for _, child := range items {
@@ -200,6 +211,9 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 
 			factoryName := fake.WidgetFactoryName()
 			mapping, known := factoryMap[factoryName]
+			if !known {
+				unmapped = append(unmapped, fake)
+			}
 
 			fieldName := fake.WidgetName()
 			if fieldName == "" {
@@ -268,6 +282,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				code:          fake.GetCode(),
 				parentField:   parentField,
 				parentAdd:     parentAdd,
+				fake:          fake,
 			})
 
 			if fake.HasChildren() {
@@ -517,14 +532,29 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	result.WriteString(body)
 
 	src := result.String()
-	formatted, err := format.Source([]byte(src))
-	if err != nil {
-		// The only thing that can be malformed here is the user's own handler
-		// code. Hand back the unformatted source so they can see and fix it,
-		// rather than swallowing their work.
-		return src
+	// A format error means the only thing that can be malformed here — the
+	// user's own handler code. Hand back the unformatted source so they can see
+	// and fix it, rather than swallowing their work.
+	if formatted, err := format.Source([]byte(src)); err == nil {
+		src = string(formatted)
 	}
-	return string(formatted)
+
+	// The line map is resolved against the finished source, not counted during
+	// the walk: gofmt collapses blank-line runs and the import block is rewritten
+	// from scratch below the walk, so a line counted while emitting would be off
+	// by an amount nothing can predict. The anchors still come from the walk.
+	anchors := make([]string, len(fields))
+	for i := range fields {
+		anchors[i] = constructorAnchor(fields[i].name)
+	}
+	lines := make(map[*FakeWidget]int, len(fields))
+	for i, at := range indexAnchors(src, anchors) {
+		if at >= 0 && fields[i].fake != nil {
+			lines[fields[i].fake] = at
+		}
+	}
+
+	return GeneratedCode{Code: src, Lines: lines, Err: unmappedFactoryError(unmapped)}
 }
 
 // emitMain writes the runnable entry point for a package main design. Both

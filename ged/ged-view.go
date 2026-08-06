@@ -168,6 +168,35 @@ func (this *GedView) GedScene() *GedScene {
 	return p
 }
 
+// Undo steps the design's command stack back one command and reports the
+// design changed. Running a command backwards pushes nothing, so the signal
+// PushCommand raises never fires for an undo — every listener on it would
+// otherwise keep showing the state Ctrl+Z just left.
+func (this *GedView) Undo() {
+	stack := this.Scene().UndoStack()
+	if stack == nil {
+		return
+	}
+	stack.Undo()
+	if scene := this.GedScene(); scene != nil {
+		scene.NotifyDesignChanged()
+	}
+	this.Self().Update()
+}
+
+// Redo is Undo in the other direction.
+func (this *GedView) Redo() {
+	stack := this.Scene().UndoStack()
+	if stack == nil {
+		return
+	}
+	stack.Redo()
+	if scene := this.GedScene(); scene != nil {
+		scene.NotifyDesignChanged()
+	}
+	this.Self().Update()
+}
+
 // snapToGrid rounds v to the nearest multiple of step. A non-positive step
 // disables snapping and returns v unchanged, so callers never divide by zero.
 // Pure so the rounding rule is unit-testable without a live view.
@@ -1713,16 +1742,10 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		this.nudgeSelection(dx, dy)
 
 	case ctrl && (key == 'Z' || key == 'z'):
-		if stack := this.Scene().UndoStack(); stack != nil {
-			stack.Undo()
-			this.Self().Update()
-		}
+		this.Undo()
 
 	case ctrl && (key == 'Y' || key == 'y'):
-		if stack := this.Scene().UndoStack(); stack != nil {
-			stack.Redo()
-			this.Self().Update()
-		}
+		this.Redo()
 
 	// Cmd/Ctrl+A: select every selectable widget on the page. Ctrl is read
 	// from IsKeyDown(KeyCtrl) up top (same modifier probe the nudge/undo cases

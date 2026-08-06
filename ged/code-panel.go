@@ -20,19 +20,41 @@ func init() {
 	})
 }
 
+// Code panel tab indices. The panel holds two views of the same design: the
+// handler source the user writes, and the file the generator produces from it.
+const (
+	codeTabHandler = 0
+	codeTabGen     = 1
+)
+
+// codeRegenDelayMs is the debounce window between a design change and the
+// regeneration it triggers. A drag emits a command per gesture and a drop
+// fires the scene's attach signal on top of it; regenerating on each would
+// re-run the whole walk several times for one user action.
+const codeRegenDelayMs = 200
+
 // CodePanel provides a code editing panel for writing Go event handler code.
 // When a widget is selected on the GED canvas, the panel displays an editable
 // code template for that widget's events, similar to Qt Creator's signal/slot
 // code editor.
+//
+// Its second tab (生成代码) shows the full generated file for the active design,
+// read-only, refreshed from the design's own change signals.
 type CodePanel struct {
 	gui.Widget
-	titleBar *gui.Label      // shows which widget's code is being edited
-	editor   *gui.CodeEditor // syntax-highlighted code editor
+	tabs     *gui.SwitchGroup // 事件代码 / 生成代码
+	titleBar *gui.Label       // shows which widget's code is being edited
+	editor   *gui.CodeEditor  // syntax-highlighted code editor
+	genView  *generatedView   // read-only view of the generated file
 	saveBtn  *gui.Button
 	fmtBtn   *gui.Button
 
 	currentWidget *FakeWidget
 	gedView       *GedView
+
+	genTimer   gui.Timer
+	genLines   map[*FakeWidget]int
+	genPending bool // a design change the 生成代码 view has not caught up with
 }
 
 func NewCodePanel() *CodePanel {
@@ -44,6 +66,14 @@ func NewCodePanel() *CodePanel {
 func (this *CodePanel) Init(self gui.IWidget) {
 	this.Widget.Init(self)
 
+	// Tab strip
+	this.tabs = gui.NewSwitchGroup()
+	this.tabs.SetParent(self)
+	this.tabs.SetItems([]string{"事件代码", "生成代码"})
+	this.tabs.SigChange(func(idx int, _ string) {
+		this.ShowTab(idx)
+	})
+
 	// Title label
 	this.titleBar = gui.NewLabel("选择控件查看代码")
 	this.titleBar.SetParent(self)
@@ -54,6 +84,13 @@ func (this *CodePanel) Init(self gui.IWidget) {
 	this.editor.SetParent(self)
 	this.editor.SetFont(paint.NewFont(gui.Theme().Font.Family(), 13, false, false))
 	this.editor.SetText("// 在此编写事件处理代码\n")
+
+	// Generated-file view, hidden until its tab is picked
+	this.genView = newGeneratedView()
+	this.genView.SetParent(self)
+	this.genView.SetFont(paint.NewFont(gui.Theme().Font.Family(), 13, false, false))
+	this.genView.SetText("// 打开或新建设计后在此查看生成的代码\n")
+	this.genView.SetVisible(false)
 
 	// Save button
 	this.saveBtn = gui.NewButton1("保存代码", nil)
@@ -80,11 +117,38 @@ func (this *CodePanel) Layout() {
 	btnH := 26.0
 	btnW := 80.0
 	fmtW := 64.0
+	tabsW := 150.0
 
-	this.titleBar.SetBounds(4, 2, w-btnW-fmtW-20, titleH)
+	// The tab strip took 150px off the top bar, so a narrow dock now reaches a
+	// negative title width where it used to have room.
+	titleW := w - tabsW - btnW - fmtW - 26
+	if titleW < 0 {
+		titleW = 0
+	}
+	this.tabs.SetBounds(4, 2, tabsW, titleH)
+	this.titleBar.SetBounds(tabsW+10, 2, titleW, titleH)
 	this.fmtBtn.SetBounds(w-btnW-fmtW-8, 2, fmtW, titleH)
 	this.saveBtn.SetBounds(w-btnW-4, 2, btnW, titleH)
 	this.editor.SetBounds(0, titleH+4, w, h-titleH-btnH-8)
+	this.genView.SetBounds(0, titleH+4, w, h-titleH-btnH-8)
+}
+
+// ShowTab brings one of the two views forward. 保存代码/Format belong to the
+// handler tab only — the generated file has nothing to save them into.
+func (this *CodePanel) ShowTab(idx int) {
+	gen := idx == codeTabGen
+	this.tabs.SetSelected(idx)
+	this.editor.SetVisible(!gen)
+	this.genView.SetVisible(gen)
+	this.saveBtn.SetVisible(!gen)
+	this.fmtBtn.SetVisible(!gen)
+	this.refreshTitle()
+	if gen && this.genPending {
+		// Regeneration is skipped while this tab is behind the other one, so
+		// coming forward is where it catches up with everything it missed.
+		this.RegenerateNow()
+	}
+	this.Self().Update()
 }
 
 func (this *CodePanel) Draw(g paint.Painter) {
@@ -108,22 +172,122 @@ func (this *CodePanel) Draw(g paint.Painter) {
 }
 
 // BindGedView connects the code panel to a GedView so that selecting a widget
-// on the canvas automatically loads its event handler code into the editor.
+// on the canvas automatically loads its event handler code into the editor,
+// and so that the 生成代码 view follows that design.
 func (this *CodePanel) BindGedView(gv *GedView) {
 	this.gedView = gv
 	if gv == nil {
 		return
 	}
 
+	// Every mutation that can be undone reaches the generated view from here:
+	// property-sheet edits, moves, resizes, drops, reparents, morphs. The
+	// scene's attach/detach slots are NOT bound — they hold one callback each
+	// and the status bar owns them (design.go bindStatusBarTo), which chains
+	// this panel's refresh onto them instead.
+	if scene := gv.GedScene(); scene != nil {
+		scene.SigDesignChanged(this.ScheduleRegenerate)
+	}
+
 	gv.AddSelectionCallback(func(items []graph.IItem) {
 		if len(items) == 1 {
 			if fake, ok := items[0].(*FakeWidget); ok {
 				this.SetWidget(fake)
+				this.ScrollToWidget(fake)
 				return
 			}
 		}
 		this.SetWidget(nil)
 	})
+
+	this.ScheduleRegenerate()
+}
+
+// ScheduleRegenerate arms the debounce timer. Start() re-arms rather than
+// stacks, so a burst of design changes collapses into one regeneration.
+func (this *CodePanel) ScheduleRegenerate() {
+	this.genPending = true
+	if this.tabs.Selected() != codeTabGen {
+		// Nothing is showing the generated code; ShowTab regenerates when the
+		// tab comes forward. Walking the whole design behind a hidden view on
+		// every nudge of a drag is exactly the cost the debounce exists to avoid.
+		return
+	}
+	this.genTimer.Start(codeRegenDelayMs, func() {
+		// gui.Timer repeats; this one is a one-shot delay.
+		this.genTimer.Stop()
+		this.RegenerateNow()
+	})
+}
+
+// RegenerateNow rebuilds the generated view from the bound design immediately.
+func (this *CodePanel) RegenerateNow() {
+	this.genPending = false
+	scene := this.scene()
+	if scene == nil {
+		this.genLines = nil
+		this.refreshTitle()
+		this.genView.SetText("// 打开或新建设计后在此查看生成的代码\n")
+		this.Self().Update()
+		return
+	}
+
+	gen := scene.GenerateCodeIndexed(CodeGenOptions{PackageName: "main"})
+	this.genLines = gen.Lines
+	this.refreshTitle()
+	if gen.Err != nil {
+		// A stale-but-green listing is worse than an honest error: the user
+		// would take it for the code their design produces.
+		this.genView.SetText("// " + gen.Err.Error() + "\n")
+	} else {
+		this.genView.SetText(gen.Code)
+	}
+	this.Self().Update()
+	if this.currentWidget != nil {
+		this.ScrollToWidget(this.currentWidget)
+	}
+}
+
+// ScrollToWidget brings the line that constructs fake into view. The line comes
+// from the generation walk, so it survives a widget whose name also appears in
+// a comment or a handler body.
+func (this *CodePanel) ScrollToWidget(fake *FakeWidget) {
+	if fake == nil || this.tabs.Selected() != codeTabGen {
+		return
+	}
+	if line, ok := this.genLines[fake]; ok {
+		this.genView.ScrollToLine(line)
+	}
+}
+
+// scene returns the design the panel is bound to, or nil.
+func (this *CodePanel) scene() *GedScene {
+	if this.gedView == nil {
+		return nil
+	}
+	return this.gedView.GedScene()
+}
+
+// refreshTitle writes the title bar for whichever tab is forward. One label
+// serves both, so every path that changes what is shown goes through here.
+func (this *CodePanel) refreshTitle() {
+	if this.tabs.Selected() == codeTabGen {
+		if scene := this.scene(); scene != nil {
+			this.titleBar.SetText("生成代码: " + scene.FormTitle())
+		} else {
+			this.titleBar.SetText("生成代码")
+		}
+		return
+	}
+	if this.currentWidget == nil {
+		this.titleBar.SetText("选择控件查看代码")
+		return
+	}
+	name := this.currentWidget.WidgetName()
+	if name == "" {
+		name = this.currentWidget.WidgetFactoryName()
+	}
+	this.titleBar.SetText("代码: " + name)
 }
 
 // SetWidget shows the code for a specific widget.
@@ -135,17 +299,13 @@ func (this *CodePanel) SetWidget(fake *FakeWidget) {
 
 	this.currentWidget = fake
 	if fake == nil {
-		this.titleBar.SetText("选择控件查看代码")
+		this.refreshTitle()
 		this.editor.SetText("// 选择画布上的控件以编辑事件代码\n")
 		this.Self().Update()
 		return
 	}
 
-	name := fake.WidgetName()
-	if name == "" {
-		name = fake.WidgetFactoryName()
-	}
-	this.titleBar.SetText("代码: " + name)
+	this.refreshTitle()
 
 	// Load existing code or generate template
 	code := fake.GetCode()

@@ -37,7 +37,8 @@ type GedScene struct {
 	guides sceneGuides
 	grid   GridModel
 	// Tags the design declares (标签字典), saved with it (see tag-dictionary.go).
-	tagDict []TagDecl
+	tagDict         []TagDecl
+	cbDesignChanged func()
 }
 
 func NewGedScene() *GedScene {
@@ -80,6 +81,33 @@ func (this *GedScene) TagDict() []TagDecl {
 // so what the generator emits is what the runtime registry can actually key on.
 func (this *GedScene) SetTagDict(decls []TagDecl) {
 	this.tagDict = normalizeTagDict(decls)
+}
+
+// SigDesignChanged registers the callback fired whenever the design is mutated
+// through the undo stack. Like every other Sig* on a scene it is a
+// single-callback slot.
+//
+// The command stack is used rather than a per-kind signal because it is the one
+// place every mutation passes: move, resize, drop, paste, reparent, morph, tag
+// dictionary — and property-sheet edits, which have no signal at all
+// (prop.PropertyItem.SetValue routes through the bound owner's PushCommand).
+func (this *GedScene) SigDesignChanged(fn func()) {
+	this.cbDesignChanged = fn
+}
+
+// PushCommand runs cmd through the undo stack, then reports the design changed.
+func (this *GedScene) PushCommand(cmd gui.ICommand) {
+	this.SceneItem.PushCommand(cmd)
+	this.NotifyDesignChanged()
+}
+
+// NotifyDesignChanged fires SigDesignChanged. Undo and Redo run commands
+// backwards off the stack without pushing anything, so the paths that drive
+// them call this to report what the stack cannot.
+func (this *GedScene) NotifyDesignChanged() {
+	if this.cbDesignChanged != nil {
+		this.cbDesignChanged()
+	}
 }
 
 //func (this *GedScene) Form() *FakeWidget {

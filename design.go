@@ -249,13 +249,13 @@ func updateWindowTitle(filename string) {
 
 func onUndo() {
 	if gv := currentGedView(); gv != nil {
-		gv.Scene().UndoStack().Undo()
+		gv.Undo()
 	}
 }
 
 func onRedo() {
 	if gv := currentGedView(); gv != nil {
-		gv.Scene().UndoStack().Redo()
+		gv.Redo()
 	}
 }
 
@@ -1410,8 +1410,19 @@ func bindStatusBarTo(gv *ged.GedView) {
 	gv.AddSelectionCallback(func([]graph.IItem) { refresh() })
 	gv.SigZoomChanged(func(interface{}, float64) { refresh() })
 	if scene := gv.Scene(); scene != nil {
-		scene.SigItemAttached(func(interface{}, graph.IItem, graph.IItem) { refresh() })
-		scene.SigItemDetached(func(interface{}, graph.IItem, graph.IItem) { refresh() })
+		// The generated-code view rides along on these two rather than binding
+		// its own pair: the slots hold one callback each, so a second binder
+		// would silently displace the status bar. It needs them because the
+		// scene's own command signal cannot see a structural change made
+		// without a command — 编辑/删除 detaches items directly.
+		structural := func() {
+			refresh()
+			if codePanel != nil {
+				codePanel.ScheduleRegenerate()
+			}
+		}
+		scene.SigItemAttached(func(interface{}, graph.IItem, graph.IItem) { structural() })
+		scene.SigItemDetached(func(interface{}, graph.IItem, graph.IItem) { structural() })
 	}
 }
 
