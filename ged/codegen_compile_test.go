@@ -104,6 +104,50 @@ func TestCodeGenCodeEditorWithEventCompiles(t *testing.T) {
 	vetGeneratedCode(t, code)
 }
 
+// TestCodeGenBoundEventWithStubCompiles proves an event bound in the property
+// sheet reaches compilable output alongside its stub handler. gui.SearchBox is
+// the canary: it has two bindable events, so binding the non-default one
+// (OnTextChanged) distinguishes "the recorded binding was emitted" from "the
+// widget's auto-default fired". Writing the stub used to suppress every
+// recorded binding — the code field carried a func, so codegen took the
+// auto-default path and wired SigSearch instead of the SigTextChanged the
+// designer asked for.
+func TestCodeGenBoundEventWithStubCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
+
+	scene := NewGedScene()
+	scene.SetFormTitle("SearchCompile")
+	scene.SetSize(120, 60)
+
+	sb, err := NewFakeWidgetFromFactory("gui.SearchBox")
+	if err != nil {
+		t.Fatalf("create SearchBox: %v", err)
+	}
+	sb.SetWidgetName("search")
+	sb.SetBounds(5, 5, 100, 10)
+	sb.SetEventHandler("OnTextChanged", "onSearchTextChanged")
+	sb.SetCode("func onSearchTextChanged(s string) { _ = s }")
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(sb, scene)
+	scene.PushCommand(cmd)
+
+	code := scene.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "SearchCompileUI"})
+
+	if !strings.Contains(code, "ui.Search.SigTextChanged(func(s string) { onSearchTextChanged(s) })") {
+		t.Errorf("missing SearchBox.SigTextChanged binding\n----\n%s", code)
+	}
+	if strings.Contains(code, "SigSearch(") {
+		t.Errorf("auto-default OnSearch overrode the bound OnTextChanged\n----\n%s", code)
+	}
+	if strings.Contains(code, "// codegen: no binding") {
+		t.Errorf("unknown-pair fall-through fired for known pair\n----\n%s", code)
+	}
+
+	vetGeneratedCode(t, code)
+}
+
 func TestCodeGenAllFactoryWidgets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping compile test in short mode")

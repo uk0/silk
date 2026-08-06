@@ -688,10 +688,29 @@ var categoryNames = map[string]string{
 // the saved design and the generated code all have to agree on this one id.
 const TagBindingID = "tag"
 
+// isEventPropID reports whether id is a Go event-handler name — "On" followed
+// by an upper-case letter, e.g. "OnClick", "OnTextChanged". That is the exact
+// shape the designer records for an event binding and the shape codegen binds,
+// so it is what marks a row as belonging to the 事件 category.
+func isEventPropID(id string) bool {
+	if !strings.HasPrefix(id, "On") || len(id) < 3 {
+		return false
+	}
+	return unicode.IsUpper(rune(id[2]))
+}
+
 // categoryOfPropID classifies a property by its ID. Ids are matched against
 // lowercase ascii keywords, so fold case here: ids are now stored verbatim and
 // may contain uppercase or unicode characters.
 func categoryOfPropID(id string) string {
+	// Go event-handler names (On + a capitalised verb) are event rows whatever
+	// the verb is. Checked before the keyword scan below, which read the verb
+	// instead of the prefix and scattered them: "OnTextChanged" matched the
+	// appearance keyword "text", "OnValueChanged" the behaviour keyword
+	// "value", and "OnToggle" matched nothing at all.
+	if isEventPropID(id) {
+		return "events"
+	}
 	id = strings.ToLower(id)
 	// Data binding is classified first, and by whole id: the appearance and
 	// behavior scans below match by substring, so a keyword added to either

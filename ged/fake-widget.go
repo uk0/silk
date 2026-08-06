@@ -660,6 +660,11 @@ func (this *FakeWidget) EnumProperties(list prop.IPropertyList) {
 			ep.EnumProperties(newMarkDirtyPropertyList(list, this.MarkDirty))
 		}
 	}
+
+	// Event bindings (the sheet's "事件" category). Not routed through the
+	// mark-dirty adapter: a binding changes generated code, not the pixels of
+	// the designer preview.
+	this.enumEventProperties(list)
 }
 
 // OnResize is called by graph.Item.SetSize after bounds change (e.g. resize handles).

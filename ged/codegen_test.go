@@ -254,7 +254,7 @@ func TestGenerateCodeUnknownEventEmitsGuidance(t *testing.T) {
 	for _, want := range []string{
 		"codegen: no binding for gui.Button.OnDragStart",
 		`Handler "onBtnDrag" is not connected at runtime`,
-		"add a case to ged/codegen.go",
+		"add an entry to ged/codegen.go's widgetEvents",
 	} {
 		if !strings.Contains(code, want) {
 			t.Errorf("missing %q\n----\n%s", want, code)

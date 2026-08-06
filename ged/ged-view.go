@@ -441,17 +441,17 @@ func defaultSizeForWidget(factoryName string) (w, h float64) {
 	}
 }
 
-// widgetEvents maps factory names to the list of events that can be bound.
-var widgetEvents = map[string][]string{
-	"gui.Button":      {"OnClick"},
-	"gui.Edit":        {"OnChanged", "OnSubmit"},
-	"gui.CheckBox":    {"OnToggled"},
-	"gui.Slider":      {"OnValueChanged"},
-	"gui.SpinBox":     {"OnValueChanged"},
-	"gui.ComboBox":    {"OnSelected"},
-	"gui.RadioButton": {"OnChanged"},
-	"gui.ProgressBar": {},
-	"gui.Label":       {},
+// eventsForItem returns the events the designer may bind on item, which is
+// what codegen can emit for it (nothing for a non-widget item). It replaced a
+// second event table maintained here: that table offered gui.Edit.OnSubmit and
+// gui.ComboBox.OnSelected, events codegen has no binding for, so the menu
+// ticked them as bound while generation dropped them.
+func eventsForItem(item graph.IItem) []string {
+	fake, ok := item.(*FakeWidget)
+	if !ok {
+		return nil
+	}
+	return AvailableEvents(fake.WidgetFactoryName())
 }
 
 // OnRightUp shows a context menu when the user right-clicks on the canvas.
@@ -479,8 +479,7 @@ func (this *GedView) OnRightUp(x, y float64) {
 		eventMenu, _ := menu.AddSubMenu("绑定事件", nil, nil)
 
 		if isFake {
-			factoryName := fake.WidgetFactoryName()
-			events := widgetEvents[factoryName]
+			events := eventsForItem(item)
 			handlers := fake.EventHandlers()
 
 			if len(events) > 0 {
@@ -516,14 +515,10 @@ func (this *GedView) OnRightUp(x, y float64) {
 				}
 			}
 		} else {
-			// Fallback: generic events for unknown widget types
-			for _, evt := range []string{"OnClick", "OnChanged", "OnSubmit", "OnSelected"} {
-				evtName := evt
-				btn := eventMenu.AddButton1(evtName, nil)
-				btn.Action().BindFunc0(func() {
-					this.bindEvent(item, evtName)
-				})
-			}
+			// A non-widget item has no generated code, so no event of it can
+			// be bound. The old fallback listed four generic names here that
+			// codegen could never emit for anything.
+			eventMenu.AddButton1("(无可用事件)", nil)
 		}
 
 		// "View Code" menu item -- triggers selection callbacks so the code
@@ -679,13 +674,15 @@ func (this *GedView) showPropertyDialog(obj interface{}) {
 }
 
 // bindEvent shows an input dialog asking for a handler function name, then
-// stores the binding on the FakeWidget.
+// stores the binding on the FakeWidget. The name goes through the same
+// validation as the property sheet's event rows, so neither entry point can
+// record a handler that generated code cannot call.
 func (this *GedView) bindEvent(item graph.IItem, eventName string) {
 	name, ok := gui.ShowInputBox(this, nil, "绑定事件",
 		"处理函数名称 ("+eventName+"):", "on"+eventName)
 	if ok && name != "" {
 		if fake, ok := item.(*FakeWidget); ok {
-			fake.SetEventHandler(eventName, name)
+			fake.SetEventHandlerChecked(eventName, name)
 		}
 	}
 }

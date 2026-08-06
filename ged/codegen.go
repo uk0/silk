@@ -350,21 +350,13 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
 		}
 		// Wire event handlers based on widget type and user code.
-		// When the user wrote a func body, pick the "natural" event
-		// for the widget (Button → OnClick, Slider → OnValueChanged,
-		// etc.) via defaultEventForFactory, then emit through the
-		// shared emitEventBinding helper so this auto path stays in
-		// lockstep with the explicit eventHandlers path below.
+		// Bindings recorded in the designer (property sheet "事件" rows)
+		// win: they name both the event and its handler, so nothing has
+		// to be guessed. Emitted by event name — map order would
+		// reshuffle the bindings of a multi-event widget on every
+		// regeneration.
 		handlerName := extractHandlerName(f.code)
-		if handlerName != "" {
-			if evt := defaultEventForFactory(f.factoryName); evt != "" {
-				emitEventBinding(&buf, imports, f.factoryName, f.name, evt, handlerName)
-			}
-		}
-		// Generate event handler bindings from the eventHandlers map, by
-		// event name — map order would reshuffle the bindings of a
-		// multi-event widget on every regeneration.
-		if len(f.eventHandlers) > 0 && handlerName == "" {
+		if len(f.eventHandlers) > 0 {
 			evtNames := make([]string, 0, len(f.eventHandlers))
 			for evtName := range f.eventHandlers {
 				evtNames = append(evtNames, evtName)
@@ -373,19 +365,29 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 			for _, evtName := range evtNames {
 				handler := f.eventHandlers[evtName]
 				if !emitEventBinding(&buf, imports, f.factoryName, f.name, evtName, handler) {
-					// Unknown (factory, event) pair. The codegen
-					// switch is a hand-maintained table of
-					// widget→signal mappings; new pairs need an
-					// explicit entry. Emit guidance instead of a
-					// silent miss so reviewers see the gap. The line
-					// still compiles (it's a comment), so generated
-					// files stay buildable — the binding just doesn't
-					// fire until codegen learns the pair.
+					// Unknown (factory, event) pair. widgetEvents is a
+					// hand-maintained table of widget→signal mappings;
+					// new pairs need an explicit entry. Emit guidance
+					// instead of a silent miss so reviewers see the gap.
+					// The line still compiles (it's a comment), so
+					// generated files stay buildable — the binding just
+					// doesn't fire until codegen learns the pair.
 					buf.WriteString(fmt.Sprintf(
-						"\t// codegen: no binding for %s.%s — add a case to ged/codegen.go's emitEventBinding.\n"+
+						"\t// codegen: no binding for %s.%s — add an entry to ged/codegen.go's widgetEvents.\n"+
 							"\t//          Handler %q is not connected at runtime.\n",
 						f.factoryName, evtName, handler))
 				}
+			}
+		} else if handlerName != "" {
+			// No recorded binding, but the user wrote a func body: pick
+			// the "natural" event for the widget (Button → OnClick,
+			// Slider → OnValueChanged, etc.) via defaultEventForFactory
+			// and emit through the same helper, so this auto path stays
+			// in lockstep with the recorded path above. It used to run
+			// first and win, which wired a widget's default signal even
+			// when the designer had bound a different event.
+			if evt := defaultEventForFactory(f.factoryName); evt != "" {
+				emitEventBinding(&buf, imports, f.factoryName, f.name, evt, handlerName)
 			}
 		}
 		buf.WriteString("\n")
@@ -702,17 +704,123 @@ func fmtFloat(v float64) string {
 	return fmt.Sprintf("%.1f", v)
 }
 
+// widgetEvent is one bindable event of a widget type: the name the
+// designer records for it and the wiring codegen emits.
+type widgetEvent struct {
+	name string // event name, as stored in the design and shown in the property sheet
+	code string // formatted with (fieldName, handlerName); ends in a newline
+	imp  string // extra import the emitted line references, "" for none
+}
+
+// widgetEvents is the single source of truth for which events codegen
+// can bind, per widget type. emitEventBinding writes the wiring from
+// it and AvailableEvents publishes the same set to the designer's
+// property sheet, so the sheet can never offer an event the generator
+// would drop on the floor. It replaced a hand-written switch for that
+// reason: the sheet had no way to read a switch, and a second table
+// listing the same pairs is exactly the drift this closes.
+var widgetEvents = map[string][]widgetEvent{
+	"gui.Button": {
+		{name: "OnClick", code: "\tui.%s.Action().BindFunc0(%s)\n"},
+	},
+	"gui.Edit": {
+		{name: "OnChanged", code: "\tui.%s.SigTextChanged(func(_ interface{}, s string) { %s(s) })\n"},
+	},
+	"gui.CheckBox": {
+		{name: "OnToggled", code: "\tui.%s.SigCheck(func(checked bool) { %s(checked) })\n"},
+	},
+	"gui.Slider": {
+		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v float64) { %s(v) })\n"},
+	},
+	"gui.SpinBox": {
+		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v int) { %s(v) })\n"},
+	},
+	"gui.RadioButton": {
+		{name: "OnChanged", code: "\tui.%s.SetChangedCallback(func(_ interface{}, v bool) { %s(v) })\n"},
+	},
+	"gui.ToggleSwitch": {
+		{name: "OnToggle", code: "\tui.%s.SigToggle(func(on bool) { %s(on) })\n"},
+	},
+	"gui.SearchBox": {
+		{name: "OnSearch", code: "\tui.%s.SigSearch(func(q string) { %s(q) })\n"},
+		{name: "OnTextChanged", code: "\tui.%s.SigTextChanged(func(s string) { %s(s) })\n"},
+	},
+	"gui.NumberInput": {
+		{name: "OnValueChanged", code: "\tui.%s.SigValueChanged(func(v float64) { %s(v) })\n"},
+	},
+	"gui.Rating": {
+		{name: "OnRatingChanged", code: "\tui.%s.SigRatingChanged(func(v int) { %s(v) })\n"},
+	},
+	"gui.DatePicker": {
+		{name: "OnDateChanged", code: "\tui.%s.SigDateChanged(func(y, m, d int) { %s(y, m, d) })\n"},
+	},
+	"gui.ColorPicker": {
+		{name: "OnColorChanged", code: "\tui.%s.SigColorChanged(func(c paint.Color) { %s(c) })\n", imp: "github.com/uk0/silk/paint"},
+	},
+	"gui.DropdownButton": {
+		{name: "OnSelect", code: "\tui.%s.SigSelect(func(idx int, text string) { %s(idx, text) })\n"},
+	},
+	"gui.SwitchGroup": {
+		{name: "OnChange", code: "\tui.%s.SigChange(func(idx int, text string) { %s(idx, text) })\n"},
+	},
+	"gui.Link": {
+		{name: "OnClick", code: "\tui.%s.SigClick(func(url string) { %s(url) })\n"},
+	},
+	"gui.ComboBox": {
+		{name: "OnSelectionChanged", code: "\tui.%s.SigSelectionChanged(func(_ interface{}, idx int) { %s(idx) })\n"},
+	},
+	"gui.ListWidget": {
+		{name: "OnSelectionChanged", code: "\tui.%s.SigSelectionChanged(func(_ interface{}, idx []int) { %s(idx) })\n"},
+	},
+	"gui.Table": {
+		{name: "OnSelectionChanged", code: "\tui.%s.SetSelectionChangedCallback(func(_ interface{}, row int) { %s(row) })\n"},
+	},
+	"gui.Tag": {
+		{name: "OnClose", code: "\tui.%s.SigClose(func() { %s() })\n"},
+	},
+	"gui.Breadcrumb": {
+		{name: "OnNavigate", code: "\tui.%s.SigClick(func(idx int, item gui.BreadcrumbItem) { %s(idx, item.Text) })\n"},
+	},
+	"gui.Accordion": {
+		{name: "OnSectionToggle", code: "\tui.%s.SigExpand(func(idx int, expanded bool) { %s(idx, expanded) })\n"},
+	},
+	"gui.NotificationPanel": {
+		{name: "OnItemClick", code: "\tui.%s.SigClick(func(idx int) { %s(idx) })\n"},
+	},
+	"gui.TabWidget": {
+		{name: "OnTabChanged", code: "\tui.%s.SetCurrentChangedCallback(func(_ interface{}, idx int) { %s(idx) })\n"},
+	},
+	"gui.CodeEditor": {
+		{name: "OnTextChanged", code: "\tui.%s.SigChanged(%s)\n"},
+		{name: "OnClick", code: "\tui.%s.SigWidgetClicked(%s)\n"},
+	},
+}
+
+// AvailableEvents returns the events codegen can bind for factoryName, in
+// table order. The designer's property sheet builds its "事件" rows from this,
+// so every event the user can bind is one the generator actually emits.
+func AvailableEvents(factoryName string) []string {
+	evts := widgetEvents[factoryName]
+	if len(evts) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(evts))
+	for _, e := range evts {
+		names = append(names, e.name)
+	}
+	return names
+}
+
 // emitEventBinding writes the Go code that wires `handler` to the
-// signal slot for `evtName` on the FakeWidget `f`. Returns true when
-// a binding was emitted; false when the (factory, event) pair has
-// no entry in the table so the caller can emit guidance.
+// signal slot for `evtName` on the widget field `fieldName`. Returns
+// true when a binding was emitted; false when the (factory, event)
+// pair has no entry in widgetEvents so the caller can emit guidance.
 //
-// Centralising the table here means the auto-default switch (the
-// "user wrote a func; pick the obvious event for this widget" path)
-// and the explicit eventHandlers switch (the "designer panel
-// recorded an event handler" path) can share the same source of
-// truth. New widget→signal mappings get added in one place rather
-// than two parallel switches that drift over time.
+// Both callers share the table: the auto-default path (the "user
+// wrote a func; pick the obvious event for this widget" path) and the
+// recorded-binding path (the "designer bound an event handler" path).
+// New widget→signal mappings get added in one place rather than two
+// parallel switches that drift over time.
 //
 // imports is the running import set the caller threads through; some
 // bindings (e.g. ColorPicker) need to pull in extra packages and
@@ -773,144 +881,15 @@ func defaultEventForFactory(factoryName string) string {
 }
 
 func emitEventBinding(buf *strings.Builder, imports map[string]bool, factoryName, fieldName, evtName, handler string) bool {
-	// Locally-named aliases match the prior literal-source style in
-	// the switch bodies — keeps the table grep-friendly when readers
-	// search for "f.factoryName" / "f.name" in older codegen pulls.
-	type _f = struct {
-		factoryName string
-		name        string
-	}
-	f := _f{factoryName: factoryName, name: fieldName}
-	switch f.factoryName {
-	case "gui.Button":
-		if evtName == "OnClick" {
-			fmt.Fprintf(buf, "\tui.%s.Action().BindFunc0(%s)\n", f.name, handler)
-			return true
+	for _, e := range widgetEvents[factoryName] {
+		if e.name != evtName {
+			continue
 		}
-	case "gui.Edit":
-		if evtName == "OnChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigTextChanged(func(_ interface{}, s string) { %s(s) })\n", f.name, handler)
-			return true
+		if e.imp != "" {
+			imports[e.imp] = true
 		}
-	case "gui.CheckBox":
-		if evtName == "OnToggled" {
-			fmt.Fprintf(buf, "\tui.%s.SigCheck(func(checked bool) { %s(checked) })\n", f.name, handler)
-			return true
-		}
-	case "gui.Slider":
-		if evtName == "OnValueChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SetValueChangedCallback(func(_ interface{}, v float64) { %s(v) })\n", f.name, handler)
-			return true
-		}
-	case "gui.SpinBox":
-		if evtName == "OnValueChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SetValueChangedCallback(func(_ interface{}, v int) { %s(v) })\n", f.name, handler)
-			return true
-		}
-	case "gui.RadioButton":
-		if evtName == "OnChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SetChangedCallback(func(_ interface{}, v bool) { %s(v) })\n", f.name, handler)
-			return true
-		}
-	case "gui.ToggleSwitch":
-		if evtName == "OnToggle" {
-			fmt.Fprintf(buf, "\tui.%s.SigToggle(func(on bool) { %s(on) })\n", f.name, handler)
-			return true
-		}
-	case "gui.SearchBox":
-		if evtName == "OnSearch" {
-			fmt.Fprintf(buf, "\tui.%s.SigSearch(func(q string) { %s(q) })\n", f.name, handler)
-			return true
-		}
-		if evtName == "OnTextChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigTextChanged(func(s string) { %s(s) })\n", f.name, handler)
-			return true
-		}
-	case "gui.NumberInput":
-		if evtName == "OnValueChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigValueChanged(func(v float64) { %s(v) })\n", f.name, handler)
-			return true
-		}
-	case "gui.Rating":
-		if evtName == "OnRatingChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigRatingChanged(func(v int) { %s(v) })\n", f.name, handler)
-			return true
-		}
-	case "gui.DatePicker":
-		if evtName == "OnDateChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigDateChanged(func(y, m, d int) { %s(y, m, d) })\n", f.name, handler)
-			return true
-		}
-	case "gui.ColorPicker":
-		if evtName == "OnColorChanged" {
-			imports["github.com/uk0/silk/paint"] = true
-			fmt.Fprintf(buf, "\tui.%s.SigColorChanged(func(c paint.Color) { %s(c) })\n", f.name, handler)
-			return true
-		}
-	case "gui.DropdownButton":
-		if evtName == "OnSelect" {
-			fmt.Fprintf(buf, "\tui.%s.SigSelect(func(idx int, text string) { %s(idx, text) })\n", f.name, handler)
-			return true
-		}
-	case "gui.SwitchGroup":
-		if evtName == "OnChange" {
-			fmt.Fprintf(buf, "\tui.%s.SigChange(func(idx int, text string) { %s(idx, text) })\n", f.name, handler)
-			return true
-		}
-	case "gui.Link":
-		if evtName == "OnClick" {
-			fmt.Fprintf(buf, "\tui.%s.SigClick(func(url string) { %s(url) })\n", f.name, handler)
-			return true
-		}
-	case "gui.ComboBox":
-		if evtName == "OnSelectionChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigSelectionChanged(func(_ interface{}, idx int) { %s(idx) })\n", f.name, handler)
-			return true
-		}
-	case "gui.ListWidget":
-		if evtName == "OnSelectionChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigSelectionChanged(func(_ interface{}, idx []int) { %s(idx) })\n", f.name, handler)
-			return true
-		}
-	case "gui.Table":
-		if evtName == "OnSelectionChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SetSelectionChangedCallback(func(_ interface{}, row int) { %s(row) })\n", f.name, handler)
-			return true
-		}
-	case "gui.Tag":
-		if evtName == "OnClose" {
-			fmt.Fprintf(buf, "\tui.%s.SigClose(func() { %s() })\n", f.name, handler)
-			return true
-		}
-	case "gui.Breadcrumb":
-		if evtName == "OnNavigate" {
-			fmt.Fprintf(buf, "\tui.%s.SigClick(func(idx int, item gui.BreadcrumbItem) { %s(idx, item.Text) })\n", f.name, handler)
-			return true
-		}
-	case "gui.Accordion":
-		if evtName == "OnSectionToggle" {
-			fmt.Fprintf(buf, "\tui.%s.SigExpand(func(idx int, expanded bool) { %s(idx, expanded) })\n", f.name, handler)
-			return true
-		}
-	case "gui.NotificationPanel":
-		if evtName == "OnItemClick" {
-			fmt.Fprintf(buf, "\tui.%s.SigClick(func(idx int) { %s(idx) })\n", f.name, handler)
-			return true
-		}
-	case "gui.TabWidget":
-		if evtName == "OnTabChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SetCurrentChangedCallback(func(_ interface{}, idx int) { %s(idx) })\n", f.name, handler)
-			return true
-		}
-	case "gui.CodeEditor":
-		if evtName == "OnTextChanged" {
-			fmt.Fprintf(buf, "\tui.%s.SigChanged(%s)\n", f.name, handler)
-			return true
-		}
-		if evtName == "OnClick" {
-			fmt.Fprintf(buf, "\tui.%s.SigWidgetClicked(%s)\n", f.name, handler)
-			return true
-		}
+		fmt.Fprintf(buf, e.code, fieldName, handler)
+		return true
 	}
 	return false
 }
