@@ -332,8 +332,12 @@ func (this *CodePanel) Focus() {
 
 // ScrollToHandler scrolls the editor to the handler for the given widget name.
 func (this *CodePanel) ScrollToHandler(name string) {
-	// Try to find a function matching "on<Name>" or a comment "// <name>"
+	// Try to find a function matching "on<Name>" or a comment "// <name>".
+	// The method form comes first — it is what generateTemplate writes and what
+	// the export owns — with the free-function form kept for designs saved
+	// before the split.
 	targets := []string{
+		") on" + capitalize(name),
 		"func on" + capitalize(name),
 		"// " + name,
 	}
@@ -449,6 +453,13 @@ func (this *CodePanel) generateTemplate(fake *FakeWidget) string {
 		code = fmt.Sprintf("// %s scroll handler\nfunc on%sScroll() {\n\t// scroll event\n}\n", name, capName)
 	default:
 		code = fmt.Sprintf("// %s event handler\nfunc on%sEvent() {\n\t// implement event logic\n}\n", name, capName)
+	}
+	// Handlers live in the export's user file as methods on the UI struct, so
+	// the template a developer starts from is one too — methodize is the same
+	// rewrite the split writer applies to a body it takes over. Without a bound
+	// design there is no struct to hang it off, and the free function stands.
+	if scene := this.scene(); scene != nil {
+		code = methodize(code, handlerReceiver(defaultCodeGenOptions(scene, CodeGenOptions{}).TypeName))
 	}
 	return code
 }

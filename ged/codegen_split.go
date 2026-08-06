@@ -46,6 +46,10 @@ func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (S
 	machine, user := splitCodePaths(filename)
 	res := SplitResult{MachineFile: machine, UserFile: user}
 
+	if err := scene.checkHandlerSource(); err != nil {
+		return res, err
+	}
+
 	machineOpts := opts
 	machineOpts.SplitHandlers = true
 	if err := os.WriteFile(machine, []byte(scene.GenerateCode(machineOpts)), 0644); err != nil {
@@ -120,6 +124,20 @@ func (scene *GedScene) collectHandlerStubs() []handlerStub {
 		}
 	})
 	return out
+}
+
+// checkHandlerSource reports the widgets whose design-time event code cannot be
+// read. It runs before either file is written: source that does not parse (a
+// design saved mid-edit) would otherwise reach the user file as an empty stub
+// with the developer's body dropped on the floor.
+func (scene *GedScene) checkHandlerSource() error {
+	var problems []handlerProblem
+	walkFakeWidgets(scene.Children(), func(fake *FakeWidget) {
+		if reason := handlerSourceProblem(fake.GetCode()); reason != "" {
+			problems = append(problems, handlerProblem{fake: fake, reason: reason})
+		}
+	})
+	return handlerSourceError(problems)
 }
 
 // needsServices reports whether the generated app owns a shared scada.Services,
@@ -201,32 +219,55 @@ func renderUserCode(opts CodeGenOptions, needServices bool, stubs []handlerStub)
 
 // renderStub writes one handler declaration for the user file. A stub seeded
 // from a design-time code attr keeps that source byte for byte apart from its
-// header, which gains the receiver: the body is the developer's, and all
-// ownership moves is what the func hangs off.
+// header, which is hung off this generation's UI struct: the body is the
+// developer's, and all ownership moves is what the func hangs off.
 func renderStub(s handlerStub, typeName string) string {
-	recv := fmt.Sprintf("func (ui *%s) ", typeName)
+	recv := handlerReceiver(typeName)
 	if s.body == "" {
 		return fmt.Sprintf("%s%s(%s) {\n}\n", recv, s.name, s.params)
 	}
 	return methodize(s.body, recv) + "\n"
 }
 
-// methodize rewrites the first "func <name>(" header in code into a method,
-// leaving every other byte — leading comments, body, spacing — alone. Source
-// that already declares a receiver is returned untouched.
+// handlerReceiver is the header every handler on the UI struct opens with. The
+// code panel seeds its templates through the same string, so what a developer
+// starts editing is the shape this file writes.
+func handlerReceiver(typeName string) string {
+	return fmt.Sprintf("func (ui *%s) ", typeName)
+}
+
+// methodize hangs the first function declaration in code off recv, leaving every
+// other byte — leading comments, body, spacing — alone.
+//
+// Source that already declares a receiver is re-hung rather than kept: which
+// struct the handlers belong to is not the design's to decide. The export route
+// picks it — interactively from the form title (defaultCodeGenOptions), project
+// wide from the design's file stem (GenerateDesign, because two forms in one
+// package may share a title) — so a receiver saved in the design is a
+// placeholder. Keeping it would make a design authored in the code panel, whose
+// templates name the form-title struct, refuse to generate through the project
+// route.
+//
+// The header is found by parsing so that a "func " inside a comment or a string
+// cannot be mistaken for it.
 func methodize(code, recv string) string {
-	lines := strings.Split(code, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimLeft(line, " \t")
-		if !strings.HasPrefix(trimmed, "func ") {
+	const pkg = "package p;"
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "", pkg+code, parser.SkipObjectResolution)
+	if err != nil {
+		return code
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
 			continue
 		}
-		rest := trimmed[len("func "):]
-		if strings.HasPrefix(strings.TrimLeft(rest, " \t"), "(") {
-			return code
-		}
-		lines[i] = line[:len(line)-len(trimmed)] + recv + rest
-		return strings.Join(lines, "\n")
+		// Offsets are into the prefixed source; both are past the prefix, so
+		// shifting them back indexes code itself. fn.Pos() is the "func"
+		// keyword, so a doc comment above it stays where it is.
+		head := fset.Position(fn.Pos()).Offset - len(pkg)
+		name := fset.Position(fn.Name.Pos()).Offset - len(pkg)
+		return code[:head] + recv + code[name:]
 	}
 	return code
 }

@@ -2,7 +2,10 @@ package ged
 
 import (
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"math"
 	"reflect"
 	"sort"
@@ -362,6 +365,10 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		buf.WriteString("\tui.Tags = core.NewTagDB()\n\n")
 	}
 
+	// Widgets whose event code the generator could not read, reported below
+	// alongside the unmapped factories.
+	var badHandlers []handlerProblem
+
 	// Children
 	for _, f := range fields {
 		buf.WriteString(fmt.Sprintf("\tui.%s = %s\n", f.name, f.constructor))
@@ -383,13 +390,19 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
 		}
+		// Event code that cannot be read is reported, not generated from: the
+		// bindings below would otherwise wire a handler this file never
+		// declares, or drop the developer's body into an empty stub.
+		if reason := handlerSourceProblem(f.code); reason != "" {
+			badHandlers = append(badHandlers, handlerProblem{fake: f.fake, reason: reason})
+		}
 		// Wire the events this widget contributes. handlerBindingsFor owns
 		// the rules (recorded bindings win, otherwise the widget's natural
 		// event) so the user-file stub collector resolves the exact same
 		// set — a handler the machine file calls is a handler the user file
 		// declares.
 		for _, b := range handlerBindingsFor(f.factoryName, f.code, f.eventHandlers) {
-			if emitEventBinding(&buf, imports, f.factoryName, f.name, b.event, handlerRef(b.handler, opts.SplitHandlers)) {
+			if emitEventBinding(&buf, imports, f.factoryName, f.name, b.event, handlerRef(b.handler, opts.SplitHandlers || b.method)) {
 				continue
 			}
 			// Unknown (factory, event) pair. widgetEvents is a
@@ -476,6 +489,12 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		emitted := map[string]bool{}
 		for _, f := range fields {
 			code := strings.TrimSpace(f.code)
+			// A handler the developer wrote as a method hangs off the struct
+			// THIS file declares, whatever type the design's copy names — same
+			// rule the split writer's stubs follow.
+			if d, err := parseHandlerDecl(code); err == nil && d.method {
+				code = methodize(code, handlerReceiver(opts.TypeName))
+			}
 			if code != "" && !emitted[code] {
 				emitted[code] = true
 				if !hasHandlerCode {
@@ -554,7 +573,14 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		}
 	}
 
-	return GeneratedCode{Code: src, Lines: lines, Err: unmappedFactoryError(unmapped)}
+	// One error at a time: an unmapped factory is the more fundamental gap (the
+	// widget is not in the output at all), so it is named first and the handler
+	// problems surface once it is resolved.
+	err := unmappedFactoryError(unmapped)
+	if err == nil {
+		err = handlerSourceError(badHandlers)
+	}
+	return GeneratedCode{Code: src, Lines: lines, Err: err}
 }
 
 // emitMain writes the runnable entry point for a package main design. Both
@@ -856,6 +882,7 @@ type handlerBinding struct {
 	params  string // the handler's Go parameter list, from widgetEvents
 	imp     string // import the parameter list references, "" for none
 	known   bool   // widgetEvents has this (factory, event) pair
+	method  bool   // the developer wrote the handler as a method, so call ui.<handler>
 }
 
 // handlerBindingsFor resolves the bindings one widget contributes, in emission
@@ -871,6 +898,9 @@ type handlerBinding struct {
 // file wires exactly these handlers, and the user file declares a method for
 // exactly these handlers.
 func handlerBindingsFor(factoryName, code string, events map[string]string) []handlerBinding {
+	// Unreadable source declares nothing to bind here; handlerSourceProblem is
+	// what reports it.
+	decl, _ := parseHandlerDecl(code)
 	if len(events) > 0 {
 		names := make([]string, 0, len(events))
 		for name := range events {
@@ -879,12 +909,13 @@ func handlerBindingsFor(factoryName, code string, events map[string]string) []ha
 		sort.Strings(names)
 		out := make([]handlerBinding, 0, len(names))
 		for _, evtName := range names {
-			out = append(out, resolveBinding(factoryName, evtName, events[evtName]))
+			b := resolveBinding(factoryName, evtName, events[evtName])
+			b.method = decl.method && decl.name == b.handler
+			out = append(out, b)
 		}
 		return out
 	}
-	handler := extractHandlerName(code)
-	if handler == "" {
+	if decl.name == "" {
 		return nil
 	}
 	evt := defaultEventForFactory(factoryName)
@@ -894,7 +925,8 @@ func handlerBindingsFor(factoryName, code string, events map[string]string) []ha
 	// An auto-default pair codegen cannot wire is dropped rather than
 	// reported: the user never asked for this binding, so there is no gap to
 	// point them at.
-	if b := resolveBinding(factoryName, evt, handler); b.known {
+	if b := resolveBinding(factoryName, evt, decl.name); b.known {
+		b.method = decl.method
 		return []handlerBinding{b}
 	}
 	return nil
@@ -912,10 +944,12 @@ func resolveBinding(factoryName, evtName, handler string) handlerBinding {
 }
 
 // handlerRef renders the expression a binding calls the handler through: a
-// method value on the UI struct when the handlers are user-file methods, the
-// bare package-level func name for single-file output.
-func handlerRef(handler string, split bool) string {
-	if split {
+// method value on the UI struct when the handler is a method, the bare
+// package-level func name otherwise. Every split-file handler is a method; a
+// single file has them too once the developer writes their source as one, and
+// its constructor has `ui` in scope to call them through.
+func handlerRef(handler string, method bool) string {
+	if method {
 		return "ui." + handler
 	}
 	return handler
@@ -1160,22 +1194,85 @@ func emitTagBinding(buf *strings.Builder, factoryName, fieldName, tagName string
 	return false
 }
 
-// extractHandlerName parses the function name from user-written Go event code.
-// It looks for the first "func <name>(" declaration and returns the name.
-func extractHandlerName(code string) string {
-	for _, line := range strings.Split(code, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "func ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				name := parts[1]
-				// Remove parameters
-				if idx := strings.Index(name, "("); idx >= 0 {
-					name = name[:idx]
-				}
-				return name
-			}
+// handlerDecl is the declaration a widget's design-time event code opens with.
+// The receiver type is deliberately not part of it: the generation picks which
+// struct the handler hangs off (see methodize), so what the design saved is a
+// placeholder.
+type handlerDecl struct {
+	name   string // the identifier codegen binds
+	method bool   // declared with a receiver, so it is called as ui.<name>
+}
+
+// parseHandlerDecl reads the first function declaration out of user-written
+// event code. The name it returns is written into the generated file as an
+// identifier, so it is parsed rather than scanned for a "func " line: that scan
+// took the receiver of "func (ui *AppUI) onGo()" (yielding no name at all, and
+// with it a silently dropped body), truncated "func onGo[T any]()" to "onGo[T"
+// and emitted BindFunc0(onGo[T), and read a func out of a block comment.
+//
+// Source that does not parse returns an error rather than a guess; source that
+// parses but declares no function returns the zero decl, which binds nothing.
+func parseHandlerDecl(code string) (handlerDecl, error) {
+	if strings.TrimSpace(code) == "" {
+		return handlerDecl{}, nil
+	}
+	// The package clause shares line 1 with the snippet, so a parse error
+	// carries the snippet's own line numbers.
+	file, err := parser.ParseFile(token.NewFileSet(), "", "package p;"+code, parser.SkipObjectResolution)
+	if err != nil {
+		return handlerDecl{}, err
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
 		}
+		return handlerDecl{name: fn.Name.Name, method: fn.Recv != nil}, nil
+	}
+	return handlerDecl{}, nil
+}
+
+// extractHandlerName is the handler identifier alone, empty for source that
+// declares none or does not parse. Callers that must tell those two apart —
+// and report the second rather than generate from it — use
+// handlerSourceProblem.
+func extractHandlerName(code string) string {
+	d, _ := parseHandlerDecl(code)
+	return d.name
+}
+
+// handlerProblem is one widget whose design-time event code codegen cannot
+// generate from, and why.
+type handlerProblem struct {
+	fake   *FakeWidget
+	reason string
+}
+
+// handlerSourceProblem reports why a widget's event code cannot become a
+// handler, or "" when it can. Carrying no code at all is not a problem — most
+// widgets do not.
+func handlerSourceProblem(code string) string {
+	if _, err := parseHandlerDecl(code); err != nil {
+		return fmt.Sprintf("事件代码无法解析: %v", err)
 	}
 	return ""
+}
+
+// handlerSourceError describes the widgets whose event code cannot be generated
+// from, or nil when there are none. Same contract as unmappedFactoryError: the
+// 生成代码 view shows it in place of the listing, and the split export refuses
+// rather than writing a pair that drops the developer's body.
+func handlerSourceError(problems []handlerProblem) error {
+	if len(problems) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(problems))
+	for _, p := range problems {
+		name := p.fake.WidgetName()
+		if name == "" {
+			name = "未命名"
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s): %s", name, p.fake.WidgetFactoryName(), p.reason))
+	}
+	return fmt.Errorf("无法生成代码: %s", strings.Join(parts, "; "))
 }

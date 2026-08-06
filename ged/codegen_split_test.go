@@ -323,9 +323,12 @@ func TestMethodizeKeepsTheBody(t *testing.T) {
 	if got != want {
 		t.Errorf("methodize:\n got %q\nwant %q", got, want)
 	}
-	// Source the developer already wrote as a method is left alone.
-	if got := methodize(want, "func (ui *OtherUI) "); got != want {
-		t.Errorf("a receiver was added twice: %q", got)
+	// Source the developer already wrote as a method is re-hung, not stacked:
+	// the generation owns which struct a handler belongs to (the export route
+	// picks the name), the developer owns everything below the header.
+	rehung := "// counts clicks\nfunc (ui *OtherUI) onGo() {\n\t// no-op for now\n\tcount++\n}"
+	if got := methodize(want, "func (ui *OtherUI) "); got != rehung {
+		t.Errorf("re-hanging a method:\n got %q\nwant %q", got, rehung)
 	}
 }
 
