@@ -264,6 +264,67 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 	return cmd
 }
 
+// isSelfOrDescendant reports whether a is root itself or sits anywhere below
+// it, by walking a's parent chain up to the tree root.
+func isSelfOrDescendant(a, root IItem) bool {
+	for p := a; p != nil; p = p.Parent() {
+		if p == root {
+			return true
+		}
+	}
+	return false
+}
+
+// GenerateReparentCommand hands every selected item to newParent, keeping each
+// item where it is on screen (TranslateBetweenParents), and returns one command
+// whose Undo restores the original parent, sibling index and position. Returns
+// nil when nothing would actually change, so a caller can forward that as a
+// quiet no-op instead of pushing an empty command — same contract as
+// GenerateMoveCommand.
+//
+// Skipped, and why:
+//   - an item whose ancestor is also selected: the ancestor carries it along,
+//     exactly as GenerateMoveCommand skips it;
+//   - an IsLockPos item: a drag leaves it behind (GenerateMoveCommand skips it
+//     too), so handing it a new owner would split one gesture in two;
+//   - an item already parented to newParent: SetParentAt is a documented no-op
+//     for it, and recording no-ops would make Count() claim work that is not
+//     there;
+//   - a newParent inside the item's own subtree: SetParentAt has no cycle
+//     guard, and a cyclic child ring hangs every later traversal.
+func (s *Selection) GenerateReparentCommand(newParent IItem) *ReparentCommand {
+	if newParent == nil || s.IsEmpty() {
+		return nil
+	}
+	// Items store the Self() form of their parent; normalise so the
+	// "already there" test below compares like with like.
+	newParent = newParent.Self()
+
+	cmd := NewReparentCommand("")
+	for p := s.first; p != nil; p = p.next {
+		item := p.item
+		if item.IsLockPos() {
+			continue
+		}
+
+		if s.isItemAncestorSelected(item) {
+			continue
+		}
+		oldParent := item.Parent()
+		if oldParent == newParent || isSelfOrDescendant(newParent, item) {
+			continue
+		}
+		x, y := item.Pos()
+		x1, y1 := TranslateBetweenParents(oldParent, newParent, x, y)
+		cmd.AddMoved(item, oldParent, newParent, x1, y1)
+
+	}
+	if cmd.Count() == 0 {
+		return nil
+	}
+	return cmd
+}
+
 // GenerateResizeCommand grows every selected item by (dw, dh) millimetres,
 // anchored at each item's top-left corner and floored at minSize by
 // resizeRectBy. Returns nil when nothing would actually change, so a caller

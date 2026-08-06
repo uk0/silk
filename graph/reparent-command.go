@@ -15,10 +15,49 @@ import (
 // it to put the item back in the exact slot it left, instead of appending
 // it — which is what silently reordered siblings before this field existed.
 // It is -1 when `from` is nil (nothing to restore a position into).
+//
+// moved marks a record that also carries the item's position, so one command
+// can express "changed owner AND landed here" (see AddMoved). fromX/fromY is
+// the position the record snapshotted, toX/toY the one Redo applies.
 type reparentRecord struct {
 	item      IItem
 	from, to  IItem
 	fromIndex int
+
+	moved                  bool
+	fromX, fromY, toX, toY float64
+}
+
+// ParentOrigin returns, in scene coordinates, the origin of the coordinate
+// space `parent` gives its children — i.e. exactly what CoordOffset() reports
+// for every child of `parent`. A nil parent means the scene origin.
+//
+// It mirrors the recurrence in Item.CoordOffset: only a parent that opts into
+// local coordinates (HasLocalCoord) shifts its children by its own position; a
+// parent without them hands its children the space it lives in, unchanged.
+func ParentOrigin(parent IItem) (ox, oy float64) {
+	if parent == nil {
+		return 0, 0
+	}
+	ox, oy = parent.CoordOffset()
+	if parent.HasLocalCoord() {
+		px, py := parent.Pos()
+		ox, oy = ox+px, oy+py
+	}
+	return
+}
+
+// TranslateBetweenParents maps (x, y) — a position expressed in `from`'s child
+// coordinate space — into `to`'s child coordinate space so the point keeps its
+// scene position. It is the whole coordinate rule of a re-parent: changing an
+// item's owner must not move it on screen.
+//
+// The delta is zero whenever both parents hand their children the same space,
+// which is the case for every parent that does not set HasLocalCoord.
+func TranslateBetweenParents(from, to IItem, x, y float64) (x1, y1 float64) {
+	fx, fy := ParentOrigin(from)
+	tx, ty := ParentOrigin(to)
+	return x + fx - tx, y + fy - ty
 }
 
 // ReparentCommand is an undoable structural edit that moves a set of
@@ -74,6 +113,29 @@ func (cmd *ReparentCommand) Add(item, from, to IItem) {
 	})
 }
 
+// AddMoved records a re-parent that also repositions the item: like Add, plus
+// the item lands at (toX, toY) in `to`'s child coordinate space. Callers get
+// (toX, toY) from TranslateBetweenParents so the item keeps its scene position
+// across the move.
+//
+// Undo restores the original position along with the original slot, so a
+// re-parent that had to shift coordinates does not leave the item at the
+// shifted position once it is back inside its old parent.
+func (cmd *ReparentCommand) AddMoved(item, from, to IItem, toX, toY float64) {
+	x, y := item.Pos()
+	cmd.records = append(cmd.records, reparentRecord{
+		item:      item,
+		from:      from,
+		to:        to,
+		fromIndex: item.IndexInParent(),
+		moved:     true,
+		fromX:     x,
+		fromY:     y,
+		toX:       toX,
+		toY:       toY,
+	})
+}
+
 // Count returns the number of reparent records.
 func (cmd *ReparentCommand) Count() int { return len(cmd.records) }
 
@@ -82,7 +144,13 @@ func (cmd *ReparentCommand) Redo() {
 		panic("illegal Redo()")
 	}
 	for i := 0; i < len(cmd.records); i++ {
-		cmd.records[i].item.SetParent(cmd.records[i].to)
+		r := &cmd.records[i]
+		r.item.SetParent(r.to)
+		if r.moved {
+			// After the attach: the position is expressed in the new parent's
+			// child coordinate space.
+			r.item.SetPos(r.toX, r.toY)
+		}
 	}
 	cmd.isUndo = true
 }
@@ -105,6 +173,9 @@ func (cmd *ReparentCommand) Undo() {
 	for _, i := range order {
 		r := &cmd.records[i]
 		r.item.SetParentAt(r.from, r.fromIndex)
+		if r.moved {
+			r.item.SetPos(r.fromX, r.fromY)
+		}
 	}
 	cmd.isUndo = false
 }

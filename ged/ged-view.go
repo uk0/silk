@@ -81,6 +81,14 @@ type GedView struct {
 	showGuides bool
 	guideDrag  guideDragState
 
+	// Re-parent state for a canvas drag. dropContainer is the container the
+	// release would nest the selection into, nil meaning the form root — the
+	// same fallback a palette drop uses. dragMovesItems records whether the
+	// gesture is a widget drag at all, so neither a marquee nor a plain
+	// selection click re-parents anything.
+	dropContainer  graph.IItem
+	dragMovesItems bool
+
 	// gestureSeq groups the commands pushed by one continuous keyboard
 	// gesture so they collapse into a single undo step; see beginGesture.
 	gestureSeq uint64
@@ -344,6 +352,30 @@ func nearestContainerAncestor(hit graph.IItem) graph.IItem {
 		}
 	}
 	return nil
+}
+
+// nearestDropContainer picks the container a canvas drag may drop into: the
+// deepest container on hit's parent chain that the moving set can legally nest
+// into. `moving` reports whether an item belongs to that set; nil means no
+// eligible container, i.e. the form root.
+//
+// Unlike nearestContainerAncestor the walk cannot stop at the first container:
+// a container only qualifies if nothing ABOVE it is moving either, so a moving
+// ancestor found later discards whatever was found below it. That is what keeps
+// a selection from being dropped into itself or into something it carries along
+// — either would build a parent cycle.
+func nearestDropContainer(hit graph.IItem, moving func(graph.IItem) bool) graph.IItem {
+	var found graph.IItem
+	for it := hit; it != nil; it = it.Parent() {
+		if moving(it) {
+			found = nil
+			continue
+		}
+		if found == nil && isContainerItem(it) {
+			found = it
+		}
+	}
+	return found
 }
 
 // isContainerItem reports whether item is a FakeWidget wrapping a container
@@ -1410,6 +1442,11 @@ func (this *GedView) OnLeftDown(x, y float64) {
 	this.dragOriginY = sy
 	this.isDragging = true
 	this.alignGuides = nil
+
+	// Both are (re)decided by OnMouseMove; a press that is never followed by
+	// one is a selection click and must leave the tree alone.
+	this.dropContainer = nil
+	this.dragMovesItems = false
 }
 
 // onDoubleClick opens the code panel for the double-clicked widget and scrolls
@@ -2136,7 +2173,7 @@ func (this *GedView) Draw(g paint.Painter) {
 	wantGrid := this.showGrid && grid.Visible && grid.Pitch > 0
 	manual := this.activeGuides()
 	wantGuides := !manual.isEmpty() || this.guideDrag.active
-	if wantGrid || wantGuides || len(this.alignGuides) > 0 {
+	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil {
 		// Clip to the page area so neither the grid nor the guides bleed into
 		// the padding region, then re-enter scene-mm coordinate space (the
 		// same transform GraphView.Draw uses for the scene) so every overlay
@@ -2162,12 +2199,36 @@ func (this *GedView) Draw(g paint.Painter) {
 			this.drawGuides(g, manual)
 		}
 		this.drawAlignGuides(g)
+		this.drawDropContainer(g)
 		g.Restore()
 	}
 
 	if this.showGuides {
 		this.drawRulers(g)
 	}
+}
+
+// drawDropContainer outlines the container the current drag would nest into.
+// Called in scene-mm coordinate space; the item's CoordOffset is applied first
+// so a container living in a local-coordinate parent is outlined where it is
+// drawn — the same shift Selection.OnDraw applies to its decorations.
+//
+// The palette drop path has no highlight to reuse (OnDragMove only sets the
+// drag action), so this is the design's fallback accent border. Its width is in
+// millimetres, the only thing this painter's scene space can express: 0.4mm
+// reads as a target next to the 0.2mm border FakeWidget draws around itself,
+// where a zero-width pen would collapse into the same hairline as the selection
+// outline.
+func (this *GedView) drawDropContainer(g paint.Painter) {
+	if this.dropContainer == nil {
+		return
+	}
+	dx, dy := this.dropContainer.CoordOffset()
+	g.Translate(dx, dy)
+	g.SetPen1(gui.Theme().HighLightColor, 0.4)
+	g.Rectangle(this.dropContainer.Bounds())
+	g.Stroke()
+	g.Translate(-dx, -dy)
 }
 
 // OnMouseMove overrides GraphView.OnMouseMove to compute alignment guides
@@ -2209,6 +2270,7 @@ func (this *GedView) OnMouseMove(x, y float64) {
 	sel := this.Selection()
 	if sel == nil || sel.Count() == 0 {
 		this.alignGuides = nil
+		this.dropContainer = nil
 		return
 	}
 
@@ -2217,6 +2279,30 @@ func (this *GedView) OnMouseMove(x, y float64) {
 	dy := sy - this.dragOriginY
 
 	this.computeAlignGuides(sel.ItemList(), dx, dy)
+
+	// A gesture only re-parents when it is a widget drag: the press must have
+	// landed on a movable item — MovePart's own claim test, so a marquee never
+	// re-parents — and the pointer must have moved at all, which is what being
+	// here proves.
+	//
+	// The drop target follows the cursor, not the dragged rects: the widgets
+	// stay at their old positions until MovePart commits on release.
+	this.dropContainer = nil
+	// Ask who claimed the press, in the order the parts themselves are asked:
+	// DecorPart pre-empts MovePart, and a resize handle's disc reaches inside
+	// the item it belongs to, so hit-testing the item alone reads a resize that
+	// happens to end over a container as a widget move — and silently re-parents
+	// the widget mid-resize, undo step and drop highlight included.
+	if decor, _ := this.FindHandleAt(this.dragOriginX, this.dragOriginY); decor != nil {
+		this.dragMovesItems = false
+		return
+	}
+	this.dragMovesItems = this.Scene().FindItemAt(this.dragOriginX, this.dragOriginY,
+		graph.TraversalCond_SelectableAndMoveable) != nil
+	if this.dragMovesItems {
+		this.dropContainer = nearestDropContainer(
+			this.Scene().FindItemAt(sx, sy, nil), sel.Contains)
+	}
 }
 
 // OnLeftUp overrides GraphView.OnLeftUp to clear alignment guides when
@@ -2233,9 +2319,14 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	}
 
 	wasDragging := this.isDragging
+	// The target and the gesture kind are read before GraphView.OnLeftUp so a
+	// tool that clears the drag state cannot take them away from us.
+	target, movesItems := this.dropContainer, this.dragMovesItems
 	this.GraphView.OnLeftUp(x, y)
 	this.isDragging = false
 	this.alignGuides = nil
+	this.dropContainer = nil
+	this.dragMovesItems = false
 
 	// Snap the dragged widget(s) onto grid intersections once the base
 	// MovePart has committed the move command. We snap after the commit
@@ -2245,9 +2336,43 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// don't move the widget, so grid snap and the guides compose cleanly.
 	if wasDragging {
 		this.snapSelectionToGrid()
+		if movesItems {
+			// After the snap, so the re-parent records the resting position.
+			this.reparentSelection(target)
+		}
 	}
 
 	this.Self().Update()
+}
+
+// reparentSelection nests the just-dragged selection into target, nil meaning
+// the form root — a container is only one case of a drop target, the same way
+// OnDrop falls back to the scene root for a palette drop over empty canvas.
+//
+// One ReparentCommand carries parent, sibling index and position for every
+// item, so Ctrl+Z returns each one to the owner and slot it left. The move
+// itself is MovePart's own command underneath, so a drag that crosses into a
+// container leaves two undo steps: the re-parent, then the move.
+func (this *GedView) reparentSelection(target graph.IItem) {
+	parent := graph.IItem(this.Scene())
+	if target != nil {
+		parent = target
+	}
+	sel := this.Selection()
+	items := sel.ItemList()
+	cmd := sel.GenerateReparentCommand(parent)
+	if cmd == nil {
+		return
+	}
+	this.Scene().PushCommand(cmd)
+
+	// Every re-parent detaches first, and GraphView.emitItemDetached drops a
+	// detached item from the selection — so the widget the user just dragged
+	// would end the gesture unselected. Restore the selection in its original
+	// order (the last item stays the alignment reference), the way
+	// layoutSelection re-selects after its own structural command.
+	sel.Clear()
+	sel.AddMulti(items)
 }
 
 // snapSelectionToGrid parks every position-unlocked selected item on the
