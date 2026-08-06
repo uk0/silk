@@ -6,13 +6,15 @@ import (
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 // TestCaptureApplyWidgetProperties exercises captureWidgetProperties /
 // applyWidgetProperties directly on a widget instance: a configured Tank's
-// scalar properties are captured, then applied onto a fresh Tank, which must
-// end up with the same values. The complex "颜色" (paint.Color) property is
-// skipped in v1 and must not appear in the captured set.
+// editable properties are captured, then applied onto a fresh Tank, which must
+// end up with the same values. "颜色" (paint.Color) is in the set because the
+// designer can now edit it (prop.ColorEdit) — an editable property that is
+// dropped on save is worse than one that cannot be edited at all.
 func TestCaptureApplyWidgetProperties(t *testing.T) {
 	src := gui.NewTank()
 	src.SetMin(5)
@@ -20,21 +22,22 @@ func TestCaptureApplyWidgetProperties(t *testing.T) {
 	src.SetLevel(0.5)
 	src.SetShowLabel(false)
 	src.SetTagName("PT-101")
+	src.SetColor(paint.Color{R: 10, G: 20, B: 30, A: 255})
 
 	vals := captureWidgetProperties(src)
 
-	for _, id := range []string{"液位", "最小值", "最大值", "显示标签", "tag"} {
+	for _, id := range []string{"液位", "最小值", "最大值", "显示标签", "tag", "颜色"} {
 		if _, ok := vals[id]; !ok {
-			t.Errorf("captured set missing scalar property %q; got %v", id, vals)
+			t.Errorf("captured set missing editable property %q; got %v", id, vals)
 		}
-	}
-	if _, ok := vals["颜色"]; ok {
-		t.Errorf("complex color property must be skipped in v1, but was captured: %q", vals["颜色"])
 	}
 
 	dst := gui.NewTank() // defaults: min 0, max 100, level 0, showLabel true, tag ""
 	applyWidgetProperties(dst, vals)
 
+	if got := dst.Color(); got != (paint.Color{R: 10, G: 20, B: 30, A: 255}) {
+		t.Errorf("Color = %v, want #0A141E", got)
+	}
 	if dst.Min() != 5 {
 		t.Errorf("Min = %v, want 5", dst.Min())
 	}
@@ -71,12 +74,16 @@ func TestFakeWidgetSaveLoadDesignProperties(t *testing.T) {
 	src.SetLevel(0.5)
 	src.SetShowLabel(false)
 	src.SetTagName("LT-9")
+	src.SetColor(paint.Color{R: 10, G: 20, B: 30, A: 255})
 
 	doc := fw.SaveDesign()
 
 	assertRestored := func(t *testing.T, target *FakeWidget) {
 		t.Helper()
 		dst := target.Widget().(*gui.Tank)
+		if got := dst.Color(); got != (paint.Color{R: 10, G: 20, B: 30, A: 255}) {
+			t.Errorf("Color = %v, want #0A141E", got)
+		}
 		if dst.Min() != 12 {
 			t.Errorf("Min = %v, want 12", dst.Min())
 		}
@@ -126,7 +133,8 @@ func TestFakeWidgetSaveLoadDesignProperties(t *testing.T) {
 
 // TestScalarRoundTripKinds covers scalarToString / parseScalar across every
 // scalar kind — including the integer/unsigned paths that Tank does not
-// exercise — and confirms non-scalar types are rejected.
+// exercise — plus paint.Color, and confirms other non-scalar types are
+// rejected.
 func TestScalarRoundTripKinds(t *testing.T) {
 	cases := []interface{}{
 		"hello world", // value with a space: quoted, survives round-trip
@@ -136,6 +144,9 @@ func TestScalarRoundTripKinds(t *testing.T) {
 		uint(7),
 		float64(3.5),
 		float32(1.25),
+		paint.Color{R: 1, G: 2, B: 3, A: 255}, // opaque: serialized "#010203"
+		paint.Color{R: 4, G: 5, B: 6, A: 128}, // alpha kept: "#04050680"
+		paint.Color{R: 0, G: 0, B: 0, A: 0},   // zero color must not read back as opaque black
 	}
 	for _, want := range cases {
 		s, ok := scalarToString(reflect.ValueOf(want))
@@ -159,5 +170,14 @@ func TestScalarRoundTripKinds(t *testing.T) {
 	}
 	if _, ok := parseScalar("whatever", reflect.TypeOf(complexT{})); ok {
 		t.Error("parseScalar must reject non-scalar target types")
+	}
+
+	// paint.ParseColor answers opaque black for anything it does not
+	// recognise, so a color that is absent or truncated in the design file
+	// has to be refused rather than repainting the widget black.
+	for _, bad := range []string{"", "#", "#0102", "010203", "#0102030405"} {
+		if _, ok := parseScalar(bad, colorType); ok {
+			t.Errorf("parseScalar(%q, paint.Color) accepted a malformed color", bad)
+		}
 	}
 }

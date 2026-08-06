@@ -84,6 +84,46 @@ func TestGenerateCodeDesignProperties(t *testing.T) {
 	vetGeneratedCode(t, code)
 }
 
+// TestGenerateCodeColorSurvivesReload is the third leg of the color
+// round-trip. emitDesignProperties reads the *live* widget, not the design
+// document, so a color the designer set was in the saved file yet gone from the
+// generated screen the moment the file was reopened: captureWidgetProperties
+// skipped paint.Color, so LoadDesign rebuilt the widget without it. Save, load
+// into a fresh scene, generate — the setters have to still be there.
+func TestGenerateCodeColorSurvivesReload(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("HMI")
+	scene.SetSize(200, 150)
+
+	addConfiguredFake(t, scene, "gui.Tank", "tank1", func(w interface{}) {
+		w.(interface{ SetColor(paint.Color) }).SetColor(paint.Color{R: 10, G: 20, B: 30, A: 255})
+	})
+	// Two colors on one widget, and a translucent one, so the alpha channel and
+	// a second setter on the same object are covered too.
+	addConfiguredFake(t, scene, "gui.Valve", "v1", func(w interface{}) {
+		w.(interface{ SetOpenColor(paint.Color) }).SetOpenColor(paint.Color{R: 0, G: 200, B: 0, A: 255})
+		w.(interface{ SetClosedColor(paint.Color) }).SetClosedColor(paint.Color{R: 200, G: 0, B: 0, A: 128})
+	})
+
+	reloaded := NewGedScene()
+	if err := reloaded.LoadDesign(scene.SaveDesign()); err != nil {
+		t.Fatalf("reload design: %v", err)
+	}
+
+	code := reloaded.GenerateCode(CodeGenOptions{PackageName: "main", TypeName: "HMIUI"})
+	for _, s := range []string{
+		"ui.Tank1.SetColor(paint.Color{R: 10, G: 20, B: 30, A: 255})",
+		"ui.V1.SetOpenColor(paint.Color{R: 0, G: 200, B: 0, A: 255})",
+		"ui.V1.SetClosedColor(paint.Color{R: 200, G: 0, B: 0, A: 128})",
+	} {
+		if !strings.Contains(code, s) {
+			t.Errorf("reopened design lost a designed color:\n  %s", s)
+		}
+	}
+
+	vetGeneratedCode(t, code)
+}
+
 // TestGenerateCodeStandardWidgetProperties verifies design-property
 // reproduction also covers standard input widgets (float range/value, int
 // range, bool state).

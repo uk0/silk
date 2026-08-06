@@ -675,6 +675,11 @@ func (this *PropertyItem) String() string {
 }
 
 func (this *PropertyItem) defaultControlType() string {
+	// A color is a struct, so the kind switch below would hand it to TextEdit,
+	// which can show the value but never commit one — see ColorEdit's comment.
+	if this.Type() == colorType {
+		return "ColorEdit"
+	}
 	switch this.Type().Kind() {
 	case reflect.Bool:
 		return "CheckBox"

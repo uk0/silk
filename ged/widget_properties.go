@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 // This file adds round-trip persistence for the *embedded* widget's editable
@@ -14,12 +15,19 @@ import (
 // embedded widget (gui.Tank's level/min/max/tag, gui.Edit's text, ...) were
 // dropped on save until now, so a configured design lost those values on reload.
 //
-// Scope (v1): only scalar-typed properties are captured — string, bool, the
-// signed/unsigned integer kinds and float32/float64. Complex property types
-// (paint.Color, structs, slices) are intentionally skipped; they need dedicated
-// serializers and are left for a follow-up. Values are (de)serialized with the
-// same core.PersistString / core.PersistSscan pair TDoc itself uses for node
-// values, so the captured form matches the rest of the design document.
+// Scope: the scalar-typed properties — string, bool, the signed/unsigned
+// integer kinds and float32/float64 — plus paint.Color, which is a struct but
+// is the one complex type the designer can actually edit (prop.ColorEdit). A
+// property the user can change but that vanishes on save is worse than one they
+// cannot change at all, so the editor and this file have to cover the same set.
+// The remaining complex types (other structs, slices) are still skipped.
+//
+// Values are (de)serialized with the same core.PersistString / core.PersistSscan
+// pair TDoc itself uses for node values, so the captured form matches the rest
+// of the design document. A Color rides the same PersistString path — it lands
+// in the interface{ String() string } case and comes out as "#RRGGBB[AA]" — but
+// has to be read back with paint.ParseColor, because fmt has no scanner for a
+// struct and PersistSscan fails outright on one.
 
 // captureWidgetProperties drives w.EnumProperties with a recording stand-in and
 // returns a map of property id -> serialized scalar value. Read-only properties
@@ -86,11 +94,22 @@ func (a *propApply) AddProperty(id string, get, set interface{}) {
 	}
 }
 
+// colorType is paint.Color's reflect.Type. It is the one struct type capture
+// and apply carry; every other struct is still skipped.
+var colorType = reflect.TypeOf(paint.Color{})
+
 // scalarToString serializes a scalar reflect.Value with core.PersistString,
-// normalizing named types to their base kind first. It reports false for any
-// non-scalar kind (structs such as paint.Color, slices, ...), which the caller
-// skips.
+// normalizing named types to their base kind first. paint.Color is handled
+// ahead of the kind switch. It reports false for any other non-scalar kind
+// (structs, slices, ...), which the caller skips.
 func scalarToString(v reflect.Value) (string, bool) {
+	if v.Type() == colorType {
+		s, err := core.PersistString(v.Interface())
+		if err != nil {
+			return "", false
+		}
+		return s, true
+	}
 	var raw interface{}
 	switch v.Kind() {
 	case reflect.String:
@@ -115,9 +134,17 @@ func scalarToString(v reflect.Value) (string, bool) {
 
 // parseScalar parses s into a value of the scalar type pt using the
 // core.PersistSscan counterpart of scalarToString, converting through the base
-// kind so named types (e.g. a defined float64) are handled. It reports false
-// for non-scalar target types.
+// kind so named types (e.g. a defined float64) are handled. paint.Color is
+// handled ahead of the kind switch. It reports false for any other non-scalar
+// target type.
 func parseScalar(s string, pt reflect.Type) (reflect.Value, bool) {
+	if pt == colorType {
+		c, ok := parseColor(s)
+		if !ok {
+			return reflect.Value{}, false
+		}
+		return reflect.ValueOf(c), true
+	}
 	switch pt.Kind() {
 	case reflect.String:
 		var v string
@@ -152,4 +179,18 @@ func parseScalar(s string, pt reflect.Type) (reflect.Value, bool) {
 	default:
 		return reflect.Value{}, false
 	}
+}
+
+// parseColor reads back the "#RRGGBB"/"#RRGGBBAA" form scalarToString writes.
+// The shape is checked first because paint.ParseColor answers opaque black for
+// anything it does not recognise: an absent or truncated value would silently
+// repaint the widget black instead of leaving the property alone.
+func parseColor(s string) (paint.Color, bool) {
+	if len(s) != 7 && len(s) != 9 {
+		return paint.Color{}, false
+	}
+	if s[0] != '#' {
+		return paint.Color{}, false
+	}
+	return paint.ParseColor(s), true
 }
