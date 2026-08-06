@@ -535,30 +535,26 @@ func onPreview() {
 	if scene == nil {
 		return
 	}
-	design := scene.Generate()
-	if design == nil {
+	preview, blocked := ged.BuildPreview(scene)
+	if len(blocked) > 0 {
+		gui.ShowMessageDialog(gui.DefaultFrame(), "无法预览",
+			"以下控件无法构建, 预览已取消:\n\n"+strings.Join(blocked, "\n"))
 		return
 	}
-	form := design.Form()
-	if form == nil {
+	if preview == nil {
 		return
 	}
 
-	// Ensure the form has a reasonable default size
-	w, h := form.Size()
-	if w < 320 {
-		w = 320
-	}
-	if h < 240 {
-		h = 240
-	}
-	form.SetSize(w, h)
-
-	form.AttachWindow(gui.WtForm)
-	form.Show()
-	if win := form.Window(); win != nil {
+	// The preview takes keyboard focus so Esc reaches it instead of the design
+	// canvas behind it, and hands it back to the canvas when it closes.
+	preview.RestoreFocusTo(gedView)
+	preview.AttachWindow(gui.WtForm)
+	preview.Show()
+	if win := preview.Window(); win != nil {
+		win.SetTitle(preview.Title())
 		win.MoveToCenter()
 	}
+	preview.SetFocus()
 }
 
 func onExportGuiGv() {
