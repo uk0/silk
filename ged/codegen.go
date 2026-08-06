@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/format"
 	"math"
-	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -43,6 +42,26 @@ type CodeGenOptions struct {
 	TypeName    string // struct name, derived from form title if empty
 	FileName    string // output file path (optional, for GenerateCodeFile)
 	ModulePath  string // module path from go.mod; emitted as "// Module: <path>" when non-empty
+	// SplitHandlers makes GenerateCode emit the machine-owned half of a
+	// split pair: handlers are wired as methods on the UI struct
+	// (ui.onBtnOK) and neither their bodies nor main() are written here —
+	// both belong to the user-owned file. Off, the output stays the
+	// self-contained single file.
+	SplitHandlers bool
+}
+
+// defaultCodeGenOptions fills in what both halves of a generation must agree on.
+// The machine file and the user file name the same package and the same struct;
+// letting them default independently would produce two files that do not
+// compile together.
+func defaultCodeGenOptions(scene *GedScene, opts CodeGenOptions) CodeGenOptions {
+	if opts.PackageName == "" {
+		opts.PackageName = "main"
+	}
+	if opts.TypeName == "" {
+		opts.TypeName = sanitizeIdentifier(scene.FormTitle()) + "UI"
+	}
+	return opts
 }
 
 // widgetMapping maps a factory name to its Go type, import path, and
@@ -139,15 +158,13 @@ var factoryMap = map[string]widgetMapping{
 // GenerateRunnable controls whether a complete runnable main() is generated.
 type GenerateRunnable bool
 
-// GenerateCode generates Go source code from the scene's design.
-// It produces a complete, compilable Go program with main().
+// GenerateCode generates Go source code from the scene's design. By default it
+// produces a complete, compilable Go program with main(); with
+// opts.SplitHandlers it produces the machine-owned half of a pair, which
+// compiles only alongside the user file that declares the handler methods (see
+// GenerateCodeFile).
 func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
-	if opts.PackageName == "" {
-		opts.PackageName = "main"
-	}
-	if opts.TypeName == "" {
-		opts.TypeName = sanitizeIdentifier(scene.FormTitle()) + "UI"
-	}
+	opts = defaultCodeGenOptions(scene, opts)
 
 	imports := make(map[string]bool)
 	imports["github.com/uk0/silk/gui"] = true  // always needed for Form
@@ -351,46 +368,26 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
 		}
-		// Wire event handlers based on widget type and user code.
-		// Bindings recorded in the designer (property sheet "事件" rows)
-		// win: they name both the event and its handler, so nothing has
-		// to be guessed. Emitted by event name — map order would
-		// reshuffle the bindings of a multi-event widget on every
-		// regeneration.
-		handlerName := extractHandlerName(f.code)
-		if len(f.eventHandlers) > 0 {
-			evtNames := make([]string, 0, len(f.eventHandlers))
-			for evtName := range f.eventHandlers {
-				evtNames = append(evtNames, evtName)
+		// Wire the events this widget contributes. handlerBindingsFor owns
+		// the rules (recorded bindings win, otherwise the widget's natural
+		// event) so the user-file stub collector resolves the exact same
+		// set — a handler the machine file calls is a handler the user file
+		// declares.
+		for _, b := range handlerBindingsFor(f.factoryName, f.code, f.eventHandlers) {
+			if emitEventBinding(&buf, imports, f.factoryName, f.name, b.event, handlerRef(b.handler, opts.SplitHandlers)) {
+				continue
 			}
-			sort.Strings(evtNames)
-			for _, evtName := range evtNames {
-				handler := f.eventHandlers[evtName]
-				if !emitEventBinding(&buf, imports, f.factoryName, f.name, evtName, handler) {
-					// Unknown (factory, event) pair. widgetEvents is a
-					// hand-maintained table of widget→signal mappings;
-					// new pairs need an explicit entry. Emit guidance
-					// instead of a silent miss so reviewers see the gap.
-					// The line still compiles (it's a comment), so
-					// generated files stay buildable — the binding just
-					// doesn't fire until codegen learns the pair.
-					buf.WriteString(fmt.Sprintf(
-						"\t// codegen: no binding for %s.%s — add an entry to ged/codegen.go's widgetEvents.\n"+
-							"\t//          Handler %q is not connected at runtime.\n",
-						f.factoryName, evtName, handler))
-				}
-			}
-		} else if handlerName != "" {
-			// No recorded binding, but the user wrote a func body: pick
-			// the "natural" event for the widget (Button → OnClick,
-			// Slider → OnValueChanged, etc.) via defaultEventForFactory
-			// and emit through the same helper, so this auto path stays
-			// in lockstep with the recorded path above. It used to run
-			// first and win, which wired a widget's default signal even
-			// when the designer had bound a different event.
-			if evt := defaultEventForFactory(f.factoryName); evt != "" {
-				emitEventBinding(&buf, imports, f.factoryName, f.name, evt, handlerName)
-			}
+			// Unknown (factory, event) pair. widgetEvents is a
+			// hand-maintained table of widget→signal mappings;
+			// new pairs need an explicit entry. Emit guidance
+			// instead of a silent miss so reviewers see the gap.
+			// The line still compiles (it's a comment), so
+			// generated files stay buildable — the binding just
+			// doesn't fire until codegen learns the pair.
+			buf.WriteString(fmt.Sprintf(
+				"\t// codegen: no binding for %s.%s — add an entry to ged/codegen.go's widgetEvents.\n"+
+					"\t//          Handler %q is not connected at runtime.\n",
+				f.factoryName, b.event, b.handler))
 		}
 		buf.WriteString("\n")
 	}
@@ -446,88 +443,39 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		emitBindServices(&buf, imports, opts.TypeName, fields, decls)
 	}
 
-	// Generate main() function for runnable program
-	if opts.PackageName == "main" {
-		imports["github.com/uk0/silk/core"] = true
-		if needServices {
-			// Services-backed app: build the shared scada.Services, bind the screen
-			// to it, start the runtime, then run the UI. services.Stop tears the
-			// container (historian/eventlog/...) down on exit.
-			imports["log"] = true
-			imports["github.com/uk0/silk/scada"] = true
-			buf.WriteString(fmt.Sprintf(`
-func main() {
-	services, err := scada.New(scada.DefaultConfig(core.LocalDataDir()))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer services.Stop()
-
-	ui := %s()
-	if err := ui.BindServices(services); err != nil {
-		log.Fatal(err)
-	}
-	if err := services.Start(); err != nil {
-		log.Fatal(err)
-	}
-
-	ui.Form.AttachWindow(gui.WtForm)
-	ui.Form.Window().SetIcon(nil)
-	ui.Form.Window().MoveToCenter()
-	ui.Form.Show()
-	core.EventLoop()
-}
-`, constructorName))
-		} else {
-			buf.WriteString(fmt.Sprintf(`
-func main() {
-	ui := %s()
-	ui.Form.AttachWindow(gui.WtForm)
-	ui.Form.Window().SetIcon(nil)
-	ui.Form.Window().MoveToCenter()
-	ui.Form.Show()
-	core.EventLoop()
-}
-`, constructorName))
-		}
+	// Generate main() function for runnable program. Split output has none:
+	// the entry point is the developer's, so it lives in the user file where
+	// they can extend it.
+	if opts.PackageName == "main" && !opts.SplitHandlers {
+		emitMain(&buf, imports, constructorName, needServices)
 	}
 
 	// Append user-written event handler code, each distinct block once.
 	// Handlers are package-level declarations shared by name, and a copy of a
 	// widget carries its handler source along — emitting the block per widget
 	// would redeclare the func and the generated file would not compile.
-	hasHandlerCode := false
-	emitted := map[string]bool{}
-	for _, f := range fields {
-		code := strings.TrimSpace(f.code)
-		if code != "" && !emitted[code] {
-			emitted[code] = true
-			if !hasHandlerCode {
-				buf.WriteString("\n// --- Event Handlers ---\n")
-				hasHandlerCode = true
+	// Split output writes none of it: this file is rewritten wholesale, so
+	// hand-written code kept here could not survive a regeneration.
+	if !opts.SplitHandlers {
+		hasHandlerCode := false
+		emitted := map[string]bool{}
+		for _, f := range fields {
+			code := strings.TrimSpace(f.code)
+			if code != "" && !emitted[code] {
+				emitted[code] = true
+				if !hasHandlerCode {
+					buf.WriteString("\n// --- Event Handlers ---\n")
+					hasHandlerCode = true
+				}
+				buf.WriteString("\n")
+				buf.WriteString(code)
+				buf.WriteString("\n")
 			}
-			buf.WriteString("\n")
-			buf.WriteString(code)
-			buf.WriteString("\n")
 		}
 	}
 
 	// Scan user event code for common stdlib imports
-	allCode := buf.String()
-	stdlibScan := map[string]string{
-		"fmt.":     "fmt",
-		"log.":     "log",
-		"os.":      "os",
-		"strings.": "strings",
-		"strconv.": "strconv",
-		"time.":    "time",
-		"math.":    "math",
-	}
-	for prefix, pkg := range stdlibScan {
-		if strings.Contains(allCode, prefix) {
-			imports[pkg] = true
-		}
-	}
+	scanStdlibImports(buf.String(), imports)
 
 	// Everything after the discarded first import block is the file body.
 	full := buf.String()
@@ -577,6 +525,73 @@ func main() {
 		return src
 	}
 	return string(formatted)
+}
+
+// emitMain writes the runnable entry point for a package main design. Both
+// output shapes go through it: the single file keeps main() next to the widget
+// tree, the split pair hands it to the user file.
+func emitMain(buf *strings.Builder, imports map[string]bool, constructorName string, needServices bool) {
+	imports["github.com/uk0/silk/gui"] = true
+	imports["github.com/uk0/silk/core"] = true
+	if needServices {
+		// Services-backed app: build the shared scada.Services, bind the screen
+		// to it, start the runtime, then run the UI. services.Stop tears the
+		// container (historian/eventlog/...) down on exit.
+		imports["log"] = true
+		imports["github.com/uk0/silk/scada"] = true
+		buf.WriteString(fmt.Sprintf(`
+func main() {
+	services, err := scada.New(scada.DefaultConfig(core.LocalDataDir()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer services.Stop()
+
+	ui := %s()
+	if err := ui.BindServices(services); err != nil {
+		log.Fatal(err)
+	}
+	if err := services.Start(); err != nil {
+		log.Fatal(err)
+	}
+
+	ui.Form.AttachWindow(gui.WtForm)
+	ui.Form.Window().SetIcon(nil)
+	ui.Form.Window().MoveToCenter()
+	ui.Form.Show()
+	core.EventLoop()
+}
+`, constructorName))
+		return
+	}
+	buf.WriteString(fmt.Sprintf(`
+func main() {
+	ui := %s()
+	ui.Form.AttachWindow(gui.WtForm)
+	ui.Form.Window().SetIcon(nil)
+	ui.Form.Window().MoveToCenter()
+	ui.Form.Show()
+	core.EventLoop()
+}
+`, constructorName))
+}
+
+// scanStdlibImports adds the stdlib packages src appears to qualify against.
+// Both halves of a split generation carry hand-written code, so both need it.
+func scanStdlibImports(src string, imports map[string]bool) {
+	for prefix, pkg := range map[string]string{
+		"fmt.":     "fmt",
+		"log.":     "log",
+		"os.":      "os",
+		"strings.": "strings",
+		"strconv.": "strconv",
+		"time.":    "time",
+		"math.":    "math",
+	} {
+		if strings.Contains(src, prefix) {
+			imports[pkg] = true
+		}
+	}
 }
 
 // referencesPackage reports whether src qualifies an identifier with pkg
@@ -641,12 +656,6 @@ func hasDesignProp(factoryName, setter string) bool {
 		}
 	}
 	return false
-}
-
-// GenerateCodeFile writes the generated code to a file.
-func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) error {
-	code := scene.GenerateCode(opts)
-	return os.WriteFile(filename, []byte(code), 0644)
 }
 
 // GenerateCodeWithMod is a thin wrapper around GenerateCode that
@@ -717,6 +726,11 @@ type widgetEvent struct {
 	name string // event name, as stored in the design and shown in the property sheet
 	code string // formatted with (fieldName, handlerName); ends in a newline
 	imp  string // extra import the emitted line references, "" for none
+	// params is the handler's Go parameter list, "" for none. It is what
+	// code calls the handler with, so a stub declared with it always
+	// type-checks against the binding. Kept in the same row as code for
+	// exactly that reason: the two drift the moment they live apart.
+	params string
 }
 
 // widgetEvents is the single source of truth for which events codegen
@@ -731,76 +745,150 @@ var widgetEvents = map[string][]widgetEvent{
 		{name: "OnClick", code: "\tui.%s.Action().BindFunc0(%s)\n"},
 	},
 	"gui.Edit": {
-		{name: "OnChanged", code: "\tui.%s.SigTextChanged(func(_ interface{}, s string) { %s(s) })\n"},
+		{name: "OnChanged", code: "\tui.%s.SigTextChanged(func(_ interface{}, s string) { %s(s) })\n", params: "s string"},
 	},
 	"gui.CheckBox": {
-		{name: "OnToggled", code: "\tui.%s.SigCheck(func(checked bool) { %s(checked) })\n"},
+		{name: "OnToggled", code: "\tui.%s.SigCheck(func(checked bool) { %s(checked) })\n", params: "checked bool"},
 	},
 	"gui.Slider": {
-		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v float64) { %s(v) })\n"},
+		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v float64) { %s(v) })\n", params: "v float64"},
 	},
 	"gui.SpinBox": {
-		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v int) { %s(v) })\n"},
+		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v int) { %s(v) })\n", params: "v int"},
 	},
 	"gui.RadioButton": {
-		{name: "OnChanged", code: "\tui.%s.SetChangedCallback(func(_ interface{}, v bool) { %s(v) })\n"},
+		{name: "OnChanged", code: "\tui.%s.SetChangedCallback(func(_ interface{}, v bool) { %s(v) })\n", params: "v bool"},
 	},
 	"gui.ToggleSwitch": {
-		{name: "OnToggle", code: "\tui.%s.SigToggle(func(on bool) { %s(on) })\n"},
+		{name: "OnToggle", code: "\tui.%s.SigToggle(func(on bool) { %s(on) })\n", params: "on bool"},
 	},
 	"gui.SearchBox": {
-		{name: "OnSearch", code: "\tui.%s.SigSearch(func(q string) { %s(q) })\n"},
-		{name: "OnTextChanged", code: "\tui.%s.SigTextChanged(func(s string) { %s(s) })\n"},
+		{name: "OnSearch", code: "\tui.%s.SigSearch(func(q string) { %s(q) })\n", params: "q string"},
+		{name: "OnTextChanged", code: "\tui.%s.SigTextChanged(func(s string) { %s(s) })\n", params: "s string"},
 	},
 	"gui.NumberInput": {
-		{name: "OnValueChanged", code: "\tui.%s.SigValueChanged(func(v float64) { %s(v) })\n"},
+		{name: "OnValueChanged", code: "\tui.%s.SigValueChanged(func(v float64) { %s(v) })\n", params: "v float64"},
 	},
 	"gui.Rating": {
-		{name: "OnRatingChanged", code: "\tui.%s.SigRatingChanged(func(v int) { %s(v) })\n"},
+		{name: "OnRatingChanged", code: "\tui.%s.SigRatingChanged(func(v int) { %s(v) })\n", params: "v int"},
 	},
 	"gui.DatePicker": {
-		{name: "OnDateChanged", code: "\tui.%s.SigDateChanged(func(y, m, d int) { %s(y, m, d) })\n"},
+		{name: "OnDateChanged", code: "\tui.%s.SigDateChanged(func(y, m, d int) { %s(y, m, d) })\n", params: "y, m, d int"},
 	},
 	"gui.ColorPicker": {
-		{name: "OnColorChanged", code: "\tui.%s.SigColorChanged(func(c paint.Color) { %s(c) })\n", imp: "github.com/uk0/silk/paint"},
+		{name: "OnColorChanged", code: "\tui.%s.SigColorChanged(func(c paint.Color) { %s(c) })\n", imp: "github.com/uk0/silk/paint", params: "c paint.Color"},
 	},
 	"gui.DropdownButton": {
-		{name: "OnSelect", code: "\tui.%s.SigSelect(func(idx int, text string) { %s(idx, text) })\n"},
+		{name: "OnSelect", code: "\tui.%s.SigSelect(func(idx int, text string) { %s(idx, text) })\n", params: "idx int, text string"},
 	},
 	"gui.SwitchGroup": {
-		{name: "OnChange", code: "\tui.%s.SigChange(func(idx int, text string) { %s(idx, text) })\n"},
+		{name: "OnChange", code: "\tui.%s.SigChange(func(idx int, text string) { %s(idx, text) })\n", params: "idx int, text string"},
 	},
 	"gui.Link": {
-		{name: "OnClick", code: "\tui.%s.SigClick(func(url string) { %s(url) })\n"},
+		{name: "OnClick", code: "\tui.%s.SigClick(func(url string) { %s(url) })\n", params: "url string"},
 	},
 	"gui.ComboBox": {
-		{name: "OnSelectionChanged", code: "\tui.%s.SigSelectionChanged(func(_ interface{}, idx int) { %s(idx) })\n"},
+		{name: "OnSelectionChanged", code: "\tui.%s.SigSelectionChanged(func(_ interface{}, idx int) { %s(idx) })\n", params: "idx int"},
 	},
 	"gui.ListWidget": {
-		{name: "OnSelectionChanged", code: "\tui.%s.SigSelectionChanged(func(_ interface{}, idx []int) { %s(idx) })\n"},
+		{name: "OnSelectionChanged", code: "\tui.%s.SigSelectionChanged(func(_ interface{}, idx []int) { %s(idx) })\n", params: "idx []int"},
 	},
 	"gui.Table": {
-		{name: "OnSelectionChanged", code: "\tui.%s.SetSelectionChangedCallback(func(_ interface{}, row int) { %s(row) })\n"},
+		{name: "OnSelectionChanged", code: "\tui.%s.SetSelectionChangedCallback(func(_ interface{}, row int) { %s(row) })\n", params: "row int"},
 	},
 	"gui.Tag": {
 		{name: "OnClose", code: "\tui.%s.SigClose(func() { %s() })\n"},
 	},
 	"gui.Breadcrumb": {
-		{name: "OnNavigate", code: "\tui.%s.SigClick(func(idx int, item gui.BreadcrumbItem) { %s(idx, item.Text) })\n"},
+		{name: "OnNavigate", code: "\tui.%s.SigClick(func(idx int, item gui.BreadcrumbItem) { %s(idx, item.Text) })\n", params: "idx int, text string"},
 	},
 	"gui.Accordion": {
-		{name: "OnSectionToggle", code: "\tui.%s.SigExpand(func(idx int, expanded bool) { %s(idx, expanded) })\n"},
+		{name: "OnSectionToggle", code: "\tui.%s.SigExpand(func(idx int, expanded bool) { %s(idx, expanded) })\n", params: "idx int, expanded bool"},
 	},
 	"gui.NotificationPanel": {
-		{name: "OnItemClick", code: "\tui.%s.SigClick(func(idx int) { %s(idx) })\n"},
+		{name: "OnItemClick", code: "\tui.%s.SigClick(func(idx int) { %s(idx) })\n", params: "idx int"},
 	},
 	"gui.TabWidget": {
-		{name: "OnTabChanged", code: "\tui.%s.SetCurrentChangedCallback(func(_ interface{}, idx int) { %s(idx) })\n"},
+		{name: "OnTabChanged", code: "\tui.%s.SetCurrentChangedCallback(func(_ interface{}, idx int) { %s(idx) })\n", params: "idx int"},
 	},
 	"gui.CodeEditor": {
-		{name: "OnTextChanged", code: "\tui.%s.SigChanged(%s)\n"},
-		{name: "OnClick", code: "\tui.%s.SigWidgetClicked(%s)\n"},
+		// Both take the handler itself, so the stub must be exactly func(string).
+		{name: "OnTextChanged", code: "\tui.%s.SigChanged(%s)\n", params: "s string"},
+		{name: "OnClick", code: "\tui.%s.SigWidgetClicked(%s)\n", params: "s string"},
 	},
+}
+
+// handlerBinding is one (event → handler) pair a widget contributes, resolved
+// against widgetEvents.
+type handlerBinding struct {
+	event   string // event name
+	handler string // handler identifier the binding calls
+	params  string // the handler's Go parameter list, from widgetEvents
+	imp     string // import the parameter list references, "" for none
+	known   bool   // widgetEvents has this (factory, event) pair
+}
+
+// handlerBindingsFor resolves the bindings one widget contributes, in emission
+// order. Bindings recorded in the designer (property sheet "事件" rows) win:
+// they name both the event and its handler, so nothing has to be guessed, and
+// they are returned by sorted event name — map order would reshuffle the
+// bindings of a multi-event widget on every regeneration. With none recorded, a
+// widget that carries handler source falls back to the "natural" event for its
+// type (Button → OnClick, Slider → OnValueChanged); a widget whose natural
+// event codegen cannot wire contributes nothing.
+//
+// This is the single answer both halves of a split generation read: the machine
+// file wires exactly these handlers, and the user file declares a method for
+// exactly these handlers.
+func handlerBindingsFor(factoryName, code string, events map[string]string) []handlerBinding {
+	if len(events) > 0 {
+		names := make([]string, 0, len(events))
+		for name := range events {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out := make([]handlerBinding, 0, len(names))
+		for _, evtName := range names {
+			out = append(out, resolveBinding(factoryName, evtName, events[evtName]))
+		}
+		return out
+	}
+	handler := extractHandlerName(code)
+	if handler == "" {
+		return nil
+	}
+	evt := defaultEventForFactory(factoryName)
+	if evt == "" {
+		return nil
+	}
+	// An auto-default pair codegen cannot wire is dropped rather than
+	// reported: the user never asked for this binding, so there is no gap to
+	// point them at.
+	if b := resolveBinding(factoryName, evt, handler); b.known {
+		return []handlerBinding{b}
+	}
+	return nil
+}
+
+func resolveBinding(factoryName, evtName, handler string) handlerBinding {
+	b := handlerBinding{event: evtName, handler: handler}
+	for _, e := range widgetEvents[factoryName] {
+		if e.name == evtName {
+			b.params, b.imp, b.known = e.params, e.imp, true
+			break
+		}
+	}
+	return b
+}
+
+// handlerRef renders the expression a binding calls the handler through: a
+// method value on the UI struct when the handlers are user-file methods, the
+// bare package-level func name for single-file output.
+func handlerRef(handler string, split bool) string {
+	if split {
+		return "ui." + handler
+	}
+	return handler
 }
 
 // AvailableEvents returns the events codegen can bind for factoryName, in

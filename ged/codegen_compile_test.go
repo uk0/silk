@@ -1,6 +1,7 @@
 package ged
 
 import (
+	"fmt"
 	"github.com/uk0/silk/graph"
 	"os"
 	"os/exec"
@@ -218,6 +219,15 @@ func TestCodeGenAllFactoryWidgets(t *testing.T) {
 // a vet failure.
 func vetGeneratedCode(t *testing.T, code string) {
 	t.Helper()
+	vetGeneratedFiles(t, map[string]string{"main.go": code})
+}
+
+// vetGeneratedFiles is the same check over a whole package: a split generation
+// produces two files that only type-check together — the machine file calls
+// ui.<handler>, the user file declares it — so vetting either alone proves
+// nothing about the pair.
+func vetGeneratedFiles(t *testing.T, files map[string]string) {
+	t.Helper()
 
 	tmpDir := t.TempDir()
 
@@ -231,8 +241,10 @@ replace github.com/uk0/silk => ` + findModuleRoot(t) + `
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		t.Fatal("failed to write go.mod:", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(code), 0644); err != nil {
-		t.Fatal("failed to write main.go:", err)
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(src), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
 	}
 
 	// Resolve dependencies, then vet. vet type-checks (won't link).
@@ -247,7 +259,11 @@ replace github.com/uk0/silk => ` + findModuleRoot(t) + `
 	cmd.Dir = tmpDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Errorf("generated code failed go vet:\n%s\n\nGenerated code:\n%s", output, code)
+		var srcs strings.Builder
+		for name, src := range files {
+			fmt.Fprintf(&srcs, "\n--- %s ---\n%s", name, src)
+		}
+		t.Errorf("generated code failed go vet:\n%s\n\nGenerated code:%s", output, srcs.String())
 	}
 }
 

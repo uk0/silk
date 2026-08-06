@@ -576,10 +576,29 @@ func onExportCode() {
 		PackageName: "main",
 		TypeName:    gedView.GedScene().FormTitle() + "UI",
 	}
-	err := gedView.GedScene().GenerateCodeFile(filename, opts)
+	res, err := gedView.GedScene().GenerateCodeFile(filename, opts)
 	if err != nil {
 		core.Error(err)
+		gui.ShowMessageDialog(gui.DefaultFrame(), "导出错误", err.Error())
+		return
 	}
+	gui.ShowMessageDialog(gui.DefaultFrame(), "导出代码", exportReport(res))
+}
+
+// exportReport describes what an export did. The machine file is rewritten
+// every time and needs no explanation; what the developer has to be told is
+// what happened on the side the designer is not allowed to overwrite.
+func exportReport(res ged.SplitResult) string {
+	msg := "已生成 " + filepath.Base(res.MachineFile) + " (界面代码, 每次导出重写)\n"
+	switch {
+	case res.UserCreated:
+		msg += "已创建 " + filepath.Base(res.UserFile) + " (你的代码, 之后只会追加, 不会被覆盖)"
+	case len(res.AddedStubs) > 0:
+		msg += "已在 " + filepath.Base(res.UserFile) + " 追加事件方法: " + strings.Join(res.AddedStubs, ", ")
+	default:
+		msg += filepath.Base(res.UserFile) + " 未改动"
+	}
+	return msg
 }
 
 // ---------------------------------------------------------------------------
@@ -647,8 +666,14 @@ func onRun() {
 	os.MkdirAll(tmpDir, 0755)
 	goFile := tmpDir + "/main.go"
 
+	// Run compiles a throwaway copy of the design, so both halves are written
+	// fresh: nothing here is ever hand-edited, and a user file left behind by
+	// another design would not match the machine file generated beside it.
+	// goFile names the user half, so removing it makes the generator write it
+	// whole instead of appending to last run's.
+	os.Remove(goFile)
 	opts := ged.CodeGenOptions{PackageName: "main", TypeName: scene.FormTitle() + "UI"}
-	err := scene.GenerateCodeFile(goFile, opts)
+	res, err := scene.GenerateCodeFile(goFile, opts)
 	if err != nil {
 		gui.ShowMessageDialog(gui.DefaultFrame(), "导出错误", err.Error())
 		return
@@ -683,7 +708,7 @@ func onRun() {
 		// "#cgo pkg-config: cairo"), so no machine-specific include path is
 		// set. Run from the silk module root so silk/* imports resolve
 		// regardless of the designer process's cwd.
-		cmd := exec.Command(goExecutable(), "build", "-o", appPath, goFile)
+		cmd := exec.Command(goExecutable(), "build", "-o", appPath, res.UserFile, res.MachineFile)
 		cmd.Dir = moduleRoot
 		cmd.Env = append(os.Environ(), "PATH="+buildToolPath())
 		output, err := cmd.CombinedOutput()
