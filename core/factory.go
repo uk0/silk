@@ -153,7 +153,11 @@ func FindFactory(name string) Factory {
 
 	realName, ok := factoryAlias[name]
 	if ok {
-		c, ok = nameFactoryMap[name]
+		// The alias has to resolve against realName. Looking name up a second
+		// time can only miss — the lookup above already failed on it — so every
+		// alias resolved to nil and the warning below blamed a real factory that
+		// was registered all along.
+		c, ok = nameFactoryMap[realName]
 		if ok {
 			return c
 		}

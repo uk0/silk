@@ -97,11 +97,45 @@ func TestFactoryLocation(t *testing.T) {
 	}
 }
 
+// aliasTarget owns its own factory so this test does not disturb the "int"
+// registration TestFactoryOf/TestFactoryNameOf assert on. The field only keeps
+// the type non-empty, so two instances get distinct addresses.
+type aliasTarget struct{ n int }
+
+// TestAddFactoryAlias holds the alias mechanism to what it promises: a name
+// registered as an alias produces the aliased factory's objects. The lookup
+// used to re-read the alias name out of the factory map instead of the real
+// name it maps to — a read that had already missed one line earlier — so every
+// alias resolved to nil, New(alias) handed back nil, and the warning printed
+// blamed the real factory for not being registered when it was. Documents
+// renamed across versions load through this path, so the failure is a widget
+// silently dropped from a form with a misleading line in the log.
 func TestAddFactoryAlias(t *testing.T) {
-	AddFactoryAlias("test.IntAlias.UniqueXYZ", "int")
-	// After adding alias, FindFactory with the alias name should resolve
-	// Note: the alias mechanism requires the real factory to be registered.
-	// FindFactory may log a warning but should not panic.
-	f := FindFactory("test.IntAlias.UniqueXYZ")
-	_ = f // May or may not resolve depending on alias lookup path
+	const real = "test.AliasTarget.UniqueXYZ"
+	const alias = "test.AliasTargetAlias.UniqueXYZ"
+	if FindFactory(real) == nil {
+		RegisterFactory(real, TypeOf(aliasTarget{}))
+	}
+	AddFactoryAlias(alias, real)
+
+	f := FindFactory(alias)
+	if f == nil {
+		t.Fatalf("FindFactory(%q) = nil; the alias of the registered factory %q did not resolve", alias, real)
+	}
+	if f.Name() != real {
+		t.Errorf("FindFactory(%q).Name() = %q, want %q", alias, f.Name(), real)
+	}
+	if _, ok := New(alias).(*aliasTarget); !ok {
+		t.Errorf("New(%q) = %T, want *aliasTarget", alias, New(alias))
+	}
+}
+
+// TestFindFactoryAliasOfMissingTarget keeps the failure path a nil rather than
+// a stale hit: an alias whose target was never registered must not resolve.
+func TestFindFactoryAliasOfMissingTarget(t *testing.T) {
+	const alias = "test.DanglingAlias.UniqueXYZ"
+	AddFactoryAlias(alias, "test.NeverRegistered.UniqueXYZ")
+	if f := FindFactory(alias); f != nil {
+		t.Errorf("FindFactory(%q) = %v, want nil for an alias of an unregistered factory", alias, f)
+	}
 }
