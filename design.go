@@ -1405,6 +1405,10 @@ var widgetHelp *ged.WidgetHelp
 // selection via bindPropertySheetTo so selecting a widget populates it.
 var propSheet *prop.PropertySheet
 
+// historyPanel lists the active document's undo stack and jumps to any point
+// in it. Aimed at a document by bindHistoryPanelTo.
+var historyPanel *ged.UndoPanel
+
 // centerDock holds the design canvas and code panel tabs.
 var centerDock *gui.Dock
 
@@ -1501,6 +1505,18 @@ func bindPropertySheetTo(gv *ged.GedView) {
 		}
 		propSheet.Bind(objs, gv.PropertyConfigName(), gv.Scene())
 	})
+}
+
+// bindHistoryPanelTo aims the 历史 panel at gv's undo stack. One panel is
+// shared by every open document, so like the property sheet it has to be
+// re-aimed whenever the active canvas changes; unlike the property sheet it
+// needs no per-view callback, because the stack has no change signal and the
+// panel re-reads it on its own.
+func bindHistoryPanelTo(gv *ged.GedView) {
+	if gv == nil || historyPanel == nil {
+		return
+	}
+	historyPanel.SetScene(gv.GedScene())
 }
 
 // bindStatusBarTo makes the permanent status bar indicators follow gv instead
@@ -1663,6 +1679,15 @@ func createPanels(mainFrame *gui.Frame) {
 		terminalPanel = ged.NewTerminalPanel()
 		rightDockI.AddView(terminalPanel)
 
+		// ─── Undo history panel in right dock ───
+		// AddView claims this as one of the frame's tool views because the
+		// panel's factory name is a registered tool view id and the
+		// ToolViewActions call above has already synced the registry into the
+		// frame. Skip either half and the frame cannot tell the panel from a
+		// document: CurrentDocView then hands it to Run, Preview and Save.
+		historyPanel = ged.NewUndoPanel()
+		rightDockI.AddView(historyPanel)
+
 		if rightDock, ok := rightDockI.(*gui.Dock); ok {
 			rightDockRef = rightDock
 			rightDock.SetActiveIndex(0)
@@ -1677,6 +1702,7 @@ func createPanels(mainFrame *gui.Frame) {
 			codePanel.BindGedView(gv)
 			bindWidgetHelpTo(gv)
 			bindPropertySheetTo(gv)
+			bindHistoryPanelTo(gv)
 			bindStatusBarTo(gv)
 		}
 		refreshTreeForCurrentView(dbgTree)
@@ -1693,6 +1719,8 @@ func createPanels(mainFrame *gui.Frame) {
 				bindWidgetHelpTo(gv)
 				// Rebind property-sheet selection listener
 				bindPropertySheetTo(gv)
+				// Re-aim the history panel at this document's undo stack
+				bindHistoryPanelTo(gv)
 				// Rebind status bar listeners, then show this document's numbers
 				bindStatusBarTo(gv)
 				updateStatusBarInfoFor(gv)
