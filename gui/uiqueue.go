@@ -1,6 +1,12 @@
 package gui
 
-import "sync"
+import (
+	"fmt"
+	"runtime/debug"
+	"sync"
+
+	"github.com/uk0/silk/core"
+)
 
 var (
 	uiTaskMu   sync.Mutex
@@ -37,8 +43,22 @@ func drainUITasks() {
 	uiTasks = nil
 	uiTaskMu.Unlock()
 	for _, fn := range batch {
-		func() { defer func() { _ = recover() }(); fn() }() // a panicking task must not kill the loop
+		runUITask(fn)
 	}
+}
+
+// runUITask keeps one panicking task from killing the event loop, and names it.
+// The recover used to swallow the panic whole: a posted task — a debugger step,
+// a git refresh, a toast — simply did nothing, with nothing in the log to say
+// it had even run, and the defect behind it could not be found. The stack is
+// the report, since the panic came off whichever goroutine called Post.
+func runUITask(fn func()) {
+	defer func() {
+		if e := recover(); e != nil {
+			core.Warn(fmt.Sprintf("ui: posted task panicked: %v\n%s", e, debug.Stack()))
+		}
+	}()
+	fn()
 }
 
 // SetUIWakeup installs the wakeup hook (called once by the window layer).

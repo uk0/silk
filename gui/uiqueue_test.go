@@ -1,9 +1,12 @@
 package gui
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/uk0/silk/core"
 )
 
 // resetUIQueue clears global queue state so tests don't bleed into each other
@@ -116,6 +119,51 @@ func TestUIQueuePanicIsolation(t *testing.T) {
 	}
 	if !third {
 		t.Fatal("task after the panicking one did not run")
+	}
+}
+
+// TestUIQueuePanicIsReported covers the half of the contract
+// TestUIQueuePanicIsolation cannot see. Surviving the panic was all the recover
+// did: the value went straight into the bin. Everything a background goroutine
+// hands the GUI arrives through Post — debugger locals, git refreshes, LSP
+// results, toasts — so a panic in one of them showed up as a menu item that
+// did nothing, forever, with no line in the log saying the task had even run.
+func TestUIQueuePanicIsReported(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+
+	var mu sync.Mutex
+	var warnings []string
+	unregister := core.RegisterLogSink(func(level core.LogLevel, msg string) {
+		if level != core.LevelWarn {
+			return
+		}
+		mu.Lock()
+		warnings = append(warnings, msg)
+		mu.Unlock()
+	})
+	defer unregister()
+
+	Post(func() { panic("boom-from-a-posted-task") })
+	drainUITasks()
+
+	mu.Lock()
+	defer mu.Unlock()
+	var reported string
+	for _, w := range warnings {
+		if strings.Contains(w, "boom-from-a-posted-task") {
+			reported = w
+			break
+		}
+	}
+	if reported == "" {
+		t.Fatalf("the panic was swallowed without a report; warnings seen: %v", warnings)
+	}
+	// The task ran on the drain thread, not on whichever goroutine posted it,
+	// so the panic value alone names nothing. Without a stack the report says
+	// a task failed but not which one.
+	if !strings.Contains(reported, "runUITask") {
+		t.Errorf("panic report carries no stack, so the failing task cannot be located:\n%s", reported)
 	}
 }
 
