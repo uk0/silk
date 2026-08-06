@@ -78,6 +78,11 @@ type GedView struct {
 	dragOriginX float64
 	dragOriginY float64
 
+	// Rulers and user-placed guides (see guides.go). The guides themselves
+	// live on the scene; the view owns their visibility and the drag gesture.
+	showGuides bool
+	guideDrag  guideDragState
+
 	// gestureSeq groups the commands pushed by one continuous keyboard
 	// gesture so they collapse into a single undo step; see beginGesture.
 	gestureSeq uint64
@@ -106,9 +111,15 @@ func (this *GedView) Init(self gui.IWidget) {
 	this.GraphView.Init(self)
 	this.snapEnabled = true
 	this.gridSize = 5.0
+	this.showGuides = true
 	this.SetScene(NewGedScene())
 	this.SetZoomFactor(1)
 	this.SetPageMarginVisible(false)
+	// Reserve the ruler strips (guides.go) in the view padding, on every side
+	// so the centred page clears them too. Without it a scrolled or zoomed
+	// page comes to rest under the rulers and the widgets in the form's
+	// top-left corner cannot be clicked at all.
+	this.SetPaddingPx(rulerThicknessPx+2, rulerThicknessPx+2, rulerThicknessPx+2, rulerThicknessPx+2)
 	this.AddStandardTools()
 	this.SetPropertyConfigName("ged")
 
@@ -1273,6 +1284,12 @@ func (this *GedView) OnLeftDown(x, y float64) {
 		return
 	}
 
+	// A press on a ruler, or on a guide line, is a guide gesture — the canvas
+	// tools must not also see it as a click on whatever sits underneath.
+	if this.beginGuideDrag(x, y) {
+		return
+	}
+
 	now := time.Now()
 	if now.Sub(lastClickTime) < 400*time.Millisecond {
 		dx := x - lastClickX
@@ -1836,12 +1853,13 @@ const alignTolerance = 1.5 // mm — snap distance for alignment guides
 // computeAlignGuides is the pure geometry behind the drag-time alignment
 // guides. It returns one guide for every case where the dragged rect's left,
 // right, or horizontal centre lines up — within threshold — with the left,
-// right, or centre of any rect in others, or with the canvas horizontal centre
-// (and the top/bottom/centre analogue for horizontal guides). Vertical guides
-// are emitted as a segment spanning the canvas height at the aligned x;
-// horizontal guides span the canvas width at the aligned y. Receiver- and
-// scene-free (mirrors the pure snapToGrid) so it is unit-testable in isolation.
-func computeAlignGuides(dragged geom.Rect, others []geom.Rect, canvas geom.Rect, threshold float64) []alignGuide {
+// right, or centre of any rect in others, with one of the user's manual
+// guides, or with the canvas horizontal centre (and the top/bottom/centre
+// analogue for horizontal guides). Vertical guides are emitted as a segment
+// spanning the canvas height at the aligned x; horizontal guides span the
+// canvas width at the aligned y. Receiver- and scene-free (mirrors the pure
+// snapToGrid) so it is unit-testable in isolation.
+func computeAlignGuides(dragged geom.Rect, others []geom.Rect, canvas geom.Rect, manual sceneGuides, threshold float64) []alignGuide {
 	var guides []alignGuide
 
 	dcx, dcy := dragged.Center()
@@ -1879,6 +1897,19 @@ func computeAlignGuides(dragged geom.Rect, others []geom.Rect, canvas geom.Rect,
 			for _, t := range yTargets {
 				tryH(e, t)
 			}
+		}
+	}
+
+	// Manual guides are just more targets in the same pass, so a widget lines
+	// up against them exactly as it does against a sibling edge.
+	for _, e := range xEdges {
+		for _, t := range manual.V {
+			tryV(e, t)
+		}
+	}
+	for _, e := range yEdges {
+		for _, t := range manual.H {
+			tryH(e, t)
 		}
 	}
 
@@ -1926,6 +1957,7 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 		others = append(others, geom.Rect{X: other.X(), Y: other.Y(), Width: other.Width(), Height: other.Height()})
 	}
 
+	manual := this.activeGuides()
 	for _, dragging := range sel {
 		dragged := geom.Rect{
 			X:      dragging.X() + dx,
@@ -1933,7 +1965,7 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 			Width:  dragging.Width(),
 			Height: dragging.Height(),
 		}
-		this.alignGuides = append(this.alignGuides, computeAlignGuides(dragged, others, canvas, alignTolerance)...)
+		this.alignGuides = append(this.alignGuides, computeAlignGuides(dragged, others, canvas, manual, alignTolerance)...)
 	}
 }
 
@@ -1983,40 +2015,48 @@ func (this *GedView) drawAlignGuides(g paint.Painter) {
 	}
 }
 
-// Draw overrides GraphView.Draw to add the background grid and the alignment
-// guide overlay. The grid (when enabled) is painted first as a faint backdrop
-// hint; the active drag guides are painted over it.
+// Draw overrides GraphView.Draw to add the background grid, the manual guide
+// lines, the alignment guide overlay and the rulers. The grid (when enabled)
+// is painted first as a faint backdrop hint; the guides are painted over it,
+// and the rulers last so nothing draws across them.
 func (this *GedView) Draw(g paint.Painter) {
 	this.GraphView.Draw(g)
 
 	wantGrid := this.showGrid && this.gridSize > 0
-	if !wantGrid && len(this.alignGuides) == 0 {
-		return
+	manual := this.activeGuides()
+	wantGuides := !manual.isEmpty() || this.guideDrag.active
+	if wantGrid || wantGuides || len(this.alignGuides) > 0 {
+		// Clip to the page area so neither the grid nor the guides bleed into
+		// the padding region, then re-enter scene-mm coordinate space (the
+		// same transform GraphView.Draw uses for the scene) so every overlay
+		// honours the current pan/zoom.
+		g.Save()
+		// Margins are hidden on the designer canvas, so the page rect is the
+		// scene rect; asking for the margin-inclusive size here would clip a
+		// margin's worth of padding region in as well.
+		pw, ph := this.PageSizePx(this.IsPageMarginVisible(), this.ZoomFactor())
+		pLeft, pTop := this.PageOriginPx()
+		g.Rectangle(pLeft-this.ScrollX(), pTop-this.ScrollY(), pw, ph)
+		g.Clip()
+
+		x0, y0 := this.SceneOriginPx()
+		g.Translate(x0-this.ScrollX(), y0-this.ScrollY())
+		pageScale := gui.ScreenDpmm() * this.ZoomFactor()
+		g.Scale(pageScale, pageScale)
+
+		if wantGrid {
+			this.drawGrid(g)
+		}
+		if wantGuides {
+			this.drawGuides(g, manual)
+		}
+		this.drawAlignGuides(g)
+		g.Restore()
 	}
 
-	// Clip to the page area so neither the grid nor the guides bleed into the
-	// padding region, then re-enter scene-mm coordinate space (the same
-	// transform GraphView.Draw uses for the scene) so both overlays honour the
-	// current pan/zoom.
-	g.Save()
-	// Margins are hidden on the designer canvas, so the page rect is the
-	// scene rect; asking for the margin-inclusive size here would clip a
-	// margin's worth of padding region in as well.
-	pw, ph := this.PageSizePx(this.IsPageMarginVisible(), this.ZoomFactor())
-	pLeft, pTop := this.PageOriginPx()
-	g.Rectangle(pLeft-this.ScrollX(), pTop-this.ScrollY(), pw, ph)
-	g.Clip()
-
-	x0, y0 := this.SceneOriginPx()
-	g.Translate(x0-this.ScrollX(), y0-this.ScrollY())
-	pageScale := gui.ScreenDpmm() * this.ZoomFactor()
-	g.Scale(pageScale, pageScale)
-
-	if wantGrid {
-		this.drawGrid(g)
+	if this.showGuides {
+		this.drawRulers(g)
 	}
-	this.drawAlignGuides(g)
-	g.Restore()
 }
 
 // OnMouseMove overrides GraphView.OnMouseMove to compute alignment guides
@@ -2031,6 +2071,10 @@ func (this *GedView) OnMouseMove(x, y float64) {
 		this.panStartX = x
 		this.panStartY = y
 		this.Self().Update()
+		return
+	}
+
+	if this.updateGuideDrag(x, y) {
 		return
 	}
 
@@ -2073,6 +2117,10 @@ func (this *GedView) OnLeftUp(x, y float64) {
 		return
 	}
 
+	if this.endGuideDrag(x, y) {
+		return
+	}
+
 	wasDragging := this.isDragging
 	this.GraphView.OnLeftUp(x, y)
 	this.isDragging = false
@@ -2091,13 +2139,19 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	this.Self().Update()
 }
 
-// snapSelectionToGrid rounds every position-unlocked selected item's top-left
-// corner onto the nearest grid intersection. No-op when snap is disabled or
-// the step is non-positive. Applied directly (mutate + Update) like
-// alignSelection / reorderSelection — it tidies the post-drag resting place
-// rather than introducing its own move command.
+// snapSelectionToGrid parks every position-unlocked selected item on the
+// nearest manual guide, falling back per axis to the nearest grid
+// intersection. A guide wins because the user placed it deliberately; without
+// that precedence the grid would immediately drag the widget back off a guide
+// that does not sit on a grid line. No-op when snap is disabled. Applied
+// directly (mutate + Update) like alignSelection / reorderSelection — it tidies
+// the post-drag resting place rather than introducing its own move command.
 func (this *GedView) snapSelectionToGrid() {
-	if !this.snapEnabled || this.gridSize <= 0 {
+	if !this.snapEnabled {
+		return
+	}
+	guides := this.activeGuides()
+	if this.gridSize <= 0 && guides.isEmpty() {
 		return
 	}
 	for _, item := range this.Selection().ItemList() {
@@ -2105,8 +2159,17 @@ func (this *GedView) snapSelectionToGrid() {
 			continue
 		}
 		x, y := item.Pos()
-		nx := snapToGrid(x, this.gridSize)
-		ny := snapToGrid(y, this.gridSize)
+		nx, ny := x, y
+		if d, ok := snapOffsetToGuides(x, x+item.Width(), guides.V, alignTolerance); ok {
+			nx = x + d
+		} else {
+			nx = snapToGrid(x, this.gridSize)
+		}
+		if d, ok := snapOffsetToGuides(y, y+item.Height(), guides.H, alignTolerance); ok {
+			ny = y + d
+		} else {
+			ny = snapToGrid(y, this.gridSize)
+		}
 		if nx != x || ny != y {
 			item.SetPos(nx, ny)
 		}

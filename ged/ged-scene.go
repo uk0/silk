@@ -33,6 +33,8 @@ type GedScene struct {
 	graph.SceneItem
 	filename string
 	title    string
+	// User-placed ruler guides, saved with the design (see guides.go).
+	guides sceneGuides
 }
 
 func NewGedScene() *GedScene {
@@ -154,6 +156,11 @@ func (this *GedScene) SaveDesign() *core.TDoc {
 	doc.SetValue("form")
 	doc.WriteAttr("bounds", this.Bounds1())
 	doc.WriteAttr("title", this.title)
+	// Omitted when there are none, so designs without guides keep the exact
+	// file shape they had before guides existed.
+	if s := encodeGuides(this.guides); s != "" {
+		doc.WriteAttr("guides", s)
+	}
 	if this.HasChildren() {
 		child := core.NewTDoc()
 		child.SetKey("children")
@@ -203,6 +210,9 @@ func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	doc.ReadAttr("bounds", &bounds)
 	this.SetBounds1(bounds)
 	doc.ReadAttr("title", &this.title)
+	var guides string
+	doc.ReadAttr("guides", &guides)
+	this.guides = decodeGuides(guides)
 	for _, v := range this.Children() {
 		v.Detach()
 	}

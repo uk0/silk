@@ -1217,6 +1217,19 @@ func createMenuBar(mainFrame *gui.Frame) {
 
 		sub.AddSeparator()
 
+		btnGuides := sub.AddButton1("显示参考线", nil)
+		if gv := currentGedView(); gv != nil {
+			btnGuides.Action().SetChecked(gv.IsShowGuides())
+		}
+		btnGuides.Action().BindFunc0(func() {
+			gv := currentGedView()
+			if gv == nil {
+				return
+			}
+			gv.SetShowGuides(!gv.IsShowGuides())
+			gv.Update()
+		})
+
 		label := "切换暗色主题"
 		if gui.CurrentThemeMode() == gui.ThemeDark {
 			label = "切换亮色主题"
@@ -2092,6 +2105,9 @@ func saveDesignerSession(mainFrame *gui.Frame) {
 	if len(recentFiles) > 0 {
 		state.LastProject = recentFiles[0]
 	}
+	if gv := currentGedView(); gv != nil {
+		state.HideGuides = !gv.IsShowGuides()
+	}
 	if win := mainFrame.Window(); win != nil {
 		_, _, w, h := win.Bounds()
 		state.WindowWidth = int(w)
@@ -2118,6 +2134,12 @@ func applyDesignerSession(state ged.SessionState) {
 		}
 		if state.ActiveFile != "" {
 			editorTabs.ActivateFile(state.ActiveFile)
+		}
+	}
+
+	if state.HideGuides {
+		if gv := currentGedView(); gv != nil {
+			gv.SetShowGuides(false)
 		}
 	}
 

@@ -47,7 +47,7 @@ func countVertical(gs []alignGuide) int {
 func TestComputeAlignGuidesLeftEdge(t *testing.T) {
 	other := geom.Rect{X: 100, Y: 100, Width: 50, Height: 20} // left = 100
 	dragged := geom.Rect{X: 103, Y: 305, Width: 30, Height: 10}
-	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), 5)
+	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 
 	if !hasVGuide(gs, 100) {
 		t.Fatalf("expected vertical guide at x=100 (left-to-left, 3px off), got %+v", gs)
@@ -62,7 +62,7 @@ func TestComputeAlignGuidesLeftEdge(t *testing.T) {
 func TestComputeAlignGuidesCenterX(t *testing.T) {
 	other := geom.Rect{X: 100, Y: 100, Width: 60, Height: 20}   // centerX = 130
 	dragged := geom.Rect{X: 108, Y: 400, Width: 40, Height: 10} // centerX = 128
-	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), 5)
+	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 
 	if !hasVGuide(gs, 130) {
 		t.Fatalf("expected vertical guide at x=130 (centre-to-centre, 2px off), got %+v", gs)
@@ -74,7 +74,7 @@ func TestComputeAlignGuidesCenterX(t *testing.T) {
 func TestComputeAlignGuidesRightEdge(t *testing.T) {
 	other := geom.Rect{X: 100, Y: 100, Width: 50, Height: 20}   // right = 150
 	dragged := geom.Rect{X: 132, Y: 400, Width: 20, Height: 10} // right = 152
-	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), 5)
+	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 
 	if !hasVGuide(gs, 150) {
 		t.Fatalf("expected vertical guide at x=150 (right-to-right, 2px off), got %+v", gs)
@@ -88,7 +88,7 @@ func TestComputeAlignGuidesTopBottom(t *testing.T) {
 	other := geom.Rect{X: 100, Y: 100, Width: 50, Height: 20} // top 100, bottom 120
 
 	topAlign := geom.Rect{X: 500, Y: 102, Width: 40, Height: 10} // top 102 -> 100
-	gs := computeAlignGuides(topAlign, []geom.Rect{other}, guideCanvas(), 5)
+	gs := computeAlignGuides(topAlign, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 	if !hasHGuide(gs, 100) {
 		t.Fatalf("expected horizontal guide at y=100 (top-to-top), got %+v", gs)
 	}
@@ -97,7 +97,7 @@ func TestComputeAlignGuidesTopBottom(t *testing.T) {
 	}
 
 	bottomAlign := geom.Rect{X: 500, Y: 121, Width: 40, Height: 10} // top 121 -> other bottom 120
-	gs = computeAlignGuides(bottomAlign, []geom.Rect{other}, guideCanvas(), 5)
+	gs = computeAlignGuides(bottomAlign, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 	if !hasHGuide(gs, 120) {
 		t.Fatalf("expected horizontal guide at y=120 (top-to-bottom), got %+v", gs)
 	}
@@ -108,7 +108,7 @@ func TestComputeAlignGuidesTopBottom(t *testing.T) {
 // guides.
 func TestComputeAlignGuidesCanvasCenter(t *testing.T) {
 	dragged := geom.Rect{X: 380, Y: 290, Width: 40, Height: 20} // centre (400, 300)
-	gs := computeAlignGuides(dragged, nil, guideCanvas(), 5)
+	gs := computeAlignGuides(dragged, nil, guideCanvas(), sceneGuides{}, 5)
 
 	if !hasVGuide(gs, 400) {
 		t.Errorf("expected vertical guide at canvas centre x=400, got %+v", gs)
@@ -123,7 +123,7 @@ func TestComputeAlignGuidesCanvasCenter(t *testing.T) {
 func TestComputeAlignGuidesNoneWhenFar(t *testing.T) {
 	other := geom.Rect{X: 100, Y: 100, Width: 50, Height: 20}
 	dragged := geom.Rect{X: 500, Y: 500, Width: 30, Height: 30}
-	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), 5)
+	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 
 	if len(gs) != 0 {
 		t.Fatalf("expected no guides when nothing is within threshold, got %+v", gs)
@@ -135,7 +135,7 @@ func TestComputeAlignGuidesNoneWhenFar(t *testing.T) {
 func TestComputeAlignGuidesExactAlign(t *testing.T) {
 	other := geom.Rect{X: 200, Y: 100, Width: 40, Height: 20} // left = 200
 	dragged := geom.Rect{X: 200, Y: 400, Width: 30, Height: 10}
-	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), 5)
+	gs := computeAlignGuides(dragged, []geom.Rect{other}, guideCanvas(), sceneGuides{}, 5)
 
 	if !hasVGuide(gs, 200) {
 		t.Fatalf("expected vertical guide at x=200 for an exact left-edge match, got %+v", gs)

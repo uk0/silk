@@ -18,6 +18,9 @@ type SessionState struct {
 	LastProject  string   `json:"last_project"`  // last opened .silk/.form project file
 	WindowWidth  int      `json:"window_width"`  // restored on next launch
 	WindowHeight int      `json:"window_height"` // restored on next launch
+	// 显示参考线 is on by default, so the flag stores the off state: a session
+	// written before it existed decodes to false and still shows the guides.
+	HideGuides bool `json:"hide_guides"`
 }
 
 // sessionFilePath returns the absolute path to the session state JSON file.
