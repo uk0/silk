@@ -8,6 +8,7 @@ import (
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/prop"
+	"sort"
 	"strings"
 )
 
@@ -503,6 +504,21 @@ func (this *FakeWidget) SetWidgetName(name string) {
 	this.MarkDirty()
 }
 
+// sortedMapKeys orders the keys of a map the design file is written from. Go
+// randomizes map iteration, so writing "events" and "props" straight out of
+// their maps gave the same untouched design a different byte sequence on every
+// save: opening a design and saving it produced a diff, and two people saving
+// the same file conflicted over reshuffled lines. Codegen already sorts the
+// same event map (handlerBindingsFor); persistence has to as well.
+func sortedMapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func (this *FakeWidget) SaveDesign() *core.TDoc {
 	doc := core.NewTDoc()
 	doc.SetValue(this.factoryName)
@@ -526,10 +542,10 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 	if len(this.eventHandlers) > 0 {
 		evtDoc := core.NewTDoc()
 		evtDoc.SetKey("events")
-		for evtName, handler := range this.eventHandlers {
+		for _, evtName := range sortedMapKeys(this.eventHandlers) {
 			child := core.NewTDoc()
 			child.SetKey(evtName)
-			child.SetValue(handler)
+			child.SetValue(this.eventHandlers[evtName])
 			evtDoc.AddChild(child)
 		}
 		doc.AddChild(evtDoc)
@@ -544,10 +560,10 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 			if props := captureWidgetProperties(ep); len(props) > 0 {
 				propsDoc := core.NewTDoc()
 				propsDoc.SetKey("props")
-				for id, val := range props {
+				for _, id := range sortedMapKeys(props) {
 					child := core.NewTDoc()
 					child.SetKey(id)
-					child.SetValue(val)
+					child.SetValue(props[id])
 					propsDoc.AddChild(child)
 				}
 				doc.AddChild(propsDoc)
