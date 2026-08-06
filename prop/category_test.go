@@ -27,13 +27,16 @@ func TestCategoryOfPropIDEventNames(t *testing.T) {
 // and the existing keyword classification for other ids is unchanged.
 func TestCategoryOfPropIDNonEvents(t *testing.T) {
 	cases := map[string]string{
-		"Online":     "general",
-		"OnlyRead":   "general",
-		"On":         "general",
-		"width":      "layout",
-		"text":       "appearance",
-		"enabled":    "behavior",
-		"tag":        "general",
+		"Online":   "general",
+		"OnlyRead": "general",
+		"On":       "general",
+		"width":    "layout",
+		"text":     "appearance",
+		"enabled":  "behavior",
+		// "tag" is claimed by the 数据绑定 category (TagBindingID): it is the
+		// seam scada.BindScreen resolves a widget's tag through, not a general
+		// property. Two units landed together here; binding wins by design.
+		"tag":        "binding",
 		"font_color": "appearance",
 	}
 	for id, want := range cases {
