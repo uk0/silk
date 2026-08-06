@@ -670,22 +670,38 @@ type propertyCategory struct {
 const categoryHeaderHeight = 24.0
 
 // predefined category order
-var categoryOrder = []string{"layout", "appearance", "behavior", "events", "general"}
+var categoryOrder = []string{"layout", "appearance", "behavior", "binding", "events", "general"}
 
 // categoryNames maps internal keys to display names.
 var categoryNames = map[string]string{
-	"layout":     "\u5e03\u5c40", // 布局
-	"appearance": "\u5916\u89c2", // 外观
-	"behavior":   "\u884c\u4e3a", // 行为
-	"events":     "\u4e8b\u4ef6", // 事件
-	"general":    "\u5e38\u89c4", // 常规
+	"layout":     "\u5e03\u5c40",             // 布局
+	"appearance": "\u5916\u89c2",             // 外观
+	"behavior":   "\u884c\u4e3a",             // 行为
+	"binding":    "\u6570\u636e\u7ed1\u5b9a", // 数据绑定
+	"events":     "\u4e8b\u4ef6",             // 事件
+	"general":    "\u5e38\u89c4",             // 常规
 }
+
+// TagBindingID is the property id an industrial widget registers for the
+// design-time tag that drives it. It is the seam scada.BindScreen resolves a
+// widget's tag through (its bindIndustrial reads TagName()), so the designer,
+// the saved design and the generated code all have to agree on this one id.
+const TagBindingID = "tag"
 
 // categoryOfPropID classifies a property by its ID. Ids are matched against
 // lowercase ascii keywords, so fold case here: ids are now stored verbatim and
 // may contain uppercase or unicode characters.
 func categoryOfPropID(id string) string {
 	id = strings.ToLower(id)
+	// Data binding is classified first, and by whole id: the appearance and
+	// behavior scans below match by substring, so a keyword added to either
+	// could otherwise file the tag row under 外观 and bury the binding a 组态
+	// screen is built around. Matching whole also keeps unrelated ids that
+	// merely spell "tag" out of 数据绑定.
+	if id == TagBindingID {
+		return "binding"
+	}
+
 	// Layout properties
 	layoutIDs := []string{"x", "y", "width", "height", "w", "h", "pos", "size", "bounds", "left", "top", "right", "bottom", "margin", "padding"}
 	for _, lid := range layoutIDs {
