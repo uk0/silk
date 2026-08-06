@@ -1555,10 +1555,27 @@ func (this *GedView) breakLayoutSelection() {
 	this.Self().Update()
 }
 
+// renameTarget returns the widget F2 should rename: exactly one selected
+// FakeWidget. A multi-selection has no single name to edit, and only a
+// FakeWidget carries a widget name at all.
+func (this *GedView) renameTarget() *FakeWidget {
+	items := this.Selection().ItemList()
+	if len(items) != 1 {
+		return nil
+	}
+	fake, _ := items[0].(*FakeWidget)
+	return fake
+}
+
+// showInputBox opens the name prompt. Indirected through a package var so the
+// rename path can be driven headlessly — gui.ShowInputBox runs a modal loop that
+// needs a window. Tests swap it; nothing else may reassign it.
+var showInputBox = gui.ShowInputBox
+
 // renameItem shows an input dialog to set the widget name of a FakeWidget.
 func (this *GedView) renameItem(item graph.IItem) {
 	if fake, ok := item.(*FakeWidget); ok {
-		name, ok := gui.ShowInputBox(this, nil, "设置名称", "控件名称:", fake.WidgetName())
+		name, ok := showInputBox(this, nil, "设置名称", "控件名称:", fake.WidgetName())
 		if ok {
 			fake.SetWidgetName(name)
 			this.Self().Update()
@@ -1677,10 +1694,16 @@ func (this *GedView) OnKeyUp(key int) {
 	}
 }
 
+// keyDown probes live modifier state. Indirected through a package var because
+// gui.IsKeyDown polls the GLFW window: with no window there is no way to hold a
+// modifier, so every Ctrl/Alt/Shift binding below was untestable. Tests swap it
+// to drive those bindings; nothing else may reassign it.
+var keyDown = gui.IsKeyDown
+
 // OnKeyDown handles keyboard shortcuts for the GED editor.
 func (this *GedView) OnKeyDown(key int, repeat bool) {
-	ctrl := gui.IsKeyDown(gui.KeyCtrl)
-	alt := gui.IsKeyDown(gui.KeyMenu)
+	ctrl := keyDown(gui.KeyCtrl)
+	alt := keyDown(gui.KeyMenu)
 
 	// Space key enables pan mode
 	if key == gui.KeySpace && !ctrl && !alt {
@@ -1691,7 +1714,7 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 	switch {
 	// Tab / Shift+Tab: cycle widget selection
 	case key == gui.KeyTab:
-		if gui.IsKeyDown(gui.KeyShift) {
+		if keyDown(gui.KeyShift) {
 			this.selectPrevWidget()
 		} else {
 			this.selectNextWidget()
@@ -1699,6 +1722,15 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 
 	case key == gui.KeyDelete || key == gui.KeyBackSpace:
 		this.DeleteSelectedItems()
+
+	// F2 renames the selected widget. Every other way to reach the name — the
+	// right-click menu, the property sheet — needs the mouse, which left the
+	// widget name as the one property a keyboard-only user could not edit. It
+	// reuses the context menu's prompt rather than adding a second name editor.
+	case key == gui.KeyF2:
+		if target := this.renameTarget(); target != nil {
+			this.renameItem(target)
+		}
 
 	// ESC clears the selection. Designer-tool muscle memory: ESC
 	// is the universal "cancel context / deselect" key (JetBrains,
@@ -1723,7 +1755,7 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 		this.beginGesture(repeat)
 		// The arrow→delta mapping is identical for moving and resizing, so the
 		// nudge helper does double duty here rather than being copied.
-		dw, dh, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, this.coarseNudgeStep())
+		dw, dh, _ := nudgeDelta(key, keyDown(gui.KeyShift), 1, this.coarseNudgeStep())
 		this.resizeSelection(dw, dh)
 
 	// Arrow keys nudge the selection by 1mm (one grid cell with Shift).
@@ -1738,7 +1770,7 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 			return
 		}
 		this.beginGesture(repeat)
-		dx, dy, _ := nudgeDelta(key, gui.IsKeyDown(gui.KeyShift), 1, this.coarseNudgeStep())
+		dx, dy, _ := nudgeDelta(key, keyDown(gui.KeyShift), 1, this.coarseNudgeStep())
 		this.nudgeSelection(dx, dy)
 
 	case ctrl && (key == 'Z' || key == 'z'):
@@ -1835,15 +1867,11 @@ func (this *GedView) OnKeyDown(key int, repeat bool) {
 	}
 }
 
-// sortedWidgetList returns the scene children sorted by Y then X (top-to-bottom, left-to-right).
-func (this *GedView) sortedWidgetList() []graph.IItem {
-	children := this.Scene().Children()
-	if len(children) == 0 {
-		return nil
-	}
-	// Copy and sort
-	sorted := make([]graph.IItem, len(children))
-	copy(sorted, children)
+// readingOrder returns items sorted by Y then X (top-to-bottom, left-to-right)
+// without touching the input slice.
+func readingOrder(items []graph.IItem) []graph.IItem {
+	sorted := make([]graph.IItem, len(items))
+	copy(sorted, items)
 	for i := 1; i < len(sorted); i++ {
 		key := sorted[i]
 		j := i - 1
@@ -1854,6 +1882,38 @@ func (this *GedView) sortedWidgetList() []graph.IItem {
 		sorted[j+1] = key
 	}
 	return sorted
+}
+
+// sortedWidgetList returns every keyboard-reachable widget in tab order: scene
+// children in reading order, each container immediately followed by its own
+// children in the same order.
+//
+// The walk must recurse. It used to list only the scene's direct children, so a
+// widget dropped into a container could be selected with the mouse and by
+// Ctrl+A — which does recurse — but never by Tab, leaving nested widgets
+// unreachable for a keyboard-only user. Hidden and unselectable items are
+// skipped for the same reason selectAll skips them: Tab must not park the
+// selection on something the canvas will not draw handles for.
+func (this *GedView) sortedWidgetList() []graph.IItem {
+	var walk func(items []graph.IItem) []graph.IItem
+	walk = func(items []graph.IItem) []graph.IItem {
+		var out []graph.IItem
+		for _, item := range readingOrder(items) {
+			// A hidden container hides its children too, so the whole subtree
+			// drops out of the walk.
+			if !item.IsVisible() {
+				continue
+			}
+			if item.IsSelectable() {
+				out = append(out, item)
+			}
+			if item.HasChildren() {
+				out = append(out, walk(item.Children())...)
+			}
+		}
+		return out
+	}
+	return walk(this.Scene().Children())
 }
 
 // selectNextWidget selects the next widget on the canvas in tab order.

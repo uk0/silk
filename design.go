@@ -2155,6 +2155,16 @@ func main() {
 	gui.RegisterShortcut(gui.ModAction, '1', toDesign)
 	gui.RegisterShortcut(gui.ModAction, '2', toEdit)
 
+	// F1 opens the 快捷键 reference, which the 帮助 menu otherwise gates behind
+	// the mouse — the panel a user reaches for when they cannot remember the
+	// keys was itself unreachable from the keyboard. It belongs in the window
+	// registry, not in a GedView key case: showing a tool view has nothing to do
+	// with which widget has focus, and F1 is bound nowhere else in the app, so
+	// claiming it ahead of focus routing steals nothing.
+	gui.RegisterShortcut(0, gui.KeyF1, func() {
+		mainFrame.ShowToolView("ged.ShortcutsPanel")
+	})
+
 	// Register Ctrl+P quick file open
 	qo := ged.GetQuickOpen()
 	qo.SetRootDir(".")

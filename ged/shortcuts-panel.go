@@ -49,64 +49,11 @@ func (this *ShortcutsPanel) Init(self gui.IWidget) {
 	this.hoverIdx = -1
 	this.scrollY = 0
 
-	this.categories = []shortcutCategory{
-		{
-			name: "文件",
-			shortcuts: []shortcutEntry{
-				{"Ctrl+N", "新建"},
-				{"Ctrl+O", "打开"},
-				{"Ctrl+S", "保存"},
-				{"Ctrl+Shift+S", "另存为"},
-			},
-		},
-		{
-			name: "编辑",
-			shortcuts: []shortcutEntry{
-				{"Ctrl+Z", "撤销"},
-				{"Ctrl+Y", "重做"},
-				{"Ctrl+C", "复制"},
-				{"Ctrl+V", "粘贴"},
-				{"Ctrl+X", "剪切"},
-				{"Delete", "删除"},
-			},
-		},
-		{
-			name: "视图",
-			shortcuts: []shortcutEntry{
-				{"Ctrl+1", "设计模式"},
-				{"Ctrl+2", "代码模式"},
-				{"Ctrl+=", "放大"},
-				{"Ctrl+-", "缩小"},
-			},
-		},
-		{
-			name: "设计",
-			shortcuts: []shortcutEntry{
-				{"Tab", "下一个控件"},
-				{"Shift+Tab", "上一个控件"},
-				{"Alt+L/R/T/B", "对齐"},
-				{"Alt+H/V", "分布"},
-			},
-		},
-		{
-			name: "代码",
-			shortcuts: []shortcutEntry{
-				{"Ctrl+F", "查找"},
-				{"Ctrl+G", "跳转行"},
-				{"Ctrl+Shift+O", "符号"},
-				{"Ctrl+/", "注释"},
-				{"Ctrl+D", "复制行"},
-			},
-		},
-		{
-			name: "运行",
-			shortcuts: []shortcutEntry{
-				{"F5", "编译运行"},
-				{"Ctrl+R", "预览"},
-				{"Ctrl+Shift+F", "格式化"},
-			},
-		},
-	}
+	// Generated from designerShortcuts, never spelled out here. A second list
+	// drifts: the one this replaced advertised "Alt+L/R/T/B 对齐" as a single
+	// row and never mentioned Esc, Ctrl+A, Ctrl+D, Ctrl+P or F2, all of which
+	// the canvas answers.
+	this.categories = shortcutCategories()
 }
 
 func (this *ShortcutsPanel) Draw(g paint.Painter) {

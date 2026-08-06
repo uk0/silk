@@ -29,8 +29,9 @@ type KeyMap struct {
 }
 
 // defaultKeymap defines the factory-default shortcut set. Reset() reverts to
-// a deep copy of this slice. Keep it in sync with the UI documentation in
-// ged/shortcuts-panel.go.
+// a deep copy of this slice. Every command here must also be described in
+// designerShortcuts (ged/shortcut-registry.go), which is what the 快捷键 panel
+// prints; TestDesignerShortcutsAgreeWithKeymap fails when the two disagree.
 var defaultKeymap = []KeyBinding{
 	{Command: "file.new", Key: "Ctrl+N", Context: "global"},
 	{Command: "file.open", Key: "Ctrl+O", Context: "global"},
