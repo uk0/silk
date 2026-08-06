@@ -757,6 +757,12 @@ func exportReport(res ged.SplitResult) string {
 	default:
 		msg += filepath.Base(res.UserFile) + " 未改动"
 	}
+	// An appended method may need an import, and the import block of a file the
+	// designer already owns is not ours to rewrite. Naming it here is the only
+	// way the developer learns it from anything but a compile error.
+	if len(res.MissingImports) > 0 {
+		msg += "\n请手动添加 import: " + strings.Join(res.MissingImports, ", ")
+	}
 	return msg
 }
 

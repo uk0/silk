@@ -1,6 +1,7 @@
 package ged
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -269,6 +270,275 @@ func everyEventHandlerName(factoryName, evt string) string {
 	return "on" + strings.TrimPrefix(factoryName, "gui.") + strings.TrimPrefix(evt, "On")
 }
 
+// TestGenerateCodeFileSeededStubImportsItsParams is the export that did not
+// compile: a design-time body written for an event whose parameter list names a
+// package. The body and the import reached stub collection down two different
+// branches, the body branch claimed the handler first, and the import its
+// signature needs never arrived — so the designer wrote a brand new user file
+// that go vet answered with "undefined: paint".
+func TestGenerateCodeFileSeededStubImportsItsParams(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
+
+	scene := NewGedScene()
+	scene.SetFormTitle("Picker")
+	scene.SetSize(120, 80)
+
+	cp, err := NewFakeWidgetFromFactory("gui.ColorPicker")
+	if err != nil {
+		t.Fatalf("create ColorPicker: %v", err)
+	}
+	cp.SetWidgetName("picker")
+	cp.SetBounds(5, 5, 60, 10)
+	cp.SetEventHandler("OnColorChanged", "onColorChanged")
+	cp.SetCode("func onColorChanged(c paint.Color) {\n\tprintln(c.R)\n}")
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(cp, scene)
+	scene.PushCommand(cmd)
+
+	res, err := scene.GenerateCodeFile(filepath.Join(t.TempDir(), "picker.go"), CodeGenOptions{PackageName: "main", TypeName: "PickerUI"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if !res.UserCreated {
+		t.Fatal("the user file already existed; this test covers the creation path")
+	}
+	pair := readPair(t, res)
+	if !strings.Contains(pair["user.go"], `"github.com/uk0/silk/paint"`) {
+		t.Errorf("the created user file declares onColorChanged(c paint.Color) but imports no paint:\n%s", pair["user.go"])
+	}
+	vetGeneratedFiles(t, pair)
+}
+
+// TestGenerateCodeFileAssemblesAStubFromBothPaths: the widget that binds a
+// handler and the widget that carries its body need not be the same one, and
+// need not come in that order. Whichever the walk reaches first, the handler is
+// one stub holding both halves — otherwise the half that lost is dropped on the
+// floor, which for the code attr means the developer's own source never reaches
+// the file it was about to be moved into.
+func TestGenerateCodeFileAssemblesAStubFromBothPaths(t *testing.T) {
+	scene := NewGedScene()
+	scene.SetFormTitle("Both")
+	scene.SetSize(120, 80)
+	// The bare binding is designed first; the body arrives on a later widget.
+	addSplitColorPicker(t, scene, "pickerA", "onColorChanged", 5, "")
+	addSplitColorPicker(t, scene, "pickerB", "onColorChanged", 20, "func onColorChanged(c paint.Color) {\n\tprintln(c.R)\n}")
+
+	res, err := scene.GenerateCodeFile(filepath.Join(t.TempDir(), "both.go"), CodeGenOptions{PackageName: "main", TypeName: "BothUI"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	user := readPair(t, res)["user.go"]
+	if n := strings.Count(user, "func (ui *BothUI) onColorChanged("); n != 1 {
+		t.Fatalf("onColorChanged declared %d times, want 1:\n%s", n, user)
+	}
+	if !strings.Contains(user, "println(c.R)") {
+		t.Errorf("the design-time body was dropped for the bare binding that came first:\n%s", user)
+	}
+	if !strings.Contains(user, `"github.com/uk0/silk/paint"`) {
+		t.Errorf("the created user file imports no paint:\n%s", user)
+	}
+}
+
+// TestGenerateCodeFileReportsTheImportItMayNotAdd is the same defect on the
+// other path. Once the user file exists it is only ever appended to, so a stub
+// whose signature names paint.Color lands in a file whose import block codegen
+// is not allowed to touch. That one-line compile error stays the developer's to
+// fix — finding it should not be, so the export report names the import.
+func TestGenerateCodeFileReportsTheImportItMayNotAdd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "late.go")
+
+	scene := NewGedScene()
+	scene.SetFormTitle("Late")
+	scene.SetSize(120, 80)
+	addSplitButton(t, scene, "btnA", "onGo", "")
+
+	opts := CodeGenOptions{PackageName: "main", TypeName: "LateUI"}
+	first, err := scene.GenerateCodeFile(path, opts)
+	if err != nil {
+		t.Fatalf("first generation: %v", err)
+	}
+	if len(first.MissingImports) != 0 {
+		t.Errorf("creation reported missing imports %v; it writes the import block itself", first.MissingImports)
+	}
+
+	// The design gains a ColorPicker after the developer owns the file, with
+	// its handler written in the designer — the shape that assembles its body
+	// and its import from two different paths.
+	addSplitColorPicker(t, scene, "picker", "onColorChanged", 20, "func onColorChanged(c paint.Color) {\n\tprintln(c.R)\n}")
+
+	res, err := scene.GenerateCodeFile(path, opts)
+	if err != nil {
+		t.Fatalf("regeneration: %v", err)
+	}
+	if len(res.AddedStubs) != 1 || res.AddedStubs[0] != "onColorChanged" {
+		t.Fatalf("AddedStubs = %v, want [onColorChanged]", res.AddedStubs)
+	}
+	if len(res.MissingImports) != 1 || res.MissingImports[0] != "github.com/uk0/silk/paint" {
+		t.Fatalf("MissingImports = %v, want [github.com/uk0/silk/paint]; unreported it reaches the developer as a bare \"undefined: paint\"", res.MissingImports)
+	}
+
+	appended := readPair(t, res)["user.go"]
+	if strings.Contains(appended, `"github.com/uk0/silk/paint"`) {
+		t.Errorf("the append path rewrote the developer's import block:\n%s", appended)
+	}
+	if !strings.Contains(appended, "func (ui *LateUI) onColorChanged(c paint.Color) {") {
+		t.Errorf("the appended stub does not carry the signature the binding calls:\n%s", appended)
+	}
+
+	// The developer applies exactly what the report named — the report's own
+	// value, not a constant this test picked — and nothing else.
+	const anchor = "\t\"github.com/uk0/silk/core\"\n"
+	fixed := strings.Replace(appended, anchor, anchor+"\t\""+res.MissingImports[0]+"\"\n", 1)
+	if fixed == appended {
+		t.Fatalf("could not splice the reported import into the user file:\n%s", appended)
+	}
+	if err := os.WriteFile(path, []byte(fixed), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second widget on the same import: the file has it now, so there is
+	// nothing left to report and the developer is not told twice.
+	addSplitColorPicker(t, scene, "picker2", "onOtherColorChanged", 40, "")
+	res, err = scene.GenerateCodeFile(path, opts)
+	if err != nil {
+		t.Fatalf("second regeneration: %v", err)
+	}
+	if len(res.AddedStubs) != 1 || res.AddedStubs[0] != "onOtherColorChanged" {
+		t.Fatalf("AddedStubs = %v, want [onOtherColorChanged]", res.AddedStubs)
+	}
+	if len(res.MissingImports) != 0 {
+		t.Errorf("MissingImports = %v; the user file already imports it", res.MissingImports)
+	}
+
+	if testing.Short() {
+		return
+	}
+	// The pair on disk builds once the one reported import is in place, which
+	// is what makes the report a fix rather than a hint.
+	vetGeneratedFiles(t, readPair(t, res))
+}
+
+// addSplitColorPicker drops a gui.ColorPicker bound to handler on the one event
+// in widgetEvents whose parameter list names a package, optionally carrying
+// design-time handler source.
+func addSplitColorPicker(t *testing.T, scene *GedScene, name, handler string, y float64, code string) {
+	t.Helper()
+	cp, err := NewFakeWidgetFromFactory("gui.ColorPicker")
+	if err != nil {
+		t.Fatalf("create ColorPicker: %v", err)
+	}
+	cp.SetWidgetName(name)
+	cp.SetBounds(5, y, 60, 10)
+	cp.SetEventHandler("OnColorChanged", handler)
+	if code != "" {
+		cp.SetCode(code)
+	}
+	cmd := graph.NewAddCommand()
+	cmd.AddItem(cp, scene)
+	scene.PushCommand(cmd)
+}
+
+// TestSplitStubsImportEveryQualifiedParam sweeps widgetEvents for parameter
+// lists that name a package and proves every one of them reaches a created user
+// file that imports it. The instance above is one row of this table; the sweep
+// is what makes the next row that gains a qualified parameter fail here instead
+// of in an export.
+func TestSplitStubsImportEveryQualifiedParam(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compile test in short mode")
+	}
+
+	type qualifiedRow struct{ factory, event, params, imp string }
+	factories := make([]string, 0, len(widgetEvents))
+	for name := range widgetEvents {
+		factories = append(factories, name)
+	}
+	sort.Strings(factories)
+	var rows []qualifiedRow
+	for _, fn := range factories {
+		for _, e := range widgetEvents[fn] {
+			if qualifierIn(e.params) == "" {
+				continue
+			}
+			rows = append(rows, qualifiedRow{fn, e.name, e.params, e.imp})
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatal("no widgetEvents row takes a package-qualified parameter; the sweep would pass vacuously")
+	}
+
+	scene := NewGedScene()
+	scene.SetFormTitle("Qualified")
+	scene.SetSize(200, 400)
+	y := 5.0
+	placed := map[string]bool{}
+	for i, r := range rows {
+		i, r := i, r
+		// Some widgets panic during layout when built without full
+		// initialisation. Contain that here: a row nobody can place is a row
+		// this sweep cannot vouch for, and it says so rather than taking the
+		// package's whole test binary down with it.
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					t.Errorf("cannot place %s to check its %q parameters: %v", r.factory, r.params, rec)
+				}
+			}()
+			fake, err := NewFakeWidgetFromFactory(r.factory)
+			if err != nil {
+				t.Errorf("create %s: %v", r.factory, err)
+				return
+			}
+			fake.SetWidgetName(fmt.Sprintf("%s%d", strings.TrimPrefix(r.factory, "gui."), i))
+			fake.SetBounds(5, y, 40, 7)
+			handler := everyEventHandlerName(r.factory, r.event)
+			fake.SetEventHandler(r.event, handler)
+			// The design-time body is the half that used to win the handler alone.
+			fake.SetCode(fmt.Sprintf("func %s(%s) {\n}", handler, r.params))
+			cmd := graph.NewAddCommand()
+			cmd.AddItem(fake, scene)
+			scene.PushCommand(cmd)
+			y += 10
+			placed[r.factory+"."+r.event] = true
+		}()
+	}
+
+	res, err := scene.GenerateCodeFile(filepath.Join(t.TempDir(), "qualified.go"), CodeGenOptions{PackageName: "main", TypeName: "QualifiedUI"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	pair := readPair(t, res)
+	for _, r := range rows {
+		if !placed[r.factory+"."+r.event] {
+			continue // already reported above
+		}
+		if r.imp == "" {
+			t.Errorf("%s.%s takes %q but names no imp, so no import can be emitted for it", r.factory, r.event, r.params)
+			continue
+		}
+		if !strings.Contains(pair["user.go"], fmt.Sprintf("%q", r.imp)) {
+			t.Errorf("%s.%s takes %q; the created user file imports no %s:\n%s", r.factory, r.event, r.params, r.imp, pair["user.go"])
+		}
+	}
+	vetGeneratedFiles(t, pair)
+}
+
+// qualifierIn names the package a parameter list qualifies against, "" when the
+// list is all builtins: "c paint.Color" -> "paint".
+func qualifierIn(params string) string {
+	dot := strings.Index(params, ".")
+	if dot <= 0 {
+		return ""
+	}
+	start := dot
+	for start > 0 && isIdentByte(params[start-1]) {
+		start--
+	}
+	return params[start:dot]
+}
+
 // TestAppendMissingStubsIsAppendOnly pins the one rule the user side lives by.
 // The file goes back byte for byte with the new method after it — no
 // reformatting, no reordering — and a handler the developer already wrote is
@@ -285,7 +555,7 @@ func (u *AppUI) helper() {}
 		{name: "onGo"},
 		{name: "onNew", params: "v float64"},
 	}
-	got, added, err := appendMissingStubs(existing, "AppUI", stubs)
+	got, added, _, err := appendMissingStubs(existing, "AppUI", stubs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +575,7 @@ func (u *AppUI) helper() {}
 // method the developer has already written. Report instead of guessing.
 func TestAppendMissingStubsRefusesBrokenFile(t *testing.T) {
 	const broken = "package main\n\nfunc (ui *AppUI) onGo() {\n"
-	got, added, err := appendMissingStubs(broken, "AppUI", []handlerStub{{name: "onGo"}})
+	got, added, _, err := appendMissingStubs(broken, "AppUI", []handlerStub{{name: "onGo"}})
 	if err == nil {
 		t.Fatal("appended to a file that does not parse")
 	}

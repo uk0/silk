@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/uk0/silk/graph"
@@ -26,6 +27,11 @@ type SplitResult struct {
 	UserFile    string   // <base>.go, created once and thereafter only appended to
 	UserCreated bool     // the user file was absent and written from scratch
 	AddedStubs  []string // handler methods appended to an already existing user file
+	// MissingImports names the imports an appended stub's signature needs that
+	// the user file does not have. Appending may not touch the developer's
+	// import block, so the gap is reported instead of closed: unreported it
+	// reaches them as a bare "undefined: paint" in a file they did not write.
+	MissingImports []string
 }
 
 // handlerStub is one handler method the user file owns. The machine file calls
@@ -66,11 +72,11 @@ func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (S
 		return res, err
 	}
 
-	updated, added, err := appendMissingStubs(string(existing), opts.TypeName, stubs)
+	updated, added, missing, err := appendMissingStubs(string(existing), opts.TypeName, stubs)
 	if err != nil {
 		return res, fmt.Errorf("%s: %w", user, err)
 	}
-	res.AddedStubs = added
+	res.AddedStubs, res.MissingImports = added, missing
 	if len(added) == 0 {
 		return res, nil
 	}
@@ -106,21 +112,43 @@ func splitCodePaths(filename string) (machine, user string) {
 // where it lives. A handler that is only wired (bound in the property sheet,
 // never written) is synthesized empty from widgetEvents, which is what lets a
 // design that has never been generated still produce a pair that builds.
+//
+// The body and the import arrive down two different paths — the body from the
+// code attr, the import from the binding — so one handler is assembled from
+// both rather than from whichever path reached it first. A stub that kept only
+// its half declared a signature naming a package the file never imported.
 func (scene *GedScene) collectHandlerStubs() []handlerStub {
 	var out []handlerStub
-	seen := map[string]bool{}
+	at := map[string]int{}
+	merge := func(s handlerStub) {
+		i, ok := at[s.name]
+		if !ok {
+			at[s.name] = len(out)
+			out = append(out, s)
+			return
+		}
+		// First non-empty wins per field: two widgets sharing a handler name
+		// call the same method, and the earlier one owns what it stated.
+		if out[i].body == "" {
+			out[i].body = s.body
+		}
+		if out[i].params == "" {
+			out[i].params = s.params
+		}
+		if out[i].imp == "" {
+			out[i].imp = s.imp
+		}
+	}
 	walkFakeWidgets(scene.Children(), func(fake *FakeWidget) {
 		code := strings.TrimSpace(fake.GetCode())
-		if name := extractHandlerName(code); name != "" && !seen[name] {
-			seen[name] = true
-			out = append(out, handlerStub{name: name, body: code})
+		if name := extractHandlerName(code); name != "" {
+			merge(handlerStub{name: name, body: code})
 		}
 		for _, b := range handlerBindingsFor(fake.WidgetFactoryName(), code, fake.EventHandlers()) {
-			if !b.known || b.handler == "" || seen[b.handler] {
+			if !b.known || b.handler == "" {
 				continue
 			}
-			seen[b.handler] = true
-			out = append(out, handlerStub{name: b.handler, params: b.params, imp: b.imp})
+			merge(handlerStub{name: b.handler, params: b.params, imp: b.imp})
 		}
 	})
 	return out
@@ -273,20 +301,28 @@ func methodize(code, recv string) string {
 }
 
 // appendMissingStubs returns src with a declaration appended for every handler
-// it does not already declare as a method on typeName, plus the names appended.
+// it does not already declare as a method on typeName, the names appended, and
+// the imports those declarations need that src does not have.
 //
 // Appending is the ONLY write codegen may make to the user side. Nothing
 // already in the file is rewritten, reordered or even reformatted, which is
 // what lets a developer keep their own layout and their own edits across every
-// regeneration. The cost of that rule: a stub seeded from a design-time body
-// may reference a package the file does not import yet — adding the import is
-// the developer's call, because their import block is theirs.
-func appendMissingStubs(src, typeName string, stubs []handlerStub) (string, []string, error) {
-	declared, err := declaredMethods(src, typeName)
+// regeneration. The cost of that rule: an appended stub may name a package the
+// file does not import yet, and closing that gap is the developer's call
+// because their import block is theirs. So it is named rather than filled —
+// the one-line fix is theirs to make, but finding it should not be.
+func appendMissingStubs(src, typeName string, stubs []handlerStub) (string, []string, []string, error) {
+	// Parsed rather than grepped because the price of a wrong answer is a lost
+	// handler or a duplicate one, and a method name is free to appear in a
+	// comment or a string. This reads the user's file only — the design itself
+	// is still generated one way.
+	file, err := parser.ParseFile(token.NewFileSet(), "user.go", src, parser.SkipObjectResolution)
 	if err != nil {
-		return src, nil, err
+		return src, nil, nil, err
 	}
-	var added []string
+	declared := declaredMethods(file, typeName)
+	imported := importedPaths(file)
+	var added, missing []string
 	var buf strings.Builder
 	buf.WriteString(src)
 	if !strings.HasSuffix(src, "\n") {
@@ -297,27 +333,23 @@ func appendMissingStubs(src, typeName string, stubs []handlerStub) (string, []st
 			continue
 		}
 		declared[s.name] = true
+		decl := renderStub(s, typeName)
 		buf.WriteString("\n")
-		buf.WriteString(renderStub(s, typeName))
+		buf.WriteString(decl)
 		added = append(added, s.name)
+		if s.imp != "" && !imported[s.imp] && referencesPackage(decl, s.imp[strings.LastIndex(s.imp, "/")+1:]) {
+			imported[s.imp] = true // report each import once, however many stubs need it
+			missing = append(missing, s.imp)
+		}
 	}
 	if len(added) == 0 {
-		return src, nil, nil
+		return src, nil, nil, nil
 	}
-	return buf.String(), added, nil
+	return buf.String(), added, missing, nil
 }
 
-// declaredMethods names the methods src declares on typeName. It parses the
-// user file instead of grepping it because the price of a wrong answer is a
-// lost handler or a duplicate one, and a method name is free to appear in a
-// comment or a string. This reads the user's file only — the design itself is
-// still generated one way.
-func declaredMethods(src, typeName string) (map[string]bool, error) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "user.go", src, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
+// declaredMethods names the methods file declares on typeName.
+func declaredMethods(file *ast.File, typeName string) map[string]bool {
 	out := map[string]bool{}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -328,7 +360,21 @@ func declaredMethods(src, typeName string) (map[string]bool, error) {
 			out[fn.Name.Name] = true
 		}
 	}
-	return out, nil
+	return out
+}
+
+// importedPaths names the packages file already imports, so a stub that needs
+// one of them is not reported as needing it.
+func importedPaths(file *ast.File) map[string]bool {
+	out := map[string]bool{}
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		out[path] = true
+	}
+	return out
 }
 
 // receiverTypeName reads the type name out of a method receiver, pointer or not.
