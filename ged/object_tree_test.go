@@ -160,9 +160,16 @@ func TestObjectTreeRowsCarryNameTypeAndLock(t *testing.T) {
 	if row.name != "btnOK" || row.typeName != "Button" {
 		t.Errorf("row = (%q, %q), want (\"btnOK\", \"Button\")", row.name, row.typeName)
 	}
-	if !row.lockPos || row.lockSize {
+	// The row caches no lock state — Draw reads the item live, so that a lock
+	// toggled from the canvas context menu (which never rebuilds this panel)
+	// still badges the row. Assert on the source of truth the badge reads.
+	if !row.item.IsLockPos() || row.item.IsLockSize() {
 		t.Errorf("row locks = (pos %v, size %v), want (true, false) — the item's own flags",
-			row.lockPos, row.lockSize)
+			row.item.IsLockPos(), row.item.IsLockSize())
+	}
+	ok.SetLockSize(true)
+	if !row.item.IsLockSize() {
+		t.Error("a lock set after the rebuild is invisible to the row; the badge would show stale state")
 	}
 	if got := insp.RowNames(); len(got) != 3 || got[2] != "edit" {
 		t.Errorf("rows = %v, want the unnamed widget listed as its lower-cased type", got)

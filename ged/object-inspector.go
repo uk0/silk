@@ -21,16 +21,15 @@ func init() {
 
 // inspectorItem represents one row in the object inspector tree.
 //
-// lockPos/lockSize are the item's own lock flags, read once per rebuild. They
-// are not re-derived from anything: the canvas badge reads the same two flags
-// (see lockGlyphBox), so a row and the widget it stands for can never disagree.
+// It deliberately caches no lock state. Locks are toggled from the canvas
+// context menu without rebuilding this panel, so a cached copy shows the badge
+// the widget carried at the last rebuild rather than the one it carries now.
+// Draw reads the flags live for the same reason the canvas does.
 type inspectorItem struct {
 	item     graph.IItem
 	name     string
 	typeName string
 	depth    int
-	lockPos  bool
-	lockSize bool
 }
 
 // ObjectInspector is a tool panel that shows the widget hierarchy as a tree,
@@ -172,6 +171,7 @@ func (this *ObjectInspector) Rebuild() {
 	}
 
 	this.selectedIdx = this.rowOfItem(selected)
+	this.clampScroll()
 	this.Self().Update()
 }
 
@@ -225,8 +225,6 @@ func newInspectorItem(child graph.IItem, depth int) inspectorItem {
 		name:     name,
 		typeName: typeName,
 		depth:    depth,
-		lockPos:  child.IsLockPos(),
-		lockSize: child.IsLockSize(),
 	}
 }
 
@@ -373,7 +371,7 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 
 		// Lock badge, in the canvas's own glyph: a widget that refuses to move
 		// must say so wherever it is listed, not only where it is drawn.
-		if item.lockPos || item.lockSize {
+		if item.item != nil && (item.item.IsLockPos() || item.item.IsLockSize()) {
 			sz := rh - 10
 			drawLockGlyph(g, w-sz-8, rowY+5, sz, 1)
 		}
@@ -505,6 +503,13 @@ func (this *ObjectInspector) dropTargetAt(y float64) (into, before int) {
 		this.canNestInto(this.dragIdx, idx) {
 		return idx, -1
 	}
+	// Reordering only ever reaches a direct child of the scene: reorderItems
+	// rejects anything else. Offering the insertion line for a nested row would
+	// promise a move that is silently dropped, so refuse the gesture here where
+	// the promise is drawn rather than there where it is broken.
+	if !this.canReorder(this.dragIdx) {
+		return -1, -1
+	}
 	if frac >= 0.5 {
 		idx++
 	}
@@ -515,6 +520,17 @@ func (this *ObjectInspector) dropTargetAt(y float64) (into, before int) {
 		idx = len(this.items)
 	}
 	return -1, idx
+}
+
+// canReorder reports whether the row at idx may be moved among its siblings —
+// true only for a direct child of the scene, which is what reorderItems can
+// actually express.
+func (this *ObjectInspector) canReorder(idx int) bool {
+	if this.scene == nil || idx < 0 || idx >= len(this.items) {
+		return false
+	}
+	it := this.items[idx].item
+	return it != nil && it.Parent() == graph.IItem(this.scene)
 }
 
 // canNestInto reports whether the row at target can adopt the row at drag: the
@@ -577,9 +593,46 @@ func (this *ObjectInspector) reparentInto(row int) {
 	if target == graph.IItem(this.scene) {
 		target = nil // the form root, spelled the way a canvas drop spells it
 	}
+	moved := this.view.Selection().ItemList()
 	this.view.reparentSelection(target)
+	parkInsideParent(moved, target)
 	this.Rebuild()
 }
+
+// parkInsideParent moves re-parented widgets into their new parent's box.
+//
+// A canvas drop cannot need this: the pointer was already over the container,
+// so the widget's rect already overlaps it. A tree drop has no pointer — the
+// widget keeps the scene rect it had somewhere else entirely, and because
+// FakeWidget has no local coordinates, Item.DrawAll clips a child to the
+// intersection with its parent and returns early when that is empty. The
+// widget stays in the document, answers Parent() correctly, and is invisible
+// on the canvas with no way to drag it back.
+//
+// Only items that have fallen outside are moved, and only far enough to sit
+// at the parent's top-left inset — a tree drop states intent about ownership,
+// not about position, so it must disturb the layout as little as it can.
+func parkInsideParent(items []graph.IItem, parent graph.IItem) {
+	if parent == nil {
+		return // the form root clips nothing
+	}
+	px, py := parent.X(), parent.Y()
+	pw, ph := parent.Width(), parent.Height()
+	for _, it := range items {
+		if it == nil || it.Parent() != parent || it.IsLockPos() {
+			continue
+		}
+		x, y, w, h := it.X(), it.Y(), it.Width(), it.Height()
+		if x < px+pw && x+w > px && y < py+ph && y+h > py {
+			continue // already overlaps; leave the layout alone
+		}
+		it.SetPos(px+parentInsetMm, py+parentInsetMm)
+	}
+}
+
+// parentInsetMm keeps a parked widget off its container's own border so the
+// user can see it landed inside rather than on the edge.
+const parentInsetMm = 2.0
 
 // selectOnCanvas mirrors a row press onto the canvas selection, so the widget
 // picks up its handles and every selection-driven panel (property sheet,
@@ -704,17 +757,26 @@ func (this *ObjectInspector) OnMouseLeave() {
 // OnMouseWheel handles scrolling.
 func (this *ObjectInspector) OnMouseWheel(x, y, z float64) {
 	this.scrollY -= z * 3
+	this.clampScroll()
+	this.Self().Update()
+}
+
+// clampScroll keeps scrollY inside the range the current row count allows.
+// Rebuild needs it as much as the wheel does: scroll down, then type a filter
+// that leaves three rows, and the offset that was valid a moment ago scrolls
+// every remaining row off the top — the panel reads as empty and the user has
+// no scrollbar to drag back.
+func (this *ObjectInspector) clampScroll() {
 	maxScroll := float64(len(this.items))*this.rowHeight - (this.Height() - this.contentTop())
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	if this.scrollY < 0 {
-		this.scrollY = 0
-	}
 	if this.scrollY > maxScroll {
 		this.scrollY = maxScroll
 	}
-	this.Self().Update()
+	if this.scrollY < 0 {
+		this.scrollY = 0
+	}
 }
 
 // SelectItem highlights the row standing for item. An item with no row on
