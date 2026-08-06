@@ -2,7 +2,10 @@ package ged
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/uk0/silk/core"
 )
 
 // fieldInfo is the per-widget record the code generator collects while walking
@@ -41,10 +44,18 @@ var scadaServiceFactories = map[string]bool{
 
 // sceneNeedsServices reports whether the generated app must own a shared
 // scada.Services. It expands the old "hasTags" test: a design needs services when
-// any widget carries a design-time tag (the industrial-widget TagName() seam) OR
-// is one of the backend-bound SCADA widgets (device / alarm / operator panels).
-// A plain UI with none of these keeps the byte-for-byte legacy output.
-func sceneNeedsServices(fields []fieldInfo) bool {
+// it declares a tag in the 标签字典, when any widget carries a design-time tag
+// (the industrial-widget TagName() seam) OR when it holds one of the
+// backend-bound SCADA widgets (device / alarm / operator panels). A plain UI with
+// none of these keeps the byte-for-byte legacy output.
+//
+// A declaration alone is enough: it exists to put unit, range and alarm limits
+// into a runtime registry, and without a Services there is no registry to put
+// them in.
+func sceneNeedsServices(fields []fieldInfo, decls []TagDecl) bool {
+	if len(decls) > 0 {
+		return true
+	}
 	for i := range fields {
 		if fields[i].tagName != "" {
 			return true
@@ -58,21 +69,23 @@ func sceneNeedsServices(fields []fieldInfo) bool {
 
 // emitBindServices writes the generated BindServices method: it records the
 // shared services handle, exposes the tag registry through ui.Tags for
-// compatibility, hands every tag-bound industrial widget its design-time tag name
-// (so scada.BindScreen can resolve it against the shared registry), then binds the
-// whole screen tree — industrial widgets, alarm panel and the five operator panels
-// — through scada.BindScreen. The bind's stop func is dropped: a generated
-// top-level app lives for the process, and services.Stop tears the container down.
-func emitBindServices(buf *strings.Builder, imports map[string]bool, typeName string, fields []fieldInfo) {
+// compatibility, registers the tags the design declares, hands every tag-bound
+// industrial widget its design-time tag name (so scada.BindScreen can resolve it
+// against the shared registry), then binds the whole screen tree — industrial
+// widgets, alarm panel and the five operator panels — through scada.BindScreen.
+// The bind's stop func is dropped: a generated top-level app lives for the
+// process, and services.Stop tears the container down.
+func emitBindServices(buf *strings.Builder, imports map[string]bool, typeName string, fields []fieldInfo, decls []TagDecl) {
 	imports["github.com/uk0/silk/scada"] = true
 
 	buf.WriteString("\n// BindServices attaches the shared SCADA services to this screen: it records the\n")
-	buf.WriteString("// handle, exposes the tag registry via ui.Tags, gives each tag-bound widget its\n")
-	buf.WriteString("// design-time tag, then wires the whole screen through scada.BindScreen. Call once\n")
-	buf.WriteString("// after construction and before services.Start.\n")
+	buf.WriteString("// handle, exposes the tag registry via ui.Tags, seeds the declared tags, gives\n")
+	buf.WriteString("// each tag-bound widget its design-time tag, then wires the whole screen through\n")
+	buf.WriteString("// scada.BindScreen. Call once after construction and before services.Start.\n")
 	fmt.Fprintf(buf, "func (ui *%s) BindServices(s *scada.Services) error {\n", typeName)
 	buf.WriteString("\tui.Services = s\n")
 	buf.WriteString("\tui.Tags = s.Tags\n")
+	emitTagDeclarations(buf, imports, decls)
 	for i := range fields {
 		if fields[i].tagName != "" {
 			fmt.Fprintf(buf, "\tui.%s.SetTagName(%q)\n", fields[i].name, fields[i].tagName)
@@ -81,6 +94,48 @@ func emitBindServices(buf *strings.Builder, imports map[string]bool, typeName st
 	fmt.Fprintf(buf, "\t_, err := scada.BindScreen(s, ui.Form, %s)\n", buildScreenOptions(fields))
 	buf.WriteString("\treturn err\n")
 	buf.WriteString("}\n")
+}
+
+// emitTagDeclarations registers the design's 标签字典 into the shared registry,
+// mirroring the seeding loop scada.New runs over Config.TagMeta. It is emitted
+// before every other line of the bind for one reason: GetOrCreate applies Meta
+// only when it creates the tag, so a tag first touched by scada.BindScreen would
+// be stuck for the life of the process with an empty Meta — no unit, no
+// engineering range, no alarm limits.
+func emitTagDeclarations(buf *strings.Builder, imports map[string]bool, decls []TagDecl) {
+	if len(decls) == 0 {
+		return
+	}
+	imports["github.com/uk0/silk/core"] = true
+	buf.WriteString("\t// Declared tags first: GetOrCreate applies Meta only on creation.\n")
+	for _, d := range decls {
+		fmt.Fprintf(buf, "\ts.Tags.GetOrCreate(%q, %s)\n", d.Name, goMetaLiteral(d.Meta))
+	}
+}
+
+// goMetaLiteral renders a core.Meta as a Go composite literal naming only the
+// fields that carry a value. core.Meta's zero value arms no alarms and declares
+// no range (core.limitSet), so emitting the zeros would add noise, not meaning.
+func goMetaLiteral(m core.Meta) string {
+	var parts []string
+	if m.Unit != "" {
+		parts = append(parts, fmt.Sprintf("Unit: %q", m.Unit))
+	}
+	for _, f := range []struct {
+		name string
+		val  float64
+	}{
+		{"Min", m.Min}, {"Max", m.Max},
+		{"LoLo", m.LoLo}, {"Lo", m.Lo}, {"Hi", m.Hi}, {"HiHi", m.HiHi},
+	} {
+		if f.val != 0 {
+			parts = append(parts, fmt.Sprintf("%s: %s", f.name, strconv.FormatFloat(f.val, 'g', -1, 64)))
+		}
+	}
+	if m.Desc != "" {
+		parts = append(parts, fmt.Sprintf("Desc: %q", m.Desc))
+	}
+	return "core.Meta{" + strings.Join(parts, ", ") + "}"
 }
 
 // buildScreenOptions renders the scada.ScreenOptions literal for BindScreen from

@@ -270,11 +270,13 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 		}
 	}
 
-	// needServices: the design binds a shared scada.Services when any widget is
-	// tag-bound OR is a backend-bound SCADA widget (device / alarm / operator
-	// panel). It is a strict superset of hasTags, so a tag-bearing scene always
-	// takes the services path; a plain UI keeps the legacy TagDB-free output.
-	needServices := sceneNeedsServices(fields)
+	// needServices: the design binds a shared scada.Services when it declares a
+	// tag, when any widget is tag-bound OR when it holds a backend-bound SCADA
+	// widget (device / alarm / operator panel). It is a strict superset of
+	// hasTags, so a tag-bearing scene always takes the services path; a plain UI
+	// keeps the legacy TagDB-free output.
+	decls := scene.TagDict()
+	needServices := sceneNeedsServices(fields, decls)
 	if needServices {
 		imports["github.com/uk0/silk/scada"] = true
 	}
@@ -441,7 +443,7 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 	// scada.Services and delegates the whole screen's runtime wiring to
 	// scada.BindScreen.
 	if needServices {
-		emitBindServices(&buf, imports, opts.TypeName, fields)
+		emitBindServices(&buf, imports, opts.TypeName, fields, decls)
 	}
 
 	// Generate main() function for runnable program

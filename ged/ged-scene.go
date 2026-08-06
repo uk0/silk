@@ -36,6 +36,8 @@ type GedScene struct {
 	// User-placed ruler guides, saved with the design (see guides.go).
 	guides sceneGuides
 	grid   GridModel
+	// Tags the design declares (标签字典), saved with it (see tag-dictionary.go).
+	tagDict []TagDecl
 }
 
 func NewGedScene() *GedScene {
@@ -66,6 +68,18 @@ func (this *GedScene) Grid() GridModel {
 func (this *GedScene) SetGrid(g GridModel) {
 	g.Pitch = clampGridPitch(g.Pitch)
 	this.grid = g
+}
+
+// TagDict returns the tags the design declares — what the 标签字典 dialog edits
+// and what the code generator seeds into the generated app's tag registry.
+func (this *GedScene) TagDict() []TagDecl {
+	return this.tagDict
+}
+
+// SetTagDict replaces the declared tags, dropping nameless and duplicate entries
+// so what the generator emits is what the runtime registry can actually key on.
+func (this *GedScene) SetTagDict(decls []TagDecl) {
+	this.tagDict = normalizeTagDict(decls)
 }
 
 //func (this *GedScene) Form() *FakeWidget {
@@ -181,6 +195,7 @@ func (this *GedScene) SaveDesign() *core.TDoc {
 	doc.WriteAttr("grid_pitch", this.grid.Pitch)
 	doc.WriteAttr("grid_visible", this.grid.Visible)
 	doc.WriteAttr("grid_snap", this.grid.Snap)
+	writeTagDict(doc, this.tagDict)
 	if this.HasChildren() {
 		child := core.NewTDoc()
 		child.SetKey("children")
@@ -242,6 +257,10 @@ func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	doc.ReadAttr("grid_visible", &grid.Visible)
 	doc.ReadAttr("grid_snap", &grid.Snap)
 	this.SetGrid(grid)
+	// Assigned, not merged: a document written before the dictionary existed has
+	// no block, and must open as an empty dictionary even in a designer that
+	// already had one loaded.
+	this.tagDict = readTagDict(doc)
 	for _, v := range this.Children() {
 		v.Detach()
 	}

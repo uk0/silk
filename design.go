@@ -1136,6 +1136,17 @@ func onFormSettings() {
 	ged.ShowFormSettingsDialog(gui.DefaultFrame(), gv)
 }
 
+// onTagDictionary opens 标签字典 for the active canvas: the tags the design
+// declares, with the unit / engineering range / alarm limits the generated app
+// registers them with, and the tags widgets bind to that nothing declares.
+func onTagDictionary() {
+	gv := currentGedView()
+	if gv == nil {
+		return
+	}
+	ged.ShowTagDictionaryDialog(gui.DefaultFrame(), gv)
+}
+
 // ---------------------------------------------------------------------------
 // Menu bar construction
 // ---------------------------------------------------------------------------
@@ -1328,6 +1339,8 @@ func createMenuBar(mainFrame *gui.Frame) {
 	designMenu, _ := mainMenu.AddSubMenu("设计", nil, nil)
 	btnFormSettings := designMenu.AddButton1("表单设置...", nil)
 	btnFormSettings.Action().BindFunc0(onFormSettings)
+	btnTagDict := designMenu.AddButton1("标签字典...", nil)
+	btnTagDict.Action().BindFunc0(onTagDictionary)
 
 	// ---- Mode buttons: 设计/代码/分屏 ----
 	mainMenu.AddWidget(gui.NewSeparator())
