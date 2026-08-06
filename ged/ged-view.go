@@ -541,6 +541,21 @@ func (this *GedView) OnRightUp(x, y float64) {
 			eventMenu.AddButton1("(无可用事件)", nil)
 		}
 
+		// "变形为" submenu — retype this widget in place. Single-selection
+		// only: the candidates come from the clicked widget's own palette
+		// category, so a mixed selection has no one answer.
+		if isFake && this.Selection().Count() == 1 {
+			if cands := morphCandidates(fake.WidgetFactoryName()); len(cands) > 0 {
+				morphMenu, _ := menu.AddSubMenu("变形为", nil, nil)
+				for _, c := range cands {
+					target := c
+					morphMenu.AddButton1(widgetFriendlyName(target), nil).Action().BindFunc0(func() {
+						this.morphSelection(fake, target)
+					})
+				}
+			}
+		}
+
 		// "View Code" menu item -- triggers selection callbacks so the code
 		// panel picks up this widget if it hasn't already.
 		btnCode := menu.AddButton1("查看代码", nil)
