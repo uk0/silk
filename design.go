@@ -316,6 +316,89 @@ func updateWindowTitle(filename string) {
 }
 
 // ---------------------------------------------------------------------------
+// Project
+// ---------------------------------------------------------------------------
+
+// currentProject is the project the designer is working in: the go.mod
+// directory 打开项目… picked, or the module the open document lives in.
+var currentProject *ged.Project
+
+func onOpenProject() {
+	// GLFW has no folder picker, so the user points at any file inside the
+	// project and the go.mod above it decides the root — the same constraint
+	// cmd/silkide works around in openProjectFolder.
+	picked := gui.OpenFileDialog()
+	if picked == "" {
+		return
+	}
+	proj, err := ged.ScanProject(filepath.Dir(picked))
+	if err != nil {
+		gui.ShowMessageDialog(gui.DefaultFrame(), "打开项目失败",
+			"所选位置不在 Go 模块内, 未找到 go.mod。\n\n"+err.Error())
+		return
+	}
+	useProject(proj)
+}
+
+// useProject adopts proj as the current one and re-roots the panels that
+// browse the project's files at it.
+func useProject(proj *ged.Project) {
+	currentProject = proj
+	if fileExplorer != nil {
+		fileExplorer.SetRootDir(proj.Root)
+	}
+	if globalSearch != nil {
+		globalSearch.SetRootDir(proj.Root)
+	}
+	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
+		sb.ShowMessage(fmt.Sprintf("项目: %s (%d 个设计文件)",
+			filepath.Base(proj.Root), len(proj.Designs)))
+	}
+}
+
+// activeProject returns the project to act on, falling back to the module the
+// current document was loaded from so 全部生成 works on a design opened through
+// 打开 without a separate 打开项目… step. nil means there is no project to act
+// on — an unsaved document outside any module.
+func activeProject() *ged.Project {
+	if currentProject != nil {
+		return currentProject
+	}
+	gv := currentGedView()
+	if gv == nil || gv.GedScene() == nil || gv.GedScene().Filename() == "" {
+		return nil
+	}
+	proj, err := ged.ScanProject(filepath.Dir(gv.GedScene().Filename()))
+	if err != nil {
+		return nil
+	}
+	currentProject = proj
+	return proj
+}
+
+func onGenerateAll() {
+	proj := activeProject()
+	if proj == nil {
+		gui.ShowMessageDialog(gui.DefaultFrame(), "全部生成",
+			"尚未打开项目。请先使用 文件 → 打开项目..., 或打开一个位于 Go 模块内的设计文件。")
+		return
+	}
+	// Re-scan first: designs added since the project was opened belong to it
+	// just as much as the ones that were there at the time.
+	if fresh, err := ged.ScanProject(proj.Root); err == nil {
+		proj = fresh
+		currentProject = fresh
+	}
+	results := proj.GenerateAll()
+	gui.ShowMessageDialog(gui.DefaultFrame(), "全部生成",
+		ged.FormatGenerateReport(proj.Root, results))
+	// The generated files are new entries in the tree.
+	if fileExplorer != nil {
+		fileExplorer.Refresh()
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Edit operations
 // ---------------------------------------------------------------------------
 
@@ -1172,6 +1255,13 @@ func createMenuBar(mainFrame *gui.Frame) {
 	btnOpen := fileMenu.AddButton1("打开", gui.LoadIcon("folder"))
 	btnOpen.Action().BindFunc0(onFileOpen)
 
+	// ---- 项目 ----
+	btnOpenProject := fileMenu.AddButton1("打开项目...", gui.LoadIcon("project"))
+	btnOpenProject.Action().BindFunc0(onOpenProject)
+
+	btnGenerateAll := fileMenu.AddButton1("全部生成", nil)
+	btnGenerateAll.Action().BindFunc0(onGenerateAll)
+
 	// ---- 最近文件 ----
 	recentMenu, recentBtn := fileMenu.AddSubMenu("最近文件", nil, nil)
 	recentBtn.SetSubPopupCallback(func(btn gui.IButton) {
@@ -1657,6 +1747,20 @@ func createPanels(mainFrame *gui.Frame) {
 		fileExplorer = ged.NewFileExplorer()
 		fileExplorer.SetRootDir(".")
 		fileExplorer.SigFileOpen(func(path string) {
+			// A design is a document this application owns: open it on the
+			// canvas as its own tab. Routing it to the text editor like any
+			// other file showed the user raw TDoc.
+			//
+			// Mode first, then open: OnDesignMode brings the *first* GedView
+			// forward, so switching after the open would drop the user on the
+			// document they already had rather than the one they clicked.
+			if ged.IsDesignPath(path) {
+				if modeSelector != nil && modeSelector.CurrentMode() != ged.ModeDesign {
+					modeSelector.SetMode(ged.ModeDesign)
+				}
+				openDesignFile(path)
+				return
+			}
 			// Switch to code mode and open file
 			if editorTabs != nil {
 				editorTabs.OpenFile(path)
