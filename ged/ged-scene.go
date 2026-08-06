@@ -39,6 +39,9 @@ type GedScene struct {
 	// Tags the design declares (标签字典), saved with it (see tag-dictionary.go).
 	tagDict         []TagDecl
 	cbDesignChanged func()
+	// Factory names the last LoadDesign had to skip. Not persisted: it
+	// describes this program's reading of the file, not the file.
+	missing []string
 }
 
 func NewGedScene() *GedScene {
@@ -299,12 +302,21 @@ func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	// so one unknown widget no longer stops the entire .silkui file from
 	// opening. A load that skipped some nodes still returns nil (partial
 	// success); an all-unknown file simply yields an empty scene.
-	var skipped int
+	var skipped []string
 	loadChildWidgets(doc.ChildByKey("children", false), this, &skipped)
-	if skipped > 0 {
-		core.Warn("silkui load: skipped ", skipped, " widget(s) with unknown factories")
+	this.missing = skipped
+	if len(skipped) > 0 {
+		core.Warn("silkui load: skipped ", len(skipped), " widget(s) with unknown factories")
 	}
 	return nil
+}
+
+// MissingWidgets names the factories the last load had to skip, in document
+// order and with repeats, one entry per dropped widget. Kept on the scene
+// because the warning it replaced only ever reached the log: the designer
+// turns these into 问题 rows the moment the file opens.
+func (this *GedScene) MissingWidgets() []string {
+	return this.missing
 }
 
 //func (this *GedScene) SizeHints() gui.SizeHints {

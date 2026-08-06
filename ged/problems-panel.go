@@ -3,6 +3,7 @@ package ged
 import (
 	"github.com/uk0/silk/buildissues"
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
 	"sort"
@@ -30,17 +31,26 @@ const (
 	SeverityWarning
 )
 
-// Problem is one structured compiler diagnostic. Where BuildOutput
-// keeps the raw text line around, a Problem is the parsed result only:
-// a file, a 1-based line, an optional column (0 when the compiler did
-// not give one), a severity and the human-readable message with the
+// Problem is one structured diagnostic. Where BuildOutput keeps the raw
+// text line around, a Problem is the parsed result only: a file, a
+// 1-based line, an optional column (0 when the compiler did not give
+// one), a severity and the human-readable message with the
 // "file:line:col:" prefix stripped off.
+//
+// The designer raises problems of its own — a widget the generator
+// cannot build, a widget a load had to drop — which have no source file
+// to point at. Those set Item instead, so activating the row selects the
+// widget on the canvas; Line stays 0 and File carries the widget's label.
 type Problem struct {
 	File     string
 	Line     int
 	Col      int
 	Severity Severity
 	Message  string
+	// Item is the design widget the problem is about, nil for a compiler
+	// diagnostic. A load-skipped widget has none either: the loader never
+	// built it, so there is nothing in the scene to select.
+	Item graph.IItem
 }
 
 // parseProblems turns raw compiler output into structured Problem rows
@@ -88,6 +98,7 @@ type ProblemsPanel struct {
 	hoverIdx   int
 	rowHeight  float64
 	cbActivate func(file string, line, col int)
+	cbItem     func(item graph.IItem)
 }
 
 // NewProblemsPanel creates an empty problems panel.
@@ -130,6 +141,14 @@ func (this *ProblemsPanel) Clear() {
 // a problem row. It receives the target file, 1-based line, and column.
 func (this *ProblemsPanel) SigProblemActivated(fn func(file string, line, col int)) {
 	this.cbActivate = fn
+}
+
+// SigItemActivated registers the callback fired when the user clicks a
+// row that names a design widget. Such a row has no source file, so it
+// never reaches the file callback above — routing it there would ask the
+// editor to open "".
+func (this *ProblemsPanel) SigItemActivated(fn func(item graph.IItem)) {
+	this.cbItem = fn
 }
 
 // ErrorCount returns how many problems are errors.
@@ -223,9 +242,9 @@ func (this *ProblemsPanel) Draw(g paint.Painter) {
 
 		this.drawSeverityGlyph(g, p.Severity, y, rh)
 
-		// Locator "file:line" in muted blue-grey.
+		// Locator in muted blue-grey.
 		g.SetBrush1(paint.Color{R: 120, G: 160, B: 210, A: 255})
-		loc := p.File + ":" + strconv.Itoa(p.Line)
+		loc := problemLocator(p)
 		g.DrawText1(24, y+fe.Ascent+2, loc)
 		locExt := font.TextExtents(loc)
 
@@ -233,6 +252,17 @@ func (this *ProblemsPanel) Draw(g paint.Painter) {
 		g.SetBrush1(paint.Color{R: 200, G: 200, B: 210, A: 255})
 		g.DrawText1(24+locExt.Width+12, y+fe.Ascent+2, p.Message)
 	}
+}
+
+// problemLocator is the text in a row's left column. A compiler
+// diagnostic points at a line; a designer problem points at a widget and
+// has none, and appending ":0" to its name only claimed a line 0 that
+// nothing can open.
+func problemLocator(p Problem) string {
+	if p.Line <= 0 {
+		return p.File
+	}
+	return p.File + ":" + strconv.Itoa(p.Line)
 }
 
 // drawSeverityGlyph paints a small severity marker at the row's left
@@ -272,8 +302,14 @@ func (this *ProblemsPanel) OnLeftDown(x, y float64) {
 	if idx < 0 || idx >= len(this.problems) {
 		return
 	}
+	p := this.problems[idx]
+	if p.Item != nil {
+		if this.cbItem != nil {
+			this.cbItem(p.Item)
+		}
+		return
+	}
 	if this.cbActivate != nil {
-		p := this.problems[idx]
 		this.cbActivate(p.File, p.Line, p.Col)
 	}
 }

@@ -76,6 +76,42 @@ func currentGedView() *ged.GedView {
 	return gv
 }
 
+// requireDesign returns the canvas and scene a design command acts on, or
+// (nil, nil) after putting the reason in the status bar.
+//
+// Every canvas command used to open with its own `if gv == nil { return }`.
+// Reached from the code editor, from the welcome tab, or from any dock panel
+// the frame hands back instead of a document, all of them did nothing and said
+// nothing — the menu item looked live and the click vanished.
+func requireDesign() (*ged.GedView, *ged.GedScene) {
+	gv := currentGedView()
+	if gv == nil {
+		reportDeclined("没有处于活动状态的设计文档: 请先切换到设计标签页")
+		return nil, nil
+	}
+	scene := gv.GedScene()
+	if scene == nil {
+		reportDeclined("当前设计文档没有可编辑的画布")
+		return nil, nil
+	}
+	return gv, scene
+}
+
+// requireSelection returns the canvas for a command that acts on whatever is
+// selected, or nil after saying there is nothing. 剪切/复制/删除/创建副本 all
+// walk an empty selection to no effect and used to end there without a word.
+func requireSelection() *ged.GedView {
+	gv, _ := requireDesign()
+	if gv == nil {
+		return nil
+	}
+	if gv.Selection().Count() == 0 {
+		reportDeclined("没有选中任何控件")
+		return nil
+	}
+	return gv
+}
+
 // ---------------------------------------------------------------------------
 // File operations
 // ---------------------------------------------------------------------------
@@ -133,7 +169,7 @@ func openDesignFile(filename string) {
 
 	p := ged.NewGedView()
 	if err := p.OpenFile(filename); err != nil {
-		core.Error(err)
+		reportLostWork("打开失败", filename+"\n\n"+err.Error())
 		return
 	}
 
@@ -156,60 +192,98 @@ func openDesignFile(filename string) {
 	if ged.GlobalAutoSaver != nil && p.GedScene() != nil {
 		ged.GlobalAutoSaver.Start(p.GedScene())
 	}
+	reportLoadProblems(p.GedScene())
+}
+
+// reportLoadProblems turns the widgets a load had to drop into 问题 rows. The
+// loader skips an unknown factory and carries on — the right call, it keeps one
+// dead widget from taking the file down — but until now it only said so in the
+// log, so the design opened looking whole and a later 保存 wrote the loss to
+// disk.
+func reportLoadProblems(scene *ged.GedScene) {
+	if scene == nil {
+		return
+	}
+	missing := scene.MissingWidgets()
+	if len(missing) == 0 {
+		return
+	}
+	showProblems(ged.LoadProblems(missing))
+	setStatus(fmt.Sprintf("载入时跳过了 %d 个未知控件, 详见「问题」", len(missing)))
+}
+
+// reportDesignProblems reports the widgets action would silently drop and says
+// whether it must be abandoned. 预览 already refused rather than open a window
+// missing part of the design; 导出Go代码 and 运行 wrote and ran that same
+// incomplete design without a word, which is the worse half of the same bug —
+// the file on disk and the running program looked finished.
+func reportDesignProblems(scene *ged.GedScene, action string) bool {
+	problems := ged.DesignProblems(scene)
+	if len(problems) == 0 {
+		return false
+	}
+	showProblems(problems)
+	names := make([]string, 0, len(problems))
+	for _, p := range problems {
+		names = append(names, p.File)
+	}
+	gui.ShowMessageDialog(gui.DefaultFrame(), "无法"+action,
+		"以下控件无法构建, "+action+"已取消:\n\n"+strings.Join(names, "\n"))
+	setStatus("无法" + action + ": 有控件无法构建, 详见「问题」")
+	return true
 }
 
 func onFileClose() {
 	f := gui.DefaultFrame()
 	view, dock := f.CurrentDocView()
-	if view != nil {
-		dock.PromptSaveCloseView(view)
+	if view == nil {
+		reportDeclined("没有可关闭的文档")
+		return
 	}
+	dock.PromptSaveCloseView(view)
 }
 
 func onFileSave() {
 	f := gui.DefaultFrame()
 	view, _ := f.CurrentDocView()
-	if ia, ok := view.(interface {
+	ia, ok := view.(interface {
 		Save() bool
-	}); ok {
-		if ia.Save() {
-			// Update title after successful save
-			if gv := currentGedView(); gv != nil && gv.GedScene() != nil {
-				scene := gv.GedScene()
-				_ = scene // title already updated inside Save()
-			}
-		}
+	})
+	if !ok {
+		reportDeclined("当前标签页不是可保存的文档")
+		return
 	}
+	// Save() folds two outcomes into one false: the user dismissed the
+	// file dialog, and the write failed. It cannot be told which here, so
+	// the report states what is certain — the file was not written.
+	if !ia.Save() {
+		reportDeclined("未保存")
+		return
+	}
+	setStatus("已保存")
 }
 
 func onFileSaveAs() {
-	gv := currentGedView()
-	if gv == nil {
+	_, scene := requireDesign()
+	if scene == nil {
 		return
 	}
 	filename := gui.SaveFileDialog()
 	if filename == "" {
 		return
 	}
-	scene := gv.GedScene()
-	if scene == nil {
-		return
-	}
 	doc := scene.SaveDesign()
 	if err := doc.SaveFile(filename); err != nil {
-		core.Error(err)
+		reportLostWork("另存为失败", filename+"\n\n"+err.Error())
 		return
 	}
 	addRecentFile(filename)
 	updateWindowTitle(filename)
+	setStatus("已另存为 " + filepath.Base(filename))
 }
 
 func onSaveAsTemplate() {
-	gv := currentGedView()
-	if gv == nil {
-		return
-	}
-	scene := gv.GedScene()
+	_, scene := requireDesign()
 	if scene == nil {
 		return
 	}
@@ -222,12 +296,10 @@ func onSaveAsTemplate() {
 		return
 	}
 	if err := ged.SaveAsTemplate(scene, name, desc); err != nil {
-		gui.ShowMessageDialog(gui.DefaultFrame(), "保存模板失败", err.Error())
+		reportLostWork("保存模板失败", err.Error())
 		return
 	}
-	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-		sb.ShowMessage(fmt.Sprintf("模板 \"%s\" 已保存", name))
-	}
+	setStatus(fmt.Sprintf("模板 \"%s\" 已保存", name))
 }
 
 func updateWindowTitle(filename string) {
@@ -248,58 +320,74 @@ func updateWindowTitle(filename string) {
 // ---------------------------------------------------------------------------
 
 func onUndo() {
-	if gv := currentGedView(); gv != nil {
-		gv.Undo()
+	gv, _ := requireDesign()
+	if gv == nil {
+		return
 	}
+	gv.Undo()
 }
 
 func onRedo() {
-	if gv := currentGedView(); gv != nil {
-		gv.Redo()
+	gv, _ := requireDesign()
+	if gv == nil {
+		return
 	}
+	gv.Redo()
 }
 
 func onDelete() {
-	if gv := currentGedView(); gv != nil {
-		sel := gv.Selection()
-		for _, item := range sel.ItemList() {
-			item.Detach()
-		}
-		sel.Clear()
+	gv := requireSelection()
+	if gv == nil {
+		return
 	}
+	sel := gv.Selection()
+	for _, item := range sel.ItemList() {
+		item.Detach()
+	}
+	sel.Clear()
 }
 
 func onSelectAll() {
-	if gv := currentGedView(); gv != nil {
-		for _, item := range gv.Scene().Children() {
-			gv.Selection().Add(item)
-		}
+	gv, _ := requireDesign()
+	if gv == nil {
+		return
+	}
+	for _, item := range gv.Scene().Children() {
+		gv.Selection().Add(item)
 	}
 }
 
 func onCut() {
-	if gv := currentGedView(); gv != nil {
-		gv.CopySelected()
-		gv.DeleteSelectedItems()
+	gv := requireSelection()
+	if gv == nil {
+		return
 	}
+	gv.CopySelected()
+	gv.DeleteSelectedItems()
 }
 
 func onCopy() {
-	if gv := currentGedView(); gv != nil {
-		gv.CopySelected()
+	gv := requireSelection()
+	if gv == nil {
+		return
 	}
+	gv.CopySelected()
 }
 
 func onPaste() {
-	if gv := currentGedView(); gv != nil {
-		gv.PasteItems()
+	gv, _ := requireDesign()
+	if gv == nil {
+		return
 	}
+	gv.PasteItems()
 }
 
 func onDuplicate() {
-	if gv := currentGedView(); gv != nil {
-		gv.DuplicateSelection()
+	gv := requireSelection()
+	if gv == nil {
+		return
 	}
+	gv.DuplicateSelection()
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +426,7 @@ func distributeH() { alignSelection(ged.DistributeH) }
 func distributeV() { alignSelection(ged.DistributeV) }
 
 func alignSelection(mode ged.AlignMode) {
-	gv := currentGedView()
+	gv := requireSelection()
 	if gv == nil {
 		return
 	}
@@ -362,7 +450,7 @@ func sameHeight() { sameSizeSelection(graph.SameSizeHeight) }
 func sameSize() { sameSizeSelection(graph.SameSizeBoth) }
 
 func sameSizeSelection(mode graph.SameSizeMode) {
-	gv := currentGedView()
+	gv := requireSelection()
 	if gv == nil {
 		return
 	}
@@ -374,7 +462,7 @@ func sameSizeSelection(mode graph.SameSizeMode) {
 // BringToFront directly from here would restack the widgets with nothing on the
 // UndoStack, leaving Ctrl+Z unable to put the order back.
 func bringToFront() {
-	gv := currentGedView()
+	gv := requireSelection()
 	if gv == nil {
 		return
 	}
@@ -382,7 +470,7 @@ func bringToFront() {
 }
 
 func sendToBack() {
-	gv := currentGedView()
+	gv := requireSelection()
 	if gv == nil {
 		return
 	}
@@ -410,15 +498,13 @@ func applyGridLayout() {
 
 // applyContainerLayout wraps the selected widgets into the given container type.
 func applyContainerLayout(factoryName, defaultName string) {
-	gv := currentGedView()
+	gv := requireSelection()
 	if gv == nil {
 		return
 	}
 	items := gv.Selection().ItemList()
 	if len(items) < 2 {
-		if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-			sb.ShowMessage("请至少选择2个控件来应用布局")
-		}
+		reportDeclined("请至少选择2个控件来应用布局")
 		return
 	}
 
@@ -443,9 +529,7 @@ func applyContainerLayout(factoryName, defaultName string) {
 	// Create the container at bounding box position with some padding
 	container, err := ged.NewFakeWidgetFromFactory(factoryName)
 	if err != nil {
-		if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-			sb.ShowMessage("无法创建布局容器: " + err.Error())
-		}
+		reportDeclined("无法创建布局容器: " + err.Error())
 		return
 	}
 	padding := 2.0
@@ -467,30 +551,27 @@ func applyContainerLayout(factoryName, defaultName string) {
 	gv.Selection().Add(container)
 	gv.Self().Update()
 
-	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-		sb.ShowMessage(fmt.Sprintf("已将 %d 个控件包装到 %s 布局中", len(items), defaultName))
-	}
+	setStatus(fmt.Sprintf("已将 %d 个控件包装到 %s 布局中", len(items), defaultName))
 }
 
 // breakLayout removes a layout container and places its child widgets back
 // on the canvas at their current positions. If the selected item is a layout
 // container, it is removed and replaced by a status message.
 func breakLayout() {
-	gv := currentGedView()
+	gv := requireSelection()
 	if gv == nil {
 		return
 	}
 	items := gv.Selection().ItemList()
 	if len(items) != 1 {
-		if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-			sb.ShowMessage("请选择一个布局容器来打破布局")
-		}
+		reportDeclined("请选择一个布局容器来打破布局")
 		return
 	}
 
 	item := items[0]
 	fw, ok := item.(*ged.FakeWidget)
 	if !ok {
+		reportDeclined("选中的对象不是控件")
 		return
 	}
 
@@ -504,9 +585,7 @@ func breakLayout() {
 		}
 	}
 	if !isLayout {
-		if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-			sb.ShowMessage("选中的控件不是布局容器")
-		}
+		reportDeclined("选中的控件不是布局容器")
 		return
 	}
 
@@ -515,9 +594,7 @@ func breakLayout() {
 	gv.Selection().Clear()
 	gv.Self().Update()
 
-	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
-		sb.ShowMessage("布局已打破")
-	}
+	setStatus("布局已打破")
 }
 
 // ---------------------------------------------------------------------------
@@ -525,23 +602,16 @@ func breakLayout() {
 // ---------------------------------------------------------------------------
 
 func onPreview() {
-	f := gui.DefaultFrame()
-	view, _ := f.CurrentDocView()
-	gedView, _ := view.(*ged.GedView)
+	gedView, scene := requireDesign()
 	if gedView == nil {
 		return
 	}
-	scene := gedView.GedScene()
-	if scene == nil {
+	if reportDesignProblems(scene, "预览") {
 		return
 	}
-	preview, blocked := ged.BuildPreview(scene)
-	if len(blocked) > 0 {
-		gui.ShowMessageDialog(gui.DefaultFrame(), "无法预览",
-			"以下控件无法构建, 预览已取消:\n\n"+strings.Join(blocked, "\n"))
-		return
-	}
+	preview, _ := ged.BuildPreview(scene)
 	if preview == nil {
+		reportFailure("无法预览", "预览窗口构建失败: 设计没有可显示的窗体")
 		return
 	}
 
@@ -562,10 +632,11 @@ func onExportGuiGv() {
 }
 
 func onExportCode() {
-	f := gui.DefaultFrame()
-	view, _ := f.CurrentDocView()
-	gedView, _ := view.(*ged.GedView)
+	gedView, scene := requireDesign()
 	if gedView == nil {
+		return
+	}
+	if reportDesignProblems(scene, "导出") {
 		return
 	}
 	filename := gui.SaveFileDialog()
@@ -574,14 +645,14 @@ func onExportCode() {
 	}
 	opts := ged.CodeGenOptions{
 		PackageName: "main",
-		TypeName:    gedView.GedScene().FormTitle() + "UI",
+		TypeName:    scene.FormTitle() + "UI",
 	}
-	res, err := gedView.GedScene().GenerateCodeFile(filename, opts)
+	res, err := scene.GenerateCodeFile(filename, opts)
 	if err != nil {
-		core.Error(err)
-		gui.ShowMessageDialog(gui.DefaultFrame(), "导出错误", err.Error())
+		reportLostWork("导出失败", filename+"\n\n"+err.Error())
 		return
 	}
+	setStatus("已导出 " + filepath.Base(res.MachineFile))
 	gui.ShowMessageDialog(gui.DefaultFrame(), "导出代码", exportReport(res))
 }
 
@@ -645,19 +716,18 @@ func findModuleRoot(dir string) string {
 }
 
 func onRun() {
-	gv := currentGedView()
+	gv, scene := requireDesign()
 	if gv == nil {
-		return
-	}
-	scene := gv.GedScene()
-	if scene == nil {
 		return
 	}
 	// The build below no longer blocks the UI, so the button stays clickable
 	// while it runs. Without this a few impatient clicks would race several
 	// compilers onto the same output path.
 	if runBusy {
-		setRunStatus("正在编译...")
+		setStatus("正在编译...")
+		return
+	}
+	if reportDesignProblems(scene, "运行") {
 		return
 	}
 
@@ -675,7 +745,7 @@ func onRun() {
 	opts := ged.CodeGenOptions{PackageName: "main", TypeName: scene.FormTitle() + "UI"}
 	res, err := scene.GenerateCodeFile(goFile, opts)
 	if err != nil {
-		gui.ShowMessageDialog(gui.DefaultFrame(), "导出错误", err.Error())
+		reportLostWork("导出错误", err.Error())
 		return
 	}
 
@@ -697,12 +767,12 @@ func onRun() {
 	// about a missing package rather than the real problem.
 	moduleRoot := silkModuleRoot()
 	if moduleRoot == "" {
-		reportRunFailure("找不到 silk 模块根目录 (go.mod)。请在 silk 源码目录下运行设计器。")
+		reportFailure("编译失败", "找不到 silk 模块根目录 (go.mod)。请在 silk 源码目录下运行设计器。")
 		return
 	}
 
 	runBusy = true
-	setRunStatus("正在编译...")
+	setStatus("正在编译...")
 	go func() {
 		// Cairo resolves via pkg-config (the cairo package declares
 		// "#cgo pkg-config: cairo"), so no machine-specific include path is
@@ -716,7 +786,7 @@ func onRun() {
 		gui.Post(func() {
 			runBusy = false
 			if err != nil {
-				reportRunFailure(buildFailureDetail(output, err))
+				reportFailure("编译失败", buildFailureDetail(output, err))
 				return
 			}
 
@@ -724,6 +794,11 @@ func onRun() {
 			if buildOutput != nil {
 				buildOutput.SetOutput("Build successful\n")
 			}
+			// A build that succeeded contradicts every row in the pane,
+			// including the load warnings: those were reported when the file
+			// opened, and rows that outlive the design they describe are the
+			// next version of the same lie.
+			showProblems(nil)
 			if editorTabs != nil {
 				if editor := editorTabs.ActiveEditor(); editor != nil {
 					editor.ClearErrors()
@@ -736,11 +811,10 @@ func onRun() {
 			runCmd.Dir = moduleRoot
 			runCmd.Env = runAppEnv()
 			if err := runCmd.Start(); err != nil {
-				reportRunFailure("启动失败: " + err.Error())
-				setRunStatus("启动失败")
+				reportFailure("启动失败", err.Error())
 				return
 			}
-			setRunStatus("程序已启动: " + appPath)
+			setStatus("程序已启动: " + appPath)
 		})
 	}()
 }
@@ -750,24 +824,47 @@ func onRun() {
 // continuation that clears it, so no lock is needed.
 var runBusy bool
 
-func setRunStatus(msg string) {
+func setStatus(msg string) {
 	if sb := gui.DefaultFrame().StatusBar(); sb != nil {
 		sb.ShowMessage(msg)
 	}
 }
 
-// reportRunFailure puts detail where the user can act on it: the build-output
-// pane if one exists, a dialog if not, and the log either way. The log copy is
-// what makes a failed Run diagnosable after the fact — a message that only ever
-// lived in a panel had to be read off a screenshot.
-func reportRunFailure(detail string) {
-	core.Warn("run: " + detail)
+// The three ways the designer tells a user a command did not do what the menu
+// item promised. Every one of them started as reportRunFailure, written when
+// Run was found failing in silence; the silence was never specific to Run.
+//
+//	reportDeclined  the command had nothing to act on. Nothing was lost, so a
+//	                dialog would be in the way — but saying nothing leaves a
+//	                live-looking menu item that does nothing when clicked.
+//	reportFailure   the command tried and failed. Detail goes to the panes and
+//	                the log, where it can be read line by line.
+//	reportLostWork  the same, plus a dialog, for the failures the user would
+//	                otherwise walk away from believing they succeeded.
+
+// reportDeclined states in the status bar why a command did nothing.
+func reportDeclined(reason string) {
+	setStatus(reason)
+}
+
+// reportFailure puts detail where the user can act on it: the 输出 pane and the
+// 问题 rows parsed out of it if they exist, a dialog if not, and the log either
+// way. The log copy is what makes a failure diagnosable after the fact — a
+// message that only ever lived in a panel had to be read off a screenshot.
+// title doubles as the status-bar summary and the dialog caption.
+func reportFailure(title, detail string) {
+	core.Warn(title + ": " + detail)
+	setStatus(title)
 	if buildOutput == nil {
-		gui.ShowMessageDialog(gui.DefaultFrame(), "编译错误", detail)
-		setRunStatus("编译失败")
+		gui.ShowMessageDialog(gui.DefaultFrame(), title, detail)
 		return
 	}
 	buildOutput.SetOutput(detail)
+	// The same text, parsed into rows. The 输出 pane comes forward rather than
+	// 问题 because a failure that is not a compiler dump has no rows at all.
+	if problemsPanel != nil {
+		problemsPanel.SetOutput(detail)
+	}
 	if rightDockRef != nil {
 		if idx := rightDockRef.IndexOfView(buildOutput); idx >= 0 {
 			rightDockRef.SetActiveIndex(idx)
@@ -779,7 +876,14 @@ func reportRunFailure(detail string) {
 			editor.SetErrors(buildOutput.ErrorMap())
 		}
 	}
-	setRunStatus("编译失败")
+}
+
+// reportLostWork reports a failure the user must not miss, because the command
+// they issued did not happen: a save that never reached disk, a file that did
+// not open. A pane they may not have in front of them is not enough.
+func reportLostWork(title, detail string) {
+	reportFailure(title, detail)
+	gui.ShowMessageDialog(gui.DefaultFrame(), title, detail)
 }
 
 // buildToolPath is the PATH the Run build should use.
@@ -1001,7 +1105,7 @@ func updateActionStates(gv *ged.GedView) {
 // the grid pitch / visibility / snap the canvas, the drag snap and the coarse
 // keyboard nudge all read.
 func onFormSettings() {
-	gv := currentGedView()
+	gv, _ := requireDesign()
 	if gv == nil {
 		return
 	}
@@ -1012,11 +1116,23 @@ func onFormSettings() {
 // declares, with the unit / engineering range / alarm limits the generated app
 // registers them with, and the tags widgets bind to that nothing declares.
 func onTagDictionary() {
-	gv := currentGedView()
+	gv, _ := requireDesign()
 	if gv == nil {
 		return
 	}
 	ged.ShowTagDictionaryDialog(gui.DefaultFrame(), gv)
+}
+
+// onToggleGuides flips 显示参考线 for the active canvas. Lifted out of the 视图
+// popup callback so it can report — and be tested — like every other command;
+// a closure built inside a live popup is reachable from neither.
+func onToggleGuides() {
+	gv, _ := requireDesign()
+	if gv == nil {
+		return
+	}
+	gv.SetShowGuides(!gv.IsShowGuides())
+	gv.Update()
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,14 +1239,7 @@ func createMenuBar(mainFrame *gui.Frame) {
 		if gv := currentGedView(); gv != nil {
 			btnGuides.Action().SetChecked(gv.IsShowGuides())
 		}
-		btnGuides.Action().BindFunc0(func() {
-			gv := currentGedView()
-			if gv == nil {
-				return
-			}
-			gv.SetShowGuides(!gv.IsShowGuides())
-			gv.Update()
-		})
+		btnGuides.Action().BindFunc0(onToggleGuides)
 
 		label := "切换暗色主题"
 		if gui.CurrentThemeMode() == gui.ThemeDark {
@@ -1252,6 +1361,59 @@ var codePanel *ged.CodePanel
 
 // buildOutput is the shared build output panel for showing compile results.
 var buildOutput *ged.BuildOutput
+
+// problemsPanel is the 问题 list beside 输出. It carries the compiler's
+// diagnostics parsed into rows, and the designer's own: the widgets a
+// generate would drop and the ones a load already dropped, each a row that
+// selects the widget at fault instead of a log line nobody reads.
+var problemsPanel *ged.ProblemsPanel
+
+// showProblems replaces the 问题 rows and brings the pane forward when there is
+// something to see. Called with nil after a clean build, so rows from the
+// previous one cannot go on describing a design that has since been fixed.
+func showProblems(list []ged.Problem) {
+	if problemsPanel == nil {
+		return
+	}
+	problemsPanel.SetProblems(list)
+	if len(list) == 0 || rightDockRef == nil {
+		return
+	}
+	if idx := rightDockRef.IndexOfView(problemsPanel); idx >= 0 {
+		rightDockRef.SetActiveIndex(idx)
+	}
+}
+
+// selectDesignItem brings item's own canvas forward and selects it there,
+// which is the whole point of a 问题 row that names a widget. The canvas is
+// reached through the item rather than through the frame's current document:
+// the row may have been raised for a design the user has since tabbed away
+// from, and selecting the widget in whatever is in front instead would be a
+// lie.
+func selectDesignItem(item graph.IItem) {
+	if item == nil {
+		return
+	}
+	scene, _ := item.Scene().(*ged.GedScene)
+	if scene == nil {
+		reportDeclined("该控件已不在设计中")
+		return
+	}
+	gv, _ := scene.View().(*ged.GedView)
+	if gv == nil {
+		reportDeclined("该控件所属的设计已关闭")
+		return
+	}
+	if centerDock != nil {
+		if idx := centerDock.IndexOfView(gv); idx >= 0 {
+			centerDock.SetActiveIndex(idx)
+		}
+	}
+	sel := gv.Selection()
+	sel.Clear()
+	sel.Add(item)
+	gv.Update()
+}
 
 // fileExplorer is the project file browser panel.
 var fileExplorer *ged.FileExplorer
@@ -1550,6 +1712,18 @@ func createPanels(mainFrame *gui.Frame) {
 
 		buildOutput = ged.NewBuildOutput()
 		rightDockI.AddView(buildOutput)
+
+		// The 问题 pane sits next to 输出 and is registered as a tool view, so
+		// AddView claims it as one; a plain document view here would be handed
+		// to Run and Save by CurrentDocView.
+		problemsPanel = ged.NewProblemsPanel()
+		problemsPanel.SigProblemActivated(func(path string, line, col int) {
+			if editorTabs != nil && path != "" {
+				editorTabs.OpenFileAtLine(path, line-1) // convert 1-based to 0-based
+			}
+		})
+		problemsPanel.SigItemActivated(selectDesignItem)
+		rightDockI.AddView(problemsPanel)
 
 		// ─── Code outline panel in right dock ───
 		codeOutline = ged.NewCodeOutlinePanel()

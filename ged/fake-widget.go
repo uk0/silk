@@ -584,12 +584,16 @@ func (this *FakeWidget) SaveDesign() *core.TDoc {
 // Skip-and-continue: when a node's factory name is not registered — a widget
 // renamed or removed across versions, or a plugin widget that simply isn't
 // loaded — the node is skipped together with its ENTIRE subtree (its children
-// cannot attach to a parent that was never created) and tallied into *skipped.
-// This never aborts the load, so one unknown widget can no longer take the
-// whole .silkui file down with it: the remaining valid siblings still load.
-// Each skip logs a warning naming the missing factory; the entry point emits a
-// single summary from the running count.
-func loadChildWidgets(childrenDoc *core.TDoc, parent graph.IItem, skipped *int) {
+// cannot attach to a parent that was never created) and its factory name is
+// appended to *skipped. This never aborts the load, so one unknown widget can
+// no longer take the whole .silkui file down with it: the remaining valid
+// siblings still load.
+//
+// The names are collected rather than counted because the count alone only
+// ever reached a log line. GedScene.LoadDesign keeps them so the 问题 pane can
+// tell the user which widget types the file lost and that saving makes it
+// permanent.
+func loadChildWidgets(childrenDoc *core.TDoc, parent graph.IItem, skipped *[]string) {
 	if childrenDoc == nil {
 		return
 	}
@@ -603,7 +607,7 @@ func loadChildWidgets(childrenDoc *core.TDoc, parent graph.IItem, skipped *int) 
 				shown = "(empty)"
 			}
 			core.Warn("silkui load: unknown widget factory ", shown, "; skipping node and its subtree")
-			*skipped++
+			*skipped = append(*skipped, factoryName)
 			continue
 		}
 		child.SetParent(parent)
@@ -612,10 +616,10 @@ func loadChildWidgets(childrenDoc *core.TDoc, parent graph.IItem, skipped *int) 
 }
 
 func (this *FakeWidget) LoadDesign(doc *core.TDoc) error {
-	var skipped int
+	var skipped []string
 	this.loadDesign(doc, &skipped)
-	if skipped > 0 {
-		core.Warn("silkui load: skipped ", skipped, " widget(s) with unknown factories")
+	if len(skipped) > 0 {
+		core.Warn("silkui load: skipped ", len(skipped), " widget(s) with unknown factories")
 	}
 	return nil
 }
@@ -624,7 +628,7 @@ func (this *FakeWidget) LoadDesign(doc *core.TDoc) error {
 // through the recursion so a single summary can be emitted by the entry point.
 // It never fails on an unknown child factory (see loadChildWidgets), so a
 // partially valid design still loads its valid widgets.
-func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *int) {
+func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *[]string) {
 	var rect geom.Rect
 	doc.ReadAttr("bounds", &rect)
 	this.SetBounds1(rect)

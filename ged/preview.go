@@ -1,8 +1,6 @@
 package ged
 
 import (
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 )
 
@@ -64,40 +62,15 @@ func previewBlockerLabel(name, factoryName string) string {
 	return name + " (" + factoryName + ")"
 }
 
-// previewBlockers lists every widget in the scene that FakeWidget.Generate
-// cannot construct, in scene order.
-//
-// Generate builds each widget through NewFakeWidgetFromFactory and returns nil
-// when that fails, and both callers — GedScene.Generate and the nested-child
-// loop — skip a nil silently. So an unbuildable widget does not fail the
-// preview, it disappears from it, together with everything nested inside it;
-// that is why a blocker's children are not walked here either.
-//
-// The condition tested is factory registration, the one that varies between a
-// document and the program reading it. A FakeWidget's factory name is always
-// derived from a live widget instance (SetWidget -> core.FactoryNameOf), so the
-// other half of Generate's test — that the factory makes a gui.IWidget — cannot
-// fail for a name that resolves at all, and is not worth constructing every
-// widget in the design a second time to ask.
+// previewBlockers names, for the dialog, every widget the preview cannot
+// build. The walk itself is unbuildableWidgets: the 问题 pane projects the same
+// widgets into rows, and two walks would eventually disagree about what a
+// build loses.
 func previewBlockers(scene *GedScene) []string {
 	var out []string
-	var walk func(items []graph.IItem)
-	walk = func(items []graph.IItem) {
-		for _, item := range items {
-			fake, ok := item.(*FakeWidget)
-			if !ok {
-				continue
-			}
-			if core.FindFactory(fake.WidgetFactoryName()) == nil {
-				out = append(out, previewBlockerLabel(fake.WidgetName(), fake.WidgetFactoryName()))
-				continue
-			}
-			if fake.HasChildren() {
-				walk(fake.Children())
-			}
-		}
+	for _, fake := range unbuildableWidgets(scene) {
+		out = append(out, previewBlockerLabel(fake.WidgetName(), fake.WidgetFactoryName()))
 	}
-	walk(scene.Children())
 	return out
 }
 
