@@ -1430,6 +1430,13 @@ func onWindowClose(gw *glfw.Window) {
 	// Prevent GLFW from hiding the window before we handle the close event
 	gw.SetShouldClose(false)
 
+	// The frame gets the first word, before anything is torn down: an app
+	// guarding unsaved work has to be able to answer "no" here, since by the
+	// time Frame.Close() reports the close its views are already shut.
+	if f, ok := win.widget.(*Frame); ok && !f.CanClose() {
+		return
+	}
+
 	if PromptSaveClose(win.widget, win) {
 		// If this was the main form (or the last form), quit the application
 		formCount := 0
