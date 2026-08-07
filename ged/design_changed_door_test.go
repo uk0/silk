@@ -12,8 +12,8 @@ package ged
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -296,42 +296,35 @@ func TestNoDirectUndoStackPushOutsideTheDoor(t *testing.T) {
 		t.Fatalf("%s no longer holds the sanctioned push; this guard is now checking nothing", doorFile)
 	}
 
+	// Ask git which files are ours rather than maintaining a skip list. A
+	// hand-kept list of directories to ignore cannot keep up: this checkout
+	// carries .claude/worktrees (51 sibling copies of the whole repo), a
+	// Package/ tree and a local/ dir, and the guard reported 350 offenders from
+	// them the moment it ran outside a pristine worktree. Version control
+	// already answers "which files are silk's source", and it answers it the
+	// same way on every machine.
+	tracked, err := trackedGoFiles(root)
+	if err != nil {
+		t.Skipf("cannot list tracked files (%v); this guard needs a git checkout", err)
+	}
+	if len(tracked) == 0 {
+		t.Fatal("git listed no Go files; the guard would pass vacuously")
+	}
+
 	var offenders []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			// An unreadable subtree is the checkout's problem, not a bypass.
-			if d != nil && d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "node_modules", "trash", "docs":
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") {
-			return nil
-		}
-		rel := filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))
+	for _, rel := range tracked {
 		if rel == doorFile {
-			return nil
+			continue
 		}
-		src, readErr := os.ReadFile(path)
+		src, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if readErr != nil {
-			return nil
+			continue
 		}
 		for i, line := range strings.Split(string(src), "\n") {
 			if strings.Contains(line, needle) {
 				offenders = append(offenders, fmt.Sprintf("  %s:%d: %s", rel, i+1, strings.TrimSpace(line)))
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
 	}
 
 	if len(offenders) > 0 {
@@ -360,4 +353,22 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
+}
+
+// trackedGoFiles lists the repository's own Go sources, slash-separated and
+// relative to root. Untracked and ignored trees are excluded by construction,
+// which is the point: a walk of the working directory also finds worktree
+// copies of this very file and reports each of them as a bypass.
+func trackedGoFiles(root string) ([]string, error) {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "--", "*.go").Output()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" {
+			files = append(files, name)
+		}
+	}
+	return files, nil
 }

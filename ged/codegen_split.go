@@ -260,6 +260,20 @@ func renderStub(s handlerStub, typeName string) string {
 // handlerReceiver is the header every handler on the UI struct opens with. The
 // code panel seeds its templates through the same string, so what a developer
 // starts editing is the shape this file writes.
+// receiverIdent returns the name the author gave a method's receiver, or "" for
+// a free function or an anonymous receiver (`func (*T) f()`), where there is
+// nothing in the body to keep working.
+func receiverIdent(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	names := fn.Recv.List[0].Names
+	if len(names) == 0 || names[0] == nil {
+		return ""
+	}
+	return names[0].Name
+}
+
 func handlerReceiver(typeName string) string {
 	return fmt.Sprintf("func (ui *%s) ", typeName)
 }
@@ -295,6 +309,15 @@ func methodize(code, recv string) string {
 		// keyword, so a doc comment above it stays where it is.
 		head := fset.Position(fn.Pos()).Offset - len(pkg)
 		name := fset.Position(fn.Name.Pos()).Offset - len(pkg)
+		// Keep the author's receiver identifier. Which struct a handler hangs
+		// off is the generator's call; what the author named the receiver is
+		// theirs, and the body below uses that name. Replacing the whole
+		// receiver with a fixed "ui" rewrote the declaration and left the body
+		// referring to an identifier that no longer exists:
+		//   func (a *T) onGo() { a.Btn.SetText(..) }  ->  undefined: a
+		if r := receiverIdent(fn); r != "" {
+			recv = strings.Replace(recv, "(ui *", "("+r+" *", 1)
+		}
 		return code[:head] + recv + code[name:]
 	}
 	return code
