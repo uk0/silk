@@ -254,14 +254,38 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 		if s.isItemAncestorSelected(item) {
 			continue
 		}
-		x, y := item.Pos()
-		cmd.AddItem(item, x+dx, y+dy)
+		addMoveSubtree(cmd, item, dx, dy)
 
 	}
 	if cmd.Count() == 0 {
 		return nil
 	}
 	return cmd
+}
+
+// addMoveSubtree records item at its shifted position, plus every descendant
+// that keeps its own scene coordinates. A container does not carry its children
+// on its own — SetPos moves the one item and OnMove only re-lays it out — so a
+// tree whose coordinates are absolute (ged never turns on local coords) would
+// leave the children sitting where they were.
+//
+// HasLocalCoord is the boundary: below such an item the children are stored
+// relative to it and already ride along, so descending past it would move them
+// a second time.
+//
+// A descendant rides along whatever its own IsLockPos says: the lock pins a
+// widget inside its container, and moving the container is not a request to
+// rearrange what is in it. Only the selected item's own lock, tested by the
+// caller, keeps a move out.
+func addMoveSubtree(cmd *MoveCommand, item IItem, dx, dy float64) {
+	x, y := item.Pos()
+	cmd.AddItem(item, x+dx, y+dy)
+	if item.HasLocalCoord() {
+		return
+	}
+	for _, c := range item.Children() {
+		addMoveSubtree(cmd, c, dx, dy)
+	}
 }
 
 // isSelfOrDescendant reports whether a is root itself or sits anywhere below
