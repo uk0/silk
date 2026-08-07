@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
@@ -518,13 +517,15 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		}
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Q', func() {
-		// Same dirty-save guard as File→New: don't quit on top of
-		// unsaved work. confirmDiscardDirty handles the clean-scene
-		// case as a quick no-op.
-		if !confirmDiscardDirty(designCanvas) {
+		// Same dirty-save guard as File→New for the design scene, plus
+		// the editor buffers — Cmd+Q used to quit straight over those,
+		// and session restore reopening the files from disk made the
+		// lost edits look like a restore that worked. canQuit is a
+		// quick no-op when nothing has drifted.
+		if !canQuit(designCanvas) {
 			return
 		}
-		core.Quit()
+		quitApp()
 	})
 
 	// Cmd+Shift+A: dump the accessibility tree of the active frame.

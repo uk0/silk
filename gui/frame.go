@@ -48,8 +48,9 @@ type Frame struct {
 	dragSplit IBrick
 	uuid      core.Uuid
 
-	cbClosing func(*Frame)
-	cbClosed  func(*Frame)
+	cbCanClose func(*Frame) bool
+	cbClosing  func(*Frame)
+	cbClosed   func(*Frame)
 
 	toolViews map[string]*_ToolViewInfo
 
@@ -776,6 +777,27 @@ func (this *Frame) SetUuid(a core.Uuid) error {
 
 func (this *Frame) SetClosedCallback(fn func(*Frame)) {
 	this.cbClosed = fn
+}
+
+// SetCanCloseCallback installs a veto for a close asked for by the window
+// manager (the title bar's close button). Returning false leaves the window
+// standing exactly as it was.
+//
+// This is the only hook that can still say no: Close() runs CloseAllViews
+// before the closing/closed callbacks get a word in, so an application that
+// has to ask "unsaved work — really quit?" would be asking it after the
+// views it was protecting are already gone.
+func (this *Frame) SetCanCloseCallback(fn func(*Frame) bool) {
+	this.cbCanClose = fn
+}
+
+// CanClose reports whether a window-manager close may proceed. True when no
+// callback is installed, so a frame that never opted in closes as before.
+func (this *Frame) CanClose() bool {
+	if this.cbCanClose == nil {
+		return true
+	}
+	return this.cbCanClose(this)
 }
 
 func (this *Frame) SetClosingCallback(fn func(*Frame)) {

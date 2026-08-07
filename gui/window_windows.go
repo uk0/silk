@@ -1280,6 +1280,13 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		}
 	case win32.WM_CLOSE:
 		core.Debug(`Receive "Close Window" command from system.`)
+		// The frame gets the first word, before anything is torn down: an app
+		// guarding unsaved work has to be able to answer "no" here, since by
+		// the time Frame.Close() reports the close its views are already shut.
+		// Swallowing WM_CLOSE (no DefWindowProc) is what keeps the window.
+		if f, ok := win.widget.(*Frame); ok && !f.CanClose() {
+			return 0
+		}
 		PromptSaveClose(win.widget, win)
 	default:
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)

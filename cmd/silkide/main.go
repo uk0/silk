@@ -38,6 +38,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/uk0/silk/a11y"
@@ -156,6 +157,10 @@ func main() {
 			setZoomLabel(zoom)
 		})
 	}
+
+	// The title bar's close button is a quit gesture like Cmd+Q, so it asks
+	// the same unsaved-work question before any of the teardown below runs.
+	installQuitGuard(frame, designCanvas)
 
 	// Persist the final window size + position on close so the next
 	// launch restores the user's geometry instead of bouncing through
@@ -1013,7 +1018,7 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 	// The three sample-seed tabs have no path; nothing on disk to compare
 	// against, so they close as they always did.
 	if ed != nil && path != "" && editorDiffersFromDisk(ed, path) {
-		switch askCloseDirtyEditor(ed, path) {
+		switch askDirty(func() gui.DialogResult { return askCloseDirtyEditor(ed, path) }) {
 		case gui.DialogOK:
 			if !saveEditorToDisk(ed, path) {
 				return false // the write failed; don't drop the buffer too
@@ -1063,6 +1068,139 @@ var askCloseDirtyEditor = func(ed *gui.CodeEditor, path string) gui.DialogResult
 	dlg.AddButton(i18n.T("Discard"), gui.DialogNo)
 	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
 	return dlg.ShowModal()
+}
+
+// dirtyPromptUp is true while an unsaved-work prompt is on screen. gui's
+// ShowModal disables the parent window chain only, and dispatchShortcut runs
+// from every window's key callback — the dialog's own included — so a second
+// Cmd+W or Cmd+Q lands while the first prompt is still up and stacks an
+// identical prompt behind it, one per keystroke. Read and written only from
+// the UI thread: both the shortcut handlers and TabBar's click run there.
+var dirtyPromptUp bool
+
+// askDirty puts one unsaved-work question on screen at a time. A second one
+// asked while the first is still open answers Cancel — the gesture that
+// re-entered is exactly the one the open prompt is already asking about, and
+// Cancel is the answer that keeps the work either way.
+func askDirty(ask func() gui.DialogResult) gui.DialogResult {
+	if dirtyPromptUp {
+		return gui.DialogCancel
+	}
+	dirtyPromptUp = true
+	defer func() { dirtyPromptUp = false }()
+	return ask()
+}
+
+// quitApp ends the event loop. A function var because a test that let the real
+// core.Quit run could no longer tell "the guard stopped the quit" from "the
+// quit happened and there was no loop to stop" — the seam is what makes the
+// difference observable (same reason askCloseDirtyEditor is one).
+var quitApp = core.Quit
+
+// dirtyEditorPaths lists the open editor files whose buffer has drifted from
+// disk, sorted so the prompt names them in a stable order (openEditors is a
+// map, so the raw range order changes between runs).
+func dirtyEditorPaths() []string {
+	var paths []string
+	for path, ed := range openEditors {
+		if ed != nil && editorDiffersFromDisk(ed, path) {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// confirmQuitDirtyEditors returns true when it's safe to end the process.
+// Every drifted buffer is the only copy of that work, and quitting used to
+// take all of them with it — worse, silently: SetOpenSession + restoreSession
+// reopen those same files FROM DISK on the next launch, so the tabs all come
+// back and the loss reads as a successful session restore until the user looks
+// at what's in them.
+//
+//   - Save all → write every drifted buffer; quit only if all of them landed.
+//   - Discard  → quit and let the edits go.
+//   - Cancel   → stay running, everything untouched.
+func confirmQuitDirtyEditors() bool {
+	dirty := dirtyEditorPaths()
+	if len(dirty) == 0 {
+		return true
+	}
+	switch askDirty(func() gui.DialogResult { return askQuitDirtyEditors(dirty) }) {
+	case gui.DialogOK:
+		for _, path := range dirty {
+			// Re-read rather than trusting the scan: the prompt runs a nested
+			// event loop, and Cmd+S then Cmd+W inside it closes a tab out from
+			// under this list. Saving a closed editor would panic here and take
+			// the buffers this whole prompt is protecting with it.
+			ed := openEditors[path]
+			if ed == nil {
+				continue
+			}
+			if !saveEditorToDisk(ed, path) {
+				return false // the write failed; don't quit over the rest either
+			}
+		}
+		return true
+	case gui.DialogNo: // Discard: quit and let the edits go.
+		return true
+	default:
+		return false
+	}
+}
+
+// askQuitDirtyEditors puts the Save all / Discard / Cancel question for a quit
+// that would drop unsaved buffers. Its own dialog rather than a loop over
+// askCloseDirtyEditor: a quit is a decision about the whole set, so the user
+// needs to see how much is at stake before answering once. Function var for
+// the same reason askCloseDirtyEditor is one — ShowModal attaches a real
+// window, which a headless test can't reach.
+var askQuitDirtyEditors = func(paths []string) gui.DialogResult {
+	dlg := gui.NewDialog(i18n.T("Unsaved changes"), globalFrame)
+	content := gui.NewVBox()
+	content.SetSpacing(12)
+	text := i18n.Tf("%d files have unsaved changes. Save them before quitting?", len(paths))
+	if len(paths) == 1 {
+		text = i18n.Tf("%s has unsaved changes. Save before quitting?", filepath.Base(paths[0]))
+	}
+	msg := gui.NewLabel(text)
+	msg.SetWrap(true)
+	content.AddWidget(msg)
+	if len(paths) > 1 {
+		// Name them: "3 files" tells the user how much is at stake, not which
+		// tabs they were about to lose.
+		names := make([]string, 0, len(paths))
+		for _, path := range paths {
+			names = append(names, filepath.Base(path))
+		}
+		list := gui.NewLabel(strings.Join(names, "\n"))
+		list.SetWrap(true)
+		content.AddWidget(list)
+	}
+	dlg.SetContent(content)
+	dlg.AddButton(i18n.T("Save All"), gui.DialogOK)
+	dlg.AddButton(i18n.T("Discard"), gui.DialogNo)
+	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	return dlg.ShowModal()
+}
+
+// canQuit is the guard both quit gestures share: Cmd+Q and the title bar's
+// close button lose the same work, so they ask the same two questions — the
+// design scene first (it's the one File→New already guards), then the editor
+// buffers.
+func canQuit(canvas *ged.GedView) bool {
+	return confirmDiscardDirty(canvas) && confirmQuitDirtyEditors()
+}
+
+// installQuitGuard puts canQuit in front of the title bar's close button.
+// It has to be the can-close callback, not the closed one: the closed callback
+// fires from inside Frame.Close(), after CloseAllViews has run, so a Cancel
+// answered there would be cancelling a close that already happened.
+func installQuitGuard(frame *gui.Frame, canvas *ged.GedView) {
+	if frame == nil {
+		return
+	}
+	frame.SetCanCloseCallback(func(*gui.Frame) bool { return canQuit(canvas) })
 }
 
 // lspDidCloseFile notifies gopls a document closed and drops its client-side
@@ -3111,7 +3249,10 @@ func confirmDiscardDirty(canvas *ged.GedView) bool {
 	dlg.AddButton(i18n.T("Save"), gui.DialogOK)
 	dlg.AddButton(i18n.T("Discard"), gui.DialogNo)
 	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
-	switch dlg.ShowModal() {
+	// Through askDirty like the editor prompts: Cmd+Q reaches this one first,
+	// so without the shared guard a second Cmd+Q stacks a second scene prompt
+	// exactly the way it used to stack tab-close prompts.
+	switch askDirty(func() gui.DialogResult { return dlg.ShowModal() }) {
 	case gui.DialogOK:
 		// Save() returns false when the user cancelled the
 		// SaveFileDialog or the write failed; in both cases we
