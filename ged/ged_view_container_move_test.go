@@ -3,6 +3,7 @@ package ged
 import (
 	"testing"
 
+	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 )
 
@@ -37,6 +38,106 @@ func nestedContainer(t *testing.T, view *GedView) (box, inner, btn *FakeWidget) 
 	btn.SetParent(inner)
 
 	return box, inner, btn
+}
+
+// addChild drops a widget of the named factory type at the given bounds under
+// parent. Positions stay on the 5mm grid pitch for the same reason
+// nestedContainer's do: the post-drag snap then has nothing left to change.
+func addChild(t *testing.T, parent graph.IItem, factory string, x, y, w, h float64) *FakeWidget {
+	t.Helper()
+
+	fw, err := NewFakeWidgetFromFactory(factory)
+	if err != nil {
+		t.Fatalf("create %s: %v", factory, err)
+	}
+	fw.SetBounds(x, y, w, h)
+	fw.SetParent(parent)
+	return fw
+}
+
+// TestCanvasDragCarriesEveryChild: the ordinary case this fix exists for is a
+// form container holding SEVERAL widgets, at more than one nesting level. A
+// walk that carries only the first child of each container leaves the rest of
+// the form standing where it was — the original defect, alive for every widget
+// but one.
+func TestCanvasDragCarriesEveryChild(t *testing.T) {
+	view := NewGedView()
+	view.GedScene().SetSize(200, 150)
+
+	box := addChild(t, view.GedScene(), "gui.VBox", 10, 10, 80, 60)
+	first := addChild(t, box, "gui.Button", 20, 20, 25, 5)
+	second := addChild(t, box, "gui.Button", 20, 30, 25, 5)
+	inner := addChild(t, box, "gui.HBox", 20, 40, 50, 20)
+	left := addChild(t, inner, "gui.Button", 25, 45, 20, 5)
+	right := addChild(t, inner, "gui.Button", 50, 45, 20, 5)
+
+	dragOnCanvas(view, 15, 15, 75, 55) // +60, +40
+
+	if x, y := box.Pos(); x != 70 || y != 50 {
+		t.Fatalf("container after the drag = (%v,%v), want (70,50) — the drag itself did not land", x, y)
+	}
+	for _, tc := range []struct {
+		what   string
+		item   *FakeWidget
+		wx, wy float64
+	}{
+		{"first child", first, 80, 60},
+		{"second child", second, 80, 70},
+		{"inner container", inner, 80, 80},
+		{"inner's first child", left, 85, 85},
+		{"inner's second child", right, 110, 85},
+	} {
+		if x, y := tc.item.Pos(); x != tc.wx || y != tc.wy {
+			t.Errorf("%s after the drag = (%v,%v), want (%v,%v) — it was left behind",
+				tc.what, x, y, tc.wx, tc.wy)
+		}
+	}
+}
+
+// TestCanvasDragCarriesLockedChildren: 锁定位置 pins a widget inside the
+// container it sits in; it is not a request to leave that widget behind when
+// the container itself is dragged. Only the selected item's own lock keeps a
+// move out, so a locked descendant — and everything hanging below it — rides
+// along like any other child.
+func TestCanvasDragCarriesLockedChildren(t *testing.T) {
+	view := NewGedView()
+	view.GedScene().SetSize(200, 150)
+
+	box := addChild(t, view.GedScene(), "gui.VBox", 10, 10, 80, 60)
+	locked := addChild(t, box, "gui.HBox", 20, 20, 50, 20)
+	inside := addChild(t, locked, "gui.Button", 25, 25, 20, 5)
+	free := addChild(t, box, "gui.Button", 20, 50, 25, 5)
+
+	// Lock through the menu entry's own glue, the way a designer reaches it.
+	view.Selection().Add(locked)
+	view.setSelectionLockPos(true)
+	if !locked.IsLockPos() {
+		t.Fatal("the lock did not reach the child")
+	}
+	view.Selection().Clear() // the press below picks up the container itself
+
+	dragOnCanvas(view, 15, 15, 75, 55) // +60, +40
+
+	if x, y := box.Pos(); x != 70 || y != 50 {
+		t.Fatalf("container after the drag = (%v,%v), want (70,50) — the drag itself did not land", x, y)
+	}
+	if x, y := locked.Pos(); x != 80 || y != 60 {
+		t.Errorf("position-locked child after the drag = (%v,%v), want (80,60) — its lock dropped it out of its own container", x, y)
+	}
+	if x, y := inside.Pos(); x != 85 || y != 65 {
+		t.Errorf("child of the locked container after the drag = (%v,%v), want (85,65) — the walk turned back at the lock", x, y)
+	}
+	if x, y := free.Pos(); x != 80 || y != 90 {
+		t.Errorf("unlocked sibling after the drag = (%v,%v), want (80,90) — it was left behind", x, y)
+	}
+
+	view.Scene().UndoStack().Undo()
+	if x, y := locked.Pos(); x != 20 || y != 20 {
+		t.Errorf("position-locked child after undo = (%v,%v), want (20,20) — undo only reaches what the command recorded", x, y)
+	}
+	if x, y := inside.Pos(); x != 25 || y != 25 {
+		t.Errorf("child of the locked container after undo = (%v,%v), want (25,25)", x, y)
+	}
 }
 
 // TestCanvasDragCarriesContainerChildren: dragging a container moves what is
