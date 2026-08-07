@@ -509,7 +509,12 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 			return
 		}
 		if idx := editorTabs.CurrentIndex(); idx >= 0 {
-			editorTabs.RemoveTab(idx)
+			// Through closeEditorTab, not RemoveTab: the keyboard close is the
+			// one people reach for most, so it needs the same unsaved-work
+			// prompt, openEditors untrack and gopls didClose the tab's X button
+			// gets. closeEditorTab drops the tab itself once the close is agreed
+			// to, so there is nothing left to remove here.
+			closeEditorTab(editorTabs, idx)
 		}
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Q', func() {
