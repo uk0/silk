@@ -254,7 +254,7 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 		if s.isItemAncestorSelected(item) {
 			continue
 		}
-		addMoveSubtree(cmd, item, dx, dy)
+		AddMoveSubtree(cmd, item, dx, dy)
 
 	}
 	if cmd.Count() == 0 {
@@ -263,7 +263,7 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 	return cmd
 }
 
-// addMoveSubtree records item at its shifted position, plus every descendant
+// AddMoveSubtree records item at its shifted position, plus every descendant
 // that keeps its own scene coordinates. A container does not carry its children
 // on its own — SetPos moves the one item and OnMove only re-lays it out — so a
 // tree whose coordinates are absolute (ged never turns on local coords) would
@@ -277,14 +277,37 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 // widget inside its container, and moving the container is not a request to
 // rearrange what is in it. Only the selected item's own lock, tested by the
 // caller, keeps a move out.
-func addMoveSubtree(cmd *MoveCommand, item IItem, dx, dy float64) {
+//
+// Exported for the callers that build their own MoveCommand because each item
+// has its own target rather than one shared delta — ged's multi-item align.
+func AddMoveSubtree(cmd *MoveCommand, item IItem, dx, dy float64) {
+	moveSubtree(item, dx, dy, func(a IItem, x, y float64) {
+		cmd.AddItem(a, x, y)
+	})
+}
+
+// ShiftSubtree moves item by (dx, dy) right now, carrying exactly the
+// descendants AddMoveSubtree would have recorded. It is for the corrections
+// that are applied outside the undo stack — ged's post-drag grid snap tidies
+// the resting place of a move that is already committed — which still have to
+// take the subtree with them.
+func ShiftSubtree(item IItem, dx, dy float64) {
+	moveSubtree(item, dx, dy, func(a IItem, x, y float64) {
+		a.SetPos(x, y)
+	})
+}
+
+// moveSubtree walks the carried set and hands each item its shifted position,
+// so the boundary rule documented on AddMoveSubtree has one implementation and
+// the recorded and the applied form cannot drift apart.
+func moveSubtree(item IItem, dx, dy float64, apply func(a IItem, x, y float64)) {
 	x, y := item.Pos()
-	cmd.AddItem(item, x+dx, y+dy)
+	apply(item, x+dx, y+dy)
 	if item.HasLocalCoord() {
 		return
 	}
 	for _, c := range item.Children() {
-		addMoveSubtree(cmd, c, dx, dy)
+		moveSubtree(c, dx, dy, apply)
 	}
 }
 

@@ -1314,7 +1314,8 @@ func frameAlignDelta(box, frame geom.Rect, mode AlignMode) (dx, dy float64) {
 //     rule every form designer uses, and the one alignRects implements. The
 //     per-item targets go onto one MoveCommand; MoveCommand.AddItem takes
 //     absolute (toX, toY), so N distinct targets need no composite and Ctrl+Z
-//     snaps everyone back at once.
+//     snaps everyone back at once. Each target carries the item's own subtree
+//     (graph.AddMoveSubtree), so aligning a container aligns what is in it.
 //   - 居中 (AlignCenter), and any mode with a single item selected: there are
 //     no selection extremes worth aligning to, so the reference is the frame —
 //     the container the items live in, or the form when they sit at the root.
@@ -1351,13 +1352,25 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 	}
 
 	aligned, clamped := alignRects(rects, mode)
+	selSet := make(map[graph.IItem]bool, len(items))
+	for _, it := range items {
+		selSet[it] = true
+	}
 	cmd := graph.NewMoveCommand()
 	for i, it := range items {
+		// A widget inside a selected container rides with it, exactly as it
+		// does under a drag or a nudge; giving it its own target as well would
+		// move it twice.
+		if hasSelectedAncestor(it, selSet) {
+			continue
+		}
 		oldX, oldY := it.Pos()
 		if oldX == aligned[i].X && oldY == aligned[i].Y {
 			continue
 		}
-		cmd.AddItem(it, aligned[i].X, aligned[i].Y)
+		// Per-item targets, so the shared delta of GenerateMoveCommand does not
+		// apply — but the subtree still has to come along.
+		graph.AddMoveSubtree(cmd, it, aligned[i].X-oldX, aligned[i].Y-oldY)
 	}
 	if cmd.Count() == 0 {
 		return
@@ -2709,6 +2722,11 @@ func (this *GedView) reparentSelection(target graph.IItem) {
 // that does not sit on a grid line. No-op when snap is disabled. Applied
 // directly (mutate + Update) like AlignSelection / reorderSelection — it tidies
 // the post-drag resting place rather than introducing its own move command.
+//
+// A correction is a move like any other, so it carries the item's subtree: the
+// drag delta is arbitrary but the snapped position is not, so a container drag
+// almost always ends with a correction, and without the subtree it would undo
+// the carrying the move command just did.
 func (this *GedView) snapSelectionToGrid() {
 	// grid.Snap is the one master switch for drop/nudge snapping; manual
 	// guides ride under it too, so 表单设置 turns every snap off in one place.
@@ -2720,8 +2738,19 @@ func (this *GedView) snapSelectionToGrid() {
 	if grid.Pitch <= 0 && guides.isEmpty() {
 		return
 	}
-	for _, item := range this.Selection().ItemList() {
+	items := this.Selection().ItemList()
+	selSet := make(map[graph.IItem]bool, len(items))
+	for _, item := range items {
+		selSet[item] = true
+	}
+	for _, item := range items {
 		if item.IsLockPos() {
+			continue
+		}
+		// The correction below carries the subtree, so an item whose own
+		// container is selected too is already being moved by it — snapping it
+		// again would shift it twice. Same skip GenerateMoveCommand makes.
+		if hasSelectedAncestor(item, selSet) {
 			continue
 		}
 		x, y := item.Pos()
@@ -2737,7 +2766,11 @@ func (this *GedView) snapSelectionToGrid() {
 			ny = snapToGrid(y, grid.Pitch)
 		}
 		if nx != x || ny != y {
-			item.SetPos(nx, ny)
+			// The move command that put the item here already carried its
+			// children; the snap correction has to carry them too, or the
+			// widgets inside a dragged container end up offset from it by
+			// whatever the rounding was worth.
+			graph.ShiftSubtree(item, nx-x, ny-y)
 		}
 	}
 }
