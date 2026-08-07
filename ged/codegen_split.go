@@ -360,9 +360,19 @@ func appendMissingStubs(src, typeName string, stubs []handlerStub) (string, []st
 		buf.WriteString("\n")
 		buf.WriteString(decl)
 		added = append(added, s.name)
-		if s.imp != "" && !imported[s.imp] && referencesPackage(decl, s.imp[strings.LastIndex(s.imp, "/")+1:]) {
-			imported[s.imp] = true // report each import once, however many stubs need it
-			missing = append(missing, s.imp)
+		// Every package the declaration qualifies, not just the one its
+		// parameters need. A design-time body is the developer's own code and
+		// may reach for anything — `fmt.Println` in a stub appended to an
+		// existing file produced `undefined: fmt` with the report saying
+		// nothing, which is the same silent puzzle the parameter case was
+		// fixed to end.
+		for _, pkg := range qualifiedPackages(decl) {
+			path := importPathFor(pkg, s.imp)
+			if path == "" || imported[path] {
+				continue
+			}
+			imported[path] = true // report each import once, however many stubs need it
+			missing = append(missing, path)
 		}
 	}
 	if len(added) == 0 {
@@ -423,4 +433,80 @@ func sortedUsedImports(imports map[string]bool, src string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// qualifiedPackages names every package identifier the declaration qualifies —
+// "fmt" from fmt.Println, "paint" from paint.Color. Parsed rather than scanned
+// so a package name inside a string or a comment cannot be mistaken for a use.
+// Selectors on a local variable (ui.BtnGo) are excluded by only accepting a
+// bare identifier as the qualifier and filtering to names that are not declared
+// in the snippet itself.
+func qualifiedPackages(decl string) []string {
+	const pkg = "package p;"
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "", pkg+decl, parser.SkipObjectResolution)
+	if err != nil {
+		return nil
+	}
+	local := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.FuncDecl:
+			if t.Recv != nil {
+				for _, f := range t.Recv.List {
+					for _, nm := range f.Names {
+						local[nm.Name] = true
+					}
+				}
+			}
+			if t.Type.Params != nil {
+				for _, f := range t.Type.Params.List {
+					for _, nm := range f.Names {
+						local[nm.Name] = true
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range t.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok {
+					local[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	seen := map[string]bool{}
+	var out []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if !ok || local[id.Name] || seen[id.Name] {
+			return true
+		}
+		seen[id.Name] = true
+		out = append(out, id.Name)
+		return true
+	})
+	return out
+}
+
+// importPathFor maps a package identifier to the path to report. The stub's own
+// declared import wins when it matches; otherwise the silk and stdlib packages
+// a handler realistically reaches for are known by name. An unknown qualifier
+// yields "" — reporting a guessed path would be worse than reporting nothing,
+// because the developer would paste it in and still not compile.
+func importPathFor(pkg, stubImport string) string {
+	if stubImport != "" && stubImport[strings.LastIndex(stubImport, "/")+1:] == pkg {
+		return stubImport
+	}
+	switch pkg {
+	case "fmt", "os", "strings", "strconv", "time", "errors", "math", "sort":
+		return pkg
+	case "gui", "core", "paint", "geom", "graph", "scada", "device":
+		return "github.com/uk0/silk/" + pkg
+	}
+	return ""
 }
