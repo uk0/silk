@@ -429,12 +429,26 @@ func TestGutterToggleOnAnEditorOlderThanTheSessionReachesDlv(t *testing.T) {
 
 	ed.ToggleBreakpoint(3)
 
-	req := f.waitFor(t, "CreateBreakpoint", 10*time.Second)
-	if req.File != path {
-		t.Errorf("CreateBreakpoint file = %q, want %q", req.File, path)
+	created := f.waitFor(t, "CreateBreakpoint", 10*time.Second)
+	if created.File != path {
+		t.Errorf("CreateBreakpoint file = %q, want %q", created.File, path)
 	}
-	if req.Line != 4 {
-		t.Errorf("CreateBreakpoint line = %d, want 4 (editor line 3, 1-based on the wire)", req.Line)
+	if created.Line != 4 {
+		t.Errorf("CreateBreakpoint line = %d, want 4 (editor line 3, 1-based on the wire)", created.Line)
+	}
+
+	// "Permanently deaf" covers both directions, and only the off-toggle can be
+	// wrong on its own: an editor that can set a breakpoint but not clear one
+	// leaves the debugger stopping at a line whose gutter dot the user has
+	// already turned off, with nothing on screen to explain it.
+	ed.ToggleBreakpoint(3) // same line, off again
+
+	cleared := f.waitFor(t, "ClearBreakpoint", 10*time.Second)
+	if cleared.ID != created.ID {
+		t.Errorf("ClearBreakpoint id = %d, want %d (the breakpoint created at %s:4)", cleared.ID, created.ID, path)
+	}
+	if cleared.File != path || cleared.Line != 4 {
+		t.Errorf("ClearBreakpoint hit %s:%d, want %s:4", cleared.File, cleared.Line, path)
 	}
 }
 

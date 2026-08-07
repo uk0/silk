@@ -273,6 +273,86 @@ func TestCmdWClosesThroughTheDirtyGuard(t *testing.T) {
 	})
 }
 
+// TestCmdWClosesTheCurrentTabWhenItIsTheFirstOfSeveral: two things the tests
+// above cannot see, because openEditedTab opens behind buildEditorTabs' three
+// mockup seeds and openFileInEditor always appends.
+//
+// The current tab is therefore never index 0 there, and it is never anything
+// but the rightmost one — so "close the current tab" and "close the last tab"
+// are the same tab in every one of them, and the leftmost tab (the one you get
+// after closing the mockup seeds, which is the state the IDE settles into) is
+// never the one closed. Here the two real files are the only tabs left, the
+// first is current, and the second has to come through untouched.
+func TestCmdWClosesTheCurrentTabWhenItIsTheFirstOfSeveral(t *testing.T) {
+	const originalFirst = "package main\n\nfunc first() {}\n"
+	const editedFirst = "package main\n\nfunc firstEdited() {}\n"
+	const originalSecond = "package main\n\nfunc second() {}\n"
+	const editedSecond = "package main\n\nfunc secondEdited() {}\n"
+
+	dir := t.TempDir()
+	pathFirst := filepath.Join(dir, "first.go")
+	pathSecond := filepath.Join(dir, "second.go")
+	if err := os.WriteFile(pathFirst, []byte(originalFirst), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathSecond, []byte(originalSecond), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tabs, edFirst, _ := openEditedTab(t, pathFirst, editedFirst)
+	if !openFileInEditor(tabs, pathSecond) {
+		t.Fatal("openFileInEditor returned false for the second file")
+	}
+	edSecond := openEditors[pathSecond]
+	if edSecond == nil {
+		t.Fatal("openEditors did not track the second file")
+	}
+	edSecond.SetText(editedSecond)
+
+	// Close the three sample seeds the way a user does — through the X button —
+	// so the real files sit at 0 and 1. They carry no path, so they close
+	// without a prompt.
+	for tabs.Count() > 2 {
+		if !tabs.TabBar().CloseTab(0) {
+			t.Fatalf("a seeded sample tab refused to close (%d tabs left)", tabs.Count())
+		}
+	}
+	if editorTabIndex(tabs, edFirst) != 0 || editorTabIndex(tabs, edSecond) != 1 {
+		t.Fatalf("tabs are at %d and %d, want the two opened files at 0 and 1",
+			editorTabIndex(tabs, edFirst), editorTabIndex(tabs, edSecond))
+	}
+	tabs.SetCurrentIndex(0)
+	if tabs.CurrentIndex() != 0 {
+		t.Fatalf("CurrentIndex = %d, want 0 — the closing tab has to be the first one", tabs.CurrentIndex())
+	}
+	answerCloseDirty(t, gui.DialogOK)
+
+	cmdW(t, tabs)()
+
+	if disk := diskText(t, pathFirst); disk != editedFirst {
+		t.Errorf("first file = %q; Cmd+W on tab 0 answered with Save must write %q", disk, editedFirst)
+	}
+	if editorTabIndex(tabs, edFirst) >= 0 {
+		t.Error("Cmd+W left the current tab open")
+	}
+	if openEditors[pathFirst] != nil {
+		t.Errorf("openEditors still tracks %q after Cmd+W", pathFirst)
+	}
+	// The tab that was not asked about keeps its unsaved buffer, its entry and
+	// its place. Closing the wrong tab is the other half of the same bug.
+	if editorTabIndex(tabs, edSecond) < 0 {
+		t.Error("Cmd+W on the first tab closed the second one instead")
+	}
+	if got := edSecond.Text(); got != editedSecond {
+		t.Errorf("second editor buffer = %q; want its untouched unsaved edit %q", got, editedSecond)
+	}
+	if openEditors[pathSecond] != edSecond {
+		t.Errorf("openEditors[%q] = %v; closing another tab untracked it", pathSecond, openEditors[pathSecond])
+	}
+	if disk := diskText(t, pathSecond); disk != originalSecond {
+		t.Errorf("second file = %q; closing another tab must not write its buffer %q", disk, editedSecond)
+	}
+}
+
 // TestCloseEditorTabSavesTheClosingTabNotTheActiveOne: a middle-click close
 // never activates the tab it closes, which is why the save takes an editor and
 // a path instead of reading the active tab. Closing a background tab must write
