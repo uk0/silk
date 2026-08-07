@@ -60,6 +60,48 @@ func TestCoverageForPathSuffixMatch(t *testing.T) {
 	}
 }
 
+// TestCoverageForPathSuffixMatchWindowsSeparators drives the shape a
+// Windows host hands the matcher: the editor tracks a backslashed
+// absolute path while the profile key stays forward-slashed, which is
+// the only form `go test -coverprofile` ever writes. The test above
+// cannot see this — filepath.Join gives it "/" on the machines we run
+// on — so the miss was silent, and the coverage gutter was dead on
+// Windows for every profile with a multi-segment key.
+func TestCoverageForPathSuffixMatchWindowsSeparators(t *testing.T) {
+	fc := map[string]*core.FileCoverage{
+		"silk/foo/bar.go": {
+			File:    "silk/foo/bar.go",
+			Covered: map[int]bool{10: true, 11: false, 12: true},
+		},
+	}
+	editorPath := `C:\Users\alice\src\dc\silk\foo\bar.go`
+	got, ok := coverageForPathSep(fc, editorPath, '\\')
+	if !ok {
+		t.Fatalf("coverageForPathSep windows: ok = false, want true (editorPath=%q)", editorPath)
+	}
+	if got.File != "silk/foo/bar.go" {
+		t.Errorf("got.File = %q, want %q", got.File, "silk/foo/bar.go")
+	}
+	if !got.Covered[10] || got.Covered[11] || !got.Covered[12] {
+		t.Errorf("got.Covered = %v, want {10:true,11:false,12:true}", got.Covered)
+	}
+}
+
+// TestCoverageForPathWindowsSeparatorsKeepBoundary: folding "\" onto "/"
+// must not buy the match at the cost of the boundary check — "foo.go"
+// still has to miss a path ending in "wfoo.go" on the Windows side too.
+func TestCoverageForPathWindowsSeparatorsKeepBoundary(t *testing.T) {
+	fc := map[string]*core.FileCoverage{
+		"foo.go": {File: "foo.go", Covered: map[int]bool{1: true}},
+	}
+	if _, ok := coverageForPathSep(fc, `C:\tmp\wfoo.go`, '\\'); ok {
+		t.Errorf(`coverageForPathSep('C:\tmp\wfoo.go') matched 'foo.go' (no path-boundary check)`)
+	}
+	if _, ok := coverageForPathSep(fc, `C:\tmp\foo.go`, '\\'); !ok {
+		t.Errorf(`coverageForPathSep('C:\tmp\foo.go') failed to match 'foo.go'`)
+	}
+}
+
 // TestCoverageForPathSuffixMatchUsesBoundary guards against the
 // "wfoo.go" trap — a naive HasSuffix("foo.go") would match an editor
 // path that ends in "wfoo.go", a false positive that would paint the
@@ -179,9 +221,9 @@ func TestCoverageTempFileCleanupHonorsMissing(t *testing.T) {
 
 // TestFilePathSeparatorMatchesGOOS sanity-checks the platform separator
 // the suffix-match builder uses — Linux and macOS get '/', Windows gets
-// '\\'. If runtime.GOOS ever returns something with an unexpected
-// separator the matcher's "/" hardcoded fallback would still rescue
-// most cases, but we'd rather catch the mismatch in CI.
+// '\\'. coverageForPath folds that separator onto "/" before it compares
+// anything, so a wrong value here leaves every native path unfolded and
+// the gutter blank again — we'd rather catch the mismatch in CI.
 func TestFilePathSeparatorMatchesGOOS(t *testing.T) {
 	want := byte('/')
 	if runtime.GOOS == "windows" {

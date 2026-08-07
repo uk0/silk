@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,10 +14,23 @@ import (
 // the drive-letter convention used by LSP ("file:///C:/...").
 func TestFileURIOf(t *testing.T) {
 	t.Run("absolute path", func(t *testing.T) {
-		got := fileURIOf("/tmp/foo/bar.go")
+		// Feed the host's own absolute shape: "/tmp/foo/bar.go" on
+		// POSIX, `\tmp\foo\bar.go` on Windows. filepath.Abs resolves a
+		// rooted but volume-less Windows path against the drive the
+		// process is on, so the URI there carries a drive letter — the
+		// one part of the expectation we can't write as a literal, and
+		// the reason it comes from the cwd rather than from fileURIOf.
+		in := filepath.Join(string(filepath.Separator), "tmp", "foo", "bar.go")
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
 		want := "file:///tmp/foo/bar.go"
-		if got != want {
-			t.Errorf("fileURIOf(/tmp/foo/bar.go) = %q, want %q", got, want)
+		if vol := filepath.VolumeName(cwd); vol != "" {
+			want = "file:///" + vol + "/tmp/foo/bar.go"
+		}
+		if got := fileURIOf(in); got != want {
+			t.Errorf("fileURIOf(%q) = %q, want %q", in, got, want)
 		}
 	})
 	t.Run("relative path absolutises", func(t *testing.T) {
