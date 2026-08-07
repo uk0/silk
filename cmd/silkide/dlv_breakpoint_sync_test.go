@@ -276,36 +276,38 @@ func waitForListenAddr(path string, timeout time.Duration) (string, error) {
 	return "", fmt.Errorf("fake dlv never published its listen address to %s", path)
 }
 
-// liveDebugSession brings up the production pieces the property needs: a real
-// core.DebugSession pointed at the fake dlv, and a real editor tab registered
-// through openFileInEditor — the one place silkide binds an editor to a path.
-func liveDebugSession(t *testing.T, f *fakeDlv) (*gui.CodeEditor, string) {
+// isolateIDEGlobals hands the test its own editor registry and a session
+// pointer that starts out nil — the state silkide sits in before anything has
+// been launched — and puts both back when the test ends. Split out of
+// liveDebugSession so a test can choose when the session appears: the two
+// orders are not interchangeable (see the open-before-launch test).
+func isolateIDEGlobals(t *testing.T) {
 	t.Helper()
 	gui.SetUIWakeup(nil) // headless: Post must not nudge GLFW (see gui/uiqueue.go)
+	savedEditors, savedDebug := openEditors, globalDebug
+	openEditors = map[string]*gui.CodeEditor{}
+	globalDebug = nil
+	t.Cleanup(func() { openEditors, globalDebug = savedEditors, savedDebug })
+}
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "main.go")
+// newDebuggeeFile writes the file these tests toggle in, alone in its own
+// directory so LaunchDebug has a package to point dlv at.
+func newDebuggeeFile(t *testing.T) (dir, path string) {
+	t.Helper()
+	dir = t.TempDir()
+	path = filepath.Join(dir, "main.go")
 	src := "package main\n\nfunc main() {\n\tprintln(1)\n\tprintln(2)\n}\n"
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return dir, path
+}
 
-	sess, err := core.LaunchDebug(dir, nil)
-	if err != nil {
-		t.Fatalf("LaunchDebug against the fake dlv: %v", err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
-
-	savedEditors, savedDebug := openEditors, globalDebug
-	openEditors = map[string]*gui.CodeEditor{}
-	// runProjectInDebugger publishes the session with this same assignment, but
-	// from inside a gui.Post closure, and package main has no way to drain that
-	// queue headless (see ui_post_test.go) — so stand in for the UI thread here.
-	globalDebug = sess
-	t.Cleanup(func() { openEditors, globalDebug = savedEditors, savedDebug })
-
-	// Opening the file AFTER the launch is the second half of the defect: such a
-	// file could not have been in the launch snapshot either.
+// openEditorFor registers a real editor tab through openFileInEditor — the one
+// place silkide binds an editor to a path, and so the only place the gutter
+// hook gets wired.
+func openEditorFor(t *testing.T, path string) *gui.CodeEditor {
+	t.Helper()
 	if !openFileInEditor(gui.NewTabWidget(), path) {
 		t.Fatal("openFileInEditor failed")
 	}
@@ -313,7 +315,31 @@ func liveDebugSession(t *testing.T, f *fakeDlv) (*gui.CodeEditor, string) {
 	if ed == nil {
 		t.Fatal("no editor registered for the opened file")
 	}
-	return ed, path
+	return ed
+}
+
+// liveDebugSession brings up the production pieces the property needs: a real
+// core.DebugSession pointed at the fake dlv, and a real editor tab registered
+// through openFileInEditor — the one place silkide binds an editor to a path.
+func liveDebugSession(t *testing.T, f *fakeDlv) (*gui.CodeEditor, string) {
+	t.Helper()
+	dir, path := newDebuggeeFile(t)
+
+	sess, err := core.LaunchDebug(dir, nil)
+	if err != nil {
+		t.Fatalf("LaunchDebug against the fake dlv: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	isolateIDEGlobals(t)
+	// runProjectInDebugger publishes the session with this same assignment, but
+	// from inside a gui.Post closure, and package main has no way to drain that
+	// queue headless (see ui_post_test.go) — so stand in for the UI thread here.
+	globalDebug = sess
+
+	// Opening the file AFTER the launch is the second half of the defect: such a
+	// file could not have been in the launch snapshot either.
+	return openEditorFor(t, path), path
 }
 
 // TestGutterToggleDuringLiveSessionReachesDlv: a breakpoint toggled on while the
@@ -379,4 +405,81 @@ func TestGutterToggleDoesNotBlockTheUIThread(t *testing.T) {
 	if elapsed > 500*time.Millisecond {
 		t.Errorf("ToggleBreakpoint took %s while the debugger stalled; the RPC must not run on the UI thread", elapsed)
 	}
+}
+
+// TestGutterToggleOnAnEditorOlderThanTheSessionReachesDlv: production order is
+// open first, launch second — you browse the code, then hit Debug — so every
+// editor silkide wires is wired while globalDebug is still nil. The hook must
+// therefore read the session when the toggle fires, not close over whatever was
+// there at wiring time; capturing it early leaves every file opened before the
+// launch permanently deaf to its own gutter.
+func TestGutterToggleOnAnEditorOlderThanTheSessionReachesDlv(t *testing.T) {
+	f := startFakeDlv(t)
+	dir, path := newDebuggeeFile(t)
+	isolateIDEGlobals(t)
+
+	ed := openEditorFor(t, path) // wired with no debugger running
+
+	sess, err := core.LaunchDebug(dir, nil)
+	if err != nil {
+		t.Fatalf("LaunchDebug against the fake dlv: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	globalDebug = sess // the assignment runProjectInDebugger makes, after the fact
+
+	ed.ToggleBreakpoint(3)
+
+	req := f.waitFor(t, "CreateBreakpoint", 10*time.Second)
+	if req.File != path {
+		t.Errorf("CreateBreakpoint file = %q, want %q", req.File, path)
+	}
+	if req.Line != 4 {
+		t.Errorf("CreateBreakpoint line = %d, want 4 (editor line 3, 1-based on the wire)", req.Line)
+	}
+}
+
+// noSessionChildEnv marks the re-executed half of the no-session test below.
+const noSessionChildEnv = "SILKIDE_TEST_TOGGLE_WITHOUT_SESSION"
+
+// TestGutterToggleWithoutASessionDoesNotKillTheIDE: setting breakpoints before
+// launching anything is the ordinary way to use a debugger, and the hook fires
+// on every one of those clicks. With no session the only right move is to drop
+// it — runProjectInDebugger will snapshot the gutter at launch — because the RPC
+// runs in a bare goroutine, where a nil session is not an error return but a
+// dereference that takes the process with it.
+//
+// That is why this runs the toggle in a child process: an unrecovered panic in
+// a goroutine cannot be caught by the goroutine that started it, so the only
+// place the crash is observable as a value is the child's exit status. The child
+// waits before returning, so the goroutine gets its chance to run rather than
+// being outlived by the test.
+//
+// On its own "nothing happened" would also pass if the hook were never wired;
+// what rules that out is the tests above, which fire the same hook on the same
+// openFileInEditor path and watch it reach the wire.
+func TestGutterToggleWithoutASessionDoesNotKillTheIDE(t *testing.T) {
+	if os.Getenv(noSessionChildEnv) == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+		cmd.Env = append(os.Environ(), noSessionChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return
+		}
+		if strings.Contains(string(out), "panic:") {
+			t.Fatalf("a gutter toggle with no debugger running crashed the process — the IDE goes down with it (%v):\n%s", err, out)
+		}
+		t.Fatalf("no-session toggle scenario failed (%v):\n%s", err, out)
+	}
+
+	// Child: no fake dlv, no session — just the editor a user opens first.
+	_, path := newDebuggeeFile(t)
+	isolateIDEGlobals(t)
+	ed := openEditorFor(t, path)
+
+	ed.ToggleBreakpoint(3) // set one before launching, as everybody does
+	ed.ToggleBreakpoint(3) // and change your mind: the clear path derefs too
+
+	// Nothing to wait *for* — a correct hook starts no goroutine at all — so give
+	// the runtime room to schedule the one a broken hook would have started.
+	time.Sleep(500 * time.Millisecond)
 }
