@@ -144,7 +144,7 @@ func TestUIQueuePanicIsReported(t *testing.T) {
 	})
 	defer unregister()
 
-	Post(func() { panic("boom-from-a-posted-task") })
+	Post(panickingTaskForTest)
 	drainUITasks()
 
 	mu.Lock()
@@ -159,12 +159,25 @@ func TestUIQueuePanicIsReported(t *testing.T) {
 	if reported == "" {
 		t.Fatalf("the panic was swallowed without a report; warnings seen: %v", warnings)
 	}
-	// The task ran on the drain thread, not on whichever goroutine posted it,
-	// so the panic value alone names nothing. Without a stack the report says
-	// a task failed but not which one.
-	if !strings.Contains(reported, "runUITask") {
-		t.Errorf("panic report carries no stack, so the failing task cannot be located:\n%s", reported)
+	// Assert the FAILING TASK's own frame, not the recover site's.
+	//
+	// "runUITask" was the earlier assertion, and it is present by construction:
+	// debug.Stack() taken inside runUITask's deferred recover always contains
+	// the frame it is running in. So the check passed whether or not any frame
+	// from the task survived — truncate the stack at the panic boundary, or
+	// stash the value and report it later from another goroutine, and the test
+	// stayed green while the report became useless. The point of the stack is
+	// naming which posted task died.
+	if !strings.Contains(reported, "panickingTaskForTest") {
+		t.Errorf("the report does not name the failing task, so it cannot be located:\n%s", reported)
 	}
+}
+
+// panickingTaskForTest is a named function so its frame appears in the stack.
+// A closure would show up as TestUIQueuePanicIsReported.funcN, which names the
+// test rather than the task and would make the assertion above meaningless.
+func panickingTaskForTest() {
+	panic("boom-from-a-posted-task")
 }
 
 func TestUIQueueWakeupHookInvoked(t *testing.T) {
