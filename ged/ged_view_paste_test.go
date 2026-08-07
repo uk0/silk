@@ -2,6 +2,8 @@ package ged
 
 import (
 	"testing"
+
+	"github.com/uk0/silk/graph"
 )
 
 // TestUniqueWidgetName checks the pure unique-name helper: a free name
@@ -133,5 +135,84 @@ func TestPasteMultipleNoSelfCollision(t *testing.T) {
 			}
 			names[n] = true
 		}
+	}
+}
+
+// sceneChildSet is the scene's top-level membership as a lookup, so the paste
+// undo/redo below can be checked on WHICH items are on the canvas rather than
+// on a count a stray leftover would happen to satisfy.
+func sceneChildSet(scene *GedScene) map[graph.IItem]bool {
+	held := map[graph.IItem]bool{}
+	for _, item := range scene.Children() {
+		held[item] = true
+	}
+	return held
+}
+
+// TestPasteUndoesInOneStep pastes three copied widgets and takes them back with
+// a single Undo. A paste is one user gesture, so it has to cost one Ctrl+Z —
+// one AddCommand per clipboard root meant undoing a 3-widget paste took three
+// presses, leaving two copies stranded on the canvas in between.
+func TestPasteUndoesInOneStep(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+
+	a := addFakeAt(t, scene, "a", 0, 0, 10, 10)
+	b := addFakeAt(t, scene, "b", 30, 0, 10, 10)
+	c := addFakeAt(t, scene, "c", 60, 0, 10, 10)
+	originals := map[graph.IItem]bool{a: true, b: true, c: true}
+
+	view.Selection().Clear()
+	view.Selection().Add(a)
+	view.Selection().Add(b)
+	view.Selection().Add(c)
+	view.CopySelected()
+	view.PasteItems()
+
+	var copies []*FakeWidget
+	for _, item := range scene.Children() {
+		if originals[item] {
+			continue
+		}
+		fake, ok := item.(*FakeWidget)
+		if !ok {
+			t.Fatalf("paste put a %T on the canvas, want a *FakeWidget", item)
+		}
+		copies = append(copies, fake)
+	}
+	if len(copies) != 3 {
+		t.Fatalf("setup: pasting 3 copied widgets produced %d copies, want 3", len(copies))
+	}
+
+	scene.UndoStack().Undo()
+	held := sceneChildSet(scene)
+	for _, dup := range copies {
+		if held[dup] {
+			t.Fatalf("after ONE undo of a 3-widget paste the copy %q is still on the"+
+				" canvas: a paste is one gesture and must undo in one step",
+				dup.WidgetName())
+		}
+	}
+	for _, orig := range []*FakeWidget{a, b, c} {
+		if !held[orig] {
+			t.Fatalf("undoing the paste also took the original %q off the canvas",
+				orig.WidgetName())
+		}
+	}
+	if len(held) != 3 {
+		t.Fatalf("after ONE undo the canvas holds %d items, want exactly the 3 originals",
+			len(held))
+	}
+
+	scene.UndoStack().Redo()
+	held = sceneChildSet(scene)
+	for _, dup := range copies {
+		if !held[dup] {
+			t.Fatalf("redoing the paste left the copy %q off the canvas", dup.WidgetName())
+		}
+	}
+	if len(held) != 6 {
+		t.Fatalf("after ONE redo the canvas holds %d items, want 6 (3 originals + 3 copies)",
+			len(held))
 	}
 }

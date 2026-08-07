@@ -2175,6 +2175,10 @@ func (this *GedView) PasteItems() {
 	taken := this.sceneWidgetNames()
 	sel := this.Selection()
 	sel.Clear()
+	// A paste is one gesture, so the whole clipboard rides in one AddCommand:
+	// a command per root would cost one Ctrl+Z per pasted widget to take back.
+	cmd := graph.NewAddCommand()
+	var pasted []graph.IItem
 	for _, doc := range clipboard {
 		var factoryName string
 		doc.Value(&factoryName)
@@ -2190,9 +2194,17 @@ func (this *GedView) PasteItems() {
 		renameSubtreeUnique(item, taken)
 		item.Layout()
 
-		cmd := graph.NewAddCommand()
 		cmd.AddItem(item, this.Scene())
+		pasted = append(pasted, item)
+	}
+	// A paste whose every factory lookup failed changed nothing: pushing the
+	// empty command would spend an undo step and report a design change.
+	if cmd.Count() > 0 {
 		this.Scene().PushCommand(cmd)
+	}
+	// Selection comes after the push so the items are attached to the scene by
+	// the time anyone listening on the selection goes looking for them.
+	for _, item := range pasted {
 		sel.Add(item)
 	}
 	this.Self().Update()
