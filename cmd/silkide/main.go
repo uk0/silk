@@ -975,10 +975,11 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	// Wire the tab X button (it was a no-op): remove the tab and untrack its
 	// editor from openEditors so the file reopens cleanly and LSP/diff state
 	// doesn't leak the closed buffer. Synchronous removal is safe — TabBar's
-	// OnLeftUp doesn't touch the tab slice after CloseTab returns.
+	// OnLeftUp doesn't touch the tab slice after CloseTab returns. Reporting
+	// closeEditorTab's answer back keeps a cancelled close from looking to
+	// TabBar like the tab went away.
 	tabs.TabBar().SetCloseCallback(func(tb *gui.TabBar, idx int) bool {
-		closeEditorTab(tabs, idx)
-		return true
+		return closeEditorTab(tabs, idx)
 	})
 	return tabs
 }
@@ -986,22 +987,82 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 // closeEditorTab removes editor tab idx and untracks its editor from
 // openEditors (so a later open re-reads the file and LSP/diff state doesn't
 // keep pointing at the closed buffer).
-func closeEditorTab(tabs *gui.TabWidget, idx int) {
+//
+// A tab whose buffer no longer matches the file it came from holds the only
+// copy of that work, so it gets a Save / Discard / Cancel prompt first —
+// closing used to drop those edits on the floor with no way back. Returns
+// false when the close was cancelled (or the requested save failed), leaving
+// the tab, its openEditors entry and its LSP state exactly as they were.
+func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 	if tabs == nil || idx < 0 || idx >= tabs.Count() {
-		return
+		return false
 	}
+	var ed *gui.CodeEditor
+	path := ""
 	if st := tabs.Stack(); st != nil {
-		if ed, ok := st.Page(idx).(*gui.CodeEditor); ok {
-			for p, e := range openEditors {
-				if e == ed {
-					delete(openEditors, p)
-					lspDidCloseFile(p) // tell gopls + drop diag/version state
+		if e, ok := st.Page(idx).(*gui.CodeEditor); ok {
+			ed = e
+			for p, tracked := range openEditors {
+				if tracked == ed {
+					path = p
 					break
 				}
 			}
 		}
 	}
+	// The three sample-seed tabs have no path; nothing on disk to compare
+	// against, so they close as they always did.
+	if ed != nil && path != "" && editorDiffersFromDisk(ed, path) {
+		switch askCloseDirtyEditor(ed, path) {
+		case gui.DialogOK:
+			if !saveEditorToDisk(ed, path) {
+				return false // the write failed; don't drop the buffer too
+			}
+		case gui.DialogNo: // Discard: close and let the edits go.
+		default:
+			return false
+		}
+	}
+	if path != "" {
+		delete(openEditors, path)
+		lspDidCloseFile(path) // tell gopls + drop diag/version state
+	}
 	tabs.RemoveTab(idx)
+	return true
+}
+
+// editorDiffersFromDisk reports whether ed's buffer has drifted from the file
+// it was opened from. gui.CodeEditor keeps no modified flag, so the buffer is
+// compared against the bytes on disk instead. A file we can't read (deleted or
+// renamed underneath the tab) reads as "no drift" — there is nothing to
+// compare, and prompting there would only block closing tabs for files the
+// user removed on purpose.
+func editorDiffersFromDisk(ed *gui.CodeEditor, path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return string(data) != ed.Text()
+}
+
+// askCloseDirtyEditor puts the Save / Discard / Cancel question for a closing
+// tab, same dialog shape confirmDiscardDirty uses for the design scene. A
+// function var (not a plain func) so tests can answer it without a display:
+// ShowModal attaches a real window, which segfaults off the main thread the
+// same way the SaveFileDialog does, so every close branch would otherwise be
+// untestable (see silkideToast in feedback.go for the same pattern).
+var askCloseDirtyEditor = func(ed *gui.CodeEditor, path string) gui.DialogResult {
+	dlg := gui.NewDialog(i18n.T("Unsaved changes"), gui.IWidget(ed))
+	content := gui.NewVBox()
+	content.SetSpacing(12)
+	msg := gui.NewLabel(i18n.Tf("%s has unsaved changes. Save before closing?", filepath.Base(path)))
+	msg.SetWrap(true)
+	content.AddWidget(msg)
+	dlg.SetContent(content)
+	dlg.AddButton(i18n.T("Save"), gui.DialogOK)
+	dlg.AddButton(i18n.T("Discard"), gui.DialogNo)
+	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	return dlg.ShowModal()
 }
 
 // lspDidCloseFile notifies gopls a document closed and drops its client-side
@@ -2810,12 +2871,7 @@ func loadModulePath(cwd string) string {
 }
 
 // saveActiveEditorToDisk writes the active code editor's buffer back
-// to the file it was opened from. .go files get a `gofmt` pass on the
-// way out so the saved buffer matches the toolchain's formatting
-// (same convention every Go IDE uses on Cmd+S). A gofmt failure (WIP
-// code with a syntax error) leaves the buffer untouched and surfaces a
-// quiet warning toast — the user still gets their save, just not the
-// reformat.
+// to the file it was opened from.
 //
 // Returns false when there is no active editor or no tracked path —
 // performSave's design-canvas branch already covered the no-canvas
@@ -2829,6 +2885,20 @@ func saveActiveEditorToDisk(tabs *gui.TabWidget) bool {
 	if path == "" {
 		return false
 	}
+	return saveEditorToDisk(ed, path)
+}
+
+// saveEditorToDisk writes ed's buffer back to path. .go files get a
+// `gofmt` pass on the way out so the saved buffer matches the
+// toolchain's formatting (same convention every Go IDE uses on Cmd+S).
+// A gofmt failure (WIP code with a syntax error) leaves the buffer
+// untouched and surfaces a quiet warning toast — the user still gets
+// their save, just not the reformat.
+//
+// Takes the editor and path explicitly rather than reading the active
+// tab: closeEditorTab saves the tab being closed, which a middle-click
+// close never activates.
+func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 	text := ed.Text()
 	out := text
 	if strings.EqualFold(filepath.Ext(path), ".go") {
