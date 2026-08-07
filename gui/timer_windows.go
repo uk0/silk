@@ -44,3 +44,31 @@ func (t *Timer) Start(millisecond uint32, f func()) bool {
 	}
 	return false
 }
+
+// processTimers fires every armed timer once, on the calling goroutine.
+//
+// The Win32 backend has no polling loop — a real WM_TIMER drives each callback
+// from the message pump — so there is nothing to poll and nothing a test
+// process can drive. This is the seam PumpTimersForTest calls, and it exists so
+// that a debounced behaviour is testable identically on both backends. It fires
+// unconditionally rather than checking dueness: without a pump there is no
+// clock to be due against, and the caller's contract is "run what is armed".
+//
+// The callback may Stop() its own timer, which deletes from timerMap, so the
+// ids are collected before anything runs.
+func processTimers() {
+	ids := make([]uintptr, 0, len(timerMap))
+	for id := range timerMap {
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		if fn := timerMap[id]; fn != nil {
+			fn()
+		}
+	}
+}
+
+// expireTimersForTest is a no-op on this backend: processTimers here fires what
+// is armed without consulting a clock, because Win32 has no polling loop to
+// consult one from. It exists so PumpTimersForTest reads the same on both.
+func expireTimersForTest() {}

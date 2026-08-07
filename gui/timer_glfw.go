@@ -93,3 +93,16 @@ func processTimers() {
 		}()
 	}
 }
+
+// expireTimersForTest backdates every armed timer so the next processTimers
+// pass finds it due. Only PumpTimersForTest calls it: a test that had to sleep
+// out a real debounce window would trade coverage for wall-clock, and one that
+// shortened the production delay to make itself pass would no longer be testing
+// the production delay.
+func expireTimersForTest() {
+	timerMu.Lock()
+	defer timerMu.Unlock()
+	for _, entry := range timerMap {
+		entry.lastFire = entry.lastFire.Add(-entry.interval)
+	}
+}

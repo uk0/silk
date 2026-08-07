@@ -55,6 +55,11 @@ type CodePanel struct {
 	genTimer   gui.Timer
 	genLines   map[*FakeWidget]int
 	genPending bool // a design change the 生成代码 view has not caught up with
+	// onRegenForTest counts regenerations. The debounce's whole purpose is
+	// collapsing a burst into one run, and "how many times did it run" cannot
+	// be read off the resulting text — five identical regenerations and one
+	// leave the same view.
+	onRegenForTest func()
 }
 
 func NewCodePanel() *CodePanel {
@@ -222,6 +227,9 @@ func (this *CodePanel) ScheduleRegenerate() {
 
 // RegenerateNow rebuilds the generated view from the bound design immediately.
 func (this *CodePanel) RegenerateNow() {
+	if this.onRegenForTest != nil {
+		this.onRegenForTest()
+	}
 	this.genPending = false
 	scene := this.scene()
 	if scene == nil {
