@@ -577,6 +577,7 @@ func (this *ObjectInspector) OnLeftUp(x, y float64) {
 // the canvas's own re-parent so one undo step covers a tree drag exactly as it
 // covers a canvas drag: GedView.reparentSelection builds the ReparentCommand
 // (parent + sibling slot + position) and pushes it on the scene's undo stack.
+// The pointerless drop's rescue rides in that same step (parkStep).
 //
 // It works on the view's selection, which the row press has just set to the
 // dragged widget. A host that bound only a scene has no selection to move, so
@@ -594,12 +595,51 @@ func (this *ObjectInspector) reparentInto(row int) {
 		target = nil // the form root, spelled the way a canvas drop spells it
 	}
 	moved := this.view.Selection().ItemList()
-	this.view.reparentSelection(target)
-	parkInsideParent(moved, target)
+	this.view.reparentSelection(target, &parkStep{items: moved, parent: target})
 	this.Rebuild()
 }
 
-// parkInsideParent moves re-parented widgets into their new parent's box.
+// parkStep is the rescue half of a tree drop, grouped with the re-parent into
+// one undo step (GedView.reparentSelection). It is the one command here that
+// cannot be built in the pre-applied state the others are: which widgets ended
+// up outside their new parent — and how far out — is only settled once the
+// re-parent itself has been applied. So it decides on the first Redo and keeps
+// the move it made, which is what Undo takes back and what a later Redo
+// replays.
+//
+// Splitting the two into separate undo steps would be worse than not recording
+// the park at all: the state between them has the widget owned by a container
+// it does not overlap, which is precisely the invisible widget the park exists
+// to prevent.
+type parkStep struct {
+	items  []graph.IItem
+	parent graph.IItem
+	move   *graph.MoveCommand
+}
+
+func (this *parkStep) Redo() {
+	if this.move == nil {
+		this.move = parkInsideParent(this.items, this.parent)
+	}
+	if this.move != nil {
+		this.move.Redo()
+	}
+}
+
+func (this *parkStep) Undo() {
+	if this.move != nil {
+		this.move.Undo()
+	}
+}
+
+// Text is not what the stack shows — the compound this rides in carries the
+// re-parent's own text — but ICommand asks for it.
+func (this *parkStep) Text() string {
+	return "Park inside parent"
+}
+
+// parkInsideParent returns the move that brings re-parented widgets into their
+// new parent's box, or nil when none of them fell outside it.
 //
 // A canvas drop cannot need this: the pointer was already over the container,
 // so the widget's rect already overlaps it. A tree drop has no pointer — the
@@ -612,12 +652,26 @@ func (this *ObjectInspector) reparentInto(row int) {
 // Only items that have fallen outside are moved, and only far enough to sit
 // at the parent's top-left inset — a tree drop states intent about ownership,
 // not about position, so it must disturb the layout as little as it can.
-func parkInsideParent(items []graph.IItem, parent graph.IItem) {
+//
+// The park takes each widget's subtree with it (AddMoveSubtree, the walk every
+// other move here uses): a container's children carry their own scene
+// coordinates, so parking the container alone lands it inside its new owner
+// and leaves its contents outside it — the same disappearance, one level down.
+//
+// It is a command rather than a bare SetPos because the re-parent's own record
+// neither replays nor restores it. That record holds the position from before
+// the park, so an unrecorded park came back on Ctrl+Y with the widget outside
+// its new parent and invisible again; and once the park carries a subtree,
+// Ctrl+Z put the container back and left its children where the park had
+// dropped them, which is the same widget lost from the other side. parkStep
+// carries the result into the re-parent's own undo step.
+func parkInsideParent(items []graph.IItem, parent graph.IItem) *graph.MoveCommand {
 	if parent == nil {
-		return // the form root clips nothing
+		return nil // the form root clips nothing
 	}
 	px, py := parent.X(), parent.Y()
 	pw, ph := parent.Width(), parent.Height()
+	cmd := graph.NewMoveCommand()
 	for _, it := range items {
 		if it == nil || it.Parent() != parent || it.IsLockPos() {
 			continue
@@ -626,8 +680,12 @@ func parkInsideParent(items []graph.IItem, parent graph.IItem) {
 		if x < px+pw && x+w > px && y < py+ph && y+h > py {
 			continue // already overlaps; leave the layout alone
 		}
-		it.SetPos(px+parentInsetMm, py+parentInsetMm)
+		graph.AddMoveSubtree(cmd, it, px+parentInsetMm-x, py+parentInsetMm-y)
 	}
+	if cmd.Count() == 0 {
+		return nil // nothing had fallen outside; the step has nothing to replay
+	}
+	return cmd
 }
 
 // parentInsetMm keeps a parked widget off its container's own border so the

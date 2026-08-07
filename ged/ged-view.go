@@ -2724,7 +2724,7 @@ func (this *GedView) OnLeftUp(x, y float64) {
 		this.snapSelectionToGrid()
 		if movesItems {
 			// After the snap, so the re-parent records the resting position.
-			this.reparentSelection(target)
+			this.reparentSelection(target, nil)
 		}
 	}
 
@@ -2739,7 +2739,12 @@ func (this *GedView) OnLeftUp(x, y float64) {
 // item, so Ctrl+Z returns each one to the owner and slot it left. The move
 // itself is MovePart's own command underneath, so a drag that crosses into a
 // container leaves two undo steps: the re-parent, then the move.
-func (this *GedView) reparentSelection(target graph.IItem) {
+//
+// park is the rescue a pointerless drop needs (the object tree's; a canvas drop
+// passes nil). It is applied and undone with the re-parent as one step, never
+// as a step of its own: between the two the widget is owned by a container it
+// does not overlap, and a widget in that state is invisible.
+func (this *GedView) reparentSelection(target graph.IItem, park *parkStep) {
 	parent := graph.IItem(this.Scene())
 	if target != nil {
 		parent = target
@@ -2750,7 +2755,7 @@ func (this *GedView) reparentSelection(target graph.IItem) {
 	if cmd == nil {
 		return
 	}
-	this.Scene().PushCommand(cmd)
+	this.Scene().PushCommand(groupWithPark(cmd, park))
 
 	// Every re-parent detaches first, and GraphView.emitItemDetached drops a
 	// detached item from the selection — so the widget the user just dragged
@@ -2759,6 +2764,20 @@ func (this *GedView) reparentSelection(target graph.IItem) {
 	// layoutSelection re-selects after its own structural command.
 	sel.Clear()
 	sel.AddMulti(items)
+}
+
+// groupWithPark ties the rescue to the re-parent that made it necessary, so the
+// pair is one entry on the undo stack. Nothing to tie means the command travels
+// on its own, which is every canvas drop.
+func groupWithPark(cmd *graph.ReparentCommand, park *parkStep) gui.ICommand {
+	if park == nil {
+		return cmd
+	}
+	group := gui.NewCompoundCommand()
+	group.SetText(cmd.Text())
+	group.Append(cmd)
+	group.Append(park)
+	return group
 }
 
 // snapSelectionToGrid parks every position-unlocked selected item on the
