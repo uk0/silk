@@ -10,6 +10,20 @@ import (
 type moveRecord struct {
 	item IItem
 	x, y float64
+	// carried marks a record that was handed the delta of the record above it
+	// — AddMoveSubtree walking into a container — instead of owning a target of
+	// its own. Redo rounds a target to the grid, and two items that one gesture
+	// moved together but rounded apart end up shifted relative to each other:
+	// the widget slides inside the container it lives in, by up to 1mm, and
+	// only in the saved design, because Undo restores the unrounded positions.
+	//
+	// The distinction has to sit on the record rather than on the command or at
+	// the recording site, because one command holds both kinds: AlignSelection
+	// puts N independently computed targets on a single MoveCommand and each of
+	// them carries its own subtree. So each target still snaps on its own, and
+	// what rides along rides along — the same rule snapSelectionToGrid applies
+	// when it corrects a drag outside the undo stack.
+	carried bool
 }
 
 type MoveCommand struct {
@@ -23,7 +37,14 @@ func NewMoveCommand() *MoveCommand {
 }
 
 func (cmd *MoveCommand) AddItem(item IItem, toX, toY float64) {
-	record := moveRecord{item, toX, toY}
+	record := moveRecord{item, toX, toY, false}
+	cmd.records = append(cmd.records, record)
+}
+
+// addCarried records an item that shares the preceding item's delta, so Redo
+// gives it that item's snap instead of rounding it on its own. See moveRecord.
+func (cmd *MoveCommand) addCarried(item IItem, toX, toY float64) {
+	record := moveRecord{item, toX, toY, true}
 	cmd.records = append(cmd.records, record)
 }
 
@@ -31,11 +52,17 @@ func (cmd *MoveCommand) Redo() {
 	if cmd.isUndo {
 		panic("irregal Redo()")
 	}
+	var snapX, snapY float64
 	for i := 0; i < len(cmd.records); i++ {
 		oldX, oldY := cmd.records[i].item.Pos()
-		// Snap to 1mm grid for precise alignment
-		newX := math.Round(cmd.records[i].x)
-		newY := math.Round(cmd.records[i].y)
+		newX, newY := cmd.records[i].x, cmd.records[i].y
+		if cmd.records[i].carried {
+			newX, newY = newX+snapX, newY+snapY
+		} else {
+			// Snap to 1mm grid for precise alignment
+			newX, newY = math.Round(newX), math.Round(newY)
+			snapX, snapY = newX-cmd.records[i].x, newY-cmd.records[i].y
+		}
 		cmd.records[i].item.SetPos(newX, newY)
 		cmd.records[i].x, cmd.records[i].y = oldX, oldY
 	}

@@ -282,7 +282,14 @@ func (s *Selection) GenerateMoveCommand(dx, dy float64) *MoveCommand {
 // has its own target rather than one shared delta — ged's multi-item align.
 func AddMoveSubtree(cmd *MoveCommand, item IItem, dx, dy float64) {
 	moveSubtree(item, dx, dy, func(a IItem, x, y float64) {
-		cmd.AddItem(a, x, y)
+		// item is the one with a target; everything under it was handed the
+		// same delta, so it has to take item's grid snap as well or the two
+		// round apart (moveRecord.carried).
+		if a == item {
+			cmd.AddItem(a, x, y)
+			return
+		}
+		cmd.addCarried(a, x, y)
 	})
 }
 
