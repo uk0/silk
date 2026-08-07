@@ -42,6 +42,16 @@ func RegisterShortcut(mods uint8, key int, fn func()) {
 	shortcutHandlers[k] = fn
 }
 
+// ShortcutHandler returns the fn bound to (mods, key), or nil when the
+// combination is unbound. The registry is otherwise only reachable through a
+// real key event — which needs a window and the modifier physically held — so
+// this is how a caller confirms which action a key actually carries.
+func ShortcutHandler(mods uint8, key int) func() {
+	shortcutMu.RLock()
+	defer shortcutMu.RUnlock()
+	return shortcutHandlers[shortcutKey{mods: mods, key: key}]
+}
+
 // dispatchShortcut is called by the window-level key callback BEFORE
 // focus routing. Returns true if a registered shortcut consumed the
 // key, in which case onKey skips the normal IEventKeyDown dispatch
