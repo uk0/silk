@@ -157,3 +157,99 @@ func TestAlignSelectionMultiDoesNotMoveChildTwice(t *testing.T) {
 		t.Errorf("child after align = (%v,%v), want (5,35) — its own target moved it a second time", x, y)
 	}
 }
+
+// grandchildContainer builds the two-level tree the skip has to see through: a
+// VBox at (13,13,80,60) holding an HBox at (16,16,50,30) holding a Button at
+// (17,17,25,7). The middle container is what makes it a grandchild — it is
+// never selected, so "is my own parent selected?" answers no for the button
+// while its container is still the thing moving it.
+func grandchildContainer(t *testing.T, view *GedView) (box, inner, grand *FakeWidget) {
+	t.Helper()
+	scene := view.GedScene()
+
+	box, err := NewFakeWidgetFromFactory("gui.VBox")
+	if err != nil {
+		t.Fatalf("create VBox: %v", err)
+	}
+	box.SetWidgetName("box")
+	box.SetBounds(13, 13, 80, 60)
+	box.SetParent(scene)
+
+	inner, err = NewFakeWidgetFromFactory("gui.HBox")
+	if err != nil {
+		t.Fatalf("create HBox: %v", err)
+	}
+	inner.SetWidgetName("inner")
+	inner.SetBounds(16, 16, 50, 30)
+	inner.SetParent(box)
+
+	grand = addFakeAt(t, scene, "grand", 17, 17, 25, 7)
+	grand.SetParent(inner)
+	return box, inner, grand
+}
+
+// TestSnapSelectionToGridDoesNotSnapGrandchildTwice: rubber-banding a form
+// selects everything the band touches, containers and their contents at every
+// depth — so the item riding a container's correction is routinely two or more
+// levels below it, with the level in between unselected. The skip has to be
+// about ancestry, not parenthood: a check that only asks about the immediate
+// parent lets the grandchild snap on its own account as well and slides it out
+// of the box that holds it.
+func TestSnapSelectionToGridDoesNotSnapGrandchildTwice(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+	scene.SetSize(200, 150)
+	view.SetGridStep(5)
+	view.SetSnapToGrid(true)
+
+	box, inner, grand := grandchildContainer(t, view)
+
+	view.Selection().Clear()
+	view.Selection().Add(box)
+	view.Selection().Add(grand) // the middle container stays out of the selection
+
+	view.snapSelectionToGrid()
+
+	if x, y := box.Pos(); x != 15 || y != 15 {
+		t.Fatalf("container after snap = (%v,%v), want (15,15)", x, y)
+	}
+	if x, y := inner.Pos(); x != 18 || y != 18 {
+		t.Errorf("middle container after snap = (%v,%v), want (18,18) — it rides the container it is in", x, y)
+	}
+	// (17,17) rode the container's (+2,+2) to (19,19). Snapping it again rounds
+	// that to (20,20), and the button leaves the HBox it belongs to.
+	if x, y := grand.Pos(); x != 19 || y != 19 {
+		t.Errorf("grandchild after snap = (%v,%v), want (19,19) — it was moved twice", x, y)
+	}
+}
+
+// TestAlignSelectionMultiDoesNotMoveGrandchildTwice is the same ancestry
+// question on the align path, which hands out one target per selected item
+// instead of one shared delta. A grandchild's own target is computed against
+// the selection's extremes, so applying it on top of the ride it already took
+// puts it wherever the two deltas happen to add up to — here 30mm to the left
+// of the container it lives in.
+func TestAlignSelectionMultiDoesNotMoveGrandchildTwice(t *testing.T) {
+	view := NewGedView()
+	view.GedScene().SetSize(200, 150)
+
+	a := addFakeAt(t, view.GedScene(), "a", 0, 5, 10, 4)
+	box, inner, grand := grandchildContainer(t, view)
+
+	view.Selection().Clear()
+	view.Selection().Add(a)
+	view.Selection().Add(box)
+	view.Selection().Add(grand)
+
+	view.AlignSelection(AlignLeft) // min left = 0, so the box moves -13 in X
+
+	if x, y := box.Pos(); x != 0 || y != 13 {
+		t.Fatalf("container after align = (%v,%v), want (0,13) — the align itself did not land", x, y)
+	}
+	if x, y := inner.Pos(); x != 3 || y != 16 {
+		t.Errorf("middle container after align = (%v,%v), want (3,16) — it was left behind", x, y)
+	}
+	if x, y := grand.Pos(); x != 4 || y != 17 {
+		t.Errorf("grandchild after align = (%v,%v), want (4,17) — its own target moved it a second time", x, y)
+	}
+}

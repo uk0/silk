@@ -106,3 +106,59 @@ func TestApplyTemplateWithNoBuildableWidgetsLeavesNothingToUndo(t *testing.T) {
 		t.Errorf("a template that placed nothing reported %d design change(s), want 0", reported)
 	}
 }
+
+// TestApplyTemplateWithOneBuildableWidgetStillPlacesIt is the boundary between
+// the two cases above: a template that builds exactly ONE widget is not the
+// empty case. The guard exists to skip the command that would carry nothing,
+// and one widget is something — dropping it here would put a template on the
+// canvas that has no widgets and no Ctrl+Z, which is what a user sees when the
+// template's other factories are from a build this binary does not have.
+func TestApplyTemplateWithOneBuildableWidgetStillPlacesIt(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+
+	reported := 0
+	scene.SigDesignChanged(func() { reported++ })
+
+	ApplyTemplate(scene, &ProjectTemplate{
+		Name:   "半坏模板",
+		Width:  100,
+		Height: 60,
+		Widgets: []TemplateWidget{
+			{Factory: "gui.NoSuchWidget", Name: "Ghost", X: 5, Y: 5, W: 20, H: 6},
+			{Factory: "gui.Label", Name: "LabelReal", X: 5, Y: 20, W: 30, H: 6, Text: "标题"},
+		},
+	})
+
+	children := scene.Children()
+	if len(children) != 1 {
+		t.Fatalf("a template with one buildable widget placed %d item(s), want the 1 that"+
+			" could be built", len(children))
+	}
+	placed, ok := children[0].(*FakeWidget)
+	if !ok {
+		t.Fatalf("the template put a %T on the canvas, want a *FakeWidget", children[0])
+	}
+	if placed.WidgetName() != "LabelReal" {
+		t.Errorf("placed widget is %q, want the template's buildable LabelReal", placed.WidgetName())
+	}
+	if reported != 1 {
+		t.Errorf("dropping a template that placed one widget reported %d design changes, want 1", reported)
+	}
+
+	// One widget still costs exactly one press to take back — the same contract
+	// the 8-widget case has, not a widget that cannot be undone at all.
+	if !scene.UndoStack().CanUndo() {
+		t.Fatal("the widget on the canvas has nothing on the undo stack: Ctrl+Z cannot take it back")
+	}
+
+	view.Undo()
+
+	if held := sceneChildSet(scene); held[placed] {
+		t.Errorf("after ONE undo %q is still on the canvas", placed.WidgetName())
+	}
+	if scene.UndoStack().CanUndo() {
+		t.Errorf("one widget took more than one undo step: %q is still on the stack",
+			scene.UndoStack().UndoText())
+	}
+}
