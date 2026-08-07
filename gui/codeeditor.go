@@ -369,6 +369,13 @@ type CodeEditor struct {
 	// and clicking it is consumed (no breakpoint toggle) but does nothing.
 	cbTestRun func(name string)
 
+	// --- Breakpoint Host Hook ---
+	// cbBreakpointToggled is fired after a gutter click / F9 has flipped a line,
+	// so the host (silkide) can mirror the change onto a live debug session — the
+	// editor keeps owning the dot, it only reports where it ended up. Nil-safe:
+	// with no callback the gutter still toggles, nobody is told.
+	cbBreakpointToggled func(line int, on bool)
+
 	// --- Git Gutter ---
 	gitStatus map[int]GitLineStatus
 
@@ -6388,10 +6395,20 @@ func (this *CodeEditor) SigTestRunRequested(fn func(name string)) {
 	this.cbTestRun = fn
 }
 
+// SigBreakpointToggled registers the callback fired after ToggleBreakpoint has
+// flipped a line — the gutter click and F9 both land there. line is 0-based
+// (editor convention) and on is the state the line ended up in; the host
+// (silkide) pushes it at the running debugger. Mirrors the
+// SigTestRunRequested / SigChanged idiom.
+func (this *CodeEditor) SigBreakpointToggled(fn func(line int, on bool)) {
+	this.cbBreakpointToggled = fn
+}
+
 // --- Breakpoints ---
 //
 // Breakpoints are part of the editor's UI/state layer only; toggling one renders
-// a red dot in the gutter but does NOT start, stop, or talk to any debugger.
+// a red dot in the gutter and reports the new state via SigBreakpointToggled,
+// but the editor itself never starts, stops, or talks to any debugger.
 // Lines are keyed 0-based (same convention as cursorLine and bookmarks). The set
 // is NOT re-mapped when lines are inserted or deleted (known limitation).
 
@@ -6406,6 +6423,9 @@ func (this *CodeEditor) ToggleBreakpoint(line int) {
 		this.breakpoints[line] = true
 	}
 	this.Self().Update()
+	if this.cbBreakpointToggled != nil {
+		this.cbBreakpointToggled(line, this.breakpoints[line])
+	}
 }
 
 // SetBreakpoint enables or disables the breakpoint on a line.

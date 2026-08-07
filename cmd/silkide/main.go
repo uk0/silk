@@ -3172,6 +3172,34 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	ed.SigSignatureRequested(func(line, col int) {
 		signatureHelpViaLSP(ed, path, line, col)
 	})
+	// Keep a live dlv session in step with the gutter: runProjectInDebugger
+	// only snapshots the breakpoints that existed at launch, so without this a
+	// toggle made while the debuggee is stopped — or any breakpoint in a file
+	// opened after launch — would show a red dot the debugger never heard of.
+	// Wiring it here (rather than at launch) covers both cases: every editor
+	// silkide registers gets the hook, whenever it was opened.
+	ed.SigBreakpointToggled(func(line int, on bool) {
+		sess := globalDebug // UI-thread read, same as debugContinue
+		if sess == nil {
+			return
+		}
+		// Off the UI thread like every other dlv call site: rpcCall serializes
+		// on the session mutex, so a toggle made while the debuggee is running
+		// parks this goroutine until the next stop instead of freezing the
+		// editor mid-click. Route on the editor's end state rather than
+		// sess.ToggleBreakpoint so the gutter dot stays the authority.
+		go func() {
+			if on {
+				if _, err := sess.SetBreakpoint(path, line+1); err != nil { // 0-based editor → 1-based dlv
+					core.Warn("dlv: SetBreakpoint ", path, ":", line+1, ": ", err)
+				}
+				return
+			}
+			if err := sess.ClearBreakpointByLocation(path, line+1); err != nil {
+				core.Warn("dlv: ClearBreakpoint ", path, ":", line+1, ": ", err)
+			}
+		}()
+	})
 	focusEditorTab(tabs, ed)
 	logEvent(ged.LogInfo, "Opened "+path)
 	// Let the background gopls client see the buffer so subsequent
