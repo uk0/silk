@@ -1316,6 +1316,9 @@ func frameAlignDelta(box, frame geom.Rect, mode AlignMode) (dx, dy float64) {
 //     absolute (toX, toY), so N distinct targets need no composite and Ctrl+Z
 //     snaps everyone back at once. Each target carries the item's own subtree
 //     (graph.AddMoveSubtree), so aligning a container aligns what is in it.
+//     Position-locked items are left where they are, as on every other move
+//     path — but they still count in the extremes, and 分布 refuses outright
+//     rather than spread the rest around one; see the two comments below.
 //   - 居中 (AlignCenter), and any mode with a single item selected: there are
 //     no selection extremes worth aligning to, so the reference is the frame —
 //     the container the items live in, or the form when they sit at the root.
@@ -1356,12 +1359,55 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 	for _, it := range items {
 		selSet[it] = true
 	}
+
+	// 分布 is one joint constraint, not N independent targets: the gaps only
+	// come out even if every item takes the slot distributeAxis gave it. A
+	// position-locked item keeps the place it had, so the others would land on
+	// a lattice measured around a widget that never moved and not one gap
+	// would be the gap that was asked for. There is no partial answer worth
+	// shipping, so the whole command is refused and the reason is said out
+	// loud. A lock on one of the two outer items costs nothing — those are the
+	// anchors and stay put by construction — hence the target-differs test
+	// rather than a bare IsLockPos.
+	//
+	// The ancestor test comes first because only here does a skip change the
+	// answer for someone else: an item carried by its selected container moves
+	// whatever its own lock says (graph.AddMoveSubtree), so vetoing the command
+	// over that lock would refuse a 分布 nothing was blocking.
+	if mode == DistributeH || mode == DistributeV {
+		for i, it := range items {
+			if hasSelectedAncestor(it, selSet) || !it.IsLockPos() {
+				continue
+			}
+			if x, y := it.Pos(); x != aligned[i].X || y != aligned[i].Y {
+				if mode == DistributeH {
+					this.showStatus("水平分布：所选控件中有位置锁定的控件，间距无法均分，已跳过")
+				} else {
+					this.showStatus("垂直分布：所选控件中有位置锁定的控件，间距无法均分，已跳过")
+				}
+				return
+			}
+		}
+	}
+
 	cmd := graph.NewMoveCommand()
 	for i, it := range items {
 		// A widget inside a selected container rides with it, exactly as it
 		// does under a drag or a nudge; giving it its own target as well would
 		// move it twice.
 		if hasSelectedAncestor(it, selSet) {
+			continue
+		}
+		// 位置锁定 already makes a drag and an arrow key leave the widget alone
+		// (GenerateMoveCommand, snapSelectionToGrid); 对齐 is a move like any
+		// other and does too — the lock was never meant to mean "unless you
+		// reach it from the align menu".
+		// The item still counts in alignRects' geometry above, deliberately:
+		// its edge is a real edge of the selection, so locking the extreme
+		// widget makes it the line everyone else aligns to — which is what
+		// pinning it was for — and dropping it from the geometry would instead
+		// send the group sailing past it.
+		if it.IsLockPos() {
 			continue
 		}
 		oldX, oldY := it.Pos()
