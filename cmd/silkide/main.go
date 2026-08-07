@@ -1816,6 +1816,17 @@ func installCoreLogSink() {
 // cover.out in os.TempDir rather than growing a pile.
 var coverageTempFile string
 
+// The most recent run's parsed profile, plus the module identity its keys
+// are written against. Held at the package level because a file opened
+// AFTER the run has to pick the stripes up too — applyCoverageToOpenEditors
+// can only reach the tabs that already existed when the profile landed.
+// Written and read on the UI thread only, like openEditors.
+var (
+	globalCoverage       map[string]*core.FileCoverage
+	globalCoverageModule string // module path the profile's keys are prefixed with
+	globalCoverageRoot   string // directory that module path names on disk
+)
+
 // showHamburgerMenu pops the silkide application menu next to the
 // hamburger toolbar button. Hosts the four standard file actions
 // (New / Open / Save / Save As-via-Open) plus a separator and the
@@ -2508,9 +2519,9 @@ func testResultCounts() (passed, failed, skipped int) {
 // ./..." in the project directory, parses the resulting profile through
 // core.ParseCoverage + core.BuildFileCoverage, and pushes per-file
 // line→covered maps into every editor tab whose tracked path matches a
-// covered file. Path matching is exact-first then suffix-fallback (the
-// cover profile records module-relative paths while openEditors keys are
-// absolute), so "github.com/uk0/silk/foo/bar.go" and "/abs/.../silk/foo/bar.go" line up.
+// covered file, clearing the ones it did not measure. The profile names
+// files by import path and openEditors by absolute path, so the two are
+// lined up through the module's go.mod — see coverageForPath.
 //
 // The cover profile lives in os.TempDir and is overwritten on each run;
 // the previous file is deleted at the start of the next run so the temp
@@ -2572,12 +2583,18 @@ func runProjectWithCoverage(canvas *ged.GedView) {
 		}
 		_, blocks, parseErr := core.ParseCoverage(string(data))
 		fileCov := core.BuildFileCoverage(blocks)
+		// The profile names every file by its import path, so turning a key
+		// back into a file on disk needs the identity of the module go test
+		// just ran in. Reading go.mod is disk I/O, so it belongs out here on
+		// the worker with the rest of the parse, not in the UI closure.
+		modPath, modRoot := loadModuleInfo(dir)
 		onUI(func() {
 			if parseErr != nil {
 				// Non-fatal: ParseCoverage returns the blocks it managed to
 				// recover alongside the error, so still render what we got.
 				reportBuildOutput(fmt.Sprintf("coverage: %v", parseErr))
 			}
+			globalCoverage, globalCoverageModule, globalCoverageRoot = fileCov, modPath, modRoot
 			applyCoverageToOpenEditors(fileCov)
 			if runErr != nil {
 				silkideToast(i18n.T("Coverage failed"), gui.ToastError)
@@ -2590,28 +2607,59 @@ func runProjectWithCoverage(canvas *ged.GedView) {
 
 // applyCoverageToOpenEditors iterates the openEditors map and pushes the
 // matching per-file coverage map into each CodeEditor. coverageForPath
-// owns the exact-match-then-suffix-match policy; this helper is just
-// the side-effecting walk, so the matcher stays pure and unit-testable.
+// owns the match policy; this helper is just the side-effecting walk, so
+// the matcher stays pure and unit-testable.
 func applyCoverageToOpenEditors(fc map[string]*core.FileCoverage) {
 	for path, ed := range openEditors {
-		if ed == nil {
-			continue
-		}
-		if cov, ok := coverageForPath(fc, path); ok {
-			ed.SetCoverage(cov.Covered)
-		}
+		applyCoverageToEditor(fc, ed, path)
 	}
 }
 
+// applyCoverageToEditor pushes `path`'s stripes into ed, and CLEARS them
+// when the profile has nothing for that file. The clear is the point: a
+// run that no longer measures a file (its test was deleted, or the run was
+// scoped to one package) would otherwise leave the previous run's green
+// sitting there forever, which reads as "still covered".
+func applyCoverageToEditor(fc map[string]*core.FileCoverage, ed *gui.CodeEditor, path string) {
+	if ed == nil {
+		return
+	}
+	if cov, ok := coverageForPath(fc, path); ok {
+		ed.SetCoverage(coverageToEditorLines(cov.Covered))
+		return
+	}
+	ed.ClearCoverage()
+}
+
+// coverageToEditorLines rebases a FileCoverage's line numbers onto the
+// index CodeEditor's gutter draws with. A cover profile counts lines from
+// 1 like the rest of the toolchain; the editor keys coverage 0-based, the
+// same as breakpoints and bookmarks. Handing the map over unshifted paints
+// every stripe one line below the code it belongs to.
+func coverageToEditorLines(cov map[int]bool) map[int]bool {
+	out := make(map[int]bool, len(cov))
+	for line, covered := range cov {
+		if line < 1 {
+			continue
+		}
+		out[line-1] = covered
+	}
+	return out
+}
+
 // coverageForPath looks up `editorPath` in the per-file coverage map. The
-// `go test -coverprofile` output records paths the way the toolchain
-// observed them (typically "<module>/<pkg>/<file>.go" — module-relative)
-// while the editor tracks absolute filesystem paths, so an exact match
-// rarely hits first try; the suffix fallback rescues the common case
-// where the editor's path ENDS with the profile's recorded path.
+// `go test -coverprofile` output records every file under its FULL IMPORT
+// PATH ("github.com/uk0/silk/geom/mat3x2.go") while the editor tracks an
+// absolute filesystem path ("/Users/me/dc/geom/mat3x2.go"), so neither an
+// exact match nor a suffix match can hit unless the checkout happens to
+// sit in a directory literally spelling out the module path. That is why
+// the gutter stayed dark on every platform: the middle branch below —
+// rewriting the editor path into the key the toolchain would have written
+// for it — is the only one that fires on an ordinary checkout.
 //
-// Returns (nil, false) when nothing matches. Pure helper so unit tests
-// can pin the policy without spawning go test.
+// Returns (nil, false) when nothing matches. The module identity comes
+// from the last coverage run (globalCoverageModule / Root); everything
+// else is pure, so unit tests can pin the policy without spawning go test.
 func coverageForPath(fc map[string]*core.FileCoverage, editorPath string) (*core.FileCoverage, bool) {
 	return coverageForPathSep(fc, editorPath, filepath.Separator)
 }
@@ -2628,6 +2676,14 @@ func coverageForPath(fc map[string]*core.FileCoverage, editorPath string) (*core
 // every host we can actually run, which is exactly how the Windows miss
 // stayed invisible; passing '\\' lets a POSIX test drive the real thing.
 func coverageForPathSep(fc map[string]*core.FileCoverage, editorPath string, sep rune) (*core.FileCoverage, bool) {
+	return coverageForPathIn(fc, editorPath, globalCoverageModule, globalCoverageRoot, sep)
+}
+
+// coverageForPathIn is coverageForPathSep with the module identity handed
+// in too — the module path the profile's keys carry, and the directory on
+// disk that path names. Both come from the go.mod above the tree go test
+// ran in; either being empty just drops the module branch.
+func coverageForPathIn(fc map[string]*core.FileCoverage, editorPath, modulePath, moduleRoot string, sep rune) (*core.FileCoverage, bool) {
 	if editorPath == "" {
 		return nil, false
 	}
@@ -2635,9 +2691,19 @@ func coverageForPathSep(fc map[string]*core.FileCoverage, editorPath string, sep
 		return cov, true
 	}
 	slashed := slashSep(editorPath, sep)
-	// Suffix match. Use "/" + key so we only match on a directory
-	// boundary — a profile key "foo.go" must not match an editor path
-	// ending in "wfoo.go".
+	// Module-rooted match: the exact key the toolchain would have written
+	// for this file. One map lookup, and it cannot collide across modules
+	// the way a bare suffix can.
+	if key := coverageKeyForPath(slashed, modulePath, slashSep(moduleRoot, sep)); key != "" {
+		if cov, ok := fc[key]; ok {
+			return cov, true
+		}
+	}
+	// Suffix match. Still worth trying: it is what rescues a profile whose
+	// keys are already relative to the checkout (an older toolchain, or a
+	// hand-fed profile) and a file we could not place inside the module.
+	// Use "/" + key so we only match on a directory boundary — a profile
+	// key "foo.go" must not match an editor path ending in "wfoo.go".
 	for key, cov := range fc {
 		if key == "" {
 			continue
@@ -2647,6 +2713,26 @@ func coverageForPathSep(fc map[string]*core.FileCoverage, editorPath string, sep
 		}
 	}
 	return nil, false
+}
+
+// coverageKeyForPath spells an editor path the way a cover profile would:
+// the file's path relative to the module root, hung off the module path.
+// Returns "" when the file is not inside the module, or when we never
+// found a go.mod to ask — the caller then falls through to its suffix
+// branch rather than guessing.
+//
+// Both path arguments arrive already folded onto "/". The root is matched
+// with its trailing separator so the same boundary rule holds here: a
+// module rooted at "/src/dc" must not claim "/src/dcx/foo.go".
+func coverageKeyForPath(slashedPath, modulePath, slashedRoot string) string {
+	if modulePath == "" || slashedRoot == "" {
+		return ""
+	}
+	root := strings.TrimSuffix(slashedRoot, "/")
+	if !strings.HasPrefix(slashedPath, root+"/") {
+		return ""
+	}
+	return strings.TrimSuffix(modulePath, "/") + "/" + slashedPath[len(root)+1:]
 }
 
 // slashSep is filepath.ToSlash with the separator supplied instead of
@@ -3002,12 +3088,24 @@ func runSingleTest(canvas *ged.GedView, name string) {
 // path (no quotes, no inline-comment tail) or "" when no go.mod is
 // found in any ancestor. Inline scan — a richer parser will replace
 // this once the concurrent core/gomod package lands.
+func loadModulePath(cwd string) string {
+	path, _ := loadModuleInfo(cwd)
+	return path
+}
+
+// loadModuleInfo is loadModulePath plus the directory the go.mod was
+// found in. The two together are the mapping between a cover profile's
+// keys (import paths) and files on disk, which is the whole reason the
+// directory is worth returning: the module path alone cannot say where
+// "github.com/uk0/silk/geom/mat3x2.go" lives in a checkout named "dc".
+// Returns ("", "") when no go.mod is reachable, and ("", dir) for a
+// go.mod with no module line — both leave the mapping switched off.
 //
 // Walks until filepath.Dir returns the same directory (filesystem
 // root) so the loop terminates on every platform.
-func loadModulePath(cwd string) string {
+func loadModuleInfo(cwd string) (path, root string) {
 	if cwd == "" {
-		return ""
+		return "", ""
 	}
 	dir := cwd
 	for {
@@ -3019,14 +3117,14 @@ func loadModulePath(cwd string) string {
 					name := strings.TrimSpace(strings.TrimPrefix(trim, "module"))
 					name = strings.TrimSpace(strings.SplitN(name, "//", 2)[0])
 					name = strings.Trim(name, `"`)
-					return name
+					return name, dir
 				}
 			}
-			return ""
+			return "", dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return "", ""
 		}
 		dir = parent
 	}
@@ -3390,6 +3488,10 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	ed.SetFilePath(path)
 	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
 	openEditors[path] = ed
+	// Coverage runs push into the tabs that are open at the time, so a file
+	// opened afterwards would show no stripes at all until the user ran the
+	// whole suite again. Same call, from the other side.
+	applyCoverageToEditor(globalCoverage, ed, path)
 	// Live LSP: each buffer change pushes didChange + a completion request
 	// to gopls. Cursor line/col are read on the main thread inside the hook
 	// (see lspOnEditorChanged) before the async fetch, so the column lines
