@@ -641,11 +641,12 @@ func (this *parkStep) Text() string {
 // parkInsideParent returns the move that brings re-parented widgets into their
 // new parent's box, or nil when none of them fell outside it.
 //
-// A canvas drop cannot need this: the pointer was already over the container,
-// so the widget's rect already overlaps it. A tree drop has no pointer — the
-// widget keeps the scene rect it had somewhere else entirely, and because
-// FakeWidget has no local coordinates, Item.DrawAll clips a child to the
-// intersection with its parent and returns early when that is empty. The
+// A tree drop has no pointer — the widget keeps the scene rect it had somewhere
+// else entirely. A canvas drop has one, but the container is chosen from the
+// cursor mid-drag and the grid snap moves the widget afterwards, so a widget
+// released near a container's edge can be snapped back out of it. Either way,
+// because FakeWidget has no local coordinates, Item.DrawAll clips a child to
+// the intersection with its parent and returns early when that is empty. The
 // widget stays in the document, answers Parent() correctly, and is invisible
 // on the canvas with no way to drag it back.
 //
