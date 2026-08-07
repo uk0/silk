@@ -360,6 +360,10 @@ func ApplyTemplate(scene *GedScene, tmpl *ProjectTemplate) {
 	scene.SetSize(tmpl.Width, tmpl.Height)
 	scene.SetFormTitle(tmpl.Name)
 
+	// Dropping a template is one gesture, so the whole widget set rides in one
+	// AddCommand: a command per widget would cost one Ctrl+Z per widget to take
+	// the template back, stranding the rest of it on the canvas in between.
+	cmd := graph.NewAddCommand()
 	for _, tw := range tmpl.Widgets {
 		item, err := NewFakeWidgetFromFactory(tw.Factory)
 		if err != nil {
@@ -381,8 +385,11 @@ func ApplyTemplate(scene *GedScene, tmpl *ProjectTemplate) {
 		// Synchronize the embedded widget pixel size
 		item.Layout()
 
-		cmd := graph.NewAddCommand()
 		cmd.AddItem(item, scene)
+	}
+	// A template whose every factory lookup failed changed nothing: pushing the
+	// empty command would spend an undo step and report a design change.
+	if cmd.Count() > 0 {
 		scene.PushCommand(cmd)
 	}
 }
