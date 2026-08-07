@@ -2475,12 +2475,28 @@ func applyCoverageToOpenEditors(fc map[string]*core.FileCoverage) {
 // Returns (nil, false) when nothing matches. Pure helper so unit tests
 // can pin the policy without spawning go test.
 func coverageForPath(fc map[string]*core.FileCoverage, editorPath string) (*core.FileCoverage, bool) {
+	return coverageForPathSep(fc, editorPath, filepath.Separator)
+}
+
+// coverageForPathSep is coverageForPath with the host's path separator
+// handed in rather than read from the build. A cover profile key is
+// forward-slashed whatever produced it, so on Windows the two sides are
+// written in different alphabets — "C:\src\dc\silk\foo\bar.go" against
+// "silk/foo/bar.go" — and no multi-segment key can match at all: the
+// gutter simply never lights up there. Both sides get folded onto "/"
+// before they meet.
+//
+// The separator is a parameter because filepath.ToSlash is a no-op on
+// every host we can actually run, which is exactly how the Windows miss
+// stayed invisible; passing '\\' lets a POSIX test drive the real thing.
+func coverageForPathSep(fc map[string]*core.FileCoverage, editorPath string, sep rune) (*core.FileCoverage, bool) {
 	if editorPath == "" {
 		return nil, false
 	}
 	if cov, ok := fc[editorPath]; ok {
 		return cov, true
 	}
+	slashed := slashSep(editorPath, sep)
 	// Suffix match. Use "/" + key so we only match on a directory
 	// boundary — a profile key "foo.go" must not match an editor path
 	// ending in "wfoo.go".
@@ -2488,12 +2504,20 @@ func coverageForPath(fc map[string]*core.FileCoverage, editorPath string) (*core
 		if key == "" {
 			continue
 		}
-		if strings.HasSuffix(editorPath, string(filepath.Separator)+key) ||
-			strings.HasSuffix(editorPath, "/"+key) {
+		if strings.HasSuffix(slashed, "/"+slashSep(key, sep)) {
 			return cov, true
 		}
 	}
 	return nil, false
+}
+
+// slashSep is filepath.ToSlash with the separator supplied instead of
+// baked in at compile time.
+func slashSep(p string, sep rune) string {
+	if sep == '/' {
+		return p
+	}
+	return strings.ReplaceAll(p, string(sep), "/")
 }
 
 // runProjectVet runs "go vet ./..." in the project directory. The

@@ -201,7 +201,7 @@ func TestSetBuildStatusReflectsErrorCount(t *testing.T) {
 }
 
 // TestProjectDirResolvesFromActiveScene: a canvas with a scene whose
-// filename points at /tmp/work/Editor.silkui resolves to /tmp/work.
+// filename points at <dir>/Editor.silkui resolves to <dir>.
 // Falling back to os.Getwd happens only when the scene has no path,
 // so the resolver behaves like JetBrains' "run in module of the
 // active editor" rule.
@@ -219,9 +219,15 @@ func TestProjectDirResolvesFromActiveScene(t *testing.T) {
 		t.Errorf("empty-filename canvas: projectDir = %q, want %q", got, wantCwd)
 	}
 
-	scene.SetFilename("/tmp/work/Editor.silkui")
-	if got = projectDir(view); got != "/tmp/work" {
-		t.Errorf("with filename: projectDir = %q, want %q", got, "/tmp/work")
+	// The scene's directory in the host's own shape — "/tmp/work" on
+	// POSIX, `\tmp\work` on Windows, which is what the editor actually
+	// carries. The filename is built from that directory so the
+	// assertion still bites: the resolver has to hand the directory
+	// back, not the file it was given and not the cwd fallback.
+	workDir := filepath.Join(string(filepath.Separator), "tmp", "work")
+	scene.SetFilename(filepath.Join(workDir, "Editor.silkui"))
+	if got = projectDir(view); got != workDir {
+		t.Errorf("with filename: projectDir = %q, want %q", got, workDir)
 	}
 
 	if got = projectDir(nil); got != wantCwd {
