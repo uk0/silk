@@ -17,7 +17,7 @@ import (
 // own doc comment claimed it matched runProjectTests, and runProjectWithCoverage,
 // which also ranged openEditors off-thread), as had the hot-reload callback,
 // which reopened the whole scene on the file watcher's goroutine.
-var uiMutatingCalls = regexp.MustCompile(`\b(reportBuildOutput|silkideToast|dockSetActiveView|applyCoverageToOpenEditors|logEvent|globalTestResults\.SetOutput|scene\.OpenFile|canvas\.GedScene)\(`)
+var uiMutatingCalls = regexp.MustCompile(`\b(reportBuildOutput|silkideToast|dockSetActiveView|adoptCoverage|applyCoverageToOpenEditors|logEvent|globalTestResults\.SetOutput|scene\.OpenFile|canvas\.GedScene)\(`)
 
 var (
 	goroutineStart = regexp.MustCompile(`\bgo func\s*\(`)

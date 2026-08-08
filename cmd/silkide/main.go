@@ -1810,12 +1810,6 @@ func installCoreLogSink() {
 	})
 }
 
-// coverageTempFile is the path of the cover profile written by the most
-// recent runProjectWithCoverage invocation. Kept at the package level
-// so the next coverage run can delete the previous one — keeps a single
-// cover.out in os.TempDir rather than growing a pile.
-var coverageTempFile string
-
 // The most recent run's parsed profile, plus the module identity its keys
 // are written against. Held at the package level because a file opened
 // AFTER the run has to pick the stripes up too — applyCoverageToOpenEditors
@@ -2523,86 +2517,137 @@ func testResultCounts() (passed, failed, skipped int) {
 // files by import path and openEditors by absolute path, so the two are
 // lined up through the module's go.mod — see coverageForPath.
 //
-// The cover profile lives in os.TempDir and is overwritten on each run;
-// the previous file is deleted at the start of the next run so the temp
-// dir doesn't accumulate. Bound to Cmd+Shift+F7 + the "Run with Coverage"
-// palette command.
+// The cover profile lives in os.TempDir and belongs to the run that made
+// it: this function hands the path to the worker, and the worker deletes
+// it when it is done reading. Bound to Cmd+Shift+F7 + the "Run with
+// Coverage" palette command.
 func runProjectWithCoverage(canvas *ged.GedView) {
 	if globalBuildOutput == nil {
 		buildOutputPane()
 	}
 	dir := projectDir(canvas)
-	// Tear down the previous run's profile before this one writes a new
-	// one — os.TempDir is shared with the rest of the system, and we don't
-	// want a stale cover.out from a previous silkide session leaking in
-	// if go test bails before writing.
-	if coverageTempFile != "" {
-		_ = os.Remove(coverageTempFile)
-	}
-	tmp, err := os.CreateTemp("", "silkide-cover-*.out")
+	profile, err := newCoverageProfile()
 	if err != nil {
 		reportBuildOutput(fmt.Sprintf("coverage: temp file: %v", err))
 		return
 	}
-	_ = tmp.Close()
-	coverageTempFile = tmp.Name()
 
 	reportBuildOutput(fmt.Sprintf(
 		"$ go test -coverprofile=%s -covermode=set ./...   (cwd: %s)",
-		coverageTempFile, dir))
+		profile, dir))
 	silkideToast(i18n.T("Running with coverage..."), gui.ToastInfo)
 	go func() {
-		cmd := exec.Command("go", "test",
-			"-coverprofile="+coverageTempFile, "-covermode=set", "./...")
-		if dir != "" {
-			cmd.Dir = dir
-		}
-		out, runErr := cmd.CombinedOutput()
-		text := string(out)
-		if runErr != nil && text == "" {
-			text = runErr.Error()
-		}
+		// `dir` and `profile` belong to this run alone. The path is a local
+		// rather than a package global because the shortcut can be hit twice:
+		// a second run starting now would otherwise move this worker's read
+		// onto the other run's file, or delete the file out from under it.
+		res := collectCoverage(dir, profile)
 		// UI mutation only, same split as runProjectTests: the toolchain run
 		// and the profile parsing stay on this worker, the panes / editors /
-		// toast go back to the main thread. applyCoverageToOpenEditors also
-		// ranges openEditors, which the main thread writes.
+		// toast go back to the main thread. adoptCoverage also ranges
+		// openEditors, which the main thread writes.
 		onUI(func() {
-			reportBuildOutput(text)
+			reportBuildOutput(res.output)
 			if globalTestResults != nil {
-				globalTestResults.SetOutput(text)
+				globalTestResults.SetOutput(res.output)
 			}
 		})
-
-		data, readErr := os.ReadFile(coverageTempFile)
-		if readErr != nil {
+		if res.readErr != nil {
 			onUI(func() {
-				reportBuildOutput(fmt.Sprintf("coverage: read profile: %v", readErr))
+				reportBuildOutput(fmt.Sprintf("coverage: read profile: %v", res.readErr))
 				silkideToast(i18n.T("Coverage failed"), gui.ToastError)
 			})
 			return
 		}
-		_, blocks, parseErr := core.ParseCoverage(string(data))
-		fileCov := core.BuildFileCoverage(blocks)
-		// The profile names every file by its import path, so turning a key
-		// back into a file on disk needs the identity of the module go test
-		// just ran in. Reading go.mod is disk I/O, so it belongs out here on
-		// the worker with the rest of the parse, not in the UI closure.
-		modPath, modRoot := loadModuleInfo(dir)
 		onUI(func() {
-			if parseErr != nil {
+			if res.parseErr != nil {
 				// Non-fatal: ParseCoverage returns the blocks it managed to
 				// recover alongside the error, so still render what we got.
-				reportBuildOutput(fmt.Sprintf("coverage: %v", parseErr))
+				reportBuildOutput(fmt.Sprintf("coverage: %v", res.parseErr))
 			}
-			globalCoverage, globalCoverageModule, globalCoverageRoot = fileCov, modPath, modRoot
-			applyCoverageToOpenEditors(fileCov)
-			if runErr != nil {
+			adoptCoverage(res.fileCov, res.module, res.root)
+			if res.runErr != nil {
 				silkideToast(i18n.T("Coverage failed"), gui.ToastError)
 			} else {
 				silkideToast(i18n.T("Coverage applied"), gui.ToastSuccess)
 			}
 		})
 	}()
+}
+
+// newCoverageProfile hands one run its own cover-profile path — created,
+// not merely named, so no second run can be handed the same one. The path
+// used to be parked in a package global that the NEXT run deleted on its
+// way past, which is a file a still-running worker was about to read; a run
+// now owns its profile from here until collectCoverage removes it.
+func newCoverageProfile() (string, error) {
+	tmp, err := os.CreateTemp("", "silkide-cover-*.out")
+	if err != nil {
+		return "", err
+	}
+	_ = tmp.Close()
+	return tmp.Name(), nil
+}
+
+// coverageResult is one run's product, carried from the worker to the UI
+// thread in one piece — the toolchain's output, the parsed profile, and the
+// module identity the profile's keys are written against. The identity
+// travels WITH the profile because the two are only meaningful together:
+// resolving a key back to a file on disk needs both (see coverageForPathIn).
+type coverageResult struct {
+	output   string
+	fileCov  map[string]*core.FileCoverage
+	module   string
+	root     string
+	runErr   error // go test's exit status
+	readErr  error // the profile never landed
+	parseErr error // non-fatal: partial blocks come back with it
+}
+
+// collectCoverage is the off-thread half of a coverage run: the toolchain
+// call, the profile read, the parse, and the go.mod lookup that says what
+// module the profile's keys belong to. Everything it touches is either an
+// argument or its own local, so two runs in flight at once stay separate.
+func collectCoverage(dir, profile string) coverageResult {
+	cmd := exec.Command("go", "test",
+		"-coverprofile="+profile, "-covermode=set", "./...")
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, runErr := cmd.CombinedOutput()
+	res := coverageResult{output: string(out), runErr: runErr}
+	if runErr != nil && res.output == "" {
+		res.output = runErr.Error()
+	}
+	// Ours to clean up, and only once we are past reading it — os.TempDir is
+	// shared with the rest of the system and we don't want to leave a
+	// cover.out behind on every run.
+	defer func() { _ = os.Remove(profile) }()
+
+	data, readErr := os.ReadFile(profile)
+	if readErr != nil {
+		res.readErr = readErr
+		return res
+	}
+	_, blocks, parseErr := core.ParseCoverage(string(data))
+	res.parseErr = parseErr
+	res.fileCov = core.BuildFileCoverage(blocks)
+	// The profile names every file by its import path, so turning a key back
+	// into a file on disk needs the identity of the module go test just ran
+	// in. Reading go.mod is disk I/O, so it belongs out here on the worker
+	// with the rest of the parse, not in the UI closure.
+	res.module, res.root = loadModuleInfo(dir)
+	return res
+}
+
+// adoptCoverage makes this profile the IDE's current coverage and repaints
+// the tabs from it. The three globals move together with the walk because
+// the walk resolves editor paths THROUGH them (coverageForPathSep reads the
+// module identity off the package): set the map without the identity and
+// every gutter goes dark. UI thread only.
+func adoptCoverage(fc map[string]*core.FileCoverage, modulePath, moduleRoot string) {
+	globalCoverage, globalCoverageModule, globalCoverageRoot = fc, modulePath, moduleRoot
+	applyCoverageToOpenEditors(fc)
 }
 
 // applyCoverageToOpenEditors iterates the openEditors map and pushes the
