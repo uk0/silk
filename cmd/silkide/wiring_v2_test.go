@@ -203,10 +203,10 @@ func TestApplyCoverageToOpenEditorsHandlesEmpty(t *testing.T) {
 }
 
 // TestCoverageTempFileCleanupHonorsMissing checks the invariant the
-// runProjectWithCoverage tear-down relies on: deleting a previously-
-// recorded temp file that the OS has already swept must not be a fatal
-// error. `os.Remove` returns *PathError wrapping ErrNotExist; the
-// runProjectWithCoverage path discards it.
+// coverage run's tear-down relies on: deleting the run's own temp file
+// when the OS has already swept it must not be a fatal error.
+// `os.Remove` returns *PathError wrapping ErrNotExist; the
+// collectCoverage path discards it.
 func TestCoverageTempFileCleanupHonorsMissing(t *testing.T) {
 	missing := filepath.Join(os.TempDir(), "silkide-cover-does-not-exist.out")
 	_ = os.Remove(missing)
