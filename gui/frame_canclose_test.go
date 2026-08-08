@@ -1,6 +1,9 @@
 package gui
 
 import (
+	"go/ast"
+	"go/parser"
+	gotoken "go/token" // the package's own `token` is a lexer type (codeeditor.go)
 	"os"
 	"strings"
 	"testing"
@@ -40,10 +43,11 @@ func TestFrameCanCloseVetoesTheWindowManagerClose(t *testing.T) {
 
 // TestWindowCloseAsksTheFrameFirst: the guard only protects anything if the
 // close paths consult it, and consult it before they start closing. Both
-// backends run inside a window procedure the OS drives, which a test process
-// has no window to drive, so this reads the source — crude, but it is the only
-// form of the invariant that can fail when someone removes the call. The Win32
-// backend matters most: it is verified on a real machine long after this runs.
+// backends run inside a window procedure the OS drives, so this reads the
+// source — crude, but it covers the Win32 half, which no test here can run and
+// which is verified on a real machine long after this does. The GLFW half is
+// driven for real in window_close_guard_glfw_test.go; it is kept here so the
+// two backends are still read against one rule.
 func TestWindowCloseAsksTheFrameFirst(t *testing.T) {
 	cases := []struct {
 		file  string
@@ -69,6 +73,102 @@ func TestWindowCloseAsksTheFrameFirst(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWin32CloseGuardHasTheRightPolarity: the test above catches a guard that
+// was deleted, not one that was turned round. Reading WM_CLOSE as
+// `if f.CanClose()` swallows the message for every frame that wants to stay and
+// tears down every frame that agreed to go — the call is still there, still
+// ahead of PromptSaveClose, and the user loses the work he just clicked Cancel
+// over. The GLFW backend answers this by being driven
+// (TestOnWindowCloseObeysTheFrameVeto); the Win32 window procedure needs a
+// message pump and an HWND this host has neither of, so its polarity is read
+// out of the syntax tree instead.
+func TestWin32CloseGuardHasTheRightPolarity(t *testing.T) {
+	const file = "window_windows.go"
+	fset := gotoken.NewFileSet()
+	parsed, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("cannot parse %s: %v", file, err)
+	}
+
+	var clause *ast.CaseClause
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		cc, ok := n.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		for _, e := range cc.List {
+			if sel, ok := e.(*ast.SelectorExpr); ok && sel.Sel.Name == "WM_CLOSE" {
+				clause = cc
+				return false
+			}
+		}
+		return true
+	})
+	if clause == nil {
+		t.Fatalf("%s no longer handles WM_CLOSE; update this test to match", file)
+	}
+
+	var guard *ast.IfStmt
+	for _, stmt := range clause.Body {
+		if is, ok := stmt.(*ast.IfStmt); ok && callsCanClose(is.Cond) {
+			guard = is
+			break
+		}
+	}
+	if guard == nil {
+		t.Fatal("WM_CLOSE does not consult Frame.CanClose; unsaved work is quit over silently on Windows")
+	}
+
+	// The veto has to be the NEGATED reading, and the branch it guards has to
+	// leave without going on to the teardown — swallowing WM_CLOSE is what
+	// keeps the window standing.
+	negated := false
+	ast.Inspect(guard.Cond, func(n ast.Node) bool {
+		if u, ok := n.(*ast.UnaryExpr); ok && u.Op == gotoken.NOT && callsCanClose(u.X) {
+			negated = true
+			return false
+		}
+		return true
+	})
+	if !negated {
+		t.Error("WM_CLOSE closes the frames that refuse and keeps the ones that agree: the CanClose test is not negated")
+	}
+	returns, tearsDown := false, false
+	ast.Inspect(guard.Body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.ReturnStmt:
+			returns = true
+		case *ast.CallExpr:
+			if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "PromptSaveClose" {
+				tearsDown = true
+			}
+		}
+		return true
+	})
+	if !returns {
+		t.Error("the vetoed branch falls through to DefWindowProc; Windows destroys the window anyway")
+	}
+	if tearsDown {
+		t.Error("the vetoed branch still runs PromptSaveClose; the veto changes nothing")
+	}
+}
+
+// callsCanClose reports whether e calls a CanClose method anywhere inside it.
+func callsCanClose(e ast.Expr) (found bool) {
+	ast.Inspect(e, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "CanClose" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return
 }
 
 // sourceBlock returns the text of file between the start marker and the first

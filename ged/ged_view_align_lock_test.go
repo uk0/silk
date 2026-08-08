@@ -196,6 +196,52 @@ func TestDistributeRefusesWithLockedInterior(t *testing.T) {
 	}
 }
 
+// TestDistributeVRefusesWithLockedInterior is the vertical twin, and it is a
+// separate test rather than a table row because the refusal is written as one
+// mode test over both 分布 modes: every veto test above drives DistributeH, so
+// narrowing that test to DistributeH alone left 垂直分布 spreading the rest of
+// the column around a widget that never moved, and the whole suite green.
+func TestDistributeVRefusesWithLockedInterior(t *testing.T) {
+	view := NewGedView()
+	scene := view.GedScene()
+	scene.SetSize(200, 300)
+
+	// Same arithmetic on the other axis: even gap = (span 100 − occupied 40)
+	// / 3 = 20, so the targets are 0 / 30 / 60 / 90 and both interior widgets
+	// would have to move.
+	a := addFakeAt(t, scene, "a", 5, 0, 4, 10)
+	locked := addFakeAt(t, scene, "locked", 5, 25, 4, 10)
+	c := addFakeAt(t, scene, "c", 5, 70, 4, 10)
+	d := addFakeAt(t, scene, "d", 5, 90, 4, 10)
+	locked.SetLockPos(true)
+
+	view.Selection().Clear()
+	for _, w := range []*FakeWidget{a, locked, c, d} {
+		view.Selection().Add(w)
+	}
+
+	before := view.Scene().UndoStack().Count()
+	view.AlignSelection(DistributeV)
+
+	want := []float64{0, 25, 70, 90}
+	for i, w := range []*FakeWidget{a, locked, c, d} {
+		if y := yOf(w); y != want[i] {
+			t.Errorf("%s.Y = %g after a 垂直分布 that cannot even out, want %g (nobody moves)",
+				w.WidgetName(), y, want[i])
+		}
+	}
+	if got := view.Scene().UndoStack().Count() - before; got != 0 {
+		t.Errorf("refused 垂直分布 pushed %d command(s); Ctrl+Z would burn a step on nothing", got)
+	}
+}
+
+// yOf reads the vertical position, so the assertion above reads as one line
+// per widget like its horizontal twin does.
+func yOf(w *FakeWidget) float64 {
+	_, y := w.Pos()
+	return y
+}
+
 // TestDistributeIgnoresLockOnACarriedChild: the refusal vetoes 分布 over a lock
 // that actually blocks something. A widget inside a selected container is not
 // that: it rides with the container whatever its own lock says

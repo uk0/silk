@@ -66,6 +66,45 @@ func TestParkInsideParentIgnoresTheFormRoot(t *testing.T) {
 	}
 }
 
+// TestParkInsideParentRescuesAnEdgeFlushWidget pins the boundary the overlap
+// test is drawn on. A widget whose edge sits exactly on its new parent's edge
+// shares a line with it and nothing more: DrawAll intersects the two rects and
+// returns early on an empty result, and geom.Rect counts a zero width or
+// height as empty — so "touching" renders as the same invisible widget a
+// widget miles away does, and the park has to rescue it too.
+//
+// One case per comparison: each subtest is flush on one side and comfortably
+// inside on the other three, so a single loosened comparison is enough to fail
+// exactly one of them.
+func TestParkInsideParentRescuesAnEdgeFlushWidget(t *testing.T) {
+	// The parent spans x 10..70, y 10..50 throughout.
+	cases := []struct {
+		name string
+		x, y float64
+	}{
+		{"left edge on the parent's right edge", 70, 20},
+		{"right edge on the parent's left edge", -30, 20},
+		{"top edge on the parent's bottom edge", 20, 50},
+		{"bottom edge on the parent's top edge", 20, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			box := newTestFake(t, "gui.VBox", 10, 10, 60, 40)
+			btn := newTestFake(t, "gui.Button", c.x, c.y, 40, 8)
+			btn.SetParent(box)
+
+			park([]graph.IItem{btn}, box)
+
+			// The predicate DrawAll itself uses, not a re-spelling of it.
+			if box.Bounds1().IntersectCopy(btn.Bounds1()).IsEmpty() {
+				t.Errorf("button at (%.1f,%.1f %.1fx%.1f) still shares nothing but a line with its parent box (%.1f,%.1f %.1fx%.1f); DrawAll clips it away",
+					btn.X(), btn.Y(), btn.Width(), btn.Height(),
+					box.X(), box.Y(), box.Width(), box.Height())
+			}
+		})
+	}
+}
+
 // park applies whatever parkInsideParent decided, the way the undo stack does
 // it (Push calls Redo). A nil command is the "nothing had fallen outside"
 // answer, which applies as nothing.
