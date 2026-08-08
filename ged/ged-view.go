@@ -1315,7 +1315,9 @@ func frameAlignDelta(box, frame geom.Rect, mode AlignMode) (dx, dy float64) {
 //     per-item targets go onto one MoveCommand; MoveCommand.AddItem takes
 //     absolute (toX, toY), so N distinct targets need no composite and Ctrl+Z
 //     snaps everyone back at once. Each target carries the item's own subtree
-//     (graph.AddMoveSubtree), so aligning a container aligns what is in it.
+//     (graph.AddMoveSubtree), so aligning a container aligns what is in it —
+//     and a widget already riding along that way is out of the extremes as
+//     well as out of the command; see the comment on movers.
 //     Position-locked items are left where they are, as on every other move
 //     path — but they still count in the extremes, and 分布 refuses outright
 //     rather than spread the rest around one; see the two comments below.
@@ -1354,11 +1356,38 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 		return
 	}
 
-	aligned, clamped := alignRects(rects, mode)
 	selSet := make(map[graph.IItem]bool, len(items))
 	for _, it := range items {
 		selSet[it] = true
 	}
+
+	// The geometry is measured over the items that will actually move, so a
+	// widget inside a selected container drops out here rather than at the
+	// command below. It never gets a target of its own — it rides with the
+	// container (graph.AddMoveSubtree) — so its rect is not an edge anything
+	// can align to: it travels by the container's delta whatever alignRects
+	// says about it. Counting it computed the answer for N items and applied it
+	// to N-1, which is how a 水平分布 over a container, a widget inside it and
+	// two others came out spaced for four things and moved three.
+	//
+	// This is the opposite of the rule position locks get, and the difference
+	// is whether the rect moves: a locked item STAYS, so its edge is a real
+	// fixed edge and making the group align to it is the point of pinning it
+	// (see the two comments below). A carried item's edge leaves with its
+	// container. That holds for the align modes as much as for 分布 — the mean
+	// of AlignHCenter is a balance point over the widgets that swing to it, and
+	// a child hanging over its container's left edge would otherwise set the
+	// AlignLeft line and then walk off it.
+	movers := make([]graph.IItem, 0, len(items))
+	moverRects := make([]geom.Rect, 0, len(items))
+	for i, it := range items {
+		if hasSelectedAncestor(it, selSet) {
+			continue
+		}
+		movers = append(movers, it)
+		moverRects = append(moverRects, rects[i])
+	}
+	aligned, clamped := alignRects(moverRects, mode)
 
 	// 分布 is one joint constraint, not N independent targets: the gaps only
 	// come out even if every item takes the slot distributeAxis gave it. A
@@ -1370,13 +1399,12 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 	// anchors and stay put by construction — hence the target-differs test
 	// rather than a bare IsLockPos.
 	//
-	// The ancestor test comes first because only here does a skip change the
-	// answer for someone else: an item carried by its selected container moves
-	// whatever its own lock says (graph.AddMoveSubtree), so vetoing the command
-	// over that lock would refuse a 分布 nothing was blocking.
+	// Only the movers are asked: an item carried by its selected container
+	// moves whatever its own lock says (graph.AddMoveSubtree), so vetoing the
+	// command over that lock would refuse a 分布 nothing was blocking.
 	if mode == DistributeH || mode == DistributeV {
-		for i, it := range items {
-			if hasSelectedAncestor(it, selSet) || !it.IsLockPos() {
+		for i, it := range movers {
+			if !it.IsLockPos() {
 				continue
 			}
 			if x, y := it.Pos(); x != aligned[i].X || y != aligned[i].Y {
@@ -1391,13 +1419,7 @@ func (this *GedView) AlignSelection(mode AlignMode) {
 	}
 
 	cmd := graph.NewMoveCommand()
-	for i, it := range items {
-		// A widget inside a selected container rides with it, exactly as it
-		// does under a drag or a nudge; giving it its own target as well would
-		// move it twice.
-		if hasSelectedAncestor(it, selSet) {
-			continue
-		}
+	for i, it := range movers {
 		// 位置锁定 already makes a drag and an arrow key leave the widget alone
 		// (GenerateMoveCommand, snapSelectionToGrid); 对齐 is a move like any
 		// other and does too — the lock was never meant to mean "unless you

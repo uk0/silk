@@ -143,7 +143,7 @@ func TestAlignSelectionCarriesLockedChildOfMovingContainer(t *testing.T) {
 
 	view.AlignSelection(AlignLeft)
 
-	// min-left over {10, 60, 65} = 10, so the box travels -50.
+	// min-left over the movers {10, 60} = 10, so the box travels -50.
 	if x, y := box.Pos(); x != 10 || y != 30 {
 		t.Fatalf("container moved to (%g,%g), want (10,30)", x, y)
 	}
