@@ -135,20 +135,36 @@ func TestWin32CloseGuardHasTheRightPolarity(t *testing.T) {
 	if !negated {
 		t.Error("WM_CLOSE closes the frames that refuse and keeps the ones that agree: the CanClose test is not negated")
 	}
-	returns, tearsDown := false, false
+	// "Returns" is not enough, and the difference is the whole guard: six
+	// neighbouring case arms end in `return win32.DefWindowProc(...)`, so
+	// harmonising this one with them is a natural edit that reads as tidying.
+	// It also hands the message straight to Windows, which destroys the window
+	// — the exact outcome the veto exists to prevent. Swallowing WM_CLOSE means
+	// returning 0 and nothing else.
+	swallows, defers2Windows, tearsDown := false, false, false
 	ast.Inspect(guard.Body, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.ReturnStmt:
-			returns = true
+			if len(v.Results) == 1 {
+				if lit, ok := v.Results[0].(*ast.BasicLit); ok && lit.Value == "0" {
+					swallows = true
+				}
+			}
 		case *ast.CallExpr:
 			if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "PromptSaveClose" {
 				tearsDown = true
 			}
+			if sel, ok := v.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "DefWindowProc" {
+				defers2Windows = true
+			}
 		}
 		return true
 	})
-	if !returns {
-		t.Error("the vetoed branch falls through to DefWindowProc; Windows destroys the window anyway")
+	if defers2Windows {
+		t.Error("the vetoed branch hands WM_CLOSE to DefWindowProc; Windows destroys the window despite the veto")
+	}
+	if !swallows {
+		t.Error("the vetoed branch does not return 0; WM_CLOSE is not swallowed and the window goes down anyway")
 	}
 	if tearsDown {
 		t.Error("the vetoed branch still runs PromptSaveClose; the veto changes nothing")

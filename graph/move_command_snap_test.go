@@ -192,3 +192,57 @@ func TestMoveCommandSnapReplaysExactly(t *testing.T) {
 		t.Errorf("child after second undo = (%v,%v), want (15.6,25.6)", x, y)
 	}
 }
+
+// TestMoveCommandSnapGivesEachAnchorItsOwnSnap covers the shape a reviewer
+// found the net blind to: every anchor in the suite had at most one carried
+// record, and all of them sat behind the FIRST anchor. So freezing snapX/snapY
+// after the first anchor — handing every later container's contents a snap
+// computed for someone else — left the whole suite green.
+//
+// Two anchors is the ordinary case the moment more than one widget is selected:
+// AlignSelection puts an independently computed target on each mover, and each
+// of those carries its own subtree.
+func TestMoveCommandSnapGivesEachAnchorItsOwnSnap(t *testing.T) {
+	// The two containers round in opposite directions on purpose: 10.4 rounds
+	// down and 30.6 rounds up, so a carried record taking the wrong anchor's
+	// snap lands a whole millimetre out rather than coincidentally right.
+	boxA, kidA := boxWithChild(10.4, 15.6)
+	boxB, kidB := boxWithChild(30.6, 35.9)
+
+	cmd := NewMoveCommand()
+	AddMoveSubtree(cmd, boxA, 7, 0)
+	AddMoveSubtree(cmd, boxB, 7, 0)
+	cmd.Redo()
+
+	// Each container lands on the grid, each child keeps the offset it had.
+	for _, c := range []struct {
+		name       string
+		box, kid   IItem
+		wantBox    float64
+		wantOffset float64
+	}{
+		{"first", boxA, kidA, 17, 5.2},
+		{"second", boxB, kidB, 38, 5.3},
+	} {
+		bx, _ := c.box.Pos()
+		kx, _ := c.kid.Pos()
+		if !nearly(bx, c.wantBox) {
+			t.Errorf("%s container at %v, want %v — an anchor did not land on the 1mm grid", c.name, bx, c.wantBox)
+		}
+		if got := kx - bx; !nearly(got, c.wantOffset) {
+			t.Errorf("%s container's child sits %v inside it, want %v — it took a snap computed for another anchor",
+				c.name, got, c.wantOffset)
+		}
+	}
+}
+
+// boxWithChild builds a scene-space container at x holding one child at kidX,
+// both on fractional coordinates so the 1mm snap has something to do.
+func boxWithChild(x, kidX float64) (box, kid IItem) {
+	b := NewRectItem()
+	b.SetBounds(x, 10, 60, 40)
+	k := NewRectItem()
+	k.SetBounds(kidX, 20, 20, 10)
+	k.SetParent(b)
+	return b, k
+}

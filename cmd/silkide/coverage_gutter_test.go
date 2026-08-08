@@ -532,3 +532,33 @@ func covKeys(fc map[string]*core.FileCoverage) []string {
 	}
 	return out
 }
+
+// TestCoverageRunShellKeepsItsTwoHalvesWired pins the shell around the two
+// halves the other tests drive directly.
+//
+// runProjectWithCoverage cannot be called from a test — it opens panes, toasts
+// and posts onto the UI queue — so the tests compose collectCoverage and
+// adoptCoverage themselves. That leaves the composition itself unwitnessed: a
+// reviewer deleted the adoptCoverage call from the worker's final closure and
+// the whole package stayed green, which is the feature going permanently dark
+// on every checkout with nothing to say so. main.go already gets read this way
+// elsewhere (silkideFuncBody); this is the same idiom for the same reason.
+func TestCoverageRunShellKeepsItsTwoHalvesWired(t *testing.T) {
+	body := silkideFuncBody(t, "func runProjectWithCoverage(canvas *ged.GedView) {")
+
+	// The profile has to reach the worker as an argument. Reading it back off a
+	// package global inside the goroutine is exactly the cross-run defect this
+	// run's own local was introduced to end.
+	if !strings.Contains(body, "collectCoverage(dir, profile)") {
+		t.Error("the worker no longer takes its directory and profile as arguments; a second run can move this one's read onto another file")
+	}
+	if strings.Contains(body, "coverageTempFile") {
+		t.Error("the profile path is back on a package global; two coverage runs will cross-wire again")
+	}
+
+	// The identity travels with the map it describes. Dropping it, or letting
+	// the two arrive separately, is what left every gutter dark.
+	if !strings.Contains(body, "adoptCoverage(res.fileCov, res.module, res.root)") {
+		t.Error("the run never adopts its coverage with the module identity that maps profile keys onto disk; the gutter stays dark")
+	}
+}

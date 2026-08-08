@@ -1,6 +1,12 @@
 package ged
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	gotoken "go/token"
+	"strings"
+	"testing"
+)
 
 // TestAlignSelectionSkipsLockedWidget is the whole point of 位置锁定: the
 // widget the user pinned must sit still whichever move reaches it. Drag and
@@ -332,4 +338,78 @@ func TestDistributeProceedsWithLockedAnchor(t *testing.T) {
 	if x, _ := c.Pos(); x != 100 {
 		t.Errorf("c.X = %g, want 100", x)
 	}
+}
+
+// TestDistributeRefusalNamesTheAxisItRefused closes the last thing the two
+// refusal tests above cannot see.
+//
+// They prove the command is refused — nothing moves, no undo step — on both
+// axes. What the message SAYS is invisible to them: showStatus (ged/morph.go)
+// no-ops when the view has no frame, which is every test here. So swapping the
+// two strings, or emptying them, stays green while a user who pressed 垂直分布
+// is told about 水平分布 and goes looking for a horizontal problem that is not
+// there.
+//
+// Read out of the syntax tree, the way gui pins its WM_CLOSE guard: this is the
+// idiom for a branch no test process can reach. It sees the words, not the
+// call — a refusal that stopped reporting at all is caught by the tests above,
+// not by this one.
+func TestDistributeRefusalNamesTheAxisItRefused(t *testing.T) {
+	fset := gotoken.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "ged-view.go", nil, 0)
+	if err != nil {
+		t.Fatalf("cannot parse ged-view.go: %v", err)
+	}
+
+	// AlignSelection picks its axis this way TWICE — once for this refusal and
+	// once for the clamp report ("总宽超出可分布范围") — so matching on the
+	// condition alone lands on whichever comes last. The first draft of this
+	// test did exactly that and stayed green through a swap of the two strings
+	// it claims to guard. The refusal is the arm that talks about the lock.
+	var arm *ast.IfStmt
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		is, ok := n.(*ast.IfStmt)
+		if !ok || is.Else == nil {
+			return true
+		}
+		bin, ok := is.Cond.(*ast.BinaryExpr)
+		if !ok || bin.Op != gotoken.EQL {
+			return true
+		}
+		if x, ok := bin.X.(*ast.Ident); !ok || x.Name != "mode" {
+			return true
+		}
+		if y, ok := bin.Y.(*ast.Ident); !ok || y.Name != "DistributeH" {
+			return true
+		}
+		if !strings.Contains(literalsIn(is), "位置锁定") {
+			return true
+		}
+		arm = is
+		return false
+	})
+	if arm == nil {
+		t.Fatal("AlignSelection no longer reports a locked-widget refusal per axis; update this test to match")
+	}
+
+	h, v := literalsIn(arm.Body), literalsIn(arm.Else)
+	if !strings.Contains(h, "水平分布") || strings.Contains(h, "垂直分布") {
+		t.Errorf("the DistributeH arm reports %q; a horizontal refusal has to name 水平分布", h)
+	}
+	if !strings.Contains(v, "垂直分布") || strings.Contains(v, "水平分布") {
+		t.Errorf("the DistributeV arm reports %q; a vertical refusal has to name 垂直分布", v)
+	}
+}
+
+// literalsIn joins every string literal under n, so an arm's message can be
+// inspected without caring how it was assembled.
+func literalsIn(n ast.Node) string {
+	var sb strings.Builder
+	ast.Inspect(n, func(x ast.Node) bool {
+		if lit, ok := x.(*ast.BasicLit); ok && lit.Kind == gotoken.STRING {
+			sb.WriteString(lit.Value)
+		}
+		return true
+	})
+	return sb.String()
 }

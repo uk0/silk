@@ -410,6 +410,42 @@ func TestMainInstallsTheQuitGuard(t *testing.T) {
 	if want := []string{frame, canvas}; !reflect.DeepEqual(args, want) {
 		t.Errorf("main calls installQuitGuard(%v), want (%v)", args, want)
 	}
+
+	// Present is not the same as reached. A call parked behind a condition, or
+	// left sitting after core.EventLoop() — which does not return until the app
+	// is quitting — installs nothing, and the close button is unguarded again
+	// while this test stays green. So the call has to be a plain statement of
+	// main's own body, ahead of the loop.
+	install, loop := -1, -1
+	for i, stmt := range mainFn.Body.List {
+		es, ok := stmt.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := es.X.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if fn.Name == "installQuitGuard" {
+				install = i
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == "EventLoop" {
+				loop = i
+			}
+		}
+	}
+	if install < 0 {
+		t.Error("installQuitGuard is not a statement of main's own body; whatever encloses it decides whether the close button is ever guarded")
+	}
+	if loop < 0 {
+		t.Fatal("main no longer runs core.EventLoop at its top level; update this test to match")
+	}
+	if install >= 0 && install > loop {
+		t.Error("installQuitGuard runs after core.EventLoop, which returns only when the app is already quitting: the guard is never installed")
+	}
 }
 
 // boundBy returns the name the i-th result of the call to fn is assigned to
