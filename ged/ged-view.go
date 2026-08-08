@@ -2745,8 +2745,21 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	if wasDragging {
 		this.snapSelectionToGrid()
 		if movesItems {
-			// After the snap, so the re-parent records the resting position.
-			this.reparentSelection(target, nil)
+			// After the snap, so the re-parent records the resting position —
+			// and so the park judges that same position. target was chosen
+			// from the cursor mid-drag, before the snap existed; the snap then
+			// moves the widget by up to half a grid pitch (a manual guide,
+			// further still), which is enough to carry a widget released near
+			// a container's edge clear of the container it is about to be
+			// parented into. The park follows the re-parent rather than
+			// preceding it — parkInsideParent measures against the new parent
+			// and only sees items already owned by it — and rides its undo
+			// step, because between the two the widget is owned by a container
+			// it does not overlap and DrawAll erases it.
+			this.reparentSelection(target, &parkStep{
+				items:  this.Selection().ItemList(),
+				parent: target,
+			})
 		}
 	}
 
@@ -2762,10 +2775,12 @@ func (this *GedView) OnLeftUp(x, y float64) {
 // itself is MovePart's own command underneath, so a drag that crosses into a
 // container leaves two undo steps: the re-parent, then the move.
 //
-// park is the rescue a pointerless drop needs (the object tree's; a canvas drop
-// passes nil). It is applied and undone with the re-parent as one step, never
-// as a step of its own: between the two the widget is owned by a container it
-// does not overlap, and a widget in that state is invisible.
+// park is the rescue both drops need — the tree's because it has no pointer at
+// all, the canvas's because the grid snap displaces the widget after the drop
+// target was chosen. It is applied and undone with the re-parent as one step,
+// never as a step of its own: between the two the widget is owned by a
+// container it does not overlap, and a widget in that state is invisible. A nil
+// park is the caller that has no rescue to tie on.
 func (this *GedView) reparentSelection(target graph.IItem, park *parkStep) {
 	parent := graph.IItem(this.Scene())
 	if target != nil {
@@ -2790,7 +2805,7 @@ func (this *GedView) reparentSelection(target graph.IItem, park *parkStep) {
 
 // groupWithPark ties the rescue to the re-parent that made it necessary, so the
 // pair is one entry on the undo stack. Nothing to tie means the command travels
-// on its own, which is every canvas drop.
+// on its own.
 func groupWithPark(cmd *graph.ReparentCommand, park *parkStep) gui.ICommand {
 	if park == nil {
 		return cmd
