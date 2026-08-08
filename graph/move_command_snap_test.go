@@ -52,6 +52,71 @@ func TestMoveCommandSnapKeepsSubtreeRigid(t *testing.T) {
 	}
 }
 
+// TestMoveCommandSnapCarriesEveryDescendant: the anchor's snap belongs to ALL
+// of its carried records, not just the next one. Every other subtree here has a
+// single child, so a snap that were consumed by the first carried record would
+// still look right — the second widget in the same container, and anything
+// below it, is where the difference shows: the box lands on the grid, one child
+// follows it and the rest stay behind by the fraction that was rounded off,
+// each of them sliding inside the container it lives in.
+//
+// The grandchild is the same question one level down: it is carried by the
+// anchor too (moveSubtree walks the whole subtree with one delta), so it takes
+// the anchor's snap rather than its own parent's.
+func TestMoveCommandSnapCarriesEveryDescendant(t *testing.T) {
+	v := NewView()
+	box := NewRectItem()
+	box.SetBounds(10.4, 20.7, 60, 60)
+
+	first := NewRectItem()
+	first.SetBounds(15.6, 25.9, 10, 10)
+	first.SetParent(box)
+
+	second := NewRectItem()
+	second.SetBounds(30.7, 45.2, 10, 10)
+	second.SetParent(box)
+
+	grand := NewRectItem()
+	grand.SetBounds(32.3, 46.6, 4, 4)
+	grand.SetParent(second)
+
+	// Offsets inside the box are what the designer drew; the move must not
+	// change any of them.
+	type offset struct {
+		name   string
+		item   IItem
+		of     IItem
+		dx, dy float64
+	}
+	want := []offset{
+		{"first child", first, box, 15.6 - 10.4, 25.9 - 20.7},
+		{"second child", second, box, 30.7 - 10.4, 45.2 - 20.7},
+		{"grandchild", grand, second, 32.3 - 30.7, 46.6 - 45.2},
+	}
+
+	v.Selection().Add(box)
+	cmd := v.Selection().GenerateMoveCommand(7, 3)
+	if cmd == nil {
+		t.Fatal("command is nil, want the container and its subtree")
+	}
+	cmd.Redo()
+
+	// (17.4, 23.7) rounds to (17, 24), so the snap is −0.4 across and +0.3
+	// down: distinct, and neither of them zero, so a snap that goes missing
+	// cannot hide behind an axis that happened to need no rounding.
+	if x, y := box.Pos(); x != 17 || y != 24 {
+		t.Fatalf("container = (%v,%v), want (17,24) — the 1mm snap is gone", x, y)
+	}
+	for _, w := range want {
+		px, py := w.of.Pos()
+		x, y := w.item.Pos()
+		if !nearly(x-px, w.dx) || !nearly(y-py, w.dy) {
+			t.Errorf("%s sits at offset (%v,%v) inside its parent, want (%v,%v) — it did not take the container's grid snap and has slid inside it",
+				w.name, x-px, y-py, w.dx, w.dy)
+		}
+	}
+}
+
 // TestMoveCommandSnapRoundsIndependentTargets: the align and distribute paths
 // put several items on one command, each with its OWN computed target, and each
 // of those still has to land on the grid. A fix that made the whole command

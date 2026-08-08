@@ -1,6 +1,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -341,6 +344,105 @@ func TestCloseButtonAsksBeforeQuittingOverUnsavedEditors(t *testing.T) {
 			t.Errorf("prompted about %v; nothing had drifted from disk", *asked)
 		}
 	})
+}
+
+// TestMainInstallsTheQuitGuard: everything above installs the guard itself, so
+// the whole package stays green with the one line that installs it in the
+// running IDE deleted — and the red button is back to ending the process over
+// every unsaved buffer. main cannot be called from a test (it opens a window
+// and enters the event loop), so this reads the call out of the syntax tree,
+// the way problems_source_test.go reads the designer's own main.
+//
+// The arguments are checked, not just the name: handed a frame other than the
+// one the window is built on, the guard protects nothing; handed a nil canvas
+// it drops the design half of canQuit and quits over an unsaved .tdoc.
+func TestMainInstallsTheQuitGuard(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("cannot parse main.go: %v", err)
+	}
+	var mainFn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+			mainFn = fn
+		}
+	}
+	if mainFn == nil {
+		t.Fatal("main.go has no func main")
+	}
+
+	// The two things the guard has to be wired to, named as main names them.
+	frame := boundBy(mainFn, "gui.NewFrameWindow", 0)
+	if frame == "" {
+		t.Fatal("main no longer builds its frame with gui.NewFrameWindow; update this test to match")
+	}
+	canvas := boundBy(mainFn, "buildPanels", 1)
+	if canvas == "" {
+		t.Fatal("main no longer takes its design canvas from buildPanels; update this test to match")
+	}
+
+	var args []string
+	calls := 0
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.Ident); !ok || fn.Name != "installQuitGuard" {
+			return true
+		}
+		calls++
+		args = nil
+		for _, a := range call.Args {
+			if id, ok := a.(*ast.Ident); ok {
+				args = append(args, id.Name)
+			} else {
+				args = append(args, "?")
+			}
+		}
+		return false
+	})
+
+	if calls == 0 {
+		t.Fatal("main never calls installQuitGuard; the title bar's close button quits over every unsaved editor and the unsaved design")
+	}
+	if want := []string{frame, canvas}; !reflect.DeepEqual(args, want) {
+		t.Errorf("main calls installQuitGuard(%v), want (%v)", args, want)
+	}
+}
+
+// boundBy returns the name the i-th result of the call to fn is assigned to
+// inside body, or "" when body never calls it. fn is matched on its printed
+// form, so both "buildPanels" and "gui.NewFrameWindow" work.
+func boundBy(body ast.Node, fn string, i int) (name string) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || i >= len(as.Lhs) {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		var got string
+		switch f := call.Fun.(type) {
+		case *ast.Ident:
+			got = f.Name
+		case *ast.SelectorExpr:
+			if pkg, ok := f.X.(*ast.Ident); ok {
+				got = pkg.Name + "." + f.Sel.Name
+			}
+		}
+		if got != fn {
+			return true
+		}
+		if id, ok := as.Lhs[i].(*ast.Ident); ok {
+			name = id.Name
+		}
+		return false
+	})
+	return
 }
 
 // TestSecondCmdWDoesNotStackASecondPrompt: dispatchShortcut runs from every
