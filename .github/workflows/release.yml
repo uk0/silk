@@ -247,5 +247,8 @@ jobs:
             SHA256SUMS.txt
           fail_on_unmatched_files: true
           generate_release_notes: true
-          draft: false
+          # Keep the release private until the packaged Windows executable
+          # passes the real desktop smoke test and archive hashes are checked.
+          # Publish explicitly with: gh release edit <tag> --draft=false
+          draft: true
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}

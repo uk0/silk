@@ -28,10 +28,8 @@ const (
 	noExitCode = -1
 
 	// killGrace bounds how long a cancelled command may keep Wait
-	// blocked. It is handed to exec.Cmd.WaitDelay, so after the context
-	// is cancelled and the group has been killed, os/exec force-closes
-	// the pipes once the grace elapses — a stray descendant that
-	// inherited stdout cannot wedge the runner.
+	// blocked. Both Cmd.WaitDelay and our manual pipe-read cancellation
+	// use it: WaitDelay alone cannot unblock readers before Cmd.Wait.
 	killGrace = 2 * time.Second
 )
 
@@ -80,12 +78,37 @@ func runCommand(ctx context.Context, t Task, emit func(Event)) (int, error) {
 	wg.Add(2)
 	go streamLines(&wg, stdout, t.ID, EventStdout, emit)
 	go streamLines(&wg, stderr, t.ID, EventStderr, emit)
-	// Both pipes must be fully read before Wait: Wait closes the parent
-	// ends. On cancellation the group kill (or WaitDelay) closes them for
-	// us, so this cannot outlive the process.
+	// Read to EOF before Wait so normal output is never truncated. Cmd's
+	// WaitDelay does not close manually managed StdoutPipe/StderrPipe while
+	// we are still blocked here (its internal copy goroutines are absent).
+	// Bound these reads explicitly on cancellation, including an escaped
+	// descendant or an already-exited parent that taskkill cannot identify.
+	readsDone := make(chan struct{})
+	cancelDone := make(chan struct{})
+	go func() {
+		defer close(cancelDone)
+		select {
+		case <-readsDone:
+			return
+		case <-ctx.Done():
+		}
+		timer := time.NewTimer(killGrace)
+		defer timer.Stop()
+		select {
+		case <-readsDone:
+		case <-timer.C:
+			_ = stdout.Close()
+			_ = stderr.Close()
+		}
+	}()
 	wg.Wait()
+	close(readsDone)
+	<-cancelDone // no late pipe close after this invocation returns
 
 	waitErr := cmd.Wait()
+	if waitErr == nil && ctx.Err() != nil {
+		waitErr = ctx.Err()
+	}
 	return exitCode(waitErr), waitErr
 }
 
@@ -158,8 +181,7 @@ func exitCode(err error) int {
 // file compiling for every GOOS without per-platform variants, and it
 // reports what actually happened: true when the child will be a group
 // leader, false on platforms without the field (notably Windows), where
-// cancellation degrades to a best-effort kill of the direct child and
-// descendants may survive it.
+// cancellation uses the platform-specific descendant-tree fallback.
 func enableProcessGroup(cmd *exec.Cmd) bool {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -176,7 +198,8 @@ func enableProcessGroup(cmd *exec.Cmd) bool {
 // (group is what enableProcessGroup reported) the kill is addressed to
 // -pid, i.e. to every member of that group, so orphaned grandchildren die
 // with it. Otherwise — or if the group kill fails, e.g. because the
-// leader is already gone — it falls back to killing the direct child.
+// leader is already gone — it uses the platform-specific fallback (a
+// PID-scoped taskkill tree on Windows, direct child elsewhere).
 //
 // It returns os.ErrProcessDone when there is no process to kill, which is
 // the value exec.Cmd.Cancel uses to mean "the command already finished".
@@ -191,5 +214,5 @@ func killProcess(p *os.Process, group bool) error {
 			}
 		}
 	}
-	return p.Kill()
+	return killProcessFallback(p)
 }

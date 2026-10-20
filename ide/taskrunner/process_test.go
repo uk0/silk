@@ -237,6 +237,9 @@ func TestRunCommandCancelReturnsPromptly(t *testing.T) {
 // output pipe would wedge the next run). The shell backgrounds a sleep and
 // reports its PID on stdout; after cancellation that PID must be gone.
 func TestRunCommandCancelKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix process groups; Windows native tree cancellation is covered separately")
+	}
 	requireSh(t)
 
 	var s sink

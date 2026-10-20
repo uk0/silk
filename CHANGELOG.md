@@ -11,6 +11,10 @@
 - Reserve Win32 input, paint and timer turns during callback bursts while keeping
   ordinary idle and modal message pumps blocking; preserve quit/error handling.
 - Join in-flight GLFW native wakeups before backend termination.
+- Cancel Windows task-runner process trees by PID without killing unrelated
+  same-name tasks; bound inherited stdout/stderr reads after cancellation even
+  when a parent has already exited. Retire the pipe-cancellation worker before
+  returning, and do not report cancelled reads as success.
 - Stop sharing mutable OpenType faces between independent pure-Go renderers.
   Share parsed font tables instead; pool only temporary glyph callback buffers.
 - Fix pure-Go exact sRGB and premultiplication, path/current-point restoration,

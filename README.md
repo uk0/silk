@@ -119,16 +119,17 @@ shaping certification; see [Windows text QA](WINDOWS_TEXT_QA_20261020.md).
 
 | Environment | Latest local evidence | Not established by this check |
 | --- | --- | --- |
-| macOS arm64 / Go 1.26.5 | 2026-10-20 seven-package regression, targeted race/vet and build; earlier GL pixel readback, ten-package run/build and 2026-09-11 desktop QA remain dated evidence | New seven-group menu desktop QA on macOS, every secondary panel action, real gopls/dlv workflows, mixed-DPI multi-monitor behavior |
+| macOS arm64 / Go 1.26.5 | 2026-10-20 18-package race regression (4,885 pass / 9 skip), pure-Go rendering and strict real GL readback; later GUI/task-runner deltas retested; earlier desktop QA remains dated evidence | New seven-group menu desktop QA on macOS, every secondary panel action, real gopls/dlv workflows, mixed-DPI multi-monitor behavior |
 | Linux arm64 / Go 1.26.0 | Earlier Debian 12 build, four-package tests, vet and non-root Xvfb window-startup smoke; not rerun this iteration | Interactive desktop/IME/font coverage; a portable dependency-free binary |
-| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Thirteen-package native-build regression; earlier bounded GDI plateau, paint pairing, accelerator dispatch, icon lifetime, layout persistence/resize and F6 build; real Pinyin commit/cancel, Unicode save/readback, visible CJK/emoji/Ext-B glyphs, caret geometry and scaled pixel comparisons | Startup/input-latency certification, complex shaping and raw-glyph rich text fallback, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
+| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Thirteen-package native and race regression (4,638 pass / 39 skip), pure-Go rendering, race/normal GUI input/save/resize and background-output checks; later native task-tree cancellation regressions; earlier bounded GDI plateau, paint pairing, accelerator dispatch, icon lifetime, layout persistence/resize and F6 build; real Pinyin commit/cancel, Unicode save/readback, visible CJK/emoji/Ext-B glyphs, caret geometry and scaled pixel comparisons | Startup/input-latency certification, complex shaping and raw-glyph rich text fallback, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
 
 Run/Build currently use **saved files on disk**; save edits before running.
 IDE symbol actions require `gopls` and report when it is unavailable. Some panels
 still have incomplete localization/font fallback. Passing tests or installing
 external tools alone is not a full desktop compatibility claim.
-The optional `silk_pure_go` paint backend still has baseline failures in dash,
-icon color/path, and allocation tests; native Cairo results do not certify it.
+The earlier `silk_pure_go` dash, icon color/path and allocation failures are
+fixed and its 192-case rendering run passes on macOS and Windows. This does not
+certify complete native Cairo parity, complex shaping or every desktop path.
 
 Detailed, dated verification records:
 [workbench](WORKBENCH_QA.md) · [menus and About](MENU_QA.md) ·

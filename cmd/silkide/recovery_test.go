@@ -207,7 +207,11 @@ func TestReloadProtectsDirtyRecoveredAndEditedDesigns(t *testing.T) {
 }
 
 func TestReloadCleanCurrentDesignPreservesIdentityAndResetsHistory(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "current.silkui")
+	dir := t.TempDir()
+	// Windows runners can check out on D: while TempDir lives on C:.
+	// A relative spelling only exists on the same volume.
+	t.Chdir(dir)
+	path := filepath.Join(dir, "current.silkui")
 	writeRecoveryDesign(t, path, "Saved", "Before")
 	scene := ged.NewGedScene()
 	if err := openDesignDocument(scene, path, ""); err != nil {

@@ -7,7 +7,7 @@
 
 Windows 原生 Cairo 文本 API 新增实际 glyph coverage 驱动的字体回退，测量和绘制使用相同字体分段，保留 ASCII 等宽、字号/样式、CTM 和图标私用区语义。真实编辑器已显示 `你好 🚀𠀀`，验证输入保存、取消不落盘与后续候选定位；100%/150%/200% 变换与原生单字体参照逐像素一致，不冒充跨显示器 DPI 验收。
 
-原生 Open/Save 文件对话框的 OS 等待使用嵌套、异常安全的 watchdog scope；实机 Open 保持 8 秒不再误报主循环卡死。未据此宣称启动时间已优化或系统对话框内部阻塞可检测。`TextToGlyphs/DrawGlyphs` 的单字体契约保持不变，复杂脚本/低级富文本回退仍是缺口。可选 `silk_pure_go` paint 测试仍有与隔离基线相同的失败，不算通过。完整边界、实机截图和失败记录见 [Windows 文本 QA](WINDOWS_TEXT_QA_20261020.md)。
+原生 Open/Save 文件对话框的 OS 等待使用嵌套、异常安全的 watchdog scope；实机 Open 保持 8 秒不再误报主循环卡死。未据此宣称启动时间已优化或系统对话框内部阻塞可检测。`TextToGlyphs/DrawGlyphs` 的单字体契约保持不变，复杂脚本/低级富文本回退仍是缺口。字体阶段曾记录的可选 `silk_pure_go` paint 失败已在本文末尾的 race/render 后续修复；历史失败保留在 QA 中。完整边界、实机截图和失败记录见 [Windows 文本 QA](WINDOWS_TEXT_QA_20261020.md)。
 
 ## 2026-10-20 输入链路后续
 
@@ -166,3 +166,11 @@ git diff --check
 - The previously recorded pure-Go paint failures are covered by this follow-up;
   this does not certify full native Cairo parity or every pure-Go desktop path.
   See [race/render QA](RACE_RENDER_QA_20261020.md).
+
+- Windows `ide/taskrunner` cancellation now uses a bounded, PID-scoped native
+  tree stop, not a Unix PID/signal probe. Cancellation also closes inherited
+  output readers after a grace period and joins the closer before returning.
+  Native tests retain real process handles and verify descendant termination,
+  an unrelated same-name sibling surviving, and bounded reads after parent exit.
+  This is not Job Object isolation: already-detached descendants whose parent
+  has exited cannot be guaranteed to terminate; their pipes cannot hang cancel.
