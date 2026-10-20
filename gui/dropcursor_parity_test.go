@@ -33,15 +33,5 @@ func TestDropCursorsSurviveMissingResources(t *testing.T) {
 // generateDropCursorsBody returns the text of GenerateDropCursors in src.
 func generateDropCursorsBody(t *testing.T, file, src string) string {
 	t.Helper()
-	const header = "func GenerateDropCursors("
-	start := strings.Index(src, header)
-	if start < 0 {
-		t.Fatalf("%s has no GenerateDropCursors", file)
-	}
-	rest := src[start:]
-	end := strings.Index(rest, "\n}\n")
-	if end < 0 {
-		t.Fatalf("%s: GenerateDropCursors is not terminated", file)
-	}
-	return rest[:end]
+	return funcBodyIn(t, src, "func GenerateDropCursors(")
 }

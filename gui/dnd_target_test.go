@@ -340,15 +340,5 @@ func readDndSource(t *testing.T, file string) string {
 // dndFuncBody returns the text of the function opened by header in file.
 func dndFuncBody(t *testing.T, file, header string) string {
 	t.Helper()
-	src := readDndSource(t, file)
-	start := strings.Index(src, header)
-	if start < 0 {
-		t.Fatalf("%s has no %s", file, header)
-	}
-	rest := src[start:]
-	end := strings.Index(rest, "\n}\n")
-	if end < 0 {
-		t.Fatalf("%s: %s is not terminated", file, header)
-	}
-	return rest[:end]
+	return funcBodyIn(t, readDndSource(t, file), header)
 }

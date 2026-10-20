@@ -23,13 +23,15 @@ var probeWindow *glfw.Window
 func TestMain(m *testing.M) {
 	if glfwReady {
 		glfw.WindowHint(glfw.Visible, glfw.False)
+		// Close-veto semantics need an NSWindow, not a GPU pixel format.
+		glfw.WindowHint(glfw.ClientAPI, glfw.NoAPI)
 		gw, err := glfw.CreateWindow(1, 1, "silk test", nil, nil)
 		glfw.DefaultWindowHints() // the hints are global; leave them as found
 		if err == nil {
 			probeWindow = gw
 		}
 	}
-	if os.Getenv("SILK_TEST_NATIVE_RENDER") == "1" {
+	if mode := os.Getenv("SILK_TEST_NATIVE_RENDER"); mode == "1" || mode == "auto" {
 		// The opt-in renderer probe also needs Cocoa's main thread. Assertions
 		// are reported by TestGLFWNativeRenderTransfers in the usual test run.
 		nativeRenderErr = runNativeRenderProbe()

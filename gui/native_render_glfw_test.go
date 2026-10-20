@@ -4,12 +4,14 @@ package gui
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 	"unsafe"
 
 	"github.com/go-gl/gl/v2.1/gl"
+	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
 )
@@ -42,11 +44,21 @@ func (w *nativeRenderProbeWidget) Draw(p paint.Painter) {
 // No screenshots or mock GL: read the uploaded texture back from the driver
 // and compare every byte with the Cairo backbuffer after successive paints.
 func runNativeRenderProbe() error {
-	if probeWindow == nil {
+	if !glfwReady {
 		return fmt.Errorf("native render probe needs a GLFW desktop")
 	}
-	gw := probeWindow
-	gw.SetSize(80, 60)
+	glfw.WindowHint(glfw.Visible, glfw.False)
+	defer glfw.DefaultWindowHints()
+	gw, err := createNativeRenderProbeWindow(func() (*glfw.Window, error) {
+		return glfw.CreateWindow(80, 60, "silk native render test", nil, nil)
+	})
+	if err != nil {
+		return err
+	}
+	if gw == nil {
+		return fmt.Errorf("native render window was not created")
+	}
+	defer gw.Destroy()
 	gw.MakeContextCurrent()
 	if err := gl.Init(); err != nil {
 		return err
@@ -162,13 +174,58 @@ func runNativeRenderProbe() error {
 }
 
 func TestGLFWNativeRenderTransfers(t *testing.T) {
-	if os.Getenv("SILK_TEST_NATIVE_RENDER") != "1" {
+	mode := os.Getenv("SILK_TEST_NATIVE_RENDER")
+	if mode != "1" && mode != "auto" {
 		t.Skip("opt-in real GL context: SILK_TEST_NATIVE_RENDER=1")
 	}
 	if nativeRenderErr != nil {
+		// Hosted macOS VMs can expose Cocoa but no NSGL pixel formats.
+		// Only auto mode may skip these specific capability failures. Strict
+		// mode, readback mismatches and all other errors always fail.
+		if mode == "auto" && nativeRenderCapabilityUnavailable(nativeRenderErr) {
+			t.Skipf("runner lacks native GL capability: %v", nativeRenderErr)
+		}
 		t.Fatal(nativeRenderErr)
 	}
 	for _, evidence := range nativeRenderEvidence {
 		t.Log(evidence)
 	}
+}
+
+// go-gl/glfw currently panics on FormatUnavailable instead of returning it.
+// Keep recovery local to probe creation and rethrow every unrelated panic.
+func createNativeRenderProbeWindow(create func() (*glfw.Window, error)) (window *glfw.Window, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(error); ok && nativeRenderCapabilityUnavailable(e) {
+				err = e
+				return
+			}
+			panic(p)
+		}
+	}()
+	return create()
+}
+
+func nativeRenderCapabilityUnavailable(err error) bool {
+	var e *glfw.Error
+	return errors.As(err, &e) && (e.Code == glfw.FormatUnavailable || e.Code == glfw.APIUnavailable || e.Code == glfw.VersionUnavailable)
+}
+
+func TestNativeRenderProbeDoesNotHideUnexpectedFailures(t *testing.T) {
+	unsupported := &glfw.Error{Code: glfw.FormatUnavailable, Desc: "no test pixel format"}
+	_, err := createNativeRenderProbeWindow(func() (*glfw.Window, error) { panic(unsupported) })
+	if err != unsupported || !nativeRenderCapabilityUnavailable(err) {
+		t.Fatalf("capability panic was not preserved: %v", err)
+	}
+	mismatch := errors.New("stale texture row")
+	if nativeRenderCapabilityUnavailable(mismatch) {
+		t.Fatal("pixel mismatch must never be a capability skip")
+	}
+	defer func() {
+		if p := recover(); p != mismatch {
+			t.Errorf("unexpected panic was hidden: %v", p)
+		}
+	}()
+	_, _ = createNativeRenderProbeWindow(func() (*glfw.Window, error) { panic(mismatch) })
 }

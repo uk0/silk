@@ -128,7 +128,9 @@ jobs:
       - name: Verify native GL texture uploads
         if: runner.os != 'Windows'
         env:
-          SILK_TEST_NATIVE_RENDER: '1'
+          # Linux Mesa and local macOS are strict. Hosted macOS may lack NSGL;
+          # auto skips only explicit GL capability errors, never pixel mismatches.
+          SILK_TEST_NATIVE_RENDER: ${{ runner.os == 'Linux' && '1' || 'auto' }}
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -count=1 -run '^TestGLFWNativeRenderTransfers$' -v ./gui/
 
       - name: Test (SCADA backend)

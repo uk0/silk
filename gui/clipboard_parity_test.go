@@ -1,6 +1,9 @@
 package gui
 
 import (
+	"go/ast"
+	"go/parser"
+	gotoken "go/token"
 	"os"
 	"strings"
 	"testing"
@@ -158,14 +161,38 @@ func TestWin32ReadsAnEmptyTextPayloadAsAbsent(t *testing.T) {
 // funcBodyIn returns the body of the named function in src.
 func funcBodyIn(t *testing.T, src, header string) string {
 	t.Helper()
+	// Git may check out CRLF on Windows. Parse actual Go boundaries instead
+	// of looking for an LF-only closing brace (also wrong for raw strings).
+	src = strings.ReplaceAll(src, "\r\n", "\n")
 	start := strings.Index(src, header)
 	if start < 0 {
 		t.Fatalf("source does not contain %q", header)
 	}
-	rest := src[start:]
-	end := strings.Index(rest, "\n}\n")
-	if end < 0 {
-		t.Fatalf("%q is not terminated", header)
+	set := gotoken.NewFileSet()
+	file, err := parser.ParseFile(set, "source.go", src, 0)
+	if err != nil {
+		t.Fatalf("cannot parse source: %v", err)
 	}
-	return rest[:end]
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Body != nil && set.Position(fn.Pos()).Offset == start {
+			return src[start:set.Position(fn.Body.Rbrace).Offset]
+		}
+	}
+	t.Fatalf("%q is not a function declaration", header)
+	return ""
+}
+
+func TestSourceFunctionBodyHandlesCheckoutLineEndings(t *testing.T) {
+	const source = "package fixture\nfunc GenerateDropCursors() {\n_ = `\n}\n`\nlastCall()\n}"
+	for _, newline := range []string{"\n", "\r\n"} {
+		src := strings.ReplaceAll(source, "\n", newline)
+		got := funcBodyIn(t, src, "func GenerateDropCursors(")
+		if !strings.Contains(got, "lastCall()") || strings.Contains(got, "\r") {
+			t.Fatalf("line ending %q truncated or corrupted function: %q", newline, got)
+		}
+		if body := generateDropCursorsBody(t, "fixture.go", src); body != got {
+			t.Fatalf("cursor source helper disagrees: %q", body)
+		}
+	}
 }
