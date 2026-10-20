@@ -1,11 +1,12 @@
 package gui
 
 import (
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/paint"
 	"math"
 	"os"
 	"runtime"
+
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 // ThemeMode represents the current color scheme.
@@ -577,6 +578,15 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.SetBrush1(t.ButtonHoverBGColor)
 			g.FillPreserve()
 			g.SetPen1(t.ButtonHoverBorderColor, 1)
+			g.Stroke()
+		}
+
+		if btn.IsEnabled() && !btn.IsSubPopupVisible() && !btn.IsChecked() && !btn.IsPushed() && !btn.IsHover() {
+			face := btn.normalFace(t.FormLightColor, t.FormColor, h)
+			roundedRect(g, 0.5, 0.5, math.Max(0, w-1), math.Max(0, h-1), radius)
+			g.SetBrush(face)
+			g.FillPreserve()
+			g.SetPen1(t.BorderColor, 1)
 			g.Stroke()
 		}
 

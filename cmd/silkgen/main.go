@@ -30,10 +30,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/decl"
+	"github.com/uk0/silk/macro"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -42,12 +44,13 @@ func run(args []string) int {
 	defer core.Close()
 	flags := flag.NewFlagSet("silkgen", flag.ContinueOnError)
 	var (
+		macroMode   = flags.Bool("macro", false, "expand .silkgo macros into standard Go (no code execution)")
 		outFile     = flags.String("o", "", "write output to file (default stdout)")
 		packageName = flags.String("package", "ui", "package name in the generated file")
 		funcName    = flags.String("func", "", "function name (default Build<Stem> derived from input filename)")
 	)
 	flags.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: silkgen [-o out.go] [-package P] [-func F] input.silkui")
+		fmt.Fprintln(os.Stderr, "usage: silkgen [-o out.go] [-package P] [-func F] input.silkui\n       silkgen -macro [-o generated.go] input.silkgo")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -61,6 +64,32 @@ func run(args []string) int {
 		return 2
 	}
 	in := flags.Arg(0)
+
+	if *macroMode {
+		f, err := os.Open(in)
+		if err != nil {
+			return fail("read %s: %v", in, err)
+		}
+		src, err := io.ReadAll(io.LimitReader(f, macro.MaxSourceBytes+1))
+		f.Close()
+		if err != nil {
+			return fail("read %s: %v", in, err)
+		}
+		generated, err := macro.Expand(in, src)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *outFile == "" {
+			if _, err := os.Stdout.Write(generated); err != nil {
+				return fail("write: %v", err)
+			}
+			return 0
+		}
+		if err := macro.WriteFile(*outFile, generated); err != nil {
+			return fail("%v", err)
+		}
+		return 0
+	}
 
 	// Load the .silkui via core's TDoc parser, then convert to AST.
 	doc, err := core.LoadTDocFile(in)

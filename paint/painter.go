@@ -1,13 +1,14 @@
 package paint
 
 import (
-	"github.com/uk0/silk/cairo"
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/geom"
 	"math"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/uk0/silk/cairo"
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 )
 
 // Atomic because the decrement happens in a finalizer, which the runtime runs
@@ -376,6 +377,11 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 	if ico == nil || ico.IsAir() || fSize <= 0 || math.IsNaN(fSize) || math.IsInf(fSize, 0) {
 		return
 	}
+	if x, ok := ico.(*icon); ok {
+		if override := satinOverride(x.name); override != nil {
+			ico = override
+		}
+	}
 	if x, ok := ico.(*icon); ok && x.draw != nil {
 		drawProceduralIcon(this.cairo, x.draw, fSize, grayed)
 		return
@@ -388,9 +394,20 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 	}
 	var img *cairoSurface
 	var pat *cairo.Pattern
+	var retainedSub *subIcon
 	switch x := ico.(type) {
+	case *atlasIcon:
+		sub := x.getSub(size)
+		retainedSub = sub
+		img = sub.img
+		if sub.pat == nil {
+			sub.pat = cairo.NewPatternForSurface(img.Surface)
+			runtime.SetFinalizer(sub, func(s *subIcon) { s.pat.Destroy() })
+		}
+		pat = sub.pat
 	case *icon:
 		sub := x.getNearest(size)
+		retainedSub = sub
 		if sub == nil {
 			return
 		}
@@ -417,10 +434,15 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 	this.cairo.Save()
 	this.cairo.SetSource(pat)
 	if grayed {
-		this.cairo.SetOperator(cairo.OPERATOR_HSL_LUMINOSITY)
+		// Alpha-mask with a neutral theme color; HSL on a transparent
+		// destination leaked the original saturated bitmap colors.
+		this.cairo.SetSourceRGBA(currentIconPalette.Disabled.NRGBAf())
+		this.cairo.Mask(pat)
+	} else {
+		this.cairo.Paint()
 	}
-	this.cairo.Paint()
 	this.cairo.Restore()
+	runtime.KeepAlive(retainedSub) // cache eviction must not finalize a pattern still in use
 }
 
 func (this *cairoPainter) DrawText(text string) {

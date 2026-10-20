@@ -101,10 +101,10 @@ jobs:
 
       # ─── Test ───
       - name: Run tests
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./macro/
 
       - name: Race regression (release gate)
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./scada/ ./macro/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
 
       - name: Win32 SDK race regression
         if: runner.os == 'Windows'

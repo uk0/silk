@@ -106,7 +106,7 @@ jobs:
 
       - name: Test SDK without a display (Linux)
         if: runner.os == 'Linux'
-        run: env -u DISPLAY -u WAYLAND_DISPLAY go test -short -count=1 ./core/ ./decl/ ./prop/ ./cmd/silkgen/ ./internal/silkgen/
+        run: env -u DISPLAY -u WAYLAND_DISPLAY go test -short -count=1 ./core/ ./decl/ ./prop/ ./cmd/silkgen/ ./internal/silkgen/ ./macro/
 
       # Split into groups: building every cgo test binary in one invocation can
       # exhaust the runner (cairo + sqlite amalgamation compile at once).
@@ -114,7 +114,7 @@ jobs:
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./printing/ ./core/ ./geom/ ./cairo/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./internal/processutil/
 
       - name: Race regression (UI scheduling and asynchronous work)
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./scada/ ./macro/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
 
       - name: Win32 SDK race regression
         if: runner.os == 'Windows'
@@ -137,7 +137,7 @@ jobs:
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/
 
       - name: Test (IDE engines)
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./macro/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
 
       - name: Build legacy entry points
         if: runner.os != 'Windows'

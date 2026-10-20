@@ -1,6 +1,9 @@
 package gui
 
 import (
+	"math"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/uk0/silk/core"
@@ -49,7 +52,7 @@ func BindTag(t *core.Tag, setter func(interface{})) func() {
 	return BindTagValue(WrapTag(t), setter)
 }
 
-// BindTagAnimated subscribes to t and, on every new sample, EASES the displayed
+// BindTagAnimated subscribes to t and EASES the displayed
 // float from its current value to the tag's new Float() over dur, calling
 // setFloat on each animation tick. This is the tag-changed -> animate-property
 // glue: a Tank level or Gauge needle sweeps smoothly to the new setpoint
@@ -60,32 +63,57 @@ func BindTag(t *core.Tag, setter func(interface{})) func() {
 // Threading. The tag's subscriber fires on whatever goroutine calls
 // Publish / SetValue — typically a background driver-poll goroutine, NOT the UI
 // thread. Animations touch widget state, which is main-thread-only, so the
-// subscriber marshals the animation setup onto the UI thread via gui.Post; the
+// subscriber coalesces pending samples through BindTagUI (at most one queued
+// update per binding) and marshals animation setup onto the UI thread; the
 // per-tick setFloat then runs on the UI thread too, because AnimationTick is
 // driven from the event loop. The eased-from value and the live *Animation are
 // therefore only ever read/written inside the posted closure and the OnUpdate
 // tick — both on the UI thread — so they need no lock.
 //
-// The returned func unsubscribes and is idempotent.
+// The returned func unsubscribes, invalidates queued updates, suppresses future
+// animation ticks and schedules animation teardown on the UI thread. It is
+// idempotent; a setter already executing may finish. This visual binding is not
+// a lossless event/alarm stream.
 func BindTagAnimated(t *core.Tag, setFloat func(float64), dur time.Duration) func() {
-	// current: the last value handed to setFloat, i.e. what the widget is
-	// showing now. Each new sample eases from here. anim: the in-flight ease,
-	// stopped and replaced when a newer sample arrives. Both are UI-thread-only
-	// (see the Threading note above).
 	var current float64
-	var anim *Animation
-	return t.Subscribe(func(v core.Value) {
+	var anim *Animation // UI-thread-only
+	var stopped atomic.Bool
+	cancel := BindTagUI(t, func(v core.Value) {
+		if stopped.Load() {
+			return
+		}
 		target := v.Float()
-		Post(func() {
-			if anim != nil {
-				anim.Stop() // cancel the in-flight ease; re-target from current
+		if math.IsNaN(target) || math.IsInf(target, 0) {
+			return
+		}
+		if anim != nil {
+			anim.Stop()
+			anim = nil
+		}
+		if dur <= 0 || target == current {
+			current = target
+			setFloat(target)
+			return
+		}
+		anim = NewAnimation(current, target, dur).OnUpdate(func(value float64) {
+			if !stopped.Load() {
+				current = value
+				setFloat(value)
 			}
-			anim = NewAnimation(current, target, dur).
-				OnUpdate(func(val float64) {
-					current = val
-					setFloat(val)
-				})
-			anim.Start()
 		})
+		anim.Start()
 	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			stopped.Store(true)
+			cancel()
+			Post(func() {
+				if anim != nil {
+					anim.Stop()
+					anim = nil
+				}
+			})
+		})
+	}
 }

@@ -19,6 +19,36 @@ signed/notarized standalone apps.
 
 ---
 
+## Current development iteration: satin sprites, HMI and macros
+
+This work is **not part of the published v0.1.5 package**.
+
+- Image-model-generated [16-icon satin atlas](paint/assets/README.md), embedded
+  unchanged with calibrated crops, bounded device-resolution caches and neutral
+  disabled rendering. Common IDE actions use it by default; set
+  `SILK_ICON_STYLE=vector` before launch to retain the vector action theme.
+  Structural glyphs stay vector. Idle buttons gain a cached, subtle material
+  gradient and border rather than a per-frame image effect.
+- Designer **SpriteView** and **ProcessValue** components: Tag binding,
+  properties, drag/drop, persistence, preview and Go generation. Gauge also
+  exposes `TagName`. Try the [hardware-free HMI example](examples/satin-dashboard).
+- Visual Tag updates coalesce bursts to the latest UI value; unbinding retires
+  queued updates and running animation. This is not a lossless event pipeline.
+- Experimental [Silk macros](macro/README.md): `.silkgo` → ordinary Go via
+  `silkgen -macro` or **Tools → Expand Silk Macros**. Explicit generation,
+  bounded expansion and overwrite guards; no Go compiler fork or runtime code
+  execution. See the [runnable accessor example](examples/silk-macros).
+
+See [iteration QA and remaining limits](SPRITE_MACRO_QA_20261020.md).
+
+![Actual Windows satin HMI dashboard: active valve, pressure card, theme-aware gauge and labeled buttons](screenshots/silk-satin-dashboard-windows.png)
+
+*Native Windows 10 window, local simulated Tags, 2026-10-20 PDT. Button-driven
+42.5/95 pressure and dark/light transitions were exercised; this is not a mockup
+or a hardware/PLC certification. [Light-theme alarm state](screenshots/silk-satin-dashboard-windows-light.png).*
+
+---
+
 ## Table of Contents
 
 - [Integrated Go Designer / IDE](#integrated-go-designer--ide) — screenshot and workflow
@@ -66,7 +96,8 @@ make test-ide    # IDE, designer, widgets and tool-engine regression tests
   Declarative output describes structure; wire event handlers with `BuildWithIndex`
   in host code, or use the imperative exporter for handler bodies.
 - Live preview: `Cmd/Ctrl+Shift+R`, or the eye button; export is a separate action.
-- Built-in vector icons require no external directory. They use exact sRGB
+- Built-in satin action sprites and fallback vector icons require no external
+  directory. Vector glyphs use exact sRGB
   theme/semantic palettes and rasterize at the device transform for Retina and
   fractional scaling; disabled icons have their own neutral palette.
 - Build / Run infer the nearest `go.mod` for forms stored in subdirectories;

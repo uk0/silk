@@ -2,14 +2,15 @@ package ged
 
 import (
 	"fmt"
+	"math"
+	"strings"
+	"time"
+
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
-	"math"
-	"strings"
-	"time"
 )
 
 // clipboard holds one serialized subtree per root of the most recent copy, in
@@ -439,6 +440,10 @@ func defaultSizeForWidget(factoryName string) (w, h float64) {
 		shortName = factoryName[idx+1:]
 	}
 	switch strings.ToLower(shortName) {
+	case "spriteview":
+		return 28, 28
+	case "processvalue":
+		return 60, 30
 	case "ganttchart":
 		return 180, 95
 	case "printbutton":

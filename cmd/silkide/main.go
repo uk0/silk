@@ -33,6 +33,7 @@ import (
 func main() {
 	configureIDEProcessToolPath()
 	paint.SetPreferVectorIcons(true)
+	paint.SetPreferSatinIcons(os.Getenv("SILK_ICON_STYLE") != "vector")
 	// Compatibility note: ged widgets (WidgetList / GedView /
 	// ObjectInspector) currently have rendering issues under the
 	// silk_no_cairo build tag — text is left-clipped, the design

@@ -1,0 +1,10 @@
+Use case: stylized-concept
+Asset type: production transparent PNG sprite atlas for SilkIDE, a professional Go desktop IDE and industrial HMI designer.
+Primary request: create ONE square 4 by 4 icon sprite sheet, exactly 16 different isolated icons, evenly aligned to a strict invisible grid. Each cell occupies exactly one quarter of canvas width and height; each icon centered within its cell with at least 20 percent transparent padding. No visible grid, no text, no labels, no letters, no numbers, no background, no mockup, no tile backplates.
+Icon order left-to-right, top-to-bottom:
+Row 1: new document with small plus; open golden folder; blue save floppy disk; curved undo arrow pointing left.
+Row 2: curved redo arrow pointing right; green play triangle; gold build wrench; violet debugger bug.
+Row 3: coral red stop square; cyan preview eye; silver settings gear with cyan center; desktop printer with paper.
+Row 4: cyan Gantt timeline with three staggered bars; round pressure gauge with needle; industrial teal pipe valve with orange handwheel; teal industrial storage tank with a visible liquid-level window.
+Style: cohesive premium satin enamel and finely machined metal, restrained shallow 3D bevels, straight-on orthographic view, clear chunky silhouettes, elegant compact detail. Crisp well-defined antialiased edges; no fuzzy glow, no cinematic blur, no perspective distortion, no thin hairlines, no grain or noisy textures. Should remain recognizable at 24-32 pixels. Color palette suited to both charcoal and light gray IDE backgrounds: cyan #35BFF0, blue #2588E8, slate silver, green #36C984, warm amber #F3B747 and restrained coral red. Balanced bright rim highlights and modest internal shadows; no broad cast shadows outside shapes.
+Constraints: actual transparent alpha background, not a checkerboard; only the 16 specified objects; consistent scale, lighting from upper left, visual weight and ample equal padding. Render at high resolution for an embedded multi-DPI atlas.

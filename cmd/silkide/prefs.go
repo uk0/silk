@@ -269,7 +269,13 @@ func installLocale() {
 // file) so the binary always has them — no separate asset to ship.
 func registerSilkideTranslations() {
 	i18n.Default.AddMany("zh-CN", map[string]string{
-		"File": "文件", "View": "视图", "Tools": "工具", "Help": "帮助",
+		"Expand Silk Macros":                       "展开 Silk 宏",
+		"Open a saved .silkgo document first":      "请先打开已保存的 .silkgo 宏文件",
+		"Save the macro source before expanding":   "请先保存宏源文件再展开",
+		"Macro source changed; expand again":       "宏源文件已变化，请重新展开",
+		"Macro expansion failed; output unchanged": "宏展开失败，输出文件未修改",
+		"Macro expanded to standard Go":            "宏已展开为标准 Go 代码",
+		"File":                                     "文件", "View": "视图", "Tools": "工具", "Help": "帮助",
 		"Widgets": "控件", "Filter widgets...": "搜索控件...",
 		"Search by widget or factory name": "按控件名称或工厂名搜索，拖入画布添加",
 		"Object Inspector":                 "对象检查器", "Build Output": "构建输出",

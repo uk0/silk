@@ -1,0 +1,13 @@
+package main
+
+//silk:macro Accessor(Owner, Field, Type)
+func (s *${Owner}) Set${Field}(value ${Type}) { s.${Field} = value }
+//silk:end
+
+type Sensor struct {
+ Pressure float64
+ Enabled bool
+}
+
+//silk:expand Accessor(Sensor, Pressure, float64)
+//silk:expand Accessor(Sensor, Enabled, bool)

@@ -1,10 +1,11 @@
 package main
 
 import (
+	"reflect"
+
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
-	"reflect"
 )
 
 func nilWidget(view gui.IWidget) bool {
@@ -130,6 +131,7 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("build.debug", "Debug", "debug", "Shift+F5", true, func() { runProjectInDebugger(canvas) })
 		add("build.stop", "Stop", "stop", "", true, stopProjectExecution)
 	case "Tools":
+		add("tools.expandMacro", "Expand Silk Macros", "build", "", canExpandMacro(tabs, canvas), func() { expandActiveMacro(tabs, canvas) })
 		add("project.settings", "Project Settings", "settings", "", true, func() { showProjectSettingsDialog(canvas) })
 		add("tools.packages", "Refresh Packages", "packages", "", true, func() { refreshPackages(canvas) })
 		add("tools.a11y", "Dump A11y Tree", "tree-view", key+"+Shift+A", true, dumpA11yTree)

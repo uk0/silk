@@ -242,8 +242,11 @@ func bindIndustrial(s *Services, w gui.IWidget, opt ScreenOptions) func() {
 // subscriber fires on a poll goroutine, so the setter is marshalled onto the UI
 // thread with gui.Post before it touches widget state.
 func bindBool(tag *core.Tag, set func(bool)) func() {
-	return gui.BindTag(tag, func(v interface{}) {
-		b := gui.TagBool(v)
-		gui.Post(func() { set(b) })
-	})
+	return gui.BindTagUI(tag, boolSampleSetter(set))
+}
+
+// Preserve the bridge's numeric/custom-value coercions (notably float32 and
+// int32); core.Value.Bool intentionally accepts a narrower set of raw types.
+func boolSampleSetter(set func(bool)) func(core.Value) {
+	return func(v core.Value) { set(gui.TagBool(v.Raw)) }
 }

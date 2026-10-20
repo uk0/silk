@@ -104,6 +104,12 @@ func parse(fn string) (name string, size int, ok bool) {
 // 此函数将缓存已加载的图标, 以优化加载效率
 // 更换图标后需要重启才能生效
 func LoadIcon(name string) Icon {
+	if strings.HasPrefix(name, "satin:") {
+		if i, err := SatinIcon(strings.TrimPrefix(name, "satin:")); err == nil {
+			return i
+		}
+		return LoadIcon("image-missing")
+	}
 	if iconSrcCache == nil {
 		preloadPath()
 		iconCache = make(map[string]*cachedIcon)
@@ -275,6 +281,9 @@ func (this *icon) String() string {
 }
 
 func (this *icon) Pixmap(size int) Pixmap {
+	if override := satinOverride(this.name); override != nil {
+		return override.Pixmap(size)
+	}
 	if size <= 0 {
 		return nil
 	}

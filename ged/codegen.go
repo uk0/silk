@@ -1257,7 +1257,7 @@ func emitTagBinding(buf *strings.Builder, factoryName, fieldName, tagName string
 		// so normalise the common 0..100 percent range.
 		fmt.Fprintf(buf, "\tgui.BindTagAnimated(%s, func(v float64) { ui.%s.SetLevel(v / 100) }, 300*time.Millisecond)\n", tag, fieldName)
 		return true
-	case "gui.Gauge", "gui.DigitalDisplay", "gui.Thermometer", "gui.ValueBar":
+	case "gui.Gauge", "gui.DigitalDisplay", "gui.Thermometer", "gui.ValueBar", "gui.ProcessValue":
 		fmt.Fprintf(buf, "\tgui.BindTagAnimated(%s, ui.%s.SetValue, 300*time.Millisecond)\n", tag, fieldName)
 		return true
 	case "gui.Indicator":
@@ -1266,7 +1266,7 @@ func emitTagBinding(buf *strings.Builder, factoryName, fieldName, tagName string
 	case "gui.Valve":
 		fmt.Fprintf(buf, "\tgui.BindTag(%s, func(v interface{}) { gui.Post(func() { ui.%s.SetState(gui.TagBool(v)) }) })\n", tag, fieldName)
 		return true
-	case "gui.Pipe":
+	case "gui.Pipe", "gui.SpriteView":
 		fmt.Fprintf(buf, "\tgui.BindTag(%s, func(v interface{}) { gui.Post(func() { ui.%s.SetActive(gui.TagBool(v)) }) })\n", tag, fieldName)
 		return true
 	case "gui.Pump":

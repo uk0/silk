@@ -63,6 +63,7 @@ func (r *focusRingRecorder) MoveTo(x, y float64)                        {}
 func (r *focusRingRecorder) Rectangle(x, y, w, h float64)               {}
 func (r *focusRingRecorder) Translate(tx, ty float64)                   {}
 func (r *focusRingRecorder) SetBrush1(c paint.Color)                    { r.brush = c }
+func (r *focusRingRecorder) SetBrush(paint.Brush)                       {}
 func (r *focusRingRecorder) Fill()                                      {}
 func (r *focusRingRecorder) FillPreserve()                              {}
 func (r *focusRingRecorder) SetPen1(c paint.Color, w float64)           { r.pen, r.penW = c, w }

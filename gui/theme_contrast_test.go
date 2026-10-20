@@ -40,6 +40,7 @@ func contrastRatio(a, b paint.Color) float64 {
 // Only the methods the theme draw paths actually reach are overridden; the
 // embedded nopPainter (spinner_test.go) covers the rest.
 type themeFillRecorder struct {
+	currentStops, fillStops []paint.Color
 	paint.Painter
 	brush paint.Color
 	fill  paint.Color
@@ -57,13 +58,32 @@ func (r *themeFillRecorder) MoveTo(x, y float64)                        {}
 func (r *themeFillRecorder) Rectangle(x, y, w, h float64)               {}
 func (r *themeFillRecorder) Translate(tx, ty float64)                   {}
 func (r *themeFillRecorder) Stroke()                                    {}
-func (r *themeFillRecorder) SetBrush1(c paint.Color)                    { r.brush = c }
-func (r *themeFillRecorder) Fill()                                      { r.fill = r.brush; r.fills++ }
-func (r *themeFillRecorder) FillPreserve()                              { r.fill = r.brush; r.fills++ }
-func (r *themeFillRecorder) SetPen1(c paint.Color, w float64)           { r.pen, r.penW = c, w }
-func (r *themeFillRecorder) SetFont(f paint.Font)                       { r.font = f }
-func (r *themeFillRecorder) Font() paint.Font                           { return r.font }
-func (r *themeFillRecorder) DrawText(text string)                       { r.ink = r.brush; r.texts++ }
+func (r *themeFillRecorder) SetBrush1(c paint.Color)                    { r.brush = c; r.currentStops = nil }
+func (r *themeFillRecorder) SetBrush(b paint.Brush) {
+	gradient, ok := b.(*paint.LinearGradient)
+	if !ok {
+		panic("unexpected non-linear brush in theme test")
+	}
+	r.currentStops = nil
+	for _, stop := range gradient.Stops {
+		r.currentStops = append(r.currentStops, stop.Color)
+	}
+	r.brush = r.currentStops[0]
+}
+func (r *themeFillRecorder) Fill() {
+	r.fill = r.brush
+	r.fillStops = append([]paint.Color(nil), r.currentStops...)
+	r.fills++
+}
+func (r *themeFillRecorder) FillPreserve() {
+	r.fill = r.brush
+	r.fillStops = append([]paint.Color(nil), r.currentStops...)
+	r.fills++
+}
+func (r *themeFillRecorder) SetPen1(c paint.Color, w float64) { r.pen, r.penW = c, w }
+func (r *themeFillRecorder) SetFont(f paint.Font)             { r.font = f }
+func (r *themeFillRecorder) Font() paint.Font                 { return r.font }
+func (r *themeFillRecorder) DrawText(text string)             { r.ink = r.brush; r.texts++ }
 
 func newThemeFillRecorder() *themeFillRecorder {
 	return &themeFillRecorder{Painter: nopPainter{}}
@@ -178,14 +198,18 @@ func TestThemeButtonLabelReadableOnItsOwnFill(t *testing.T) {
 			st.setup(b)
 
 			rec := newThemeFillRecorder()
-			// Seed the fill with the chrome the button sits on: the enabled
-			// idle state paints no face at all, so "no fill" means the form
-			// colour is what shows through behind the label.
+			// Seed parent chrome; material faces additionally verify every
+			// gradient endpoint rather than pretending a gradient is a solid fill.
 			rec.fill = th.FormColor
 			th.DrawButton(rec, b)
 
 			if rec.texts == 0 {
 				t.Fatalf("%s/%s: DrawButton drew no label", tc.name, st.name)
+			}
+			for _, stop := range rec.fillStops {
+				if ratio := contrastRatio(rec.ink, stop); ratio < 4.5 {
+					t.Errorf("%s/%s gradient endpoint contrast %v: %g", tc.name, st.name, stop, ratio)
+				}
 			}
 			if r := contrastRatio(rec.ink, rec.fill); r < 4.5 {
 				t.Errorf("%s/%s: label %v on fill %v = %.2f:1, want >= 4.5:1",

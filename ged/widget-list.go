@@ -1,11 +1,12 @@
 package ged
 
 import (
+	"math"
+	"strings"
+
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
-	"math"
-	"strings"
 )
 
 func init() {
@@ -375,6 +376,20 @@ func drawWidgetIcon(g paint.Painter, factoryName string, x, y, size float64) {
 	shortName := factoryName
 	if idx := strings.LastIndex(factoryName, "."); idx >= 0 {
 		shortName = factoryName[idx+1:]
+	}
+
+	switch shortName {
+	case "SpriteView", "ProcessValue", "Tank", "Valve", "Gauge":
+		name := "gauge"
+		if shortName == "SpriteView" || shortName == "Valve" {
+			name = "valve"
+		}
+		if shortName == "Tank" {
+			name = "tank"
+		}
+		icon, _ := paint.SatinIcon(name)
+		g.DrawIcon1(icon, x, y, size, false)
+		return
 	}
 
 	switch shortName {

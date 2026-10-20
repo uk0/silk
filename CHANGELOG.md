@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — satin sprites, HMI and compile-time macros
+
+- Embed a generated 16-icon satin atlas, calibrated object crops, bounded
+  device-size caches and neutral disabled masks. Keep structural vector glyphs
+  and a `SILK_ICON_STYLE=vector` IDE opt-out.
+- Give enabled idle buttons a cached material gradient and inset border.
+- Add designer-ready SpriteView and ProcessValue widgets and Gauge TagName;
+  preserve properties across drag/drop, save/load, preview and Go generation.
+- Fix Gauge's hard-coded white background under dark themes, use theme-aware
+  ticks/readout, clip to widget bounds, reuse fonts and remove duplicate end
+  labels. Give the HMI example labeled buttons and an embedded window icon.
+- Coalesce visual Tag bursts and invalidate cancelled updates/animations instead
+  of allowing an unbounded UI callback backlog or animation after unbind.
+- Add explicit `.silkgo` compile-time textual macros, complete-Go validation,
+  generated-file write guards, `silkgen -macro`, IDE Tools/palette actions and
+  runnable examples. Go remains the compiler; macros are not hygienic/recursive.
+
 ## SilkIDE v0.1.5 / SDK 2.5.1 (2026-10-20)
 
 - Include the race, scheduling, font and visual-quality fixes listed below.

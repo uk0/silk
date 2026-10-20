@@ -70,6 +70,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Save All", actionKeyHint()+"+Shift+S", func() { performSaveAll(editorTabs, designCanvas) })
 	add("Undo", actionKeyHint()+"+Z", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
 	add("Redo", actionKeyHint()+"+Shift+Z", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
+	add("Expand Silk Macros", "", func() { expandActiveMacro(editorTabs, designCanvas) })
 	// File actions.
 	add("New", "Cmd+N", func() { newDesignCanvas(designCanvas) })
 	add("Open", "Cmd+O", func() {

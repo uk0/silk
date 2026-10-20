@@ -1,10 +1,11 @@
 package gui
 
 import (
+	"math"
+
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gv"
 	"github.com/uk0/silk/paint"
-	"math"
 )
 
 func (this *Button) EnumProperties(list core.IPropertyList) {
@@ -26,6 +27,9 @@ type IButton interface {
 
 // 按钮, 含普通按钮, 菜单项, 下拉按钮等
 type Button struct {
+	face                *paint.LinearGradient
+	faceHeight          float64
+	faceTop, faceBottom paint.Color
 	Widget
 	pushed      bool
 	textVisible bool
@@ -554,4 +558,16 @@ func (this *Button) ExportGv(g *gv.Graph) {
 		edge.TextColor = edge.Color
 		edge.Text = "SubPopup"
 	}
+}
+
+// Cache the material face per widget; do not allocate a Cairo gradient on every
+// repaint. Size and colors form the key, so theme changes cannot reuse stale ink.
+func (this *Button) normalFace(top, bottom paint.Color, height float64) *paint.LinearGradient {
+	if this.face == nil || this.faceHeight != height || this.faceTop != top || this.faceBottom != bottom {
+		this.face = paint.NewLinearGradient(0, 0, 0, float32(height))
+		this.face.AddStop(0, top)
+		this.face.AddStop(1, bottom)
+		this.faceHeight, this.faceTop, this.faceBottom = height, top, bottom
+	}
+	return this.face
 }

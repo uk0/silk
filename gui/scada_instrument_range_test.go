@@ -40,7 +40,7 @@ func TestGaugeFactoryValueAndScaleSpanItsRange(t *testing.T) {
 	g.Draw(rec)
 
 	// Draw emits the six scale labels first (i = 0,2,4,6,8,10 of eleven ticks),
-	// then the readout, then the min and max end labels.
+	// then the readout. Endpoint ticks already show min/max without duplicates.
 	want := []string{"0", "20", "40", "60", "80", "100"}
 	if len(rec.texts) < len(want)+1 {
 		t.Fatalf("gauge drew %d texts %v, want at least %d (six scale labels plus the readout)",
@@ -330,6 +330,12 @@ type scadaRecorder struct {
 func newScadaRecorder() *scadaRecorder {
 	return &scadaRecorder{Painter: nopPainter{}}
 }
+
+// This recorder inspects values/geometry, not raster clipping. Pixel-level
+// clipping and theme transitions are covered by sprite_widgets_test.go.
+func (r *scadaRecorder) Save() int    { return 0 }
+func (r *scadaRecorder) Restore() int { return 0 }
+func (r *scadaRecorder) Clip()        { r.hasPending = false }
 
 func (r *scadaRecorder) Rectangle(x, y, w, h float64) {
 	r.pending = scadaFill{x, y, w, h, r.brush}

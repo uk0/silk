@@ -2,9 +2,10 @@ package gui
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
-	"math"
 )
 
 // GaugeZone defines a colored arc region on a Gauge.
@@ -15,13 +16,15 @@ type GaugeZone struct {
 
 // Gauge renders a semi-circular meter with a needle.
 type Gauge struct {
+	tagName string
 	Widget
-	value    float64 // current value
-	min, max float64
-	title    string
-	unit     string // e.g. "°C", "%", "RPM"
-	zones    []GaugeZone
-	bgColor  paint.Color
+	value                          float64 // current value
+	min, max                       float64
+	title                          string
+	unit                           string // e.g. "°C", "%", "RPM"
+	zones                          []GaugeZone
+	fontFamily                     string
+	titleFont, valueFont, tickFont paint.Font
 }
 
 func init() {
@@ -35,7 +38,7 @@ func NewGauge() *Gauge {
 	return p
 }
 
-// Init carries the range and the background, not NewGauge: the designer and
+// Init carries the range, not NewGauge: the designer and
 // the .tdoc loader build widgets through the core factory, which reflects on
 // Init and never sees the constructor. A range left in the constructor comes
 // up as 0..0, which clamps every SetValue to 0, pins the needle at the left
@@ -44,7 +47,6 @@ func (this *Gauge) Init(self IWidget) {
 	this.Widget.Init(self)
 	this.min = 0
 	this.max = 100
-	this.bgColor = paint.Color{R: 255, G: 255, B: 255, A: 255}
 }
 
 // SetValue sets the needle position.
@@ -117,8 +119,12 @@ func (this *Gauge) ClearZones() {
 	this.Self().Update()
 }
 
+func (this *Gauge) TagName() string        { return this.tagName }
+func (this *Gauge) SetTagName(name string) { this.tagName = name }
+
 // EnumProperties exposes inspectable properties.
 func (this *Gauge) EnumProperties(list core.IPropertyList) {
+	list.AddProperty("tag", this.TagName, this.SetTagName)
 	list.AddProperty("标题", this.Title, this.SetTitle)
 	list.AddProperty("单位", this.Unit, this.SetUnit)
 	list.AddProperty("数值", this.Value, this.SetValue)
@@ -134,16 +140,30 @@ func (this *Gauge) SizeHints() SizeHints {
 // Draw renders the gauge.
 func (this *Gauge) Draw(g paint.Painter) {
 	w, h := this.Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, 0, w, h)
+	g.Clip()
+	theme := Theme()
+	if this.titleFont == nil || this.fontFamily != theme.Font.Family() {
+		this.fontFamily = theme.Font.Family()
+		this.titleFont = paint.NewFont(this.fontFamily, 12, true, false)
+		this.valueFont = paint.NewFont(this.fontFamily, 16, true, false)
+		this.tickFont = paint.NewFont(this.fontFamily, 9, false, false)
+	}
 
 	// Background
-	g.SetBrush1(this.bgColor)
+	g.SetBrush1(theme.ViewBGColor)
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
 
 	// Title
 	if this.title != "" {
-		g.SetFont(paint.NewFont(Theme().Font.Family(), 12, true, false))
-		g.SetBrush1(Theme().TextColor)
+		g.SetFont(this.titleFont)
+		g.SetBrush1(theme.TextColor)
 		g.DrawText1(10, 16, this.title)
 	}
 
@@ -190,14 +210,14 @@ func (this *Gauge) Draw(g paint.Painter) {
 
 	// If no zones, draw a default gray arc
 	if len(this.zones) == 0 {
-		g.SetPen1(paint.Color{R: 200, G: 200, B: 200, A: 255}, (outerR-innerR)*0.8)
+		g.SetPen1(theme.MenuGrayTextColor, (outerR-innerR)*0.8)
 		g.Arc(cx, cy, (outerR+innerR)/2, -math.Pi, 0)
 		g.Stroke()
 	}
 
 	// Tick marks
-	g.SetPen1(paint.Color{R: 80, G: 80, B: 80, A: 255}, 1)
-	smallFont := paint.NewFont(Theme().Font.Family(), 9, false, false)
+	g.SetPen1(theme.TextColor, 1)
+	smallFont := this.tickFont
 	for i := 0; i <= 10; i++ {
 		frac := float64(i) / 10
 		angle := math.Pi - frac*math.Pi
@@ -214,7 +234,7 @@ func (this *Gauge) Draw(g paint.Painter) {
 			lx := cx + outerR*1.12*math.Cos(angle) - 10
 			ly := cy - outerR*1.12*math.Sin(angle) + 4
 			g.SetFont(smallFont)
-			g.SetBrush1(Theme().TextColor)
+			g.SetBrush1(theme.TextColor)
 			g.DrawText1(lx, ly, fmt.Sprintf("%.0f", val))
 		}
 	}
@@ -224,25 +244,24 @@ func (this *Gauge) Draw(g paint.Painter) {
 	angle := math.Pi - frac*math.Pi
 	nx := cx + outerR*0.85*math.Cos(angle)
 	ny := cy - outerR*0.85*math.Sin(angle)
-	g.SetPen1(paint.Color{R: 220, G: 50, B: 50, A: 255}, 2)
+	g.SetPen1(paint.CurrentIconPalette().Danger, 2)
 	g.MoveTo(cx, cy)
 	g.LineTo(nx, ny)
 	g.Stroke()
 
 	// Center dot
-	g.SetBrush1(paint.Color{R: 60, G: 60, B: 60, A: 255})
+	g.SetBrush1(theme.TextColor)
 	g.Arc(cx, cy, 5, 0, 2*math.Pi)
 	g.Fill()
 
 	// Value text
-	g.SetFont(paint.NewFont(Theme().Font.Family(), 16, true, false))
-	g.SetBrush1(Theme().TextColor)
-	text := fmt.Sprintf("%.1f%s", this.value, this.unit)
-	g.DrawText1(cx-20, cy+22, text)
-
-	// Min / Max labels
-	g.SetFont(smallFont)
-	g.SetBrush1(paint.Color{R: 120, G: 120, B: 120, A: 255})
-	g.DrawText1(cx-outerR-5, cy+14, fmt.Sprintf("%.0f", this.min))
-	g.DrawText1(cx+outerR-10, cy+14, fmt.Sprintf("%.0f", this.max))
+	g.SetFont(this.valueFont)
+	g.SetBrush1(theme.TextColor)
+	text := fmt.Sprintf("%.1f", this.value)
+	if this.unit != "" {
+		text += " " + this.unit
+	}
+	ext := this.valueFont.TextExtents(text)
+	g.DrawText1(cx-ext.Width/2-ext.XBearing, cy+22, text)
+	// Endpoint major ticks already label min/max; do not draw duplicates below.
 }
