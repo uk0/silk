@@ -97,7 +97,9 @@ type Window struct {
 	title                                                         string
 	// WM_SETICON does not transfer ownership to the window manager. Keep only
 	// handles created by this Window; the previous OS handle may be shared.
-	ownedIcons [2]win32.HICON // ICON_SMALL, ICON_BIG
+	ownedIcons     [2]win32.HICON // ICON_SMALL, ICON_BIG
+	textInput      utf16TextInput
+	positioningIME bool
 	//	staticTitle  bool
 	autoCaptured           bool
 	toCapture              bool
@@ -1334,13 +1336,30 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 	case win32.WM_ERASEBKGND:
 		return 1
 	case win32.WM_CHAR:
-		if it, ok := focusWidget.(IEventTextInput); ok {
-			r := rune(wParam)
-			if !unicode.IsControl(r) {
-				utf16 := []uint16{uint16(wParam), 0}
-				it.OnTextInput(syscall.UTF16ToString(utf16))
-				return 0
-			}
+		if win.dispatchUTF16(uint16(wParam)) {
+			return 0
+		}
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	case win32.WM_UNICHAR:
+		if wParam == win32.UNICODE_NOCHAR {
+			return 1
+		}
+		win.dispatchUnicode(wParam)
+		return 0
+	case win32.WM_KILLFOCUS:
+		win.textInput.reset()
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	case win32.WM_IME_STARTCOMPOSITION, win32.WM_IME_COMPOSITION:
+		win.positionInputMethod(1)
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	case win32.WM_IME_SETCONTEXT:
+		if wParam != 0 {
+			win.positionInputMethod(1)
+		}
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	case win32.WM_IME_NOTIFY:
+		if wParam == win32.IMN_OPENCANDIDATE || wParam == win32.IMN_CHANGECANDIDATE {
+			win.positionInputMethod(uint32(lParam))
 		}
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_ACTIVATE:

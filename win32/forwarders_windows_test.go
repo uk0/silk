@@ -17,7 +17,7 @@ import (
 // required to call a same-named entry point.
 func TestWin32ForwardersUseMatchingProcedures(t *testing.T) {
 	checked := 0
-	for _, path := range []string{"user32.go", "gdi32.go", "kernel32.go"} {
+	for _, path := range []string{"user32.go", "gdi32.go", "kernel32.go", "imm32_windows.go"} {
 		file, err := parser.ParseFile(gotoken.NewFileSet(), path, nil, 0)
 		if err != nil {
 			t.Fatal(err)

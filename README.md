@@ -37,6 +37,7 @@ Windows/macOS application icons live in [assets/branding](assets/branding/README
 *Actual Windows 10 interactive desktop capture from the 2026-10-20 iteration (PDT), limited to the application frame. See [Windows rendering and SDK QA](WINDOWS_RENDERING_QA_20261020.md) for reproducible steps and remaining issues.*
 
 [Actual Windows menu capture](screenshots/silkide-menu-windows.png).
+[Windows IME positioning and Unicode input follow-up](WINDOWS_INPUT_QA_20261020.md).
 
 ```bash
 make run-ide     # Qt Creator-style Go editing + visual design workbench
@@ -99,12 +100,16 @@ owned window-icon retirement, and two additional misrouted SDK API wrappers.
 The reproduced repeated-menu GDI growth now plateaus in the bounded native run.
 The editor also supports document-boundary Ctrl/Cmd+Home/End navigation and
 Shift selection, including Unicode, folded EOF and viewport following.
+The input follow-up anchors Windows IME composition/candidates to the focused
+editor, handles UTF-16 surrogate pairs and `WM_UNICHAR`, and verifies actual
+Pinyin commit/cancel plus supplementary Unicode save/readback. This is not full
+IME certification: the Windows code font still needs CJK/emoji glyph fallback.
 
 | Environment | Latest local evidence | Not established by this check |
 | --- | --- | --- |
 | macOS arm64 / Go 1.26.5 | 2026-10-20 six-package regression, targeted race/vet and GL pixel readback; earlier ten-package run/build and 2026-09-11 desktop QA remain dated evidence | New seven-group menu desktop QA on macOS, every secondary panel action, real gopls/dlv workflows, mixed-DPI multi-monitor behavior |
 | Linux arm64 / Go 1.26.0 | Earlier Debian 12 build, four-package tests, vet and non-root Xvfb window-startup smoke; not rerun this iteration | Interactive desktop/IME/font coverage; a portable dependency-free binary |
-| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Native twelve-package regressions; bounded GDI plateau in 120-cycle render / final 40-cycle UI runs, paint pairing, accelerator dispatch and icon lifetime; Label/Grid persistence, runtime resize, real Ctrl+End EOF save/readback and F6 build | Startup/input-latency certification, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
+| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Native twelve-package regressions; bounded GDI plateau in 120-cycle render / final 40-cycle UI runs, paint pairing, accelerator dispatch and icon lifetime; Label/Grid persistence, runtime resize, real Ctrl+End EOF save/readback and F6 build; Pinyin candidate/commit/cancel and supplementary Unicode persistence | Startup/input-latency certification, CJK/emoji glyph fallback, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
 
 Run/Build currently use **saved files on disk**; save edits before running.
 IDE symbol actions require `gopls` and report when it is unavailable. Some panels
@@ -116,7 +121,8 @@ Detailed, dated verification records:
 [SDK/platform compatibility](SDK_COMPATIBILITY.md) ·
 [popup ownership](POPUP_AUDIT.md) · [designer gaps](DESIGNER_GAPS.md) ·
 [Windows desktop iteration](WINDOWS_UI_QA.md) ·
-[latest Windows rendering/SDK verification](WINDOWS_RENDERING_QA_20261020.md).
+[Windows rendering/SDK verification](WINDOWS_RENDERING_QA_20261020.md) ·
+[Windows input follow-up](WINDOWS_INPUT_QA_20261020.md).
 Local `bin/qa-artifacts/` evidence mentioned in those records is not shipped in Git.
 
 ### Rendering performance

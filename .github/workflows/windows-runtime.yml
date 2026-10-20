@@ -72,6 +72,11 @@ jobs:
       - name: Retire owned window icons without waiting for GC
         run: go test -count=1 -run '^TestWindowsWindow' -v ./gui/
 
+      # IMM may be unavailable in Session 0; the position test reports a skip
+      # there. Interactive desktop QA separately requires SILK_TEST_NATIVE_IME=1.
+      - name: Verify Unicode input and IME cursor geometry
+        run: go test -count=1 -run '^Test(WindowsTextInput|WindowsIME|UTF16TextInput|InputMethod)' -v ./gui/ ./win32/
+
       - name: Balance native BeginPaint and EndPaint
         run: go test -count=1 -run '^TestBeginEndPaintReleasesDisplayDC$' -v ./win32/
 

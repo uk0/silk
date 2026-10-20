@@ -637,6 +637,7 @@ func (this *Widget) SetFocus() {
 	//core.Debug("SetFocus()")
 	oldFocusWidget := focusWidget
 	focusWidget = iw
+	textInputFocusChanged()
 	if ie, ok := oldFocusWidget.(IEventFocusChanged); ok {
 		ie.OnFocusChanged(focusWidget, oldFocusWidget)
 	}
