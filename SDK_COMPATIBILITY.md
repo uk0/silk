@@ -3,11 +3,17 @@
 本轮关注设计文件实际加载、平台窗口事件、安装后的文件系统行为和交付链。
 编译通过、虚拟显示启动和人工桌面交互是不同等级的证据，不能互相替代。
 
+## 2026-10-20 字体与原生模态后续
+
+Windows 原生 Cairo 文本 API 新增实际 glyph coverage 驱动的字体回退，测量和绘制使用相同字体分段，保留 ASCII 等宽、字号/样式、CTM 和图标私用区语义。真实编辑器已显示 `你好 🚀𠀀`，验证输入保存、取消不落盘与后续候选定位；100%/150%/200% 变换与原生单字体参照逐像素一致，不冒充跨显示器 DPI 验收。
+
+原生 Open/Save 文件对话框的 OS 等待使用嵌套、异常安全的 watchdog scope；实机 Open 保持 8 秒不再误报主循环卡死。未据此宣称启动时间已优化或系统对话框内部阻塞可检测。`TextToGlyphs/DrawGlyphs` 的单字体契约保持不变，复杂脚本/低级富文本回退仍是缺口。可选 `silk_pure_go` paint 测试仍有与隔离基线相同的失败，不算通过。完整边界、实机截图和失败记录见 [Windows 文本 QA](WINDOWS_TEXT_QA_20261020.md)。
+
 ## 2026-10-20 输入链路后续
 
 新增可选 `gui.IInputMethodCursor`，不改变 `IWidget` 必需接口；CodeEditor、Edit、SearchBox 提供光标矩形。Windows 通过 IMM 在输入事件中定位组合窗/候选窗，不新增逐帧或空闲轮询；借用的 HIMC 成对释放。UTF-16 代理对按完整字符提交，并支持 `WM_UNICHAR`，逻辑焦点变化会清空未完成的代理对。
 
-实际 Win10 微软拼音候选位置、选择后单次提交、取消不落盘，以及 `你好 🚀𠀀` 保存回读已验证；**代码字体 CJK/emoji 回退仍缺失，保存正确不代表字形显示正确**。跨任务切换焦点的提交策略还未专项定因。完整证据和测试边界见 [Windows 输入 QA](WINDOWS_INPUT_QA_20261020.md)。下面绘制阶段的数字和边界保留为历史记录。
+实际 Win10 微软拼音候选位置、选择后单次提交、取消不落盘，以及 `你好 🚀𠀀` 保存回读已验证；**该输入阶段尚未修复字体回退，字形验收由上方文本后续单独补齐**。跨任务切换焦点的提交策略还未专项定因。完整证据和测试边界见 [Windows 输入 QA](WINDOWS_INPUT_QA_20261020.md)。下面绘制阶段的数字和边界保留为历史记录。
 
 ## 2026-10-20 原生 Windows 更新
 
@@ -145,3 +151,18 @@ git diff --check
 
 弹层归属及完整人工回放见 `POPUP_AUDIT.md`、`WORKBENCH_QA.md`；仍未宣称
 全部 Qt Creator 功能或全部桌面环境兼容已完成。
+
+## 2026-10-20 race and ownership follow-up
+
+- `gui.Post` is safe for producers on any goroutine; execution remains on the
+  UI thread. Bursts yield after at most 64 callbacks or a 4 ms soft budget.
+  An individual callback cannot be preempted; move blocking work to a worker.
+- Win32 reserves input/paint/timer turns while callbacks remain, without idle
+  polling. Both normal and nested-modal pumps use the same selection policy.
+- GLFW shutdown joins already-captured native wakeups before terminating GLFW.
+- `purecairo` independent contexts/independent scaled fonts no longer share
+  mutable OpenType faces. A single context/surface/scaled-font instance is not
+  a concurrent API. `paint` caches and widget trees remain UI-thread-owned.
+- The previously recorded pure-Go paint failures are covered by this follow-up;
+  this does not certify full native Cairo parity or every pure-Go desktop path.
+  See [race/render QA](RACE_RENDER_QA_20261020.md).

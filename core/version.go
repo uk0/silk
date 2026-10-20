@@ -1,5 +1,5 @@
 package core
 
-// Version is the silk release version. CI/CD release builds are driven by
-// pushing a matching git tag (see .github/workflows/release.yml).
-const Version = "2.5.0"
+// Version is the framework SDK version displayed in About. Repository release
+// tags follow SilkIDE's 0.x version to preserve the module path without /v2.
+const Version = "2.5.1"

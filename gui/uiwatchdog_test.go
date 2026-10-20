@@ -63,3 +63,43 @@ func TestUIStallThresholdMatchesWindows(t *testing.T) {
 		t.Errorf("uiStallPoll = %v must be well under the threshold %v", uiStallPoll, uiStallThreshold)
 	}
 }
+
+func TestUIWatchdogNativeWaitIsNestedAndPanicSafe(t *testing.T) {
+	var wait nativeUIWait
+	beats := 0
+	beat := func() { beats++ }
+	func() {
+		defer wait.begin(beat)()
+		if wait.depth.Load() != 1 {
+			t.Fatal("outer native wait not active")
+		}
+		func() {
+			defer func() { _ = recover() }()
+			defer wait.begin(beat)()
+			if wait.depth.Load() != 2 {
+				t.Fatal("nested native wait not active")
+			}
+			panic("native dialog failure")
+		}()
+		if wait.depth.Load() != 1 {
+			t.Fatal("inner panic ended outer scope")
+		}
+	}()
+	if wait.depth.Load() != 0 || beats != 4 {
+		t.Fatalf("unbalanced wait: depth=%d, beats=%d", wait.depth.Load(), beats)
+	}
+}
+
+func TestUIWatchdogIgnoresNativeWaitButDetectsBlockedWork(t *testing.T) {
+	now := time.Now()
+	last := now.Add(-10 * time.Second).UnixNano()
+	if got := uiWatchdogDelay(now, last, true); got != 0 {
+		t.Fatalf("native dialog misclassified as %v stall", got)
+	}
+	if got := uiWatchdogDelay(now, last, false); got < uiStallThreshold {
+		t.Fatalf("real blocked work no longer detected: %v", got)
+	}
+	if got := uiWatchdogDelay(now, now.UnixNano(), false); got != 0 {
+		t.Fatalf("resumed event loop has stale deadline: %v", got)
+	}
+}

@@ -14,8 +14,9 @@
 //      from the platform's CJK system font (PingFang on macOS, Noto on
 //      Linux, MS YaHei on Windows).
 //
-// All faces are cached by `(family, size, bold, italic)` so widget
-// repaints don't re-parse the font on every frame.
+// Parsed fonts are shared, but mutable opentype faces belong to each
+// ScaledFont. Sharing a face across independent contexts races its sfnt.Buffer
+// and reusable glyph mask, corrupting text even on separate output surfaces.
 
 package purecairo
 
@@ -37,18 +38,7 @@ import (
 	"golang.org/x/image/font/sfnt"
 )
 
-// faceKey is the lookup key for the face cache.
-type faceKey struct {
-	family string
-	size   int // pixel size, rounded
-	bold   bool
-	italic bool
-}
-
 var (
-	faceCache   = make(map[faceKey]font.Face)
-	faceCacheMu sync.Mutex
-	cjkFallback font.Face
 	cjkOnce     sync.Once
 	systemFonts = make(map[string]string) // family-key → path
 	sysOnce     sync.Once
@@ -62,23 +52,11 @@ func loadFace(family string, size int, bold, italic bool) font.Face {
 	if size <= 0 {
 		size = 12
 	}
-	key := faceKey{family: strings.ToLower(family), size: size, bold: bold, italic: italic}
-
-	faceCacheMu.Lock()
-	if f, ok := faceCache[key]; ok {
-		faceCacheMu.Unlock()
-		return f
-	}
-	faceCacheMu.Unlock()
-
 	face := resolveFace(family, size, bold, italic)
 	if face == nil {
 		face = bundledFace(size, bold, italic)
 	}
 
-	faceCacheMu.Lock()
-	faceCache[key] = face
-	faceCacheMu.Unlock()
 	return face
 }
 
@@ -300,21 +278,26 @@ func makeFace(f *sfnt.Font, size int) font.Face {
 	return face
 }
 
+// Font tables are immutable; unlike font.Face, they are safe to share.
+var bundledFonts = [...]func() (*sfnt.Font, error){
+	sync.OnceValues(func() (*sfnt.Font, error) { return opentype.Parse(goregular.TTF) }),
+	sync.OnceValues(func() (*sfnt.Font, error) { return opentype.Parse(gobold.TTF) }),
+	sync.OnceValues(func() (*sfnt.Font, error) { return opentype.Parse(goitalic.TTF) }),
+	sync.OnceValues(func() (*sfnt.Font, error) { return opentype.Parse(gobolditalic.TTF) }),
+	sync.OnceValues(func() (*sfnt.Font, error) { return opentype.Parse(gomono.TTF) }),
+}
+
 // bundledFace returns a face from the embedded gofont TTFs. Always
 // succeeds — the byte slices ship with the binary.
 func bundledFace(size int, bold, italic bool) font.Face {
-	var ttf []byte
-	switch {
-	case bold && italic:
-		ttf = gobolditalic.TTF
-	case bold:
-		ttf = gobold.TTF
-	case italic:
-		ttf = goitalic.TTF
-	default:
-		ttf = goregular.TTF
+	index := 0
+	if bold {
+		index |= 1
 	}
-	f, err := opentype.Parse(ttf)
+	if italic {
+		index |= 2
+	}
+	f, err := bundledFonts[index]()
 	if err != nil {
 		// Static asset; parse should never fail at runtime, but be defensive.
 		return basicFontFallback()
@@ -345,7 +328,7 @@ func loadCJKFallback(size int) font.Face {
 	}
 	// No CJK system font — return Go Mono as a stub. Won't render Chinese
 	// glyphs but the caller code-flow stays valid.
-	f, err := opentype.Parse(gomono.TTF)
+	f, err := bundledFonts[4]()
 	if err != nil {
 		return basicFontFallback()
 	}

@@ -84,6 +84,15 @@ IDE alone does not establish language-server or debugger availability.
 
 ### Validation Status
 
+The 2026-10-20 race/render follow-up bounds UI callback turns, prevents native
+Windows input/paint/timer starvation during callback bursts, joins outstanding
+GLFW wakeups before shutdown, and serializes build-progress delivery. The
+optional pure-Go backend no longer shares mutable glyph buffers across separate
+canvases, and its dash, exact-color, disabled-icon and high-DPI stroke regressions
+are covered. See [race and rendering QA](RACE_RENDER_QA_20261020.md) for actual
+commands, evidence and remaining backend limits.
+
+
 The 2026-10-11 core iteration adds zero-allocation RGBA/NRGBA image uploads,
 damage-sized GLFW texture transfers, draw-time invalidation retention, and
 in-place activation of an existing free layout container. Real macOS GL texture
@@ -102,19 +111,24 @@ The editor also supports document-boundary Ctrl/Cmd+Home/End navigation and
 Shift selection, including Unicode, folded EOF and viewport following.
 The input follow-up anchors Windows IME composition/candidates to the focused
 editor, handles UTF-16 surrogate pairs and `WM_UNICHAR`, and verifies actual
-Pinyin commit/cancel plus supplementary Unicode save/readback. This is not full
-IME certification: the Windows code font still needs CJK/emoji glyph fallback.
+Pinyin commit/cancel plus supplementary Unicode save/readback. The text follow-up
+adds coverage-checked Windows CJK/emoji font runs with matching drawing/caret
+metrics, while retaining ASCII monospace rendering. Native file chooser waits
+no longer produce false UI-stall dumps. This is not full IME or complex-script
+shaping certification; see [Windows text QA](WINDOWS_TEXT_QA_20261020.md).
 
 | Environment | Latest local evidence | Not established by this check |
 | --- | --- | --- |
-| macOS arm64 / Go 1.26.5 | 2026-10-20 six-package regression, targeted race/vet and GL pixel readback; earlier ten-package run/build and 2026-09-11 desktop QA remain dated evidence | New seven-group menu desktop QA on macOS, every secondary panel action, real gopls/dlv workflows, mixed-DPI multi-monitor behavior |
+| macOS arm64 / Go 1.26.5 | 2026-10-20 seven-package regression, targeted race/vet and build; earlier GL pixel readback, ten-package run/build and 2026-09-11 desktop QA remain dated evidence | New seven-group menu desktop QA on macOS, every secondary panel action, real gopls/dlv workflows, mixed-DPI multi-monitor behavior |
 | Linux arm64 / Go 1.26.0 | Earlier Debian 12 build, four-package tests, vet and non-root Xvfb window-startup smoke; not rerun this iteration | Interactive desktop/IME/font coverage; a portable dependency-free binary |
-| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Native twelve-package regressions; bounded GDI plateau in 120-cycle render / final 40-cycle UI runs, paint pairing, accelerator dispatch and icon lifetime; Label/Grid persistence, runtime resize, real Ctrl+End EOF save/readback and F6 build; Pinyin candidate/commit/cancel and supplementary Unicode persistence | Startup/input-latency certification, CJK/emoji glyph fallback, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
+| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Thirteen-package native-build regression; earlier bounded GDI plateau, paint pairing, accelerator dispatch, icon lifetime, layout persistence/resize and F6 build; real Pinyin commit/cancel, Unicode save/readback, visible CJK/emoji/Ext-B glyphs, caret geometry and scaled pixel comparisons | Startup/input-latency certification, complex shaping and raw-glyph rich text fallback, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
 
 Run/Build currently use **saved files on disk**; save edits before running.
 IDE symbol actions require `gopls` and report when it is unavailable. Some panels
 still have incomplete localization/font fallback. Passing tests or installing
 external tools alone is not a full desktop compatibility claim.
+The optional `silk_pure_go` paint backend still has baseline failures in dash,
+icon color/path, and allocation tests; native Cairo results do not certify it.
 
 Detailed, dated verification records:
 [workbench](WORKBENCH_QA.md) · [menus and About](MENU_QA.md) ·

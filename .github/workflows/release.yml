@@ -1,7 +1,7 @@
 name: Release
 
 # Tag-driven release. The main branch never triggers a build by itself —
-# only pushing a tag like v2.4.0 produces artifacts and a GitHub Release.
+# only a tag matching SilkIDE (for example v0.1.4) produces release artifacts.
 on:
   push:
     tags:
@@ -39,6 +39,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate release version and SDK module path
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/validate-release-version.sh "$RELEASE_TAG"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -97,6 +103,22 @@ jobs:
       - name: Run tests
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/
 
+      - name: Race regression (release gate)
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
+
+      - name: Win32 SDK race regression
+        if: runner.os == 'Windows'
+        run: go test -race -count=1 ./win32/
+
+      - name: Pure-Go rendering parity (release gate)
+        env:
+          CGO_ENABLED: '0'
+        run: go test -count=1 -tags silk_pure_go ./cairo/ ./purecairo/ ./paint/
+
+      - name: Test release version validation
+        shell: bash
+        run: bash scripts/test-release-version.sh
+
       - name: Test platform packaging scripts
         shell: bash
         run: bash scripts/test-platform-scripts.sh
@@ -108,7 +130,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
         run: |
-          go build -v -ldflags="-s -w" -o silk-designer-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} design.go
+          go build -v -ldflags="-s -w ${{ matrix.goos == 'windows' && '-H windowsgui' || '' }}" -o silk-designer-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} design.go
 
       - name: Build demo
         env:
@@ -116,7 +138,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
         run: |
-          go build -v -ldflags="-s -w" -o silk-demo-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} demo.go
+          go build -v -ldflags="-s -w ${{ matrix.goos == 'windows' && '-H windowsgui' || '' }}" -o silk-demo-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} demo.go
 
       - name: Embed Windows IDE icon
         if: runner.os == 'Windows'
@@ -129,7 +151,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
         run: |
-          go build -v -ldflags="-s -w" -o silkide-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkide/
+          go build -v -ldflags="-s -w ${{ matrix.goos == 'windows' && '-H windowsgui' || '' }}" -o silkide-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkide/
           go build -v -ldflags="-s -w" -o silkgen-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkgen/
 
       - name: Smoke IDE (Linux virtual display)
@@ -211,17 +233,19 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f -name 'silk-*'
 
+      - name: Checksum release archives
+        run: |
+          find artifacts -type f \( -name 'silk-*.tar.gz' -o -name 'silk-*.zip' \) -print0 | sort -z | xargs -0 sha256sum | sed -E 's#  artifacts/[^/]+/#  #' > SHA256SUMS.txt
+          test "$(wc -l < SHA256SUMS.txt)" -eq 4
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/silk-*.tar.gz
-          # Also attach Windows zip — second pattern (separate file pattern):
+          files: |
+            artifacts/**/silk-*.tar.gz
+            artifacts/**/silk-*.zip
+            SHA256SUMS.txt
+          fail_on_unmatched_files: true
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
-
-      - name: Attach Windows zips
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/silk-*.zip
-          fail_on_unmatched_files: false

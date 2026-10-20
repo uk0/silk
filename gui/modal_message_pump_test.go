@@ -95,9 +95,17 @@ func TestWindowsModalProductionUsesBlockingPump(t *testing.T) {
 		t.Fatal("Windows modal functions missing")
 	}
 	body := text[start : start+end]
-	if !strings.Contains(body, "ok, err := win32.GetMessageResult(&msg, 0, 0, 0)") || !strings.Contains(body, "return modalPumpMessage{}, false") || !strings.Contains(body, "pumpBlockingModalMessages(") || !strings.Contains(body, "service: serviceUIFrame") || strings.Contains(body, "win32.PeekMessage(") || strings.Contains(body, "win32.Sleep(") {
+	if !strings.Contains(body, "ok, err := nextWindowsUIMessage(&msg)") || !strings.Contains(body, "return modalPumpMessage{}, false") || !strings.Contains(body, "pumpBlockingModalMessages(") || !strings.Contains(body, "service: serviceUIFrame") || strings.Contains(body, "win32.PeekMessage(") || strings.Contains(body, "win32.Sleep(") {
 		t.Fatal("Windows modal does not use the blocking, UI-servicing production pump")
 	}
+	picker, err := os.ReadFile("message_fairness_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(picker), "return getUIMessage(msg, 0, 0, 0)") || !strings.Contains(string(picker), "var getUIMessage = win32.GetMessageResult") {
+		t.Fatal("fairness picker lost the blocking/error-aware GetMessage fallback")
+	}
+
 }
 
 func TestBlockingModalPumpReadFailureStopsWithoutDispatchOrRetry(t *testing.T) {
@@ -126,7 +134,7 @@ func TestWindowsMainLoopChecksGetMessageErrorBeforeDispatch(t *testing.T) {
 		t.Fatal("MainLoop boundary missing")
 	}
 	body := text[start : start+end]
-	call := strings.Index(body, "win32.GetMessageResult(")
+	call := strings.Index(body, "nextWindowsUIMessage(")
 	guard := strings.Index(body, "if err != nil {")
 	dispatch := strings.Index(body, "win32.DispatchMessage(")
 	if call < 0 || guard < call || dispatch < guard || !strings.Contains(body[guard:dispatch], "break") {

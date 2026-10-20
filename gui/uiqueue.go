@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/uk0/silk/core"
 )
@@ -15,7 +16,7 @@ var (
 )
 
 // Post enqueues fn to run on the main (event-loop) thread on the next
-// iteration. Safe to call from any goroutine. Use this for every GUI
+// iteration (large bursts are spread over bounded turns). Safe to call from any goroutine. Use this for every GUI
 // mutation that originates off the main thread (dlv/LSP callbacks, etc).
 func Post(fn func()) {
 	if fn == nil {
@@ -34,6 +35,11 @@ func Post(fn func()) {
 // drainUITasks runs and clears all queued tasks. MUST be called only from
 // the main thread (the event loop). Snapshots under the lock then runs
 // unlocked so a task that calls Post (re-entrancy) doesn't deadlock.
+// A background build/LSP/log burst must leave time for input, timers and
+// painting. One callback is non-preemptible; expensive work belongs off-thread.
+const uiTaskBatchLimit = 64
+const uiTaskTimeBudget = 4 * time.Millisecond
+
 func drainUITasks() {
 	uiTaskMu.Lock()
 	if len(uiTasks) == 0 {
@@ -43,8 +49,22 @@ func drainUITasks() {
 	batch := uiTasks
 	uiTasks = nil
 	uiTaskMu.Unlock()
-	for _, fn := range batch {
+	deadline := time.Now().Add(uiTaskTimeBudget)
+	for i, fn := range batch {
 		runUITask(fn)
+		batch[i] = nil // release captured documents/frames promptly
+		if i+1 < len(batch) && (i+1 >= uiTaskBatchLimit || !time.Now().Before(deadline)) {
+			uiTaskMu.Lock()
+			// The older snapshot remainder stays ahead of tasks posted meanwhile.
+			// Nested modal drains still see only posts made after the outer snapshot.
+			uiTasks = append(batch[i+1:], uiTasks...)
+			wake := uiWakeupFn
+			uiTaskMu.Unlock()
+			if wake != nil {
+				wake()
+			}
+			return
+		}
 	}
 }
 

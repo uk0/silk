@@ -21,9 +21,11 @@ import (
 // which points straight at the blocked call. Recovery is logged too, so a slow
 // operation can be told apart from a permanent deadlock.
 //
-// Known benign trigger: a native modal dialog (GetOpenFileName, MessageBox)
-// runs its own message loop, so ours stops iterating for as long as the dialog
-// is open. The warning says so rather than pretending it is always a bug.
+// Native file dialogs run an OS-owned message loop. Their explicit wait scope
+// suspends this heartbeat-only detector: time spent choosing a file is not UI
+// work, and dumping every goroutine during that wait is both noisy and costly.
+// The scope ends with a fresh beat, so real blocking after the dialog still
+// triggers the normal deadline. This does not certify the native dialog itself.
 
 const (
 	uiStallThreshold = 5 * time.Second
@@ -35,7 +37,29 @@ var (
 	uiWatchOnce  atomic.Bool
 	uiStallOpen  atomic.Bool // a stall is currently being reported
 	uiStallStart atomic.Int64
+	uiNativeWait nativeUIWait
 )
+
+// nativeUIWait supports nested native dialogs and balances even on panic.
+// Only known OS-owned modal calls use it, never arbitrary UI callbacks.
+type nativeUIWait struct{ depth atomic.Int64 }
+
+func (w *nativeUIWait) begin(heartbeat func()) func() {
+	w.depth.Add(1)
+	heartbeat()
+	return func() {
+		// Publish progress before unmasking the detector.
+		heartbeat()
+		w.depth.Add(-1)
+	}
+}
+
+func uiWatchdogDelay(now time.Time, last int64, nativeWait bool) time.Duration {
+	if last == 0 || nativeWait {
+		return 0
+	}
+	return now.Sub(time.Unix(0, last))
+}
 
 // uiHeartbeat records that the event loop is still turning. Cheap enough to
 // call on every message: one atomic store.
@@ -50,16 +74,19 @@ func watchUIThread() {
 	t := time.NewTicker(uiStallPoll)
 	defer t.Stop()
 	for range t.C {
+		nativeWait := uiNativeWait.depth.Load() > 0
 		last := uiLastBeat.Load()
 		if last == 0 {
 			continue
 		}
-		idle := time.Since(time.Unix(0, last))
+		// Sample the scope before the heartbeat to avoid observing the old
+		// heartbeat together with a just-ended scope; recheck for entry too.
+		idle := uiWatchdogDelay(time.Now(), last, nativeWait || uiNativeWait.depth.Load() > 0)
 
 		if idle < uiStallThreshold {
 			// Recovered — report how long it was stuck, once.
 			if uiStallOpen.CompareAndSwap(true, false) {
-				stalled := time.Since(time.Unix(0, uiStallStart.Load()))
+				stalled := time.Duration(last - uiStallStart.Load())
 				core.Warn("ui: event loop resumed after ", stalled.Round(time.Millisecond))
 			}
 			continue
@@ -71,8 +98,7 @@ func watchUIThread() {
 		}
 		uiStallStart.Store(last)
 		core.Warn("ui: event loop has not run for ", idle.Round(time.Millisecond),
-			" — the window will show as Not Responding. A native modal dialog does this legitimately; ",
-			"otherwise something is blocking the UI thread. Set SILK_DEBUG=1 for goroutine stacks.")
+			" — UI work may be blocking. Set SILK_DEBUG=1 for goroutine stacks.")
 		if core.IsDebugOn() {
 			core.Warn("ui: goroutine dump follows\n", goroutineDump())
 		}

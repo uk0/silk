@@ -1141,6 +1141,7 @@ func silkUIFilterUTF16() []uint16 {
 }
 
 func OpenFileDialog() string {
+	defer uiNativeWait.begin(uiHeartbeat)()
 	var fileBuf = make([]uint16, 32768)
 	ofn := win32.OPENFILENAME{}
 	ofn.StructSize = uint32(unsafe.Sizeof(ofn))
@@ -1167,6 +1168,7 @@ func OpenFileDialog() string {
 }
 
 func SaveFileDialog() string {
+	defer uiNativeWait.begin(uiHeartbeat)()
 	var fileBuf = make([]uint16, 32768)
 	ofn := win32.OPENFILENAME{}
 	ofn.StructSize = uint32(unsafe.Sizeof(ofn))
@@ -1856,7 +1858,7 @@ func MainLoop() {
 
 	msg := win32.MSG{}
 	for {
-		ok, err := win32.GetMessageResult(&msg, 0, 0, 0)
+		ok, err := nextWindowsUIMessage(&msg)
 		if err != nil {
 			core.Warn("GetMessage failed; stopping UI loop: ", err)
 			break
@@ -2053,7 +2055,7 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 		next: func() (modalPumpMessage, bool) {
 			// GetMessage sleeps until input, a timer, gui.Post's thread wakeup,
 			// EndModal or WM_QUIT arrives. No 1 ms PeekMessage/Sleep polling.
-			ok, err := win32.GetMessageResult(&msg, 0, 0, 0)
+			ok, err := nextWindowsUIMessage(&msg)
 			if err != nil {
 				core.Warn("GetMessage failed; stopping modal loop: ", err)
 				return modalPumpMessage{}, false

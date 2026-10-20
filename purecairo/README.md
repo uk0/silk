@@ -11,7 +11,7 @@ Windows, BSD — without libcairo, libpng, libfreetype, or fontconfig.
 | Image surface            | `image.RGBA` backed, BGRA mirror for GL upload |
 | Path (M/L/C/Z + Arc + Rectangle/RoundRect) | full                |
 | Fill / FillPreserve      | `golang.org/x/image/vector` AA rasteriser |
-| Stroke / StrokePreserve  | per-segment thin-quad + round cap / join |
+| Stroke / StrokePreserve  | transformed outlines, dashes, round cap / join |
 | Save / Restore stack     | full (matrix, source, line attrs, clip, font) |
 | Transform stack          | cairo column-vector semantics           |
 | Clip / ClipBounds        | AABB approximation, `cairo_clip_extents` user-space |
@@ -21,7 +21,7 @@ Windows, BSD — without libcairo, libpng, libfreetype, or fontconfig.
 | Font discovery           | per-OS system font walk + bundled Go fallback |
 | CJK fallback             | PingFang (macOS), Noto-CJK (Linux), MS YaHei (Windows) |
 | Glyph rendering          | `font.Face.Glyph` + `draw.DrawMask`     |
-| Group / mask / push pop  | stub                                    |
+| Group / mask / push pop  | nested device-space groups and alpha masks |
 | Path-shaped clip         | not yet (AABB only)                     |
 | PDF / PS / SVG export    | not in scope (silk has dedicated packages) |
 | Native platform surfaces | not in scope                            |
@@ -100,3 +100,20 @@ no `libcairo.dylib`, no `libpng`, no `libfreetype`.
 ## License
 
 Same license as silk.
+
+## Ownership and rendering limits
+
+Each context, surface, and scaled font is single-owner; do not mutate or render
+through the same instance from multiple goroutines. Independent contexts with
+independent scaled fonts may render concurrently: only immutable parsed font
+tables are shared, never OpenType scratch buffers or reusable glyph masks.
+Silk widget trees and the `paint` package caches remain UI-thread-owned; workers
+must use `gui.Post` for UI changes.
+
+The pure-Go backend is not full Cairo parity. Clipping is still AABB-only,
+curves/stroke joins are approximations, and only the documented compositing
+operators are supported. Dash expansion is bounded to 65,536 pieces per stroke
+to avoid runaway work on extremely small periods; invalid patterns fall back
+to solid strokes. `PushGroupWidthContent` uses an ARGB32 intermediate regardless
+of the requested content hint. These limits are separate from the native Cairo
+backend used by release desktop binaries.

@@ -33,7 +33,8 @@ const streamThrottle = 200 * time.Millisecond
 // onProgress receives the accumulated text (not the delta) because the output
 // panes take a whole document; it is called from a worker goroutine, so a UI
 // caller must marshal it. It is throttled to streamThrottle and always fires
-// once more at the end so the final text is never lost.
+// once more at the end so the final text is never lost. Callbacks are serialized
+// and all finish before streamCommand returns.
 func streamCommand(cmd *exec.Cmd, onProgress func(text string)) (string, error) {
 	processutil.NoConsoleWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
@@ -49,10 +50,15 @@ func streamCommand(cmd *exec.Cmd, onProgress func(text string)) (string, error) 
 	}
 
 	var mu sync.Mutex
+	// Snapshot and delivery are one serialized operation. Otherwise the two
+	// pipe readers can deliver a newer snapshot before an older slow callback.
+	var emitMu sync.Mutex
 	var buf strings.Builder
 	last := time.Time{}
 
 	emit := func(force bool) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
 		mu.Lock()
 		text := buf.String()
 		due := force || time.Since(last) >= streamThrottle
@@ -101,20 +107,22 @@ func streamCommand(cmd *exec.Cmd, onProgress func(text string)) (string, error) 
 func runWithProgress(cmd *exec.Cmd, header string, report func(text string)) (string, error) {
 	start := time.Now()
 	done := make(chan struct{})
+	heartbeatDone := make(chan struct{})
 
+	// Serialize both the snapshot and its delivery, not just access to latest.
 	var mu sync.Mutex
 	latest := ""
 
 	show := func(tail string) {
 		mu.Lock()
-		body := latest
-		mu.Unlock()
-		report(header + "\n" + body + tail)
+		defer mu.Unlock()
+		report(header + "\n" + latest + tail)
 	}
 
 	// Heartbeat: even a build that prints nothing for a minute now shows a
 	// ticking elapsed time.
 	go func() {
+		defer close(heartbeatDone)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
 		for {
@@ -129,11 +137,14 @@ func runWithProgress(cmd *exec.Cmd, header string, report func(text string)) (st
 
 	text, err := streamCommand(cmd, func(sofar string) {
 		mu.Lock()
+		defer mu.Unlock()
 		latest = sofar
-		mu.Unlock()
-		show("")
+		report(header + "\n" + latest)
 	})
 	close(done)
+	// Closing a channel is not a join: a tick may already be inside report.
+	// No late heartbeat may overwrite the caller's final success/error state.
+	<-heartbeatDone
 
 	mu.Lock()
 	latest = text

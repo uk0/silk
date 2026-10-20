@@ -1729,6 +1729,9 @@ type Glyph struct {
 	Y     float64
 }
 
+// Index returns the font-local glyph index. Zero is the missing glyph.
+func (g Glyph) Index() uint32 { return g.index }
+
 //func (g *Glyph) X() float64 {
 //	return g.X
 //}

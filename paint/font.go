@@ -129,6 +129,10 @@ type scaledFont struct {
 	*cairo.ScaledFont
 	font   *font
 	access uint64
+	ctm    geom.Mat3x2
+	// Family names, not font pointers: avoid finalizer-retaining cycles between
+	// cached fonts. Missing/primary results use an empty family name.
+	fallbackFamilies map[rune]string
 }
 
 func (this *scaledFont) setFinalizer() {
@@ -196,6 +200,9 @@ func (this *scaledFont) textToGlyphsInto(x, y float64, text string, dst []Glyph)
 }
 
 func (this *scaledFont) TextExtents(text string) *TextExtents {
+	if needsTextFallback(text) {
+		return this.fallbackTextExtents(text)
+	}
 	return (*TextExtents)(this.ScaledFont.TextExtents(text))
 }
 
@@ -366,7 +373,7 @@ func (this *font) scaledFont(ctm *geom.Mat3x2) *scaledFont {
 		// The cache entry represents this font at creation time, even if the
 		// original Font is subsequently resized or restyled in place.
 		snapshot := *this
-		sf = &scaledFont{sf0, &snapshot, scaledFontCacheAccessId}
+		sf = &scaledFont{ScaledFont: sf0, font: &snapshot, access: scaledFontCacheAccessId, ctm: key.m}
 		sf.setFinalizer()
 		scaledFontCache.Insert(key, sf)
 	}

@@ -1,5 +1,28 @@
 # Changelog
 
+## SilkIDE v0.1.4 / SDK 2.5.1 (2026-10-20)
+
+### Race safety, rendering and UI scheduling
+
+- Serialize stdout/stderr progress callbacks and join the elapsed-time reporter
+  before completing a build; stale heartbeats cannot overwrite final results.
+- Bound each GUI callback turn to 64 tasks / 4 ms (soft budget); preserve queued
+  work, FIFO remainder order, panic isolation and nested-modal dispatch.
+- Reserve Win32 input, paint and timer turns during callback bursts while keeping
+  ordinary idle and modal message pumps blocking; preserve quit/error handling.
+- Join in-flight GLFW native wakeups before backend termination.
+- Stop sharing mutable OpenType faces between independent pure-Go renderers.
+  Share parsed font tables instead; pool only temporary glyph callback buffers.
+- Fix pure-Go exact sRGB and premultiplication, path/current-point restoration,
+  empty glyph-buffer clearing, dashed strokes, transformed stroke widths, and
+  nested group/alpha masks for disabled icons. The optional backend still has
+  documented clipping/compositing/shaping limitations.
+- Add Windows native missing-glyph fallback for simple LTR text, keeping
+  measurement, drawing and IME cursor geometry aligned. Native file dialogs no
+  longer generate false UI-watchdog stall reports while awaiting user input.
+- Bump SilkIDE to 0.1.4; add native/race/pure-Go release gates and archive checksums.
+
+
 ## v2.5.0 (2026-07-27)
 
 ### IDE — Qt Creator-class depth

@@ -6,7 +6,7 @@
 
 绘制/设计器阶段已提交推送为 `9ce1d0f`。随后工作区迭代修复 Windows 候选窗左上角定位和 UTF-16 代理对损坏，补齐 `WM_UNICHAR` 与输入焦点隔离；真实拼音选择、取消、Unicode 保存回读和原生 IMM 坐标回读均另有验证。Windows 十二包 4,608 pass / 39 skip / 0 fail；macOS 六包 3,797 pass / 5 skip / 0 fail。Session 0 跳过的 IMM 用例在 Session 1 必需模式单独通过。
 
-**仍未完成**：代码字体中文字形/emoji fallback、跨任务焦点变化下的组合提交策略、启动/首次交互阻塞。详见 [Windows 输入 QA](WINDOWS_INPUT_QA_20261020.md)，不以保存成功替代字形渲染验收。
+**输入阶段未完成**：代码字体中文字形/emoji fallback、跨任务焦点变化下的组合提交策略、启动/首次交互阻塞。详见 [Windows 输入 QA](WINDOWS_INPUT_QA_20261020.md)，不以保存成功替代字形渲染验收。其后的 [Windows 文本迭代](WINDOWS_TEXT_QA_20261020.md) 已独立验收原生文本回退，并纠正原生文件选择器的阻塞误报；不等于其余启动/输入问题全部解决。
 
 ## 本次改动
 
@@ -274,3 +274,5 @@ API 修复阶段 Windows 十二包 4,593 pass / 38 skip / 0 fail；随后发现�
 首次 F6 的缺少 go.sum 截图未算成功：移出 QA runtime 探针并在独立工程 go mod tidy 后，最终原生 Ctrl+End 输入确实落在最后非空行，Ctrl+S 磁盘回读与 F6 `build ok` 再验。最终导航进程 40 次菜单循环 GDI=82/82、USER=35/35，静置 20.229s 为 1.16% 单核 CPU，20 次均 Responding；不同已打开功能的资源基线不冒充同状态 A/B。
 
 详细步骤、75 文件源码/二进制身份和未完成边界见 [WINDOWS_RENDERING_QA_20261020.md](WINDOWS_RENDERING_QA_20261020.md)。没有以 GDI 修复冒充启动阻塞、中文 IME 或完整 Qt Creator 对等已解决。
+
+Race, render ownership and bounded UI scheduling follow-up: [2026-10-20 QA](RACE_RENDER_QA_20261020.md).

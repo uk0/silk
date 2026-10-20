@@ -19,7 +19,9 @@ func TestUIQueueBurstCoalescesWakeupsWithoutDroppingTasks(t *testing.T) {
 	if got := wakes.Load(); got != 1 {
 		t.Fatalf("200 pending tasks woke native loop %d times", got)
 	}
-	drainUITasks()
+	for len(order) < 200 {
+		drainUITasks()
+	}
 	if len(order) != 200 {
 		t.Fatalf("coalescing dropped tasks: %d", len(order))
 	}
@@ -28,8 +30,9 @@ func TestUIQueueBurstCoalescesWakeupsWithoutDroppingTasks(t *testing.T) {
 			t.Fatalf("FIFO order[%d]=%d", i, got)
 		}
 	}
+	wakesBefore := wakes.Load()
 	Post(func() { order = append(order, 200) })
-	if wakes.Load() != 2 {
+	if wakes.Load() != wakesBefore+1 {
 		t.Fatal("next batch did not wake a parked loop")
 	}
 	drainUITasks()
@@ -100,7 +103,9 @@ func TestUIQueueConcurrentBurstHasOneWakeup(t *testing.T) {
 	if got := wakes.Load(); got != 1 {
 		t.Fatalf("burst wakes=%d", got)
 	}
-	drainUITasks()
+	for ran < 640 {
+		drainUITasks()
+	}
 	if ran != 640 {
 		t.Fatalf("executed=%d", ran)
 	}

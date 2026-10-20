@@ -50,6 +50,8 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
+	"sync"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/uk0/silk/geom"
@@ -278,12 +280,13 @@ type gradStop struct {
 // most of the time, surface patterns for image brushes, and gradients
 // for theme buttons / cards / radial avatars.
 type Pattern struct {
-	kind   patternKind
-	col    color.Color
-	surf   *Surface
-	extend Extend
-	filter Filter
-	matrix geom.Mat3x2
+	kind        patternKind
+	col         color.Color
+	surf        *Surface
+	extend      Extend
+	filter      Filter
+	deviceSpace bool // group surfaces already contain device-space pixels
+	matrix      geom.Mat3x2
 
 	// Linear gradient endpoints in user space.
 	x0, y0, x1, y1 float64
@@ -556,17 +559,34 @@ func (this *ScaledFont) GlyphExtents_hack(p unsafe.Pointer, n int) *TextExtents 
 //
 // Returned glyphs are emitted via the `out` callback; silk's wrapper
 // in paint/font.go reads the buffer back into Go memory.
+var glyphScratch = sync.Pool{New: func() any { return new([]Glyph) }}
+
 func (this *ScaledFont) TextToGlyphs_hack(x, y float64, text string, out func(buf unsafe.Pointer, num int)) error {
-	runes := []rune(text)
-	if len(runes) == 0 {
+	n := utf8.RuneCountInString(text)
+	if n == 0 {
+		if out != nil {
+			out(nil, 0)
+		}
 		return nil
 	}
+	// Pool only the temporary callback buffer, never a font or its mutable mask.
+	// A nested callback gets its own buffer, and retained output is still copied.
+	scratch := glyphScratch.Get().(*[]Glyph)
+	if cap(*scratch) < n {
+		*scratch = make([]Glyph, 0, n)
+	}
+	glyphs := (*scratch)[:0]
+	defer func() {
+		if cap(glyphs) <= 4096 {
+			*scratch = glyphs[:0]
+			glyphScratch.Put(scratch)
+		}
+	}()
 	primary := this.latinFace()
 	cjk := (font.Face)(nil)
 
-	glyphs := make([]Glyph, 0, len(runes))
 	cx := x
-	for _, r := range runes {
+	for _, r := range text {
 		adv, ok := primary.GlyphAdvance(r)
 		if !ok {
 			if cjk == nil {
@@ -683,6 +703,9 @@ type Glyph struct {
 	Y     float64
 }
 
+// Index returns this backend's glyph identifier (a Unicode scalar value).
+func (g Glyph) Index() uint32 { return g.index }
+
 // ===== Misc types =====
 
 type Rectangle struct {
@@ -721,15 +744,21 @@ type Context struct {
 	surface *Surface
 	state   ctxState
 	stack   []ctxState
+	groups  []*Surface
 	path    []pathSeg
 	curX    float64
 	curY    float64
 	hasCur  bool
 }
 
-func (this *Context) Destroy()         {}
-func (this *Context) Status() Status   { return STATUS_SUCCESS }
-func (this *Context) Target() *Surface { return this.surface }
+func (this *Context) Destroy()       {}
+func (this *Context) Status() Status { return STATUS_SUCCESS }
+func (this *Context) Target() *Surface {
+	if len(this.groups) > 0 {
+		return this.groups[0]
+	}
+	return this.surface
+}
 
 // --- Save / Restore ---
 
@@ -747,10 +776,12 @@ func (this *Context) Restore() {
 // --- Source colour ---
 
 func (this *Context) SetSourceRGB(r, g, b float64) {
+	this.state.sourceSurf, this.state.sourceImage = nil, nil
 	this.state.source = f64ColorRGB(r, g, b, 1)
 }
 
 func (this *Context) SetSourceRGBA(r, g, b, a float64) {
+	this.state.sourceSurf, this.state.sourceImage = nil, nil
 	this.state.source = f64ColorRGB(r, g, b, a)
 }
 
@@ -767,6 +798,10 @@ func (this *Context) SetSource(p *Pattern) {
 
 	switch p.kind {
 	case patternKindSurface:
+		if p.deviceSpace && p.surf != nil {
+			this.state.sourceImage = p.surf.img
+			return
+		}
 		if p.surf != nil && p.surf.img != nil {
 			this.state.sourceSurf = p.surf.img
 			this.state.sourceX = -p.matrix.X0
@@ -791,6 +826,7 @@ func (this *Context) SetSourceSurface(s *Surface, x, y float64) {
 		this.state.sourceSurf = nil
 		return
 	}
+	this.state.sourceImage = nil
 	this.state.sourceSurf = s.img
 	this.state.sourceX = x
 	this.state.sourceY = y
@@ -802,16 +838,22 @@ func (this *Context) Source() *Pattern {
 
 // --- Pen / line attrs ---
 
-func (this *Context) SetLineWidth(w float64)   { this.state.lineWidth = w }
-func (this *Context) LineWidth() float64       { return this.state.lineWidth }
-func (this *Context) SetLineCap(c LineCap)     { this.state.lineCap = c }
-func (this *Context) LineCap() LineCap         { return this.state.lineCap }
-func (this *Context) SetLineJoin(j LineJoin)   { this.state.lineJoin = j }
-func (this *Context) LineJoin() LineJoin       { return this.state.lineJoin }
-func (this *Context) SetMiterLimit(m float64)  { this.state.miter = m }
-func (this *Context) MiterLimit() float64      { return this.state.miter }
-func (this *Context) SetDash(d Dash)           { this.state.dash = d }
-func (this *Context) Dash() Dash               { return this.state.dash }
+func (this *Context) SetLineWidth(w float64)  { this.state.lineWidth = w }
+func (this *Context) LineWidth() float64      { return this.state.lineWidth }
+func (this *Context) SetLineCap(c LineCap)    { this.state.lineCap = c }
+func (this *Context) LineCap() LineCap        { return this.state.lineCap }
+func (this *Context) SetLineJoin(j LineJoin)  { this.state.lineJoin = j }
+func (this *Context) LineJoin() LineJoin      { return this.state.lineJoin }
+func (this *Context) SetMiterLimit(m float64) { this.state.miter = m }
+func (this *Context) MiterLimit() float64     { return this.state.miter }
+func (this *Context) SetDash(d Dash) {
+	this.state.dash = Dash{Dashes: append([]float64(nil), d.Dashes...), Offset: d.Offset}
+}
+func (this *Context) Dash() Dash {
+	d := this.state.dash
+	d.Dashes = append([]float64(nil), d.Dashes...)
+	return d
+}
 func (this *Context) SetTolerance(v float64)   {}
 func (this *Context) Tolerance() float64       { return 0.1 }
 func (this *Context) SetAntialias(a Antialias) {}
@@ -939,9 +981,23 @@ func (this *Context) DeviceToUserDistance(x, y *float64) {
 
 // --- Path construction ---
 
-func (this *Context) NewPath()              { this.path = this.path[:0] }
-func (this *Context) NewSubPath()           {}
-func (this *Context) ClosePath()            { this.path = append(this.path, pathSeg{op: 'Z'}) }
+func (this *Context) NewPath() {
+	this.path = this.path[:0]
+	this.curX, this.curY, this.hasCur = 0, 0, false
+}
+func (this *Context) NewSubPath() { this.curX, this.curY, this.hasCur = 0, 0, false }
+func (this *Context) ClosePath() {
+	if !this.hasCur {
+		return
+	}
+	for i := len(this.path) - 1; i >= 0; i-- {
+		if p := this.path[i]; p.op == 'M' {
+			this.path = append(this.path, pathSeg{op: 'Z'})
+			this.curX, this.curY = p.x1, p.y1
+			return
+		}
+	}
+}
 func (this *Context) HasCurrentPoint() bool { return this.hasCur }
 
 func (this *Context) MoveTo(x, y float64) {
@@ -950,6 +1006,10 @@ func (this *Context) MoveTo(x, y float64) {
 }
 
 func (this *Context) LineTo(x, y float64) {
+	if !this.hasCur {
+		this.MoveTo(x, y)
+		return
+	}
 	this.path = append(this.path, pathSeg{op: 'L', x1: x, y1: y})
 	this.curX, this.curY, this.hasCur = x, y, true
 }
@@ -1015,17 +1075,14 @@ func (this *Context) appendArc(xc, yc, r, a0, a1 float64, sign float64) {
 	}
 	startX := xc + r*math.Cos(a0)
 	startY := yc + r*math.Sin(a0)
-	// Decide M-vs-L by what the path actually contains. Just checking
-	// hasCur is not enough: after Stroke / Fill the path is cleared but
-	// hasCur stays true (cairo preserves the current point across
-	// path-consuming ops). If we emitted LineTo with an empty path, the
-	// rasterizer would synthesise a stray line from (0, 0) to the arc
-	// start — which then fills as a giant wedge across the surface.
-	if len(this.path) == 0 {
+	// NewSubPath and consuming operations clear the current point; an arc
+	// must start a new subpath in that case instead of connecting to old ink.
+	if !this.hasCur {
 		this.MoveTo(startX, startY)
 	} else {
 		this.LineTo(startX, startY)
 	}
+
 	for i := 1; i <= steps; i++ {
 		t := float64(i) / float64(steps)
 		a := a0 + (a1-a0)*t
@@ -1073,7 +1130,18 @@ func (this *Context) CopyPath() *Path     { return &Path{segs: append([]pathSeg{
 func (this *Context) CopyPathFlat() *Path { return this.CopyPath() }
 func (this *Context) AppendPath(p *Path) {
 	if p != nil {
-		this.path = append(this.path, p.segs...)
+		for _, seg := range p.segs {
+			switch seg.op {
+			case 'M':
+				this.MoveTo(seg.x1, seg.y1)
+			case 'L':
+				this.LineTo(seg.x1, seg.y1)
+			case 'C':
+				this.CurveTo(seg.x1, seg.y1, seg.x2, seg.y2, seg.x3, seg.y3)
+			case 'Z':
+				this.ClosePath()
+			}
+		}
 	}
 }
 
@@ -1086,7 +1154,7 @@ func (this *Context) TextPath(s string) {
 
 func (this *Context) Fill() {
 	this.fillPath()
-	this.path = this.path[:0]
+	this.NewPath()
 }
 
 func (this *Context) FillPreserve() { this.fillPath() }
@@ -1162,7 +1230,7 @@ func (this *Context) InFill(x, y float64) bool             { return false }
 
 func (this *Context) Stroke() {
 	this.strokePath()
-	this.path = this.path[:0]
+	this.NewPath()
 }
 
 func (this *Context) StrokePreserve() { this.strokePath() }
@@ -1195,13 +1263,20 @@ func (this *Context) strokePath() {
 	if this.surface == nil || this.surface.img == nil {
 		return
 	}
+	if path, ok := dashedPath(this.path, this.state.dash); ok {
+		copy := *this
+		copy.path, copy.state.dash = path, Dash{}
+		copy.strokePath()
+		return
+	}
 	w, h := this.surface.width, this.surface.height
 	wpx := this.state.lineWidth
 	if wpx < 1 {
 		wpx = 1
 	}
 	hw := wpx * 0.5
-	r := vector.NewRasterizer(w, h)
+	raster := vector.NewRasterizer(w, h)
+	r := &transformedStroke{Rasterizer: raster, matrix: this.state.matrix}
 
 	cap := this.state.lineCap
 	join := this.state.lineJoin
@@ -1234,13 +1309,13 @@ func (this *Context) strokePath() {
 		switch p.op {
 		case 'M':
 			flushSubpath()
-			prevX, prevY = this.state.matrix.Transform(p.x1, p.y1)
+			prevX, prevY = p.x1, p.y1
 			subStartX, subStartY = prevX, prevY
 			subStart = true
 			have = true
 			addCap(prevX, prevY)
 		case 'L':
-			x, y := this.state.matrix.Transform(p.x1, p.y1)
+			x, y := p.x1, p.y1
 			if have {
 				strokeSegment(r, prevX, prevY, x, y, wpx)
 				if !subStart {
@@ -1251,9 +1326,9 @@ func (this *Context) strokePath() {
 			subStart = false
 		case 'C':
 			x0, y0 := prevX, prevY
-			cp1x, cp1y := this.state.matrix.Transform(p.x1, p.y1)
-			cp2x, cp2y := this.state.matrix.Transform(p.x2, p.y2)
-			x3, y3 := this.state.matrix.Transform(p.x3, p.y3)
+			cp1x, cp1y := p.x1, p.y1
+			cp2x, cp2y := p.x2, p.y2
+			x3, y3 := p.x3, p.y3
 			for i := 1; i <= 16; i++ {
 				t := float64(i) / 16
 				mt := 1 - t
@@ -1284,14 +1359,14 @@ func (this *Context) strokePath() {
 	}
 	flushSubpath()
 
-	this.rasterizeWithSource(r, this.drawRect())
+	this.rasterizeWithSource(raster, this.drawRect())
 }
 
 // strokeSegment rasterises a line as a thin oriented quad (offset by
 // half-width perpendicular to the segment). The quad is added to `r`
 // as a closed subpath with non-zero winding so it composes cleanly
 // with adjacent segments and join discs.
-func strokeSegment(r *vector.Rasterizer, x0, y0, x1, y1, width float64) {
+func strokeSegment(r strokePathWriter, x0, y0, x1, y1, width float64) {
 	dx, dy := x1-x0, y1-y0
 	l := math.Hypot(dx, dy)
 	if l == 0 {
@@ -1306,10 +1381,31 @@ func strokeSegment(r *vector.Rasterizer, x0, y0, x1, y1, width float64) {
 	r.ClosePath()
 }
 
+// Stroke outlines are constructed in user space, then transformed as a whole.
+// Transforming only the centerline left high-DPI strokes one device pixel wide.
+type strokePathWriter interface {
+	MoveTo(float32, float32)
+	LineTo(float32, float32)
+	ClosePath()
+}
+type transformedStroke struct {
+	*vector.Rasterizer
+	matrix geom.Mat3x2
+}
+
+func (r *transformedStroke) MoveTo(x, y float32) {
+	a, b := r.matrix.Transform(float64(x), float64(y))
+	r.Rasterizer.MoveTo(float32(a), float32(b))
+}
+func (r *transformedStroke) LineTo(x, y float32) {
+	a, b := r.matrix.Transform(float64(x), float64(y))
+	r.Rasterizer.LineTo(float32(a), float32(b))
+}
+
 // addStrokeDisc emits a 16-segment polygon approximation of a disc
 // centred at (cx, cy) with radius `radius`. Used by round caps and
 // round joins. Each call appends one closed subpath to `r`.
-func addStrokeDisc(r *vector.Rasterizer, cx, cy, radius float64) {
+func addStrokeDisc(r strokePathWriter, cx, cy, radius float64) {
 	if radius <= 0 {
 		return
 	}
@@ -1346,45 +1442,20 @@ func (this *Context) PaintWithAlpha(alpha float64) {
 		return
 	}
 	dr := this.drawRect()
-	if dr.Empty() {
-		return
-	}
-
+	src, sp := this.sourceForDraw(dr)
+	op := draw.Over
 	switch this.state.operator {
 	case OPERATOR_CLEAR:
-		// Result = (0,0,0,0). Source is ignored entirely.
-		clear := color.RGBA{}
-		draw.Draw(this.surface.img, dr, &image.Uniform{C: clear}, image.Point{}, draw.Src)
-		return
+		src, sp = &image.Uniform{C: color.RGBA{}}, image.Point{}
+		op = draw.Src
 	case OPERATOR_SOURCE:
-		// Result = source. Replaces dst even where source is transparent.
-		if this.state.sourceSurf != nil {
-			draw.Draw(this.surface.img, dr, this.state.sourceSurf,
-				this.sourceSamplePoint(dr.Min), draw.Src)
-			return
-		}
-		src := this.state.source
-		if src == nil {
-			src = color.RGBA{}
-		}
-		col := scaleAlpha(src, alpha)
-		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Src)
-		return
-	default:
-		// OPERATOR_OVER (the cairo default) and any other operator we
-		// haven't specialised: alpha-blend source over dst.
-		if this.state.sourceSurf != nil {
-			draw.Draw(this.surface.img, dr, this.state.sourceSurf,
-				this.sourceSamplePoint(dr.Min), draw.Over)
-			return
-		}
-		src := this.state.source
-		if src == nil {
-			return
-		}
-		col := scaleAlpha(src, alpha)
-		draw.Draw(this.surface.img, dr, &image.Uniform{C: col}, image.Point{}, draw.Over)
+		op = draw.Src
 	}
+	if alpha >= 1 {
+		draw.Draw(this.surface.img, dr, src, sp, op)
+		return
+	}
+	draw.DrawMask(this.surface.img, dr, src, sp, &image.Uniform{C: color.Alpha{A: clamp8(alpha)}}, image.Point{}, op)
 }
 
 // sourceSamplePoint returns the (x, y) pixel inside state.sourceSurf
@@ -1425,7 +1496,7 @@ func scaleAlpha(c color.Color, alpha float64) color.RGBA {
 
 func (this *Context) Clip() {
 	this.applyClip()
-	this.path = this.path[:0]
+	this.NewPath()
 }
 
 func (this *Context) ClipPreserve() { this.applyClip() }
@@ -1580,15 +1651,66 @@ func (this *Context) InClip(x, y float64) bool { return true }
 
 // --- Group / mask ---
 
-func (this *Context) PushGroup()                           {}
-func (this *Context) PushGroupWidthContent(c Content)      {}
-func (this *Context) PopGroup() *Pattern                   { return &Pattern{} }
-func (this *Context) PopGroupToSource()                    {}
-func (this *Context) GroupTarget() *Surface                { return this.surface }
-func (this *Context) Mask(p *Pattern)                      {}
-func (this *Context) MaskSurface(s *Surface, x, y float64) {}
-func (this *Context) CopyPage()                            {}
-func (this *Context) ShowPage()                            {}
+func (this *Context) PushGroup() {
+	this.Save()
+	this.groups = append(this.groups, this.surface)
+	this.surface = NewImageSurface(FORMAT_ARGB32, this.surface.width, this.surface.height)
+}
+func (this *Context) PushGroupWidthContent(c Content) { this.PushGroup() }
+func (this *Context) PopGroup() *Pattern {
+	if len(this.groups) == 0 {
+		return &Pattern{}
+	}
+	p := NewPatternForSurface(this.surface)
+	p.deviceSpace = true
+	n := len(this.groups) - 1
+	this.surface = this.groups[n]
+	this.groups[n] = nil
+	this.groups = this.groups[:n]
+	this.Restore()
+	return p
+}
+func (this *Context) PopGroupToSource()     { this.SetSource(this.PopGroup()) }
+func (this *Context) GroupTarget() *Surface { return this.surface }
+func (this *Context) sourceForDraw(dr image.Rectangle) (image.Image, image.Point) {
+	if this.state.sourceImage != nil {
+		return this.state.sourceImage, dr.Min
+	}
+	if this.state.sourceSurf != nil {
+		return this.state.sourceSurf, this.sourceSamplePoint(dr.Min)
+	}
+	col := this.state.source
+	if col == nil {
+		col = color.RGBA{}
+	}
+	return &image.Uniform{C: col}, image.Point{}
+}
+func (this *Context) Mask(p *Pattern) {
+	if p == nil || this.surface == nil || this.surface.img == nil {
+		return
+	}
+	dr := this.drawRect()
+	src, sp := this.sourceForDraw(dr)
+	maskContext := *this
+	maskContext.SetSource(p)
+	mask, mp := maskContext.sourceForDraw(dr)
+	op := draw.Over
+	if this.state.operator == OPERATOR_SOURCE {
+		op = draw.Src
+	} else if this.state.operator == OPERATOR_CLEAR {
+		src, sp = &image.Uniform{C: color.RGBA{}}, image.Point{}
+		op = draw.Src
+	}
+	draw.DrawMask(this.surface.img, dr, src, sp, mask, mp, op)
+}
+func (this *Context) MaskSurface(s *Surface, x, y float64) {
+	p := NewPatternForSurface(s)
+	p.matrix.X0 = -x
+	p.matrix.Y0 = -y
+	this.Mask(p)
+}
+func (this *Context) CopyPage() {}
+func (this *Context) ShowPage() {}
 
 // --- Font ---
 
@@ -1730,7 +1852,7 @@ func (this *Context) GlyphExtents(glyphs []Glyph) *TextExtents {
 // ===== Helpers =====
 
 func f64ColorRGB(r, g, b, a float64) color.Color {
-	return color.RGBA{
+	return color.NRGBA{
 		R: clamp8(r),
 		G: clamp8(g),
 		B: clamp8(b),
@@ -1739,13 +1861,13 @@ func f64ColorRGB(r, g, b, a float64) color.Color {
 }
 
 func clamp8(v float64) uint8 {
-	if v <= 0 {
+	if v <= 0 || math.IsNaN(v) {
 		return 0
 	}
 	if v >= 1 {
 		return 255
 	}
-	return uint8(v * 255)
+	return uint8(math.Round(v * 255))
 }
 
 // Multiplygeom.Mat3x2 mirrors the original cairo.go helper used by

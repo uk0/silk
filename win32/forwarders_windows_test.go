@@ -115,14 +115,15 @@ func TestTranslateAcceleratorDispatchesNativeCommand(t *testing.T) {
 		t.Fatal("CreateWindowEx failed")
 	}
 	defer DestroyWindow(h)
-	// Native ACCEL has byte/WORD/WORD fields, with two-byte alignment.
-	accel := struct {
-		flags, padding uint8
-		key, command   uint16
-	}{flags: 1, key: VK_F12, command: 0x7345}
-	table, _, _ := moduser32.NewProc("CreateAcceleratorTableW").Call(uintptr(unsafe.Pointer(&accel)), 1)
+	// ACCEL records have a six-byte layout, but Win10 probes the table's
+	// base at DWORD alignment. A Go struct aligned only to WORD can land at
+	// address % 4 == 2 under -race and fail with ERROR_NOACCESS. Use aligned
+	// storage for this single record without inventing an eight-byte array stride.
+	accel := [2]uint32{uint32(VK_F12)<<16 | 1, 0x7345}
+	table, _, tableErr := moduser32.NewProc("CreateAcceleratorTableW").Call(uintptr(unsafe.Pointer(&accel[0])), 1)
+	runtime.KeepAlive(accel)
 	if table == 0 {
-		t.Fatal("CreateAcceleratorTableW failed")
+		t.Fatalf("CreateAcceleratorTableW failed: %v", tableErr)
 	}
 	defer moduser32.NewProc("DestroyAcceleratorTable").Call(table)
 	msg := MSG{Hwnd: h, Message: WM_KEYDOWN, WParam: VK_F12}

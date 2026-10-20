@@ -4,6 +4,7 @@ name: CI
 # — pushes to main are local merges, not events that should consume
 # Actions minutes. Tag pushes are handled by release.yml.
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, opengl]
 
@@ -96,6 +97,10 @@ jobs:
         # unkeyed; keep all other analyzers enabled, matching local QA.
         run: go vet -composites=false ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
 
+      - name: Test release version validation
+        shell: bash
+        run: bash scripts/test-release-version.sh
+
       - name: Test platform packaging scripts
         run: bash scripts/test-platform-scripts.sh
 
@@ -107,6 +112,18 @@ jobs:
       # exhaust the runner (cairo + sqlite amalgamation compile at once).
       - name: Test (core UI)
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./printing/ ./core/ ./geom/ ./cairo/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./internal/processutil/
+
+      - name: Race regression (UI scheduling and asynchronous work)
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
+
+      - name: Win32 SDK race regression
+        if: runner.os == 'Windows'
+        run: go test -race -count=1 ./win32/
+
+      - name: Pure-Go rendering parity
+        env:
+          CGO_ENABLED: '0'
+        run: go test -count=1 -tags silk_pure_go ./cairo/ ./purecairo/ ./paint/
 
       - name: Verify native GL texture uploads
         if: runner.os != 'Windows'

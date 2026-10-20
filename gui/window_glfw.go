@@ -145,6 +145,8 @@ type Window struct {
 	dndCtx        *dndContext
 }
 
+var glfwWakeup = nativeWakeup{fn: glfw.PostEmptyEvent}
+
 func init() {
 	runtime.LockOSThread()
 
@@ -176,7 +178,7 @@ func init() {
 	glfwReady = glfwInitErr == nil
 	if glfwReady {
 		// Only initialized GLFW may be called by off-thread Post() wakeups.
-		SetUIWakeup(glfw.PostEmptyEvent)
+		SetUIWakeup(glfwWakeup.wake)
 	}
 	core.Debug("Main screen DPI: ", screenDpi)
 
@@ -1668,6 +1670,7 @@ func MainLoop() {
 
 	flushNativeDestruction()
 	SetUIWakeup(nil)
+	glfwWakeup.stop() // join producers that already copied the old hook
 	glfwReady = false
 	glfw.Terminate()
 }

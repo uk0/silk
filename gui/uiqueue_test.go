@@ -113,7 +113,10 @@ func TestUIQueuePanicIsolation(t *testing.T) {
 	// A panicking task must not propagate out of drainUITasks...
 	drainUITasks()
 
-	// ...and must not stop later tasks in the same batch.
+	// The stack report itself can exceed the soft time budget (especially
+	// over Windows stderr). A yielded remainder must still run on the next turn.
+	drainUITasks()
+	// ...and must not lose later tasks in the same snapshot.
 	if !first {
 		t.Fatal("task before the panicking one did not run")
 	}
