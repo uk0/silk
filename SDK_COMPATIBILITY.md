@@ -174,3 +174,17 @@ git diff --check
   an unrelated same-name sibling surviving, and bounded reads after parent exit.
   This is not Job Object isolation: already-detached descendants whose parent
   has exited cannot be guaranteed to terminate; their pipes cannot hang cancel.
+
+## 2026-10-20 visual-quality follow-up
+
+Raster/custom icons now select source resolution using the actual affine device
+transform while preserving fractional logical bounds. Windows offscreen font
+rendering explicitly uses grayscale antialiasing; GLFW presentation consumes
+Cairo premultiplied alpha without darkening edge pixels a second time. Native
+GL QA now checks presented framebuffer RGB, not just uploaded texture bytes.
+
+This is **not Windows per-monitor DPI support**. The Win32 backend still lacks a
+complete logical/device coordinate conversion and WM_DPICHANGED lifecycle;
+Windows bitmap virtualization can remain blurry above 100% system scaling.
+Changing the manifest alone would break geometry/input/IME assumptions. CTM
+pixel tests at 125% / 150% / 200% are not system-DPI or cross-monitor acceptance.

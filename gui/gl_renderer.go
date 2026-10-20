@@ -111,6 +111,11 @@ func drawFullscreenQuad(texture uint32, fbWidth, fbHeight int32) {
 // caller to display only a sub-region of a texture that is larger than
 // the viewport (e.g. when the backbuffer was allocated with padding).
 func drawFullscreenQuadUV(texture uint32, fbWidth, fbHeight int32, texU, texV float32) {
+	// Cairo ARGB32 already contains RGB multiplied by alpha. Multiplying
+	// again (SRC_ALPHA) darkens anti-aliased edges and translucent UI surfaces.
+	// GPU chart vertices use straight alpha, so restore their blend convention.
+	gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+	defer gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	gl.ClearColor(0.2, 0.2, 0.2, 1)
 	gl.Clear(gl.COLOR_BUFFER_BIT)
 

@@ -37,6 +37,7 @@ Windows/macOS application icons live in [assets/branding](assets/branding/README
 *Actual Windows 10 interactive desktop capture from the 2026-10-20 iteration (PDT), limited to the application frame. See [Windows rendering and SDK QA](WINDOWS_RENDERING_QA_20261020.md) for reproducible steps and remaining issues.*
 
 [Actual Windows menu capture](screenshots/silkide-menu-windows.png).
+[Latest Windows font / menu QA capture](screenshots/silkide-windows-visual.png) (debug outlines enabled).
 [Windows IME positioning and Unicode input follow-up](WINDOWS_INPUT_QA_20261020.md).
 
 ```bash
@@ -89,7 +90,10 @@ Windows input/paint/timer starvation during callback bursts, joins outstanding
 GLFW wakeups before shutdown, and serializes build-progress delivery. The
 optional pure-Go backend no longer shares mutable glyph buffers across separate
 canvases, and its dash, exact-color, disabled-icon and high-DPI stroke regressions
-are covered. See [race and rendering QA](RACE_RENDER_QA_20261020.md) for actual
+are covered. Raster/custom icons now select device-resolution sources, Windows offscreen
+text uses neutral grayscale antialiasing, and the GL blit respects premultiplied
+alpha instead of darkening translucent edges. These fixes do not add Windows
+per-monitor DPI awareness. See [race and rendering QA](RACE_RENDER_QA_20261020.md) for actual
 commands, evidence and remaining backend limits.
 
 

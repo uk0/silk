@@ -360,68 +360,67 @@ func (this *cairoPainter) DrawIcon1(ico Icon, x, y, fSize float64, grayed bool) 
 	this.Translate(-x, -y)
 }
 
-func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
+// iconDeviceSize chooses source resolution, not layout size. The largest
+// singular value covers rotation, non-uniform scale and shear. Bound custom
+// Icon.Pixmap allocations even if a caller supplies an extreme zoom transform.
+func iconDeviceSize(size float64, m geom.Mat3x2) int {
+	a, b := math.Hypot(m.Xx+m.Yy, m.Yx-m.Xy), math.Hypot(m.Xx-m.Yy, m.Yx+m.Xy)
+	pixels := size * (a + b) / 2
+	if pixels <= 0 || math.IsNaN(pixels) || math.IsInf(pixels, 0) {
+		return 0
+	}
+	return int(math.Min(4096, math.Ceil(pixels-1e-9)))
+}
 
-	if ico == nil || ico.IsAir() {
+func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
+	if ico == nil || ico.IsAir() || fSize <= 0 || math.IsNaN(fSize) || math.IsInf(fSize, 0) {
 		return
 	}
-
-	size := int(fSize + 0.5)
+	if x, ok := ico.(*icon); ok && x.draw != nil {
+		drawProceduralIcon(this.cairo, x.draw, fSize, grayed)
+		return
+	}
+	var ctm geom.Mat3x2
+	this.cairo.GetMatrix(&ctm)
+	size := iconDeviceSize(fSize, ctm)
+	if size <= 0 {
+		return
+	}
+	var img *cairoSurface
+	var pat *cairo.Pattern
 	switch x := ico.(type) {
 	case *icon:
-		if x.draw != nil {
-			if fSize > 0 && !math.IsNaN(fSize) && !math.IsInf(fSize, 0) {
-				drawProceduralIcon(this.cairo, x.draw, fSize, grayed)
-			}
-			return
-		}
 		sub := x.getNearest(size)
 		if sub == nil {
 			return
 		}
-		sz := sub.img.Width()
-		if sz != size {
-			if sub.pat == nil {
-				sub.pat = cairo.NewPatternForSurface(sub.img.Surface)
-			}
-			var m geom.Mat3x2
-			scale := float64(sz) / float64(size)
-			m.InitScale(scale, scale)
-			sub.pat.SetMatrix(&m)
-			this.cairo.SetSource(sub.pat)
-		} else {
-			this.SetSourceSurface(sub.img, 0, 0)
+		img = sub.img
+		if sub.pat == nil {
+			sub.pat = cairo.NewPatternForSurface(img.Surface)
+			runtime.SetFinalizer(sub, func(s *subIcon) { s.pat.Destroy() })
 		}
-
-		if grayed {
-			this.SetOperator(OpHslLuminosity)
-		}
-		this.cairo.Paint()
-		this.SetOperator(OpOver)
-
-		this.cairo.SetSourceRGB(0, 0, 0)
-
+		pat = sub.pat
 	default:
-		// Generic Icon: get pixmap at requested size and draw it
-		px := ico.Pixmap(size)
-		if px != nil {
-			if cs, ok := px.(*cairoSurface); ok {
-				pw := cs.Width()
-				if pw != size && pw > 0 {
-					scale := float64(pw) / float64(size)
-					var m geom.Mat3x2
-					m.InitScale(scale, scale)
-					pat := cairo.NewPatternForSurface(cs.Surface)
-					pat.SetMatrix(&m)
-					this.cairo.SetSource(pat)
-				} else {
-					this.SetSourceSurface(cs, 0, 0)
-				}
-				this.cairo.Paint()
-				this.cairo.SetSourceRGB(0, 0, 0)
-			}
+		var ok bool
+		img, ok = ico.Pixmap(size).(*cairoSurface)
+		if !ok || img == nil || img.Width() <= 0 || img.Height() <= 0 {
+			return
 		}
+		pat = cairo.NewPatternForSurface(img.Surface)
+		defer pat.Destroy()
 	}
+	// Keep the requested fractional logical extent: rounding it to an integer
+	// enlarges small icons and adds a second resampling step at fractional DPI.
+	var m geom.Mat3x2
+	m.InitScale(float64(img.Width())/fSize, float64(img.Height())/fSize)
+	pat.SetMatrix(&m)
+	this.cairo.Save()
+	this.cairo.SetSource(pat)
+	if grayed {
+		this.cairo.SetOperator(cairo.OPERATOR_HSL_LUMINOSITY)
+	}
+	this.cairo.Paint()
+	this.cairo.Restore()
 }
 
 func (this *cairoPainter) DrawText(text string) {

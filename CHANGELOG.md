@@ -24,6 +24,12 @@
 - Add Windows native missing-glyph fallback for simple LTR text, keeping
   measurement, drawing and IME cursor geometry aligned. Native file dialogs no
   longer generate false UI-watchdog stall reports while awaiting user input.
+- Select raster and custom icon resolutions from the device transform instead
+  of logical size; preserve fractional layout dimensions without upscaling
+  a low-resolution source when a suitable asset is available.
+- Use grayscale Windows offscreen font antialiasing to avoid LCD color fringes.
+  Fix double-alpha darkening in Cairo-to-OpenGL presentation; native readback
+  now verifies final displayed pixels as well as texture uploads.
 - Bump SilkIDE to 0.1.4; add native/race/pure-Go release gates and archive checksums.
 
 

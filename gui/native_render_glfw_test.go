@@ -29,6 +29,25 @@ func (w *nativeRenderProbeWidget) Draw(p paint.Painter) {
 	p.SetBrush(paint.Color{R: 10, G: 20, B: 30, A: 255})
 	p.Rectangle(0, 0, w.Width(), w.Height())
 	p.Fill()
+	// One-device-pixel patterns reveal any extra texture resampling. A
+	// translucent patch catches double multiplication of Cairo's premultiplied
+	// RGB, which texture-only readback cannot detect.
+	var matrix geom.Mat3x2
+	p.GetMatrix(&matrix)
+	for x := 40; x < 60; x++ {
+		c := paint.Color{R: 255, A: 255}
+		if x%2 == 0 {
+			c = paint.Color{G: 255, A: 255}
+		}
+		p.SetBrush(c)
+		p.Rectangle(float64(x)/matrix.Xx, 20, 1/matrix.Xx, 8)
+		p.Fill()
+	}
+	p.SetOperator(paint.OpSource)
+	p.SetBrush(paint.Color{R: 240, G: 120, B: 60, A: 128})
+	p.Rectangle(30, 40, 12, 8)
+	p.Fill()
+	p.SetOperator(paint.OpOver)
 	if w.changed {
 		p.SetBrush(paint.Color{R: 200, G: 80, B: 40, A: 255})
 		p.Rectangle(8, 8, 12, 10)
@@ -100,6 +119,34 @@ func runNativeRenderProbe() error {
 			for y := 0; y < win.backHeight; y++ {
 				if !bytes.Equal(got[y*win.backWidth*4:(y+1)*win.backWidth*4], src[y*win.backBuffer.Stride():y*win.backBuffer.Stride()+win.backWidth*4]) {
 					return fmt.Errorf("%s pbo=%v: stale texture row %d", stage, pbo, y)
+				}
+			}
+			// Re-present into the backbuffer (SwapBuffers leaves its contents
+			// undefined) and inspect the actual final blit, not just the upload.
+			gl.DrawBuffer(gl.BACK)
+			drawFullscreenQuad(win.glTexture, int32(win.backWidth), int32(win.backHeight))
+			var blendSrc, blendDst int32
+			gl.GetIntegerv(gl.BLEND_SRC, &blendSrc)
+			gl.GetIntegerv(gl.BLEND_DST, &blendDst)
+			if blendSrc != gl.SRC_ALPHA || blendDst != gl.ONE_MINUS_SRC_ALPHA {
+				return fmt.Errorf("%s: blit leaked premultiplied blend state into GPU overlays", stage)
+			}
+			gl.ReadBuffer(gl.BACK)
+			gl.ReadPixels(0, 0, int32(win.backWidth), int32(win.backHeight), gl.BGRA, gl.UNSIGNED_BYTE, gl.Ptr(got))
+			if err := gl.GetError(); err != gl.NO_ERROR {
+				return fmt.Errorf("%s: framebuffer readback error %d", stage, err)
+			}
+			for y := 0; y < win.backHeight; y++ {
+				for x := 0; x < win.backWidth; x++ {
+					si := y*win.backBuffer.Stride() + x*4
+					di := ((win.backHeight-1-y)*win.backWidth + x) * 4
+					for c := 0; c < 3; c++ {
+						want := int(src[si+c]) + (51*(255-int(src[si+3]))+127)/255
+						delta := int(got[di+c]) - want
+						if delta < -1 || delta > 1 {
+							return fmt.Errorf("%s pbo=%v: presented pixel (%d,%d) channel=%d got=%d want=%d alpha=%d", stage, pbo, x, y, c, got[di+c], want, src[si+3])
+						}
+					}
 				}
 			}
 			return nil

@@ -12,6 +12,13 @@
 - **独立画布的字体竞争**：八个独立 purecairo context 并发绘制，在旧实现触发 OpenType/sfnt scratch-buffer race、字形错误和崩溃。现在共享不可变字体表，不共享可变 `font.Face`；临时 glyph 数组使用有容量上限的池，每次调用独占，嵌套调用不覆盖外层。
 - **纯 Go 绘制**：修复颜色转换截断及非预乘/预乘混淆、路径恢复后 current point 错误、空文本未清空复用 glyph buffer、虚线未实现、高 DPI 仅变换中心线不变换描边宽度，以及禁用图标所依赖的嵌套 group/alpha mask。前一轮记录的 26 个失败记录（含父/子项）所在绘制专项已全绿。
 
+## 本轮追加：锯齿、模糊与边缘颜色
+
+- **位图图标选错分辨率**：原先 `DrawIcon` 只按逻辑 16px 请求 PNG / 自定义 `Icon.Pixmap`，125% / 150% / 200% / 300% 变换仍放大 16px。新增棋盘像素用例在旧实现四档均失败；现按 CTM 的最大伸缩倍率选择真实设备分辨率，并保留小数逻辑尺寸、原有 painter 状态。自定义位图分配边长有 4096 上限，已有低清资源不会凭空变成高清。
+- **Windows 字体彩边**：Win10 原生 Cairo 默认 / subpixel 探针得到相同的彩色字边；固定灰度抗锯齿后白色字形的 RGB 三通道逐像素相等，保留部分透明覆盖。100% / 125% / 150% / 200% CTM 的 ASCII + 中文回退专项全部通过，不依赖修改系统 ClearType / RDP 设置。只改变 Windows 离屏文字策略，不修改 macOS / Linux 默认字体策略。
+- **GL 合成再次乘 alpha**：旧最终画面读回得到半透明像素蓝通道 40，按 Cairo 预乘格式应为 55；此前仅纹理上传读回无法发现。改用 `ONE, ONE_MINUS_SRC_ALPHA` 呈现 Cairo 帧，再恢复 GPU 图表的直通 alpha 约定。真实 macOS GL 对 PBO / 直接上传、全量 / 局部帧的最终 RGB 和单像素条纹逐像素验收通过；透明合成允许最多 1/255 的舍入差异，验证没有污染后续 overlay 混合状态。
+- **明确未覆盖**：这些缩放用例是画布 CTM 验证，不是修改 Windows 系统缩放后的桌面验收。当前 Win32 后端尚未完整实现 per-monitor DPI awareness；系统对 DPI-unaware 窗口做位图拉伸仍可能模糊。没有只加 DPI manifest 开关而让控件大小、鼠标与 IME 坐标失配。用户所见新现象的原尺寸截图 / 平台 / 系统缩放尚待补充，不能把本次三处实证修复泛化成所有模糊均已消失。
+
 ## 验证
 
 ### macOS arm64
@@ -31,7 +38,10 @@
 - 第一次 UI 验收的 PowerShell Process 对象没有保留退出码；保留其失败记录，修正为提前持有原生查询句柄后，用全新工作区完整复跑通过，不把空 ExitCode 当 0。
 - 普通 GUI 构建同一交互流程通过，原生退出码 0。启动稳定后欢迎页空闲 12 秒消耗 **0.234375 CPU 秒**（约单核 1.95%，不是整机 CPU 百分比）；仅为该机器单次观察，不是启动/输入延迟认证或提速倍数。
 - 后续 Windows CI 发现 checkout / TempDir 跨盘的相对路径测试假设，以及 Git Bash 的 Unix PID / signal(0) 并不等于 Windows 进程句柄。修正跨盘 fixture，并新增不依赖 shell 的原生子进程测试；旧实现复现取消后仍卡在继承管道。任务树测试验证后代退出、同名无关 sibling 不受影响，另以握手文件 + 原生父句柄证明父进程先退出的孤儿管道分支。
-- 最终 CI、打包制品和发布状态在完成后补记。未完成的执行不记为通过。
+- race / task-runner 修复提交 `5823cd1` 的[四平台 CI](https://github.com/uk0/silk/actions/runs/39426374069)全部成功；这是追加画质改动之前的基线，不冒充最终提交的 CI。
+- 画质追加：本地 paint / gui / cmd/silkide 三包 `-race` **2,425 pass / 4 skip / 0 fail**，其后新增的变换边界用例在 paint `-race` 再次通过；纯 Go 两包通过；Win10 paint `-race -count=3`、字体四档 CTM 像素检查通过。
+- 画质版 Win10 Session 1 完整重跑：实际鼠标打开文件菜单并截图（不是仅发快捷键）、拼音及 Unicode 保存回读、取消、Save All、8 秒原生对话框、F7 4,000 行输出与 12 轮窗口缩放均通过，原生退出码 0。欢迎页 / 编辑器各 12 秒空闲分别消耗 0.28125 / 0.109375 CPU 秒，均保持响应；单次观察不当作性能保证。截图见 [菜单与文字](screenshots/silkide-windows-visual.png)。
+- 画质追加后的最终 CI、打包制品和发布状态在完成后补记。Windows 系统 DPI 问题尚未解除前不报告“所有模糊已解决”。
 
 四平台 CI 首轮补充发现两个环境相关测试缺陷：Windows CRLF checkout 导致三个源码提取 helper 错判函数终止位置，现改用 Go AST 并添加 CRLF / LF / 原始字符串 / 无末尾换行测试，同类 IDE / 旧设计器线程检查也同步修复；macOS hosted VM 缺少 NSGL 像素格式，关闭回调测试现使用不需要 GL 的真实窗口。渲染探针独立创建 GL context，CI macOS 的 `auto` 模式仅允许已知的 GL 能力错误显式 skip，像素差异和其他错误仍失败；Linux CI 及本机 macOS 继续 strict 模式。本机改动后完整 gui race 和 strict GL 读回均再次通过，不将 hosted macOS 的 GL skip 写成渲染通过。
 
@@ -51,3 +61,5 @@ Windows `-race` 另暴露了一处原生 accelerator **测试夹具**的 ABI 假
 `bin/qa-artifacts/iteration-20261020-race/` 保存旧实现失败、源码 manifest、上传日志、原始 JSONL、Windows 脚本、截图及 stdout/stderr。关键基线为 `progress-before.log`、`queue-before.log`、`pure-font-race-before.log`；最终本地记录为 `macos-race-release.jsonl`、`pure-go-verified.jsonl`、`macos-native-render.log`。
 
 Windows 首次类别 mask 方案未能让实际到期定时器越过 posted wake；保留失败后改用显式 WM_PAINT/WM_TIMER 范围，原生专项连续 5 轮通过。panic 日志打印超过 4 ms 时正确让出，旧断言已改为下一轮仍须执行剩余任务，未放宽丢任务检查。中间两条源码 wiring guard 因消息选择器重构失败，已更新为验证新的共用选择器并额外约束其 blocking GetMessage fallback；旧失败日志保留，不删除或改写成成功。无关 `gen_image/` 和根目录 `silkide` 不纳入本次提交。
+
+画质负向证据：`visual-before.log`（高 DPI 资源选错）、`visual-gl-before.log`（预乘 alpha 暗边）、`visual-probe/{default,gray}.png`（原生字体彩边）；正向证据：`visual-gl-final.log`、`visual-windows-after.log`、`visual-regression.jsonl`、`visual-ui-run.log`。正式发布仍需最终 CI、归档校验与制品本体 GUI 验收。

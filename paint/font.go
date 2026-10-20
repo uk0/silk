@@ -16,7 +16,19 @@ var fontFaceCache = make(map[string]*fontFace)
 var fontFaceCacheAccessId uint64
 var scaledFontCache = hashmap.NewHashMap(hashScaledFontCacheKey, equalScaledFontCacheKey)
 var scaledFontCacheAccessId uint64
-var globalFontOptions = cairo.NewFontOptions()
+var globalFontOptions = newUIFontOptions()
+
+func newUIFontOptions() *cairo.FontOptions {
+	options := cairo.NewFontOptions()
+	if runtime.GOOS == "windows" {
+		// We render into ARGB offscreen surfaces, not directly to a known RGB
+		// LCD. ClearType's colored coverage becomes fringes when composited,
+		// scaled or viewed remotely. Explicit grayscale AA is orientation-neutral
+		// and also avoids inheriting disabled font smoothing from an RDP session.
+		options.SetAntialias(cairo.ANTIALIAS_GRAY)
+	}
+	return options
+}
 
 // Atomic because the decrements happen in finalizers, which the runtime runs
 // on its own goroutine concurrently with whatever thread is allocating.
