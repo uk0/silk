@@ -1,6 +1,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	gotoken "go/token"
 	"os"
 	"regexp"
 	"strings"
@@ -116,14 +119,34 @@ func silkideFuncBody(t *testing.T, header string) string {
 	if err != nil {
 		t.Fatalf("cannot read main.go: %v", err)
 	}
-	start := strings.Index(string(src), header)
+	text := strings.ReplaceAll(string(src), "\r\n", "\n")
+	start := strings.Index(text, header)
 	if start < 0 {
 		t.Fatalf("main.go does not contain %q", header)
 	}
-	rest := string(src)[start+len(header):]
-	end := strings.Index(rest, "\n}\n")
-	if end < 0 {
-		t.Fatalf("%q is not terminated", header)
+	set := gotoken.NewFileSet()
+	parsed, err := parser.ParseFile(set, "source.go", text, 0)
+	if err != nil {
+		t.Fatalf("cannot parse source: %v", err)
 	}
-	return rest[:end]
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Body != nil && set.Position(fn.Pos()).Offset == start {
+			return text[start+len(header) : set.Position(fn.Body.Rbrace).Offset]
+		}
+	}
+	t.Fatalf("%q is not a function declaration", header)
+	return ""
+}
+
+func TestSilkideFuncBodyWithCRLFAndRawStringBraces(t *testing.T) {
+	t.Chdir(t.TempDir())
+	source := "package fixture\r\nfunc fixture() {\r\n_ = `\r\n}\r\n`\r\nlastCall()\r\n}"
+	if err := os.WriteFile("main.go", []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body := silkideFuncBody(t, "func fixture() {")
+	if !strings.Contains(body, "lastCall()") || strings.Contains(body, "\r") {
+		t.Fatalf("invalid function boundary: %q", body)
+	}
 }

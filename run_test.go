@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	gotoken "go/token"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,16 +59,24 @@ func funcBody(t *testing.T, file, header string) string {
 	if err != nil {
 		t.Fatalf("cannot read %s: %v", file, err)
 	}
-	start := strings.Index(string(src), header)
+	text := strings.ReplaceAll(string(src), "\r\n", "\n")
+	start := strings.Index(text, header)
 	if start < 0 {
 		t.Fatalf("%s does not contain %q", file, header)
 	}
-	rest := string(src)[start+len(header):]
-	end := strings.Index(rest, "\n}\n")
-	if end < 0 {
-		t.Fatalf("%q in %s is not terminated", header, file)
+	set := gotoken.NewFileSet()
+	parsed, err := parser.ParseFile(set, "source.go", text, 0)
+	if err != nil {
+		t.Fatalf("cannot parse source: %v", err)
 	}
-	return rest[:end]
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Body != nil && set.Position(fn.Pos()).Offset == start {
+			return text[start+len(header) : set.Position(fn.Body.Rbrace).Offset]
+		}
+	}
+	t.Fatalf("%q is not a function declaration", header)
+	return ""
 }
 
 // TestPrependPathPutsToolDirsFirst checks the resolved directories win over
@@ -233,5 +244,17 @@ func TestPreviewAppGetsARunnableEnvironment(t *testing.T) {
 	}
 	if dirs := filepath.SplitList(path); len(dirs) == 0 || dirs[0] != filepath.Dir(exe) {
 		t.Errorf("PATH does not lead with the program's own directory: %q", path)
+	}
+}
+
+func TestFuncBodyWithCRLFAndRawStringBraces(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "fixture.go")
+	source := "package fixture\r\nfunc fixture() {\r\n_ = `\r\n}\r\n`\r\nlastCall()\r\n}"
+	if err := os.WriteFile(file, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body := funcBody(t, file, "func fixture() {")
+	if !strings.Contains(body, "lastCall()") || strings.Contains(body, "\r") {
+		t.Fatalf("invalid function boundary: %q", body)
 	}
 }

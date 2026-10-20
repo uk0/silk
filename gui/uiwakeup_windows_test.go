@@ -25,15 +25,7 @@ func TestUIWakeupHookIsInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot read the Win32 backend: %v", err)
 	}
-	src := string(raw)
-	start := strings.Index(src, "\nfunc init() {")
-	if start < 0 {
-		t.Fatal("window_windows.go has no init()")
-	}
-	body := src[start:]
-	if end := strings.Index(body, "\n}\n"); end >= 0 {
-		body = body[:end]
-	}
+	body := funcBodyIn(t, string(raw), "func init() {")
 	if !strings.Contains(body, "SetUIWakeup(") {
 		t.Error("init() does not install a UI wakeup hook; gui.Post waits for the idle timer instead of waking the pump")
 	}
