@@ -9,6 +9,14 @@ A Go-native GUI framework with a **visual form designer** and **integrated Go ID
 The SilkIDE mark is a cyan-to-blue folded silk **S**. Transparent PNGs and
 Windows/macOS application icons live in [assets/branding](assets/branding/README.md).
 
+**Release:** [SilkIDE v0.1.5 / SDK 2.5.1](https://github.com/uk0/silk/releases/tag/v0.1.5)
+provides Windows amd64, Linux amd64 and macOS arm64 / amd64 archives with SHA-256 checksums.
+The four-platform release gates and actual Windows package desktop checks passed;
+see [release notes](RELEASE_NOTES_v0.1.5.md) and [package QA](RACE_RENDER_QA_20261020.md).
+Windows system/per-monitor DPI scaling remains incomplete and may still blur the
+whole window. macOS packages require external Cairo and are not Developer ID
+signed/notarized standalone apps.
+
 ---
 
 ## Table of Contents
@@ -38,6 +46,7 @@ Windows/macOS application icons live in [assets/branding](assets/branding/README
 
 [Actual Windows menu capture](screenshots/silkide-menu-windows.png).
 [Latest Windows font / menu QA capture](screenshots/silkide-windows-visual.png) (debug outlines enabled).
+[v0.1.5 actual Windows release-package capture](screenshots/silkide-v0.1.5-windows.png) (debug outlines enabled).
 [Windows IME positioning and Unicode input follow-up](WINDOWS_INPUT_QA_20261020.md).
 
 ```bash

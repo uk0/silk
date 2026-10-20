@@ -30,6 +30,11 @@
 
 仓库标签跟随 IDE 的 0.x 版本，保持现有 `github.com/uk0/silk` 导入路径；SDK 的 2.5.1 是框架显示版本，不是需要 `/v2` 的模块标签。
 
-代码提交 `d6d18e3` 已通过[四平台 CI](https://github.com/uk0/silk/actions/runs/39428561489)。发布流程另外在 tag 源码上重新执行 native / race / pure-Go 门禁，先生成草稿，再校验四个归档和 Windows 制品本体 GUI，最后公开发布。托管 macOS 无 GL 能力时的显式 skip 不计作渲染通过；真实 GL 像素验收在本机 macOS 完成。
+### 发行包验收
 
-验收过程、跳过项与覆盖边界见 [race / 渲染 QA](https://github.com/uk0/silk/blob/v0.1.5/RACE_RENDER_QA_20261020.md)。
+- tag 源码 `ee713e7382fd2740adabfd1b9fdfd09caf90c661` 的[四平台发布工作流](https://github.com/uk0/silk/actions/runs/39434012113)成功，native / race / pure-Go 门禁与打包回归通过。托管 macOS 无 GL 能力时的显式 skip 不计作渲染通过；真实 GL 像素验收在本机 macOS 完成。
+- 四个归档逐一匹配 `SHA256SUMS.txt` 和 GitHub asset digest，完整解压及程序 / 资源清单校验通过。
+- 原样 Windows ZIP 在 Win10 全新目录解压，以不含 Go / MSYS2 的进程 PATH 启动；运行时 DLL 来源检查通过，无开发目录补丁。真实桌面验证中文 / Unicode 输入、保存回读、菜单、12 轮窗口缩放、F7 执行 4,000 行输出测试，原生退出码 0。
+- macOS arm64 归档 `silkgen -h` 运行通过。未宣称四个平台全部发行包均完成完整 GUI 验收，也不把普通发行程序日志无报错当作 race 插桩测试。
+
+验收过程、跳过项与覆盖边界见[主分支最终 race / 渲染 QA](https://github.com/uk0/silk/blob/main/RACE_RENDER_QA_20261020.md)；tag 内文档保留发布准备时的快照，不重写标签。

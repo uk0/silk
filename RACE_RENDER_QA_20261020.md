@@ -1,6 +1,6 @@
 # SilkIDE 竞争、渲染与线程调度 QA — 2026-10-20
 
-本轮针对 race 数据竞争、后台任务抢占 UI、窗口退出与原生资源销毁；包含上一轮未提交的 Windows 字体回退和原生对话框 watchdog 修复。SDK 显示版本 2.5.1，IDE/仓库发布标签使用 v0.1.4。保留 `github.com/uk0/silk` 的现有导入路径，不发布需要 `/v2` 后缀的 SDK 模块标签；[Go 模块大版本规则](https://go.dev/ref/mod#major-version-suffixes)要求二者匹配。新增 tag / IDE / module 校验阻止不兼容的版本标签。
+本轮针对 race 数据竞争、后台任务抢占 UI、窗口退出与原生资源销毁；包含上一轮未提交的 Windows 字体回退和原生对话框 watchdog 修复。SDK 显示版本 2.5.1，IDE/仓库发布标签使用 v0.1.5（v0.1.4 打包失败，保留原标签，见文末）。保留 `github.com/uk0/silk` 的现有导入路径，不发布需要 `/v2` 后缀的 SDK 模块标签；[Go 模块大版本规则](https://go.dev/ref/mod#major-version-suffixes)要求二者匹配。新增 tag / IDE / module 校验阻止不兼容的版本标签。
 
 ## 已复现与修复
 
@@ -63,8 +63,31 @@ Windows `-race` 另暴露了一处原生 accelerator **测试夹具**的 ABI 假
 
 Windows 首次类别 mask 方案未能让实际到期定时器越过 posted wake；保留失败后改用显式 WM_PAINT/WM_TIMER 范围，原生专项连续 5 轮通过。panic 日志打印超过 4 ms 时正确让出，旧断言已改为下一轮仍须执行剩余任务，未放宽丢任务检查。中间两条源码 wiring guard 因消息选择器重构失败，已更新为验证新的共用选择器并额外约束其 blocking GetMessage fallback；旧失败日志保留，不删除或改写成成功。无关 `gen_image/` 和根目录 `silkide` 不纳入本次提交。
 
-画质负向证据：`visual-before.log`（高 DPI 资源选错）、`visual-gl-before.log`（预乘 alpha 暗边）、`visual-probe/{default,gray}.png`（原生字体彩边）；正向证据：`visual-gl-final.log`、`visual-windows-after.log`、`visual-regression.jsonl`、`visual-ui-run.log`。正式发布仍需最终 CI、归档校验与制品本体 GUI 验收。
+画质负向证据：`visual-before.log`（高 DPI 资源选错）、`visual-gl-before.log`（预乘 alpha 暗边）、`visual-probe/{default,gray}.png`（原生字体彩边）；正向证据：`visual-gl-final.log`、`visual-windows-after.log`、`visual-regression.jsonl`、`visual-ui-run.log`。此阶段只完成源码验证；随后完成的最终 CI、归档校验与制品本体 GUI 验收见下文。
 
 ## 发布打包跟进
 
 用户明确要求发布后，v0.1.4 tag 的[发布构建](https://github.com/uk0/silk/actions/runs/39431811417)四平台 native / race / pure-Go 测试均通过，但 Windows DLL 暂存归档校验失败，未公开 Release。真实 Win10 最小 MSYS2 重现 `cmp: command not found`；继承 Git Bash 工具的路径解释也不能作为 MSYS2 文件一致性判断依据。改为当前运行环境的 SHA-256 工具通过 stdin 读取；测试注入不可用 cmp，仍必须通过正确副本、拒绝冲突 / 缺失 / 外来 DLL。保留原 v0.1.4 标签，修复以 **v0.1.5 / SDK 2.5.1** 发布，不强推覆盖旧标签。完整说明见 [v0.1.5 发布说明](RELEASE_NOTES_v0.1.5.md)。
+
+### v0.1.5 发行包校验
+
+- 发布源码：`ee713e7382fd2740adabfd1b9fdfd09caf90c661`；[发布工作流 39434012113](https://github.com/uk0/silk/actions/runs/39434012113)四平台构建、native / race / pure-Go 门禁及打包脚本回归全部成功。托管 macOS 的已知 GL 能力 skip 仍不算渲染通过。
+- 下载四个 Actions 归档，逐一与 Release 的 `SHA256SUMS.txt` **以及 GitHub asset digest** 匹配；验证归档路径、完整解压、四个命令程序及资源文件。所有 IDE 的 Go build info 均指向上述 tag 提交；Unix 构建记录 `vcs.modified=true`（构建期间仓库根目录产生未忽略的二进制），Windows 为 false，不宣称 bit-for-bit 可复现或以 revision 单独证明工作树完全干净。
+- macOS arm64 归档的 `silkgen -h` 实际运行退出 0，App plist 为 0.1.5。`otool` 确认依赖外部 Homebrew Cairo；只有 linker ad-hoc 签名，不是 Developer ID 签名 / 公证发行包。此检查不是该归档的新一轮 macOS GUI 验收。
+
+| 归档 | SHA-256 |
+| --- | --- |
+| `silk-linux-amd64.tar.gz` | `a7521761d85731fc7b76957438be8f4c7ada878bdd62cea80071f61dd80d96f4` |
+| `silk-macos-amd64.tar.gz` | `46bcd1b805e53bedbd05d7899b55a9656ad934ab32ee0a2ddcc01de35080a27e` |
+| `silk-macos-arm64.tar.gz` | `c6e39c4108969d3fec12d8448b1ec30a43ef9f15cda84f09ceb76a0aad08035a` |
+| `silk-windows-amd64.zip` | `bc4aa404162795e336d4596d6c6536f3f55f0dba375a31201b2950fa6a3b24b5` |
+
+### Windows 原样发行包桌面验收
+
+- 将上述 **未修改 ZIP** 传至全新 `C:\silk\release-v0.1.5-20261020`，再次核对 ZIP 哈希后解压；没有重新编译 EXE，也没有从开发 / 旧 QA 目录补 DLL。原样 `silkide.exe` SHA-256 为 `6106cd2f40c122165d5d454782a623b8ddd4f3f15bedea1501b07c04301a8a01`，与本地归档解压结果一致。
+- 进程 PATH 仅包含 Windows 系统目录，隔离配置和 Go 工程。包内 19 个 DLL 保持原样；检查真实进程模块表，Cairo 和所有已加载的同名运行库均来自发行包目录，没有使用 MSYS2 / 旧 QA DLL。`silkgen -h` 及实际 `.silkui` → Go 生成、控件标识回读通过。
+- Session 1 / 1600×1200 真实桌面：拼音提交恰好一次、emoji / Ext-B 保存回读、preedit 取消、Save All、原生 Open 保持 8 秒无假 stall；F7 实际运行 4,000 行双流输出测试，同时鼠标打开文件菜单并执行 12 轮窗口缩放。完成文件内容正确，原生进程退出码 **0**，stderr 无 race / checkptr / UI-thread / fatal 标记；这是普通发行程序，race 结论来自前述插桩测试，不来自普通 EXE 的安静日志。
+- 欢迎页 / 编辑器分别静置 12 秒，消耗 **0.140625 / 0.328125 CPU 秒**，均保持响应；仅为该次观察，不是延迟认证或长期性能保证。截图见 [v0.1.5 发行包菜单](screenshots/silkide-v0.1.5-windows.png)，开启 debug outlines 以观察边界。
+- 原始证据保存在 `bin/qa-artifacts/release-v0.1.5/`：`archive-verification.json`、`release-run.json`、`package-cli-verified.log`、`package-ui-run.log`、`windows-results/`。首次 CLI 脚本被 PowerShell 执行策略拒绝的记录保留；随后只对测试子进程使用 `-ExecutionPolicy Bypass`，未修改系统策略。上传脚本尾部因空临时文件变量返回 1，未据此认定部署成功；以远端 ZIP / EXE 哈希和实际运行结果为准。
+
+**剩余限制不变**：Windows 系统高 DPI / 跨屏缩放未认证且仍可能整窗模糊；macOS 包依赖外部 Cairo，未做 Developer ID 签名公证；未执行四个平台全部发行包的完整 GUI 验收。
