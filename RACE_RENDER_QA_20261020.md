@@ -64,3 +64,7 @@ Windows `-race` 另暴露了一处原生 accelerator **测试夹具**的 ABI 假
 Windows 首次类别 mask 方案未能让实际到期定时器越过 posted wake；保留失败后改用显式 WM_PAINT/WM_TIMER 范围，原生专项连续 5 轮通过。panic 日志打印超过 4 ms 时正确让出，旧断言已改为下一轮仍须执行剩余任务，未放宽丢任务检查。中间两条源码 wiring guard 因消息选择器重构失败，已更新为验证新的共用选择器并额外约束其 blocking GetMessage fallback；旧失败日志保留，不删除或改写成成功。无关 `gen_image/` 和根目录 `silkide` 不纳入本次提交。
 
 画质负向证据：`visual-before.log`（高 DPI 资源选错）、`visual-gl-before.log`（预乘 alpha 暗边）、`visual-probe/{default,gray}.png`（原生字体彩边）；正向证据：`visual-gl-final.log`、`visual-windows-after.log`、`visual-regression.jsonl`、`visual-ui-run.log`。正式发布仍需最终 CI、归档校验与制品本体 GUI 验收。
+
+## 发布打包跟进
+
+用户明确要求发布后，v0.1.4 tag 的[发布构建](https://github.com/uk0/silk/actions/runs/39431811417)四平台 native / race / pure-Go 测试均通过，但 Windows DLL 暂存归档校验失败，未公开 Release。真实 Win10 最小 MSYS2 重现 `cmp: command not found`；继承 Git Bash 工具的路径解释也不能作为 MSYS2 文件一致性判断依据。改为当前运行环境的 SHA-256 工具通过 stdin 读取；测试注入不可用 cmp，仍必须通过正确副本、拒绝冲突 / 缺失 / 外来 DLL。保留原 v0.1.4 标签，修复以 **v0.1.5 / SDK 2.5.1** 发布，不强推覆盖旧标签。完整说明见 [v0.1.5 发布说明](RELEASE_NOTES_v0.1.5.md)。

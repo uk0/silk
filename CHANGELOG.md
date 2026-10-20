@@ -1,5 +1,17 @@
 # Changelog
 
+## SilkIDE v0.1.5 / SDK 2.5.1 (2026-10-20)
+
+- Include the race, scheduling, font and visual-quality fixes listed below.
+- Fix Windows DLL packaging under minimal MSYS2 / inherited Git Bash paths:
+  compare runtime and staged DLLs using the active environment's SHA-256 tool
+  and stdin, rather than relying on missing or foreign-runtime `cmp`.
+- Keep missing, foreign, corrupt and conflicting DLLs as hard packaging errors;
+  add regressions with an unusable `cmp` and remove diffutils from fixture tests.
+- v0.1.4's tag is retained for audit; its Windows packaging failed and no Release
+  was published. v0.1.5 is the corrected release, not a rewritten v0.1.4 tag.
+- Windows system-DPI virtualization remains a known limitation; see release notes.
+
 ## SilkIDE v0.1.4 / SDK 2.5.1 (2026-10-20)
 
 ### Race safety, rendering and UI scheduling

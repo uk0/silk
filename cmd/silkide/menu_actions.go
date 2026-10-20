@@ -10,7 +10,7 @@ import (
 	"github.com/uk0/silk/paint"
 )
 
-const ideVersion = "0.1.4"
+const ideVersion = "0.1.5"
 
 func showIDEAbout(parent gui.IWidget) {
 	ged.ShowAboutDialogWithInfo(parent, silkIDEAboutInfo())

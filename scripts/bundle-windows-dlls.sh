@@ -3,6 +3,26 @@
 # must fail packaging instead of producing an archive that only works on CI.
 set -euo pipefail
 
+# Use the active MSYS2 coreutils, not an inherited Git-for-Windows cmp.
+# Minimal MSYS2 has no diffutils; a foreign cmp may silently resolve /ucrt64
+# against Git's root. stdin also keeps POSIX paths out of native argv conversion.
+if [[ -x /usr/bin/sha256sum ]]; then
+  digest_command=(/usr/bin/sha256sum)
+elif command -v sha256sum >/dev/null 2>&1; then
+  digest_command=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+  digest_command=(shasum -a 256)
+else
+  echo 'SHA-256 tool required (MSYS2 coreutils or shasum)' >&2
+  exit 1
+fi
+same_contents() {
+  local first second
+  first=$("${digest_command[@]}" < "$1") || return 1
+  second=$("${digest_command[@]}" < "$2") || return 1
+  [[ $first =~ ^[[:xdigit:]]{64}[[:space:]] && $first == "$second" ]]
+}
+
 out=${1:?Usage: bundle-windows-dlls.sh OUTPUT_DIRECTORY}
 out=$(cd "$out" && pwd)
 shopt -s nullglob
@@ -31,11 +51,11 @@ for exe in "${executables[@]}"; do
     allowed=false
     # After the first executable, the Windows loader may resolve a shared DLL
     # beside the next .exe, not in /ucrt64. Accept that staged copy only when it
-    # matches an installed toolchain DLL byte-for-byte (also makes reruns safe).
+    # matches an installed toolchain DLL SHA-256 (also makes reruns safe).
     if [[ $dll == "$out/"* && -f $dll ]]; then
       for root in "${roots[@]}"; do
         candidate="$root/bin/$(basename "$dll")"
-        if [[ -f $candidate ]] && cmp -s "$dll" "$candidate"; then
+        if [[ -f $candidate ]] && same_contents "$dll" "$candidate"; then
           allowed=true
           break
         fi
@@ -50,7 +70,7 @@ for exe in "${executables[@]}"; do
     fi
     target="$out/$(basename "$dll")"
     if [[ -e $target ]]; then
-      if ! cmp -s "$dll" "$target"; then
+      if ! same_contents "$dll" "$target"; then
         echo "Conflicting runtime DLLs: $target and $dll" >&2
         exit 1
       fi
