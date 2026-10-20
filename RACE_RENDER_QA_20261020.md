@@ -42,7 +42,7 @@
 - 画质追加：本地 paint / gui / cmd/silkide 三包 `-race` **2,425 pass / 4 skip / 0 fail**，其后新增的变换边界用例在 paint `-race` 再次通过；纯 Go 两包通过；Win10 paint `-race -count=3`、字体四档 CTM 像素检查通过。
 - 画质版 Win10 Session 1 完整重跑：实际鼠标打开文件菜单并截图（不是仅发快捷键）、拼音及 Unicode 保存回读、取消、Save All、8 秒原生对话框、F7 4,000 行输出与 12 轮窗口缩放均通过，原生退出码 0。欢迎页 / 编辑器各 12 秒空闲分别消耗 0.28125 / 0.109375 CPU 秒，均保持响应；单次观察不当作性能保证。截图见 [菜单与文字](screenshots/silkide-windows-visual.png)。
 - 画质修复提交 `d6d18e3` 的[四平台 CI](https://github.com/uk0/silk/actions/runs/39428561489)全部成功（Linux / Windows / macOS arm64 / macOS Intel）。最终 Win10 源码回读匹配 **1,185 个 Go 文件**，paint / gui / cmd/silkide 全部 `-race -count=1` 通过，退出标记 `FINAL_VISUAL_RACE_OK`。
-- **发布状态：已 commit / push，未打 v0.1.4 标签、未正式发布。** Windows 整窗系统 DPI 虚拟化问题仍未完成适配，尚不能证明用户报告的所有模糊已消失；最终归档本体的校验与 GUI 验收也还未执行，不用源码构建的 UI 测试冒充发行包验收。
+- **发布跟进：用户在获知系统 DPI 限制后明确要求发布。** 保留该限制并写入 [v0.1.4 发布说明](RELEASE_NOTES_v0.1.4.md)，按原生 / race / pure-Go 门禁、四归档校验、Windows 归档本体 GUI 验收顺序发布。本文随 tag 的快照记录准备状态；正式发布结果将补记到主分支和 GitHub Release，不把源码构建测试冒充发行包验收。
 
 四平台 CI 首轮补充发现两个环境相关测试缺陷：Windows CRLF checkout 导致三个源码提取 helper 错判函数终止位置，现改用 Go AST 并添加 CRLF / LF / 原始字符串 / 无末尾换行测试，同类 IDE / 旧设计器线程检查也同步修复；macOS hosted VM 缺少 NSGL 像素格式，关闭回调测试现使用不需要 GL 的真实窗口。渲染探针独立创建 GL context，CI macOS 的 `auto` 模式仅允许已知的 GL 能力错误显式 skip，像素差异和其他错误仍失败；Linux CI 及本机 macOS 继续 strict 模式。本机改动后完整 gui race 和 strict GL 读回均再次通过，不将 hosted macOS 的 GL skip 写成渲染通过。
 
