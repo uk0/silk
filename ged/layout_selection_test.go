@@ -156,22 +156,28 @@ func TestGeneratedLayoutProgramActuallyArrangesWidgets(t *testing.T) {
 		t.Skip("generated Go integration")
 	}
 	for _, kind := range []LayoutKind{LayoutGrid, LayoutForm} {
-		t.Run(string(kind), func(t *testing.T) {
-			v, _ := layoutFixture(t, kind)
-			if !v.LayoutSelection(kind) {
-				t.Fatal("layout refused")
-			}
-			dir := t.TempDir()
-			src := filepath.Join(dir, "layout.go")
-			testFile := filepath.Join(dir, "layout_test.go")
-			code := v.GedScene().GenerateCode(CodeGenOptions{PackageName: "ui", TypeName: "LayoutUI"})
-			if !strings.Contains(code, ".AddLayoutWidget(") {
-				t.Fatal("no layout registration in generated Go")
-			}
-			if err := os.WriteFile(src, []byte(code), 0600); err != nil {
-				t.Fatal(err)
-			}
-			testSource := `package ui
+		for _, mode := range []string{"wrap", "container"} {
+			t.Run(string(kind)+"/"+mode, func(t *testing.T) {
+				var v *GedView
+				if mode == "container" {
+					v, _, _ = containerLayoutFixture(t, kind, 4)
+				} else {
+					v, _ = layoutFixture(t, kind)
+				}
+				if !v.LayoutSelection(kind) {
+					t.Fatal("layout refused")
+				}
+				dir := t.TempDir()
+				src := filepath.Join(dir, "layout.go")
+				testFile := filepath.Join(dir, "layout_test.go")
+				code := v.GedScene().GenerateCode(CodeGenOptions{PackageName: "ui", TypeName: "LayoutUI"})
+				if !strings.Contains(code, ".AddLayoutWidget(") {
+					t.Fatal("no layout registration in generated Go")
+				}
+				if err := os.WriteFile(src, []byte(code), 0600); err != nil {
+					t.Fatal(err)
+				}
+				testSource := `package ui
 import "testing"
 func TestActualLayout(t *testing.T){
  u:=NewLayoutUI()
@@ -181,14 +187,15 @@ func TestActualLayout(t *testing.T){
  if p.Children()[1].Width()<=0 || (p.Children()[1].X()==old && p.Children()[1].Width()==u.A.Width()){t.Fatal("runtime resize did not relayout")}
 }
 `
-			if err := os.WriteFile(testFile, []byte(testSource), 0600); err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.Command("go", "test", src, testFile)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("generated program failed: %v\n%s", err, out)
-			}
-		})
+				if err := os.WriteFile(testFile, []byte(testSource), 0600); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("go", "test", src, testFile)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("generated program failed: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }
 

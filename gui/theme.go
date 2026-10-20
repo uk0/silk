@@ -490,6 +490,10 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 	if btn.IsInPopupMenu() {
 		//ml, mr, _, _ := t.MenuItemMargin.Margin()
 		m := t.MenuItemMargin
+		// One font baseline for both columns. Ink bearings differ between
+		// labels and shortcuts (notably with Microsoft YaHei on Windows).
+		fe := t.Font.FontExtents()
+		baseline := 0.5*(h-fe.Ascent-fe.Descent) + fe.Ascent
 		highlight := btn.IsEnabled() && (btn.IsHover() || btn.IsSubPopupVisible())
 		if highlight {
 			g.SetBrush1(t.MenuActiveBGColor)
@@ -519,7 +523,7 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			text := btn.Text()
 			ext := g.Font().TextExtents(text)
 			xt := m.L*2 + t.IconSize - ext.XBearing
-			yt := 0.5*(h+ext.YBearing) - ext.YBearing
+			yt := baseline
 			g.Translate(xt, yt)
 			g.DrawText(text)
 			g.Translate(-xt, -yt)
@@ -534,6 +538,18 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.LineTo(w-m.R, h*0.5)
 			g.SetBrush1(t.TextColor)
 			g.Fill()
+		}
+		if hint := btn.ShortcutText(); hint != "" {
+			g.SetFont(t.Font)
+			ext := t.Font.TextExtents(hint)
+			x := w - m.R - t.MenuSubMarkWidth - ext.Width - ext.XBearing
+			y := baseline
+			if !highlight {
+				g.SetBrush1(t.MenuGrayTextColor)
+			}
+			g.Translate(x, y)
+			g.DrawText(hint)
+			g.Translate(-x, -y)
 		}
 	} else {
 		// Modern programmatic button drawing (no pixmap faces)

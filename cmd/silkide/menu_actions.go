@@ -121,6 +121,7 @@ func appendFileMenuCommand(menu *gui.Menu, c fileMenuCommand) *gui.Button {
 	b.Action().BindFunc0(c.run)
 	b.Action().SetEnabled(c.enabled)
 	b.SetEnabled(c.enabled)
+	b.SetShortcutText(c.hint)
 	tip := i18n.T(c.label)
 	if c.hint != "" {
 		tip += " (" + c.hint + ")"
@@ -130,8 +131,18 @@ func appendFileMenuCommand(menu *gui.Menu, c fileMenuCommand) *gui.Button {
 }
 
 func buildHamburgerMenu(anchor *gui.Button, tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {
-	m := gui.NewPopupMenu()
+	m := buildFileMenu(tabs, canvas)
 	m.SetParent(anchor)
+	m.AddSeparator()
+	appendFileMenuCommand(m, fileMenuCommand{"tools.a11y", "Dump A11y Tree", "tree-view", actionKeyHint() + "+Shift+A", dumpA11yTree, true})
+	appendFileMenuCommand(m, fileMenuCommand{"project.settings", "Project Settings", "settings", "", func() { showProjectSettingsDialog(canvas) }, true})
+	m.AddSeparator()
+	appendFileMenuCommand(m, fileMenuCommand{"help.about", "About", "help", "", func() { showIDEAbout(canvas) }, true})
+	return m
+}
+
+func buildFileMenu(tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {
+	m := gui.NewPopupMenu()
 	key := actionKeyHint()
 	appendFileMenuCommand(m, fileMenuCommand{"file.new", "New", "plus", key + "+N", func() { newDesignCanvas(canvas) }, canvas != nil})
 	appendFileMenuCommand(m, fileMenuCommand{"file.open", "Open", "folder", key + "+O", func() {
@@ -146,14 +157,13 @@ func buildHamburgerMenu(anchor *gui.Button, tabs *gui.TabWidget, canvas *ged.Ged
 		documentMode(tabs, canvas) == modeDesign && canvas != nil
 	appendFileMenuCommand(m, fileMenuCommand{"file.save", "Save", "save", key + "+S", func() { saveCurrentDocument(tabs, canvas) }, canSave})
 	appendFileMenuCommand(m, fileMenuCommand{"file.saveAll", "Save All", "save", key + "+Shift+S", func() { performSaveAll(tabs, canvas) }, canvas != nil || activeEditor(tabs) != nil})
-	appendFileMenuCommand(m, fileMenuCommand{"file.export", "Export...", "document", "", func() { performExport(canvas) }, canvas != nil})
+	appendFileMenuCommand(m, fileMenuCommand{"file.export", "Export...", "document", "", func() { performExport(canvas) }, designDocumentActive(tabs, canvas)})
 	appendFileMenuCommand(m, fileMenuCommand{"file.print", "Print Design...", "printer", "", func() { performPrintDesign(canvas) }, canPrintDesign(canvas)})
-	m.AddSeparator()
-	appendFileMenuCommand(m, fileMenuCommand{"tools.a11y", "Dump A11y Tree", "tree-view", key + "+Shift+A", dumpA11yTree, true})
-	appendFileMenuCommand(m, fileMenuCommand{"project.settings", "Project Settings", "propsheet", "", func() { showProjectSettingsDialog(canvas) }, true})
-	m.AddSeparator()
-	appendFileMenuCommand(m, fileMenuCommand{"help.about", "About", "help", "", func() { showIDEAbout(canvas) }, true})
 	return m
+}
+
+func designDocumentActive(tabs *gui.TabWidget, canvas *ged.GedView) bool {
+	return canvas != nil && canvas.GedScene() != nil && documentMode(tabs, canvas) == modeDesign
 }
 
 func buildRecentFilesMenu(tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {

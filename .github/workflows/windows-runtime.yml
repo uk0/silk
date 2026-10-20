@@ -63,6 +63,21 @@ jobs:
       - name: Backend registers its event loop
         run: go test -count=1 -run TestBackendRegistersMainLoop -v ./gui/
 
+      - name: Verify native Cairo pixel transfers
+        run: go test -count=1 -run '^TestSurface' -v ./cairo/
+
+      - name: Verify native editor font and background command policy
+        run: go test -count=1 -run '^Test(WindowsDefaultEditorFontIsReallyMonospace|MeasureText|NoConsoleWindow)' -v ./gui/ ./internal/processutil/
+
+      - name: Retire owned window icons without waiting for GC
+        run: go test -count=1 -run '^TestWindowsWindow' -v ./gui/
+
+      - name: Balance native BeginPaint and EndPaint
+        run: go test -count=1 -run '^TestBeginEndPaintReleasesDisplayDC$' -v ./win32/
+
+      - name: Check native SDK forwarders and accelerator dispatch
+        run: go test -count=1 -run '^Test(Win32Forwarders|StockObject|MapVirtualKeyEx|TranslateAccelerator)' -v ./win32/
+
       # 2. Package init under the race detector, which also enables checkptr.
       #    gui's init calls registerWndClasses(), where faking a resource
       #    ordinal as a pointer used to abort the process before main. Scoped to

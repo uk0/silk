@@ -2,6 +2,30 @@ package gui
 
 import "testing"
 
+func TestMenuBarSiblingSkipsDisabledAndHiddenHeaders(t *testing.T) {
+	bar := NewMenuBar()
+	first, a := bar.AddSubMenu("File", nil, nil)
+	_, disabled := bar.AddSubMenu("Disabled", nil, nil)
+	disabled.SetEnabled(false)
+	_, hidden := bar.AddSubMenu("Hidden", nil, nil)
+	hidden.SetVisible(false)
+	last, b := bar.AddSubMenu("Build", nil, nil)
+	first.SetParent(a)
+	last.SetParent(b)
+	if first.menuBarSibling(1) != b || first.menuBarSibling(-1) != b || last.menuBarSibling(1) != a {
+		t.Fatal("menu bar sibling navigation does not skip/wrap")
+	}
+	nested, header := first.AddSubMenu("Recent", nil, nil)
+	nested.SetParent(header)
+	if nested.menuBarSibling(1) != nil {
+		t.Fatal("nested submenu switches top-level groups")
+	}
+	b.SetEnabled(false)
+	if first.menuBarSibling(1) != nil {
+		t.Fatal("single available header navigates to itself")
+	}
+}
+
 // kinds builds a []menuItemKind from a boolean selectability pattern, so the
 // pure-helper tests read like the menu they describe (true = a normal item,
 // false = a separator or disabled item).

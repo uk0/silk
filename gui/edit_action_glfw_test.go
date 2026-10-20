@@ -154,3 +154,23 @@ func TestEditSuperDoesNotBecomeControlOutsideMacOS(t *testing.T) {
 		t.Fatal("non-macOS Super unexpectedly acted as Control")
 	}
 }
+
+func TestSearchBoxActionSelectAllReplacesQuery(t *testing.T) {
+	for _, mods := range editActionTestModifiers() {
+		t.Run(fmt.Sprint(mods), func(t *testing.T) {
+			withEditActionModifiers(t, mods)
+			s := NewSearchBox()
+			s.SetText("Button 中文 🟦")
+			s.OnKeyDown('A', false)
+			if s.SelectionText() != s.Text() {
+				t.Fatal("search shortcut did not select all")
+			}
+			plain := glfw.ModifierKey(0)
+			eventModifiers = &plain
+			s.OnTextInput("GanttChart")
+			if s.Text() != "GanttChart" || s.SelectionText() != "" {
+				t.Fatal("new query was appended instead of replacing")
+			}
+		})
+	}
+}

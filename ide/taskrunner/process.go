@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"github.com/uk0/silk/internal/processutil"
 	"io"
 	"os"
 	"os/exec"
@@ -58,6 +59,7 @@ func runCommand(ctx context.Context, t Task, emit func(Event)) (int, error) {
 	// compilers and test binaries that would otherwise survive a
 	// cancelled build and keep holding the output pipes.
 	group := enableProcessGroup(cmd)
+	processutil.NoConsoleWindow(cmd)
 	cmd.Cancel = func() error { return killProcess(cmd.Process, group) }
 	cmd.WaitDelay = killGrace
 

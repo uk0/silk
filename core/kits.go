@@ -10,6 +10,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -82,7 +83,9 @@ func DetectKits() ([]Kit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("detect kits: go not found on PATH: %w", err)
 	}
-	out, err := exec.Command(exe, "env", "GOOS", "GOARCH", "GOVERSION").Output()
+	cmd := exec.Command(exe, "env", "GOOS", "GOARCH", "GOVERSION")
+	processutil.NoConsoleWindow(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("detect kits: go env: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"io"
 	"os/exec"
 	"strings"
@@ -90,6 +91,7 @@ func RunGoList(dir string, args ...string) (jsonOut string, diagnostics string, 
 	}
 	full := append([]string{"list", "-json"}, args...)
 	cmd := exec.Command("go", full...)
+	processutil.NoConsoleWindow(cmd)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

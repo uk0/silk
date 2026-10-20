@@ -106,7 +106,7 @@ var (
 	procEndPaint                      = moduser32.NewProc("EndPaint")
 	procGetKeyboardState              = moduser32.NewProc("GetKeyboardState")
 	procGetKeyState                   = moduser32.NewProc("GetKeyState")
-	procMapVirtualKey                 = moduser32.NewProc("MapVirtualKeyExW")
+	procMapVirtualKeyEx               = moduser32.NewProc("MapVirtualKeyExW")
 	procGetAsyncKeyState              = moduser32.NewProc("GetAsyncKeyState")
 	procToAscii                       = moduser32.NewProc("ToAscii")
 	procSwapMouseButton               = moduser32.NewProc("SwapMouseButton")
@@ -730,7 +730,7 @@ func PeekMessage(lpMsg *MSG, hwnd HWND, wMsgFilterMin, wMsgFilterMax, wRemoveMsg
 }
 
 func TranslateAccelerator(hwnd HWND, hAccTable HACCEL, lpMsg *MSG) bool {
-	ret, _, _ := procTranslateMessage.Call(
+	ret, _, _ := procTranslateAccelerator.Call(
 		uintptr(hwnd),
 		uintptr(hAccTable),
 		uintptr(unsafe.Pointer(lpMsg)))
@@ -846,7 +846,9 @@ func BeginPaint(hwnd HWND, paint *PAINTSTRUCT) HDC {
 }
 
 func EndPaint(hwnd HWND, paint *PAINTSTRUCT) {
-	procBeginPaint.Call(
+	// EndPaint must pair with BeginPaint and release its display DC. Calling
+	// BeginPaint here instead acquires another DC and overwrites PAINTSTRUCT.
+	procEndPaint.Call(
 		uintptr(hwnd),
 		uintptr(unsafe.Pointer(paint)))
 }
@@ -863,7 +865,7 @@ func GetKeyState(key int) int16 {
 }
 
 func MapVirtualKeyEx(uCode, uMapType uint, dwhkl HKL) uint {
-	ret, _, _ := procMapVirtualKey.Call(
+	ret, _, _ := procMapVirtualKeyEx.Call(
 		uintptr(uCode),
 		uintptr(uMapType),
 		uintptr(dwhkl))

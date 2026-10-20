@@ -219,12 +219,9 @@ func TestProjectDirResolvesFromActiveScene(t *testing.T) {
 		t.Errorf("empty-filename canvas: projectDir = %q, want %q", got, wantCwd)
 	}
 
-	// The scene's directory in the host's own shape — "/tmp/work" on
-	// POSIX, `\tmp\work` on Windows, which is what the editor actually
-	// carries. The filename is built from that directory so the
-	// assertion still bites: the resolver has to hand the directory
-	// back, not the file it was given and not the cwd fallback.
-	workDir := filepath.Join(string(filepath.Separator), "tmp", "work")
+	// Use a fully qualified native path: a drive-relative \tmp\work on
+	// Windows correctly acquires the current drive when normalized.
+	workDir := t.TempDir()
 	scene.SetFilename(filepath.Join(workDir, "Editor.silkui"))
 	if got = projectDir(view); got != workDir {
 		t.Errorf("with filename: projectDir = %q, want %q", got, workDir)
@@ -481,6 +478,7 @@ func TestRecentFilesRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("HOME", tmp)
+	t.Setenv("APPDATA", tmp) // Windows settings must not touch the user's store.
 
 	// Create three real files so RecentFiles' stat filter accepts them.
 	paths := []string{
@@ -538,6 +536,7 @@ func TestPreferencesWindowSize(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp) // Linux fallback path
 	t.Setenv("HOME", tmp)            // macOS Application Support path
+	t.Setenv("APPDATA", tmp)         // Windows Roaming path
 
 	p := newPreferences()
 	w, h := p.WindowSize()

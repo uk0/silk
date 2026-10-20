@@ -709,7 +709,8 @@ func (this *PropertyItem) defaultControlType() string {
 	switch this.Type().Kind() {
 	case reflect.Bool:
 		return "CheckBox"
-	case reflect.Int:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return "IntEdit"
 	default:
 		return "TextEdit"

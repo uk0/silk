@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"io"
 	"net"
 	"os/exec"
@@ -200,6 +201,7 @@ func LaunchDebug(packageDir string, args []string) (*DebugSession, error) {
 		cmdArgs = append(cmdArgs, args...)
 	}
 	cmd := exec.Command("dlv", cmdArgs...)
+	processutil.NoConsoleWindow(cmd)
 	cmd.Dir = packageDir
 	// 把 dlv 的 stdout/stderr 接成管道: `dlv debug` 下被调试程序继承同一对 fd,
 	// 所以这两条流里既有 dlv 自己的日志 (build 报错 / API server listening),

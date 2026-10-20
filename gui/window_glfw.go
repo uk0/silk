@@ -96,7 +96,7 @@ type Window struct {
 
 	// Dirty region tracking. fullDirty=true (the default) means the next
 	// paint redraws the whole window. dirtyRegion accumulates partial
-	// invalidations in logical (widget) coordinates; once the user opts
+	// invalidations in window-root logical coordinates; once the user opts
 	// into partial repaints by calling MarkDirtyRect instead of Update,
 	// the paint pass will use Cairo's clip rect to skip unchanged pixels.
 	dirtyRegion geom.Rect
@@ -105,14 +105,14 @@ type Window struct {
 	iconified   bool
 
 	// PBO (Pixel Buffer Object) state for async texture streaming. The PBO
-	// is sized to match the texture; uploadTextureViaPBO orphans + remaps
+	// is sized to match the upload region; uploadTextureViaPBO orphans + remaps
 	// it each frame so the driver can DMA the previous frame's data while
 	// the CPU writes the next.
-	pbo          uint32
-	pboSize      int
-	pboTexW      int32
-	pboTexH      int32
-	pboAvailable bool
+	pbo           uint32
+	pboSize       int
+	textureWidth  int32
+	textureHeight int32
+	pboAvailable  bool
 
 	// glOverlays holds per-frame GPU chart-series draw requests. Populated by
 	// GPU-mode LineCharts during the Cairo pass and drawn after the texture
@@ -431,8 +431,8 @@ func (this *Window) destroy() {
 		gl.DeleteBuffers(1, &this.pbo)
 		this.pbo = 0
 		this.pboSize = 0
-		this.pboTexW = 0
-		this.pboTexH = 0
+		this.textureWidth = 0
+		this.textureHeight = 0
 	}
 	// Drop painter and back buffer in a defined order: painter first, so
 	// the cairo Context releases its surface reference before we drop the
@@ -540,6 +540,15 @@ func (this *Window) paint() {
 	// Get content scale for Retina/HiDPI displays
 	sx, sy := this.glfwWin.GetContentScale()
 	fbw, fbh := this.glfwWin.GetFramebufferSize()
+	if fbw <= 0 || fbh <= 0 {
+		return // Iconified windows have no drawable framebuffer.
+	}
+	fullDirty, dirtyRegion := this.takeFrameDamage()
+	// GPU overlays are not stored in the Cairo surface. A clipped tree pass
+	// would forget unchanged charts after the fullscreen blit. Keep those
+	// windows (and the dynamic perf overlay) on the conservative full path.
+	fullDirty = fullDirty || this.glTexture == 0 || len(this.glOverlays) > 0 || GlobalPerfStats.IsVisible() ||
+		this.textureWidth != int32(fbw) || this.textureHeight != int32(fbh)
 
 	// Reuse the back buffer when dimensions haven't changed.
 	// Only allocate a new pixmap when the framebuffer size differs. A size
@@ -550,8 +559,7 @@ func (this *Window) paint() {
 		this.backBuffer = paint.NewPixmap(fbw, fbh)
 		this.backWidth = fbw
 		this.backHeight = fbh
-		this.fullDirty = true
-		this.dirtyRegion = geom.Rect{}
+		fullDirty = true
 		this.backPainter = nil
 	}
 	backBuffer := this.backBuffer
@@ -573,32 +581,14 @@ func (this *Window) paint() {
 		this.backPainter = backPainter
 	}
 
-	// Decide whether to clip to a dirty subrect. We clip when:
-	//   - fullDirty is false
-	//   - dirtyRegion is non-empty
-	//   - the region is meaningfully smaller than the window (otherwise the
-	//     overhead of clip setup outweighs any savings)
-	useClip := false
-	var clipX, clipY, clipW, clipH float64
-	if !this.fullDirty &&
-		this.dirtyRegion.Width > 0 && this.dirtyRegion.Height > 0 {
-		// Inflate by 1 logical pixel each side: anti-aliasing and 1px borders
-		// straddle their nominal coordinate, so a tight rect can leave fringes.
-		r := this.dirtyRegion.ExpandCopy(1)
-		// Intersect with the window rect.
-		r = r.IntersectCopy(geom.Rect{X: 0, Y: 0, Width: width, Height: height})
-		if r.Width > 0 && r.Height > 0 &&
-			r.Area() < width*height*0.85 {
-			clipX, clipY, clipW, clipH = r.X, r.Y, r.Width, r.Height
-			useClip = true
-		}
-	}
+	region := framebufferDamage(dirtyRegion, fullDirty, fbw, fbh, float64(sx), float64(sy))
+	useClip := region.Dx() != fbw || region.Dy() != fbh
 
 	if useClip {
 		// Clip to physical-pixel rect first, then clear only inside the clip.
 		// This preserves the unchanged pixels from the previous frame.
-		backPainter.Rectangle(clipX*float64(sx), clipY*float64(sy),
-			clipW*float64(sx), clipH*float64(sy))
+		backPainter.Rectangle(float64(region.Min.X), float64(region.Min.Y),
+			float64(region.Dx()), float64(region.Dy()))
 		backPainter.Clip()
 		backPainter.SetOperator(paint.OpClear)
 		backPainter.Paint()
@@ -644,44 +634,57 @@ func (this *Window) paint() {
 	// Get raw Cairo pixel data directly (BGRA format, no copy)
 	dataPtr := backBuffer.DataPtr()
 	if dataPtr == nil {
+		this.MarkFullDirty()
 		return
 	}
 	stride := backBuffer.Stride()
 
 	// Upload to OpenGL texture at physical resolution. We try a PBO upload
 	// first (allows the driver to DMA the previous frame async with this
-	// frame's CPU work) and fall back to glTexImage2D if PBOs are unsupported
+	// frame's CPU work) and fall back to direct glTexSubImage2D if PBOs are unsupported
 	// or fail at runtime.
 	if this.glTexture == 0 {
 		gl.GenTextures(1, &this.glTexture)
 		// Enable PBO path for newly created textures. Disabled per-window
 		// permanently if uploadTextureViaPBO fails.
 		this.pboAvailable = true
-		this.pboTexW = 0
-		this.pboTexH = 0
+		this.textureWidth = 0
+		this.textureHeight = 0
 	}
 	gl.BindTexture(gl.TEXTURE_2D, this.glTexture)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	// Texture allocation is independent of PBO support. Neither fallback nor
+	// partial paints should reallocate a whole window texture every frame.
+	if this.textureWidth != int32(fbw) || this.textureHeight != int32(fbh) {
+		gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(fbw), int32(fbh), 0,
+			gl.BGRA, gl.UNSIGNED_BYTE, nil)
+		this.textureWidth, this.textureHeight = int32(fbw), int32(fbh)
+	}
 
 	uploaded := false
 	if this.pboAvailable {
-		uploaded = this.uploadTextureViaPBO(int32(this.backWidth),
-			int32(this.backHeight), stride, dataPtr)
+		uploaded = this.uploadTextureViaPBO(region, stride, dataPtr)
 	}
 	if !uploaded {
+		gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
 		gl.PixelStorei(gl.UNPACK_ROW_LENGTH, int32(stride/4))
 		// Cairo stores ARGB32 as BGRA in memory on little-endian
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
-			int32(this.backWidth), int32(this.backHeight),
-			0, gl.BGRA, gl.UNSIGNED_BYTE, dataPtr)
+		gl.TexSubImage2D(gl.TEXTURE_2D, 0, int32(region.Min.X), int32(region.Min.Y),
+			int32(region.Dx()), int32(region.Dy()), gl.BGRA, gl.UNSIGNED_BYTE,
+			unsafe.Add(dataPtr, region.Min.Y*stride+region.Min.X*4))
 	}
+	gl.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
 
 	glErr := gl.GetError()
 	if glErr != gl.NO_ERROR {
 		core.Warn("GL error after texture upload: ", glErr)
+		this.textureWidth, this.textureHeight = 0, 0
+		this.MarkFullDirty()
+		return
 	}
 
 	// Ensure GL state is set up for this context
@@ -702,9 +705,6 @@ func (this *Window) paint() {
 
 	gl.Flush()
 	this.glfwWin.SwapBuffers()
-	this.dirty = false
-	this.fullDirty = false
-	this.dirtyRegion = geom.Rect{}
 }
 
 func (this *Window) Close() {
@@ -909,10 +909,10 @@ func (this *Window) UpdateRect(x, y, width, height float64) {
 // most one accumulated region per frame. If MarkFullDirty was called this
 // frame the call is a no-op (the whole window is already going to repaint).
 //
-// Coordinates are widget-local (the same coordinate system widget Bounds()
-// uses). The paint pass converts to physical pixels via the content scale.
+// Coordinates are window-root logical pixels, NOT child-local Bounds().
+// Map child bounds to the window first. The paint pass applies content scale.
 func (this *Window) MarkDirtyRect(x, y, w, h float64) {
-	if w <= 0 || h <= 0 {
+	if w <= 0 || h <= 0 || !finite(x) || !finite(y) || !finite(w) || !finite(h) {
 		return
 	}
 	this.dirty = true

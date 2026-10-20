@@ -22,6 +22,7 @@ import (
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hotreload"
 	"github.com/uk0/silk/i18n"
+	"github.com/uk0/silk/internal/processutil"
 	"github.com/uk0/silk/internal/silkgen"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/pdfexport"
@@ -30,6 +31,7 @@ import (
 )
 
 func main() {
+	configureIDEProcessToolPath()
 	paint.SetPreferVectorIcons(true)
 	// Compatibility note: ged widgets (WidgetList / GedView /
 	// ObjectInspector) currently have rendering issues under the
@@ -98,6 +100,7 @@ func main() {
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
+	buildWorkbenchMenu(frame, editorTabs, designCanvas)
 	registerPaletteCommands(editorTabs, designCanvas)
 	startTitleSync(frame, designCanvas)
 	if designCanvas != nil {
@@ -301,23 +304,6 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 			gui.SetToolTip(btn, i18n.T(tipKey))
 		}
 	}
-
-	// Hamburger menu — no glyph in the silk icon catalog, so we keep
-	// the unicode bars. Click pops a menu with File→New / Open /
-	// Save followed by the recent files MRU. Closes the visibility
-	// gap on the prefs.RecentFiles list (data was tracked but had
-	// no UI to surface it before).
-	// Empty initial callback then re-bind: lets us reference the
-	// returned *Button from inside the closure (used as the popup
-	// anchor point).
-	hamburger := tb.AddAction(i18n.T("Menu"), paint.LoadIcon("menu"), func() {})
-	if hamburger != nil {
-		gui.SetToolTip(hamburger, i18n.T("Menu"))
-		hamburger.Action().BindFunc0(func() {
-			showHamburgerMenu(hamburger, editorTabs, designCanvas)
-		})
-	}
-	tb.AddSeparator()
 
 	// New: clears the design canvas to a fresh scene. Bound to
 	// Cmd+N too via registerShortcuts. silk's resource theme has no
@@ -523,7 +509,8 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// drop target (OnDragEnter / OnDragMove / OnDrop).
 		widgetList := ged.NewWidgetList()
 		w.palette = widgetList
-		leftDock.AddView(widgetList)
+		w.paletteView = buildWidgetPalette(widgetList)
+		leftDock.AddView(w.paletteView)
 
 		// Global search panel — VSCode-style search-across-files. The
 		// panel walks the project root and reports matches via SigOpen,
@@ -1885,7 +1872,13 @@ func regenerateGoForSilkui(silkuiPath string) {
 		return
 	}
 	stem := strings.TrimSuffix(filepath.Base(silkuiPath), ".silkui")
-	formatted, err := silkgen.GenerateSource(silkuiPath, "ui", "", tree)
+	packageName, err := companionPackage(filepath.Dir(silkuiPath))
+	if err != nil {
+		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen package failed: %v", silkuiPath, err))
+		core.Warn("silkgen: package ", silkuiPath, ": ", err)
+		return
+	}
+	formatted, err := silkgen.GenerateSource(silkuiPath, packageName, "", tree)
 	if err != nil {
 		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen generate failed: %v", silkuiPath, err))
 		core.Warn("silkgen: generate ", silkuiPath, ": ", err)
@@ -2695,6 +2688,7 @@ func runProjectVet(canvas *ged.GedView) {
 	silkideToast(i18n.T("Running go vet..."), gui.ToastInfo)
 	go func() {
 		cmd := exec.Command("go", "vet", "./...")
+		processutil.NoConsoleWindow(cmd)
 		if dir != "" {
 			cmd.Dir = dir
 		}
@@ -2738,6 +2732,7 @@ func runProjectVet(canvas *ged.GedView) {
 // runs, no version drift.
 func gofmtSource(src string) (string, error) {
 	cmd := exec.Command("gofmt")
+	processutil.NoConsoleWindow(cmd)
 	cmd.Stdin = strings.NewReader(src)
 	var out, errBuf strings.Builder
 	cmd.Stdout = &out

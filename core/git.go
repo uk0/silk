@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -380,6 +381,7 @@ func runGit(dir string, args ...string) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
+	processutil.NoConsoleWindow(cmd)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

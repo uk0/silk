@@ -106,7 +106,13 @@ jobs:
       # Split into groups: building every cgo test binary in one invocation can
       # exhaust the runner (cairo + sqlite amalgamation compile at once).
       - name: Test (core UI)
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./printing/ ./core/ ./geom/ ./cairo/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./internal/processutil/
+
+      - name: Verify native GL texture uploads
+        if: runner.os != 'Windows'
+        env:
+          SILK_TEST_NATIVE_RENDER: '1'
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -count=1 -run '^TestGLFWNativeRenderTransfers$' -v ./gui/
 
       - name: Test (SCADA backend)
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/

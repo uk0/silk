@@ -12,6 +12,7 @@ func TestRunWorkingDirRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp) // Linux fallback path
 	t.Setenv("HOME", tmp)            // macOS Application Support path
+	t.Setenv("APPDATA", tmp)         // Windows Roaming path
 
 	const dir = "/Users/test/projects/widget"
 
@@ -39,6 +40,7 @@ func TestRunEnvRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("HOME", tmp)
+	t.Setenv("APPDATA", tmp)
 
 	env := []string{
 		"DEBUG=1",

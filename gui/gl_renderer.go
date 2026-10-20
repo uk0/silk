@@ -4,6 +4,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"image"
 	"unsafe"
 
 	"github.com/go-gl/gl/v2.1/gl"
@@ -36,12 +37,13 @@ func initGL() {
 //
 // On failure (MapBuffer returns nil — older drivers, OpenGL ES profile,
 // etc.) we mark PBO unavailable on the window and signal the caller to
-// fall back to plain glTexImage2D. Subsequent frames skip PBO entirely.
+// fall back to direct glTexSubImage2D. Subsequent frames skip PBO entirely.
 //
 // rowStride is the byte stride of the source data; mapped destination
-// is tightly packed at width*4 bytes.
-func (this *Window) uploadTextureViaPBO(width, height int32, rowStride int, data unsafe.Pointer) bool {
-	size := int(width) * int(height) * 4
+// is tightly packed at region.Dx()*4 bytes. Texture storage is allocated by
+// the caller before entering this function, with the PBO unbound.
+func (this *Window) uploadTextureViaPBO(region image.Rectangle, rowStride int, data unsafe.Pointer) bool {
+	size := region.Dx() * region.Dy() * 4
 	if size <= 0 || data == nil {
 		return false
 	}
@@ -69,41 +71,19 @@ func (this *Window) uploadTextureViaPBO(width, height int32, rowStride int, data
 		return false
 	}
 
-	// memcpy width*4 bytes per row from data (with rowStride) into the
-	// mapping (tightly packed at width*4). When rowStride == width*4 the
-	// whole upload is a single memmove; otherwise we copy row-by-row.
-	dstStride := int(width) * 4
-	if rowStride == dstStride {
-		copyBytes(ptr, data, size)
-	} else {
-		for y := int32(0); y < height; y++ {
-			src := unsafe.Pointer(uintptr(data) + uintptr(int(y)*rowStride))
-			dst := unsafe.Pointer(uintptr(ptr) + uintptr(int(y)*dstStride))
-			copyBytes(dst, src, dstStride)
-		}
-	}
+	copyFramebufferRegion(ptr, data, rowStride, region)
 
 	if !gl.UnmapBuffer(gl.PIXEL_UNPACK_BUFFER) {
 		// Buffer was corrupted (rare; usually means another context did
 		// something unexpected). Reupload from CPU memory.
 		gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
-		core.Warn("UnmapBuffer signalled corruption; falling back this frame")
+		this.pboAvailable = false
+		core.Warn("UnmapBuffer signalled corruption; disabling PBO uploads")
 		return false
 	}
 
-	// Make sure the texture storage is sized to (width, height). When the
-	// dimensions change we need a fresh TexImage2D allocation; otherwise
-	// TexSubImage2D streams into the existing storage.
-	if this.pboTexW != width || this.pboTexH != height {
-		gl.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0,
-			gl.BGRA, gl.UNSIGNED_BYTE, nil)
-		this.pboTexW = width
-		this.pboTexH = height
-	}
-
 	gl.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
-	gl.TexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height,
+	gl.TexSubImage2D(gl.TEXTURE_2D, 0, int32(region.Min.X), int32(region.Min.Y), int32(region.Dx()), int32(region.Dy()),
 		gl.BGRA, gl.UNSIGNED_BYTE, gl.PtrOffset(0))
 
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)

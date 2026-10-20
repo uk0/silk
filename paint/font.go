@@ -161,6 +161,11 @@ func (this *scaledFont) TextToGlyphs(x, y float64, text string) (ret []Glyph) {
 			//C.memcpy(unsafe.Pointer(&ret[0]), buf, C.size_t(num*24))
 			for i := 0; i < num; i++ {
 				ret[i] = *(*Glyph)(unsafe.Pointer(uintptr(buf) + uintptr(i)*24))
+				if runtime.GOOS == "windows" {
+					// cairo_glyph_t's unsigned long is 32-bit on Windows;
+					// A is alignment padding, which native malloc leaves undefined.
+					ret[i].A = 0
+				}
 			}
 		})
 	return
@@ -182,6 +187,9 @@ func (this *scaledFont) textToGlyphsInto(x, y float64, text string, dst []Glyph)
 			}
 			for i := 0; i < num; i++ {
 				dst[i] = *(*Glyph)(unsafe.Pointer(uintptr(buf) + uintptr(i)*24))
+				if runtime.GOOS == "windows" {
+					dst[i].A = 0
+				}
 			}
 		})
 	return dst
@@ -343,6 +351,10 @@ func (this *font) scaledFont(ctm *geom.Mat3x2) *scaledFont {
 	if ctm != nil {
 		key.m = *ctm
 	}
+	// Cairo ignores CTM translation when creating a scaled font. Retaining
+	// widget positions in this cache key kept an entry for every drag/scroll
+	// coordinate even though font scale, hinting and glyph metrics were equal.
+	key.m.X0, key.m.Y0 = 0, 0
 	key.fontMatrix.InitScale(float64(this.size), float64(this.size))
 	isf, ok := scaledFontCache.Find(key)
 	if ok {

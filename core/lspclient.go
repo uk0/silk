@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"io"
 	"os"
 	"os/exec"
@@ -238,6 +239,7 @@ func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 	}
 
 	cmd := exec.Command(serverCmd, args...)
+	processutil.NoConsoleWindow(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("lspclient: stdin pipe: %w", err)

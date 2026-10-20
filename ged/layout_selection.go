@@ -48,6 +48,9 @@ func (v *GedView) CanLayoutSelection(kind LayoutKind) bool {
 	if !isDesignerLayoutFactory(string(kind)) {
 		return false
 	}
+	if v.containerLayoutTarget(kind) != nil {
+		return true
+	}
 	items := v.layoutCandidates()
 	if len(items) < 2 {
 		return false
@@ -61,6 +64,120 @@ func (v *GedView) CanLayoutSelection(kind LayoutKind) bool {
 		}
 	}
 	return true
+}
+
+// Activate an existing free layout container in place, instead of wrapping it
+// in a second identical layout. Changing container type and top-level form
+// layouts are separate operations; never silently change their hierarchy.
+func (v *GedView) containerLayoutTarget(kind LayoutKind) *FakeWidget {
+	selected := v.Selection().ItemList()
+	if len(selected) != 1 {
+		return nil
+	}
+	f, ok := selected[0].(*FakeWidget)
+	if !ok || f.Scene() != v.Scene() || f.IsLockPos() || f.layoutManaged ||
+		f.factoryName != string(kind) || !f.HasChildren() {
+		return nil
+	}
+	var editable func(graph.IItem) bool
+	editable = func(parent graph.IItem) bool {
+		for _, it := range parent.Children() {
+			child, ok := it.(*FakeWidget)
+			if !ok || child.IsLockPos() || !editable(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if !editable(f) {
+		return nil
+	}
+	return f
+}
+
+type containerLayoutCommand struct {
+	view       *GedView
+	container  *FakeWidget
+	before     []layoutSnapshot
+	placements map[*FakeWidget]layoutPlacement
+}
+
+func (c *containerLayoutCommand) Text() string { return "Lay Out Container" }
+func (c *containerLayoutCommand) Redo() {
+	for f, p := range c.placements {
+		f.layoutCell = p
+	}
+	c.container.layoutManaged = true
+	c.container.Layout()
+	setLayoutSelection(c.view, []graph.IItem{c.container})
+}
+func (c *containerLayoutCommand) Undo() {
+	c.container.layoutManaged = false
+	// Restore preorder: parent resize/layout can move descendants, so their
+	// saved absolute canvas bounds must be restored AFTER the parent.
+	for _, s := range c.before {
+		s.item.layoutCell = s.placement
+		s.item.SetBounds1(s.bounds)
+	}
+	setLayoutSelection(c.view, []graph.IItem{c.container})
+}
+
+func (v *GedView) layoutContainer(container *FakeWidget, kind LayoutKind) bool {
+	cmd := &containerLayoutCommand{view: v, container: container, placements: make(map[*FakeWidget]layoutPlacement)}
+	var capture func(graph.IItem)
+	capture = func(parent graph.IItem) {
+		for _, it := range parent.Children() {
+			f := it.(*FakeWidget) // validated by containerLayoutTarget
+			cmd.before = append(cmd.before, layoutSnapshot{f, f.Bounds1(), f.layoutCell})
+			capture(f)
+		}
+	}
+	capture(container)
+	items := make([]*FakeWidget, 0, len(container.Children()))
+	for _, it := range container.Children() {
+		items = append(items, it.(*FakeWidget))
+	}
+	// Boxes retain document order, as does the runtime. Grid/Form can map
+	// their visual order into explicit cells without changing object order.
+	if kind == LayoutGrid || kind == LayoutForm {
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].Y() == items[j].Y() {
+				return items[i].X() < items[j].X()
+			}
+			return items[i].Y() < items[j].Y()
+		})
+	}
+	for i, p := range layoutPlacements(items, kind) {
+		cmd.placements[items[i]] = p
+	}
+	v.Scene().PushCommand(cmd)
+	v.GedScene().NotifyDesignChanged()
+	return true
+}
+
+func layoutPlacements(items []*FakeWidget, kind LayoutKind) []layoutPlacement {
+	placements := make([]layoutPlacement, len(items))
+	row, col := 0, 0
+	for i, f := range items {
+		p := layoutPlacement{RowSpan: 1, ColumnSpan: 1, Valid: true}
+		switch kind {
+		case LayoutHorizontal:
+			p.Column = i
+		case LayoutVertical:
+			p.Row = i
+		case LayoutForm:
+			p.Row, p.Column = i/2, i%2
+		case LayoutGrid:
+			if i > 0 && f.Y() >= items[i-1].Y()+items[i-1].Height() {
+				row++
+				col = 0
+			}
+			p.Row, p.Column = row, col
+			col++
+		}
+		placements[i] = p
+	}
+	return placements
 }
 
 func (v *GedView) CanBreakLayout() bool {
@@ -112,11 +229,15 @@ func (c *layoutSelectionCommand) Undo() {
 	setLayoutSelection(c.view, c.originalSelection)
 }
 
-// LayoutSelection wraps sibling widgets in one undoable layout. Grid and form
+// LayoutSelection activates a selected free layout container in place, or
+// wraps sibling widgets in one undoable layout. Grid and form
 // placement is persisted explicitly, so preview and both code emitters agree.
 func (v *GedView) LayoutSelection(kind LayoutKind) bool {
 	if !v.CanLayoutSelection(kind) {
 		return false
+	}
+	if container := v.containerLayoutTarget(kind); container != nil {
+		return v.layoutContainer(container, kind)
 	}
 	items := v.layoutCandidates()
 	sort.SliceStable(items, func(i, j int) bool {
@@ -146,26 +267,10 @@ func (v *GedView) LayoutSelection(kind LayoutKind) bool {
 	cmd := &layoutSelectionCommand{view: v, originalSelection: append([]graph.IItem(nil), v.Selection().ItemList()...), move: graph.NewReparentCommand("Lay Out"), container: container}
 	cmd.parentLayout, _ = items[0].Parent().(*FakeWidget)
 	cmd.move.Add(container, nil, items[0].Parent())
-	row, col := 0, 0
+	placements := layoutPlacements(items, kind)
 	for i, f := range items {
-		p := layoutPlacement{RowSpan: 1, ColumnSpan: 1, Valid: true}
-		switch kind {
-		case LayoutHorizontal:
-			p.Column = i
-		case LayoutVertical:
-			p.Row = i
-		case LayoutForm:
-			p.Row, p.Column = i/2, i%2
-		case LayoutGrid:
-			if i > 0 && f.Y() >= items[i-1].Y()+items[i-1].Height() {
-				row++
-				col = 0
-			}
-			p.Row, p.Column = row, col
-			col++
-		}
 		cmd.before = append(cmd.before, layoutSnapshot{f, f.Bounds1(), f.layoutCell})
-		cmd.placements = append(cmd.placements, p)
+		cmd.placements = append(cmd.placements, placements[i])
 		cmd.move.AddMoved(f, f.Parent(), container, f.X(), f.Y())
 	}
 	v.Scene().PushCommand(cmd)

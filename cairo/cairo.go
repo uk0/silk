@@ -15,7 +15,6 @@ import (
 	"errors"
 	"github.com/uk0/silk/geom"
 	"image"
-	"image/draw"
 	"io"
 	"math"
 	"os"
@@ -1044,26 +1043,6 @@ func (this *Surface) WritePNG(filename string) error {
 	}
 	return nil
 }
-func rgbaToBgra(src []uint8) []uint8 {
-	sz := len(src) - 3
-	dst := make([]uint8, 0)
-	for i := 0; i < sz; i += 4 {
-		x, y, z, w := src[i], src[i+1], src[i+2], src[i+3]
-		dst = append(dst, z, y, x, w)
-	}
-	return dst
-}
-
-func rgbnToBgra(src []uint8) []uint8 {
-	sz := len(src) - 3
-	dst := make([]uint8, 0)
-	for i := 0; i < sz; i += 4 {
-		x, y, z, _ := src[i], src[i+1], src[i+2], src[i+3]
-		dst = append(dst, z, y, x, 255)
-	}
-	return dst
-}
-
 func (this *Surface) Image() (image.Image, error) {
 	format := this.Format()
 	stride := this.Stride()
@@ -1082,11 +1061,9 @@ func (this *Surface) Image() (image.Image, error) {
 		rect := image.Rect(0, 0, width, height)
 		pix := C.GoBytes(unsafe.Pointer(data), C.int(stride*height))
 		var ret image.Image
-		if format == FORMAT_RGB24 {
-			pix = rgbnToBgra(pix)
-		} else {
-			pix = rgbaToBgra(pix)
-		}
+		// GoBytes already owns a copy. Swizzle that copy in place rather than
+		// growing a second multi-megabyte slice through repeated append.
+		surfaceImagePixelsToRGBA(pix, format == FORMAT_RGB24)
 		ret = &image.RGBA{Pix: pix, Stride: stride, Rect: rect}
 		return ret, nil
 	case FORMAT_A8:
@@ -1112,10 +1089,12 @@ func (this *Surface) Image() (image.Image, error) {
 }
 
 func (this *Surface) SetData(src []uint8) error {
-
-	if src == nil {
+	if len(src) == 0 {
 		return nil
 	}
+	// External writes must bracket access with Flush/MarkDirty. In particular
+	// a newly allocated clear surface may otherwise paint as fully transparent.
+	this.Flush()
 	sz := len(src)
 	data := C.cairo_image_surface_get_data(surface_t(this))
 	if data == nil {
@@ -1127,70 +1106,16 @@ func (this *Surface) SetData(src []uint8) error {
 		sz = stride * height
 	}
 
-	C.memcpy(unsafe.Pointer(data), unsafe.Pointer(&src[0]), C.size_t(sz))
+	if sz == 0 {
+		return nil
+	}
+	C.memmove(unsafe.Pointer(data), unsafe.Pointer(&src[0]), C.size_t(sz))
+	this.MarkDirty()
 	return nil
 }
 
 func (this *Surface) SetImage(img image.Image) error {
-	format := this.Format()
-	stride := this.Stride()
-	width := this.Width()
-	height := this.Height()
-
-	switch format {
-	case FORMAT_ARGB32:
-		fallthrough
-	case FORMAT_RGB24:
-		p, ok := img.(*image.RGBA)
-		if ok && p.Rect.Dx() == width && p.Rect.Dy() == height && p.Stride == stride {
-			pix := p.Pix
-			if format == FORMAT_ARGB32 {
-				pix = rgbaToBgra(p.Pix)
-			} else {
-				pix = rgbnToBgra(p.Pix)
-			}
-			this.SetData(pix)
-			return nil
-		}
-		dstImg, err := this.Image()
-		if err != nil {
-			return err
-		}
-		dst := dstImg.(*image.RGBA)
-		draw.Draw(dst, dst.Bounds(), img, img.Bounds().Min, draw.Src)
-		pix := dst.Pix
-		if format == FORMAT_ARGB32 {
-			pix = rgbaToBgra(p.Pix)
-		} else {
-			pix = rgbnToBgra(p.Pix)
-		}
-		return this.SetData(pix)
-	case FORMAT_A8:
-		p, ok := img.(*image.Alpha)
-		if ok && p.Rect.Dx() == width && p.Rect.Dy() == height && p.Stride == stride {
-			pix := p.Pix
-			this.SetData(pix)
-			return nil
-		}
-		dstImg, err := this.Image()
-		if err != nil {
-			return err
-		}
-		dst := dstImg.(*image.Alpha)
-		draw.Draw(dst, dst.Bounds(), img, img.Bounds().Min, draw.Src)
-		pix := dst.Pix
-		return this.SetData(pix)
-
-	case FORMAT_A1:
-		return errors.New("unsupported FORMAT_A1")
-	case FORMAT_RGB16_565:
-		return errors.New("unsupported FORMAT_RGB16_565")
-	case FORMAT_RGB30:
-		return errors.New("unsupported FORMAT_RGB30")
-	default:
-		return errors.New("unsupported unkown format")
-	}
-
+	return setSurfaceImage(this, img)
 }
 
 // DataPtr returns the raw pixel data pointer for the image surface.

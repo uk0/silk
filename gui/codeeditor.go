@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/internal/processutil"
 	"github.com/uk0/silk/paint"
 	"hash/fnv"
 	"math"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -503,7 +505,7 @@ func NewCodeEditor() *CodeEditor {
 
 func (this *CodeEditor) Init(iw IWidget) {
 	this.Widget.Init(iw)
-	this.font = paint.NewFont("Menlo", 13, false, false)
+	this.font = paint.NewFont(codeEditorFontFamily(runtime.GOOS), 13, false, false)
 	this.gutterW = 50
 	this.lines = []string{""}
 	this.cacheText("")
@@ -5796,6 +5798,10 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyHome:
+		if ctrl {
+			this.moveToDocumentBoundary(false, shift)
+			return
+		}
 		if len(this.additionalCursors) > 0 && !shift {
 			this.clearSelection()
 			this.moveAllCursorsToLineBound(false)
@@ -5808,6 +5814,10 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyEnd:
+		if ctrl {
+			this.moveToDocumentBoundary(true, shift)
+			return
+		}
 		if len(this.additionalCursors) > 0 && !shift {
 			this.clearSelection()
 			this.moveAllCursorsToLineBound(true)
@@ -6264,6 +6274,7 @@ func (this *CodeEditor) FormatCode() {
 
 	// Run gofmt with a timeout so a hung process cannot freeze the UI
 	cmd := exec.Command("gofmt", tmpPath)
+	processutil.NoConsoleWindow(cmd)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Start(); err != nil {

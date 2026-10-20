@@ -101,3 +101,23 @@ func TestScaledFontCacheCTMUsesImmutableValues(t *testing.T) {
 		t.Error("equal positive/negative zero CTMs hashed differently")
 	}
 }
+
+func TestScaledFontCacheIgnoresTranslationButKeepsLinearTransform(t *testing.T) {
+	f := NewFont("sans-serif", 13, false, false)
+	matrix := geom.Mat3x2{Xx: 1.25, Yy: 1.5}
+	original := f.ScaledFont(&matrix)
+	before := scaledFontCache.Len()
+	for i := 0; i < 1000; i++ {
+		matrix.X0, matrix.Y0 = float64(i)/3, float64(-i)/7
+		if f.ScaledFont(&matrix) != original {
+			t.Fatal("widget movement creates redundant scaled fonts")
+		}
+	}
+	if scaledFontCache.Len() != before {
+		t.Fatal("translation-only drawing grew the font cache")
+	}
+	matrix.Xx = 2
+	if f.ScaledFont(&matrix) == original {
+		t.Fatal("DPI scaling lost its own font metrics")
+	}
+}

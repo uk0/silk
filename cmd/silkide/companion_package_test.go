@@ -1,0 +1,75 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/uk0/silk/decl"
+)
+
+func TestCompanionPackageUsesSiblingCode(t *testing.T) {
+	for _, name := range []string{"main", "widgets", "窗口"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for file, text := range map[string]string{
+				"main.go":       "// comment\npackage " + name + "\n",
+				"view.silk.go":  "package ui\n",
+				"other_test.go": "package " + name + "_test\n",
+				"_ignore.go":    "package ignored\n",
+			} {
+				if err := os.WriteFile(filepath.Join(dir, file), []byte(text), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := companionPackage(dir)
+			if err != nil || got != name {
+				t.Fatalf("package = %q, %v", got, err)
+			}
+		})
+	}
+	dir := t.TempDir()
+	if name, err := companionPackage(dir); name != "ui" || err != nil {
+		t.Fatalf("empty folder default = %q, %v", name, err)
+	}
+	for file, text := range map[string]string{"a.go": "package a", "b.go": "package b"} {
+		os.WriteFile(filepath.Join(dir, file), []byte(text), 0o644)
+	}
+	if _, err := companionPackage(dir); err == nil {
+		t.Fatal("conflicting user packages accepted")
+	}
+}
+
+func TestScreenCompanionBuildsBesideMain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a generated companion against the native SDK")
+	}
+	dir := t.TempDir()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := "module example.com/companionqa\n\ngo 1.26\n\nrequire github.com/uk0/silk v0.0.0\nreplace github.com/uk0/silk => " + strconv.Quote(filepath.ToSlash(root)) + "\n"
+	for file, text := range map[string]string{"go.mod": module, "main.go": "package main\nfunc main() {}\n", "old.silk.go": "package ui\n"} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := filepath.Join(dir, "old.silkui")
+	if err := decl.ToTDoc(decl.Form(decl.Child(decl.Button(decl.P("text", "Windows QA"))))).SaveFile(input); err != nil {
+		t.Fatal(err)
+	}
+	regenerateGoForSilkui(input)
+	bytes, err := os.ReadFile(filepath.Join(dir, "old.silk.go"))
+	if err != nil || !strings.Contains(string(bytes), "package main") {
+		t.Fatalf("companion package not repaired: %s, %v", bytes, err)
+	}
+	cmd := exec.Command("go", "build", "-p", "1", "-mod=mod", "./...")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("save followed by real build: %v\n%s", err, output)
+	}
+}

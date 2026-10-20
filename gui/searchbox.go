@@ -4,18 +4,22 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
 	"math"
+	"strings"
+	"unicode"
 )
 
 // SearchBox 搜索框控件，带搜索图标和清除按钮
 type SearchBox struct {
 	Widget
-	text          string
-	placeholder   string
-	focused       bool
-	cursorPos     int
-	cbSearch      func(string)
-	cbTextChanged func(string)
-	hoverClear    bool
+	text            string
+	placeholder     string
+	focused         bool
+	cursorPos       int
+	selectionAnchor int
+	scrollX         float64
+	cbSearch        func(string)
+	cbTextChanged   func(string)
+	hoverClear      bool
 }
 
 func init() {
@@ -93,6 +97,8 @@ func (this *SearchBox) SetText(s string) {
 	if this.text != s {
 		this.text = s
 		this.cursorPos = len([]rune(s))
+		this.selectionAnchor = this.cursorPos
+		this.scrollX = 0
 		this.fireTextChanged()
 		this.Self().Update()
 	}
@@ -109,6 +115,48 @@ func (this *SearchBox) SetPlaceholder(s string) {
 
 func (this *SearchBox) Clear() {
 	this.SetText("")
+}
+
+// SelectAll uses rune positions, like the editing fields, so replacing a
+// query works identically for Latin text, CJK and supplementary characters.
+func (this *SearchBox) SelectAll() {
+	this.selectionAnchor = 0
+	this.cursorPos = len([]rune(this.text))
+	this.Self().Update()
+}
+
+func (this *SearchBox) selection() (int, int) {
+	n := len([]rune(this.text))
+	a := max(0, min(this.selectionAnchor, n))
+	b := max(0, min(this.cursorPos, n))
+	return min(a, b), max(a, b)
+}
+
+func (this *SearchBox) SelectionText() string {
+	a, b := this.selection()
+	return string([]rune(this.text)[a:b])
+}
+
+func (this *SearchBox) replaceSelection(text string) {
+	a, b := this.selection()
+	runes := []rune(this.text)
+	ins := []rune(text)
+	result := append(append(append([]rune{}, runes[:a]...), ins...), runes[b:]...)
+	this.cursorPos = a + len(ins)
+	this.selectionAnchor = this.cursorPos
+	if next := string(result); next != this.text {
+		this.text = next
+		this.fireTextChanged()
+	}
+	this.Self().Update()
+}
+
+func (this *SearchBox) moveCaret(pos int, extend bool) {
+	this.cursorPos = max(0, min(pos, len([]rune(this.text))))
+	if !extend {
+		this.selectionAnchor = this.cursorPos
+	}
+	this.Self().Update()
 }
 
 func (this *SearchBox) SigSearch(fn func(string)) {
@@ -161,7 +209,7 @@ func (this *SearchBox) OnLeftDown(x, y float64) {
 
 	this.SetFocus()
 	this.focused = true
-	this.cursorPos = searchBoxCaretIndex(this.text, Theme().Font, x-searchBoxTextX)
+	this.moveCaret(searchBoxCaretIndex(this.text, Theme().Font, x-searchBoxTextX+this.scrollX), IsKeyDown(KeyShift))
 	this.Self().Update()
 }
 
@@ -180,42 +228,62 @@ func (this *SearchBox) OnKeyDown(key int, repeat bool) {
 		return
 	}
 	runes := []rune(this.text)
+	if IsKeyDown(KeyCtrl) || isActionModifier() {
+		switch key {
+		case 'A':
+			this.SelectAll()
+			return
+		case 'C', 'X':
+			if text := this.SelectionText(); text != "" {
+				Clipboard.Clear()
+				Clipboard.SetData(text)
+				if key == 'X' {
+					this.replaceSelection("")
+				}
+			}
+			return
+		case 'V':
+			if data, err := Clipboard.Data("text/plain"); err == nil {
+				if text, ok := data.(string); ok {
+					this.OnTextInput(text)
+				}
+			}
+			return
+		}
+	}
+	a, b := this.selection()
+	shift := IsKeyDown(KeyShift)
 	switch key {
 	case KeyBackSpace:
-		if this.cursorPos > 0 && len(runes) > 0 {
-			runes = append(runes[:this.cursorPos-1], runes[this.cursorPos:]...)
-			this.cursorPos--
-			this.text = string(runes)
-			this.fireTextChanged()
-			this.Self().Update()
+		if a == b && this.cursorPos > 0 {
+			this.selectionAnchor = this.cursorPos - 1
 		}
+		this.replaceSelection("")
 	case KeyDelete:
-		if this.cursorPos < len(runes) {
-			runes = append(runes[:this.cursorPos], runes[this.cursorPos+1:]...)
-			this.text = string(runes)
-			this.fireTextChanged()
-			this.Self().Update()
+		if a == b && this.cursorPos < len(runes) {
+			this.selectionAnchor = this.cursorPos + 1
 		}
+		this.replaceSelection("")
 	case KeyLeft:
-		if this.cursorPos > 0 {
-			this.cursorPos--
-			this.Self().Update()
+		if a != b && !shift {
+			this.moveCaret(a, false)
+		} else {
+			this.moveCaret(this.cursorPos-1, shift)
 		}
 	case KeyRight:
-		if this.cursorPos < len(runes) {
-			this.cursorPos++
-			this.Self().Update()
+		if a != b && !shift {
+			this.moveCaret(b, false)
+		} else {
+			this.moveCaret(this.cursorPos+1, shift)
 		}
 	case KeyEnter:
 		if this.cbSearch != nil {
 			this.cbSearch(this.text)
 		}
 	case KeyHome:
-		this.cursorPos = 0
-		this.Self().Update()
+		this.moveCaret(0, shift)
 	case KeyEnd:
-		this.cursorPos = len(runes)
-		this.Self().Update()
+		this.moveCaret(len(runes), shift)
 	}
 }
 
@@ -226,16 +294,20 @@ func (this *SearchBox) OnTextInput(s string) {
 	if !this.IsEnabled() || s == "" {
 		return
 	}
-	runes := []rune(this.text)
-	if this.cursorPos > len(runes) {
-		this.cursorPos = len(runes)
+	// Clipboard paste is still a single-line query, not a multiline editor.
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if s == "" {
+		return
 	}
-	ins := []rune(s)
-	runes = append(runes[:this.cursorPos], append(ins, runes[this.cursorPos:]...)...)
-	this.cursorPos += len(ins)
-	this.text = string(runes)
-	this.fireTextChanged()
-	this.Self().Update()
+	this.replaceSelection(s)
 }
 
 // --- Drawing ---
@@ -303,6 +375,26 @@ func (this *SearchBox) Draw(g paint.Painter) {
 	g.SetFont(t.Font)
 	fe := t.Font.FontExtents()
 	textY := 0.5 * (h + fe.Ascent - fe.Descent)
+	// Text/caret stay in their own strip; long queries must not cover the
+	// search or clear icons, or float beyond the palette's parent panel.
+	textWidth := math.Max(0, w-searchBoxTextX-searchBoxClearW)
+	caretX := searchBoxCaretX(this.text, t.Font, this.cursorPos)
+	this.scrollX = math.Max(0, math.Min(this.scrollX, caretX))
+	if caretX-this.scrollX > math.Max(0, textWidth-2) {
+		this.scrollX = caretX - math.Max(0, textWidth-2)
+	}
+	g.Save()
+	g.Rectangle(textStartX, 0, textWidth, h)
+	g.Clip()
+	textStartX -= this.scrollX
+	a, b := this.selection()
+	if this.focused && a != b {
+		x0 := textStartX + searchBoxCaretX(this.text, t.Font, a)
+		x1 := textStartX + searchBoxCaretX(this.text, t.Font, b)
+		g.SetBrush1(t.MenuActiveBGColor)
+		g.Rectangle(x0, (h-fe.Height)/2, x1-x0, fe.Height)
+		g.Fill()
+	}
 
 	if this.text == "" && !this.focused {
 		// placeholder
@@ -316,6 +408,17 @@ func (this *SearchBox) Draw(g paint.Painter) {
 		g.Translate(textStartX, textY)
 		g.DrawText(this.text)
 		g.Translate(-textStartX, -textY)
+		if this.focused && a != b {
+			x0 := textStartX + searchBoxCaretX(this.text, t.Font, a)
+			x1 := textStartX + searchBoxCaretX(this.text, t.Font, b)
+			g.Save()
+			g.Rectangle(x0, 0, x1-x0, h)
+			g.Clip()
+			g.SetBrush1(t.MenuActiveTextColor)
+			g.Translate(textStartX, textY)
+			g.DrawText(this.text)
+			g.Restore()
+		}
 
 		// cursor
 		if this.focused {
@@ -326,6 +429,7 @@ func (this *SearchBox) Draw(g paint.Painter) {
 			g.Stroke()
 		}
 	}
+	g.Restore()
 
 	// clear button (X) when text is not empty
 	if this.text != "" {

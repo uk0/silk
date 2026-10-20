@@ -269,6 +269,10 @@ func installLocale() {
 // file) so the binary always has them — no separate asset to ship.
 func registerSilkideTranslations() {
 	i18n.Default.AddMany("zh-CN", map[string]string{
+		"File": "文件", "View": "视图", "Tools": "工具", "Help": "帮助",
+		"Widgets": "控件", "Filter widgets...": "搜索控件...",
+		"Search by widget or factory name": "按控件名称或工厂名搜索，拖入画布添加",
+		"Object Inspector":                 "对象检查器", "Build Output": "构建输出",
 		"Debug":           "调试",
 		"Run":             "运行",
 		"Build":           "构建",

@@ -54,9 +54,34 @@ func (this *cairoSurface) setFinalizer() {
 		core.Warn("seems cairo surface leaks, count = ", n)
 	}
 	runtime.SetFinalizer(this, func(p *cairoSurface) {
-		p.Surface.Destroy()
-		cairoSurfaceCount.Add(-1)
+		p.releaseNative()
 	})
+}
+
+// CloseSurface releases an exclusively owned native surface without waiting
+// for Go's heap-driven GC. No interface change is required of custom surfaces.
+// All painters/aliases owned by the caller must be retired first.
+func CloseSurface(s Surface) {
+	if native, ok := s.(*cairoSurface); ok && native != nil {
+		runtime.SetFinalizer(native, nil)
+		if native.Surface != nil {
+			// Retire backend resources/snapshots even if Cairo retains native
+			// cache references. Only explicit, exclusive ownership permits
+			// Finish here; finalizers merely drop their reference because an
+			// independently retained native painter may still use its target.
+			native.Surface.Finish()
+		}
+		native.releaseNative()
+	}
+}
+
+func (p *cairoSurface) releaseNative() {
+	if p.Surface == nil {
+		return
+	}
+	p.Surface.Destroy()
+	p.Surface = nil
+	cairoSurfaceCount.Add(-1)
 }
 
 func (this *cairoSurface) SurfaceType() cairo.SurfaceType {

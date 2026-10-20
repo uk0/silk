@@ -31,11 +31,12 @@ type Button struct {
 	textVisible bool
 	isDefault   bool
 	//iconVisible bool
-	action     IAction
-	iconName   string // resource name the icon came from, "" for a directly set icon
-	subPopup   IWidget
-	syncRev    uint64
-	cbSubPopup func(IButton)
+	action       IAction
+	iconName     string // resource name the icon came from, "" for a directly set icon
+	subPopup     IWidget
+	syncRev      uint64
+	cbSubPopup   func(IButton)
+	shortcutText string // informational popup column; shortcut dispatch is registered separately
 
 	// SizeHints cache. Validity is determined by comparing the captured key
 	// fields below against the current widget/theme state on each call. The
@@ -276,6 +277,9 @@ func (this *Button) computeSizeHints() SizeHints {
 			//ml, mr, mt, mb := t.MenuItemMargin.Margin()
 			m := t.MenuItemMargin
 			w := ext.Width + m.L*2 + m.R + t.IconSize + t.MenuSubMarkWidth
+			if this.shortcutText != "" {
+				w += t.Font.TextExtents(this.shortcutText).Width + m.L*2
+			}
 			h := math.Max(t.IconSize, fe.Height) + m.T + m.B
 			return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
 		} else if this.IsIconVisible() {
@@ -516,6 +520,21 @@ func (this *Button) SetTextVisible(b bool) {
 	}
 	this.textVisible = b
 	this.invalidateHints()
+}
+
+// ShortcutText is a right-aligned hint in popup menus, not a key binding.
+func (this *Button) ShortcutText() string { return this.shortcutText }
+
+func (this *Button) SetShortcutText(text string) {
+	if this.shortcutText == text {
+		return
+	}
+	this.shortcutText = text
+	this.invalidateHints()
+	if menu, ok := this.Parent().(*Menu); ok {
+		menu.Layout()
+	}
+	this.Update()
 }
 
 func (this *Button) IsIconVisible() bool {

@@ -5,6 +5,7 @@ package ged
 import (
 	"context"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-func configureTerminalProcess(c *exec.Cmd) {}
+func configureTerminalProcess(c *exec.Cmd) { processutil.NoConsoleWindow(c) }
 
 // Use a specific child PID, never image-name/global matching. /T terminates
 // its descendant tree; /F prevents a detached GUI child ignoring the stop.
@@ -27,7 +28,9 @@ func killTerminalProcess(p *os.Process) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, tool, "/PID", strconv.Itoa(p.Pid), "/T", "/F").Run(); err != nil {
+	cmd := exec.CommandContext(ctx, tool, "/PID", strconv.Itoa(p.Pid), "/T", "/F")
+	processutil.NoConsoleWindow(cmd)
+	if err := cmd.Run(); err != nil {
 		if fallback := p.Kill(); fallback != nil {
 			return fmt.Errorf("taskkill: %v; direct child: %w", err, fallback)
 		}

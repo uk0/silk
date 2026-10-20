@@ -48,6 +48,7 @@ func TestOpenSessionRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp) // Linux fallback path
 	t.Setenv("HOME", tmp)            // macOS Application Support path
+	t.Setenv("APPDATA", tmp)         // Windows Roaming path
 
 	paths := []string{
 		filepath.Join(tmp, "Form.silkui"),

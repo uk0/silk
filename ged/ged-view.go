@@ -1573,7 +1573,8 @@ func boundingBoxOf(rects []geom.Rect) geom.Rect {
 //
 // The whole wrap goes onto the undo stack as one ReparentCommand, which
 // is also how the 布局 menu tells an applied layout from a declined one.
-// No-op below 2 selected items.
+// A single free layout container of the matching type is activated in place.
+// Otherwise requires at least two sibling widgets.
 func (this *GedView) LayOutSelection(horizontal bool) {
 	if horizontal {
 		this.LayoutSelection(LayoutHorizontal)

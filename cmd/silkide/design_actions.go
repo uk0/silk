@@ -36,7 +36,7 @@ func designerActionSpecs(canvas *ged.GedView) []designActionSpec {
 		kind := layout.kind
 		enabled := func() bool { return active() && canvas.CanLayoutSelection(kind) }
 		specs = append(specs, designActionSpec{layout.label, layout.icon,
-			"框选或按 Shift 多选同一容器中的至少两个未锁定控件；表单布局按左右配对", enabled,
+			"多选同父的至少两个未锁定控件，或选中同类型自由布局容器直接启用；表单布局左右配对", enabled,
 			func() {
 				if enabled() {
 					canvas.LayoutSelection(kind)

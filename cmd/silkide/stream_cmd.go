@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"io"
 	"os/exec"
 	"strings"
@@ -34,6 +35,7 @@ const streamThrottle = 200 * time.Millisecond
 // caller must marshal it. It is throttled to streamThrottle and always fires
 // once more at the end so the final text is never lost.
 func streamCommand(cmd *exec.Cmd, onProgress func(text string)) (string, error) {
+	processutil.NoConsoleWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err

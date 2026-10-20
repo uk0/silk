@@ -95,6 +95,9 @@ type Window struct {
 	widget                                                        IWidget
 	wt                                                            WindowType
 	title                                                         string
+	// WM_SETICON does not transfer ownership to the window manager. Keep only
+	// handles created by this Window; the previous OS handle may be shared.
+	ownedIcons [2]win32.HICON // ICON_SMALL, ICON_BIG
 	//	staticTitle  bool
 	autoCaptured           bool
 	toCapture              bool
@@ -406,7 +409,24 @@ func (this *Window) destroy() {
 	}
 	this.hWnd = 0
 	this.widget = nil
-	this.backPainter, this.backBuffer = nil, nil
+	this.releaseBackBuffer()
+	this.releaseWindowIcons()
+}
+
+func (win *Window) releaseWindowIcons() {
+	for i, icon := range win.ownedIcons {
+		win.ownedIcons[i] = 0
+		if icon != 0 {
+			win32.DestroyIcon(icon)
+		}
+	}
+}
+
+func (win *Window) releaseBackBuffer() {
+	paint.ClosePainter(win.backPainter)
+	paint.CloseSurface(win.backBuffer)
+	win.backPainter, win.backBuffer = nil, nil
+	win.backWidth, win.backHeight = 0, 0
 }
 
 // forgetWidgetsOfWindow drops the package-level widget pointers that belong to
@@ -466,6 +486,7 @@ func (this *Window) getBackBuffer(s0 paint.Surface, width, height int) (backPain
 		height = 1
 	}
 	if width != this.backWidth || height != this.backHeight {
+		this.releaseBackBuffer()
 		this.backWidth = width
 		this.backHeight = height
 		this.backBuffer = paint.NewPixmap(width, height)
@@ -530,7 +551,8 @@ func (this *Window) OnDestroy() {
 	delete(winMap, this.hWnd)
 	this.hWnd = 0
 	this.widget = nil
-	this.backPainter, this.backBuffer = nil, nil
+	this.releaseBackBuffer()
+	this.releaseWindowIcons()
 }
 
 func (this *Window) SetFrameBounds(x, y, w, h float64) {
@@ -775,6 +797,9 @@ func (this *Window) SetTitle(s string) {
 }
 
 func (this *Window) setIcon(icon paint.Icon, small bool) {
+	if this.hWnd == 0 {
+		return
+	}
 	var szType int
 	var iconType uintptr
 	if small {
@@ -789,9 +814,12 @@ func (this *Window) setIcon(icon paint.Icon, small bool) {
 	hIcon, err := NewCursorFromIcon(icon, sz, 0, 0)
 	//core.Debug(hIcon, err)
 	if err == nil {
-		r := win32.SendMessage(this.hWnd, win32.WM_SETICON, iconType, uintptr(hIcon.Detach()))
-		if r != 0 {
-			win32.DestroyIcon(win32.HICON(r))
+		native := win32.HICON(hIcon.Detach())
+		win32.SendMessage(this.hWnd, win32.WM_SETICON, iconType, uintptr(native))
+		old := this.ownedIcons[iconType]
+		this.ownedIcons[iconType] = native
+		if old != 0 {
+			win32.DestroyIcon(old)
 		}
 	} else {
 		core.Warn(err)
@@ -1111,52 +1139,77 @@ func silkUIFilterUTF16() []uint16 {
 }
 
 func OpenFileDialog() string {
-	var fileBuf = make([]uint16, win32.MAX_PATH)
+	var fileBuf = make([]uint16, 32768)
 	ofn := win32.OPENFILENAME{}
 	ofn.StructSize = uint32(unsafe.Sizeof(ofn))
 	core.Debug("ofn.StructSize = ", ofn.StructSize)
 	ofn.Instance = hInstance
-	ofn.Owner = 0
+	ofn.Owner = nativeFileDialogOwner()
 	ofn.File = &fileBuf[0]
 	fileBuf[0] = 0
-	ofn.MaxFile = win32.MAX_PATH
+	ofn.MaxFile = uint32(len(fileBuf))
 	filter := silkUIFilterUTF16()
 	ofn.Filter = &filter[0]
 	ofn.FilterIndex = 1
-	ofn.Flags = win32.OFN_PATHMUSTEXIST | win32.OFN_FILEMUSTEXIST | win32.OFN_HIDEREADONLY
+	ofn.Flags = win32.OFN_PATHMUSTEXIST | win32.OFN_FILEMUSTEXIST | win32.OFN_HIDEREADONLY | win32.OFN_NOCHANGEDIR
 	ok := win32.GetOpenFileName(&ofn)
 	if ok {
 		s := syscall.UTF16ToString(fileBuf)
 		s = strings.Replace(s, `\`, `/`, -1)
 		return s
 	}
+	if code := win32.CommDlgExtendedError(); code != 0 {
+		core.Warn(fmt.Sprintf("OpenFileDialog failed: CommDlgExtendedError=0x%X", code))
+	}
 	return ""
 }
 
 func SaveFileDialog() string {
-	var fileBuf = make([]uint16, win32.MAX_PATH)
+	var fileBuf = make([]uint16, 32768)
 	ofn := win32.OPENFILENAME{}
 	ofn.StructSize = uint32(unsafe.Sizeof(ofn))
 	core.Debug("ofn.StructSize = ", ofn.StructSize)
 	ofn.Instance = hInstance
-	ofn.Owner = 0
+	ofn.Owner = nativeFileDialogOwner()
 	ofn.File = &fileBuf[0]
 	fileBuf[0] = 0
-	ofn.MaxFile = win32.MAX_PATH
+	ofn.MaxFile = uint32(len(fileBuf))
 	filter := silkUIFilterUTF16()
 	ofn.Filter = &filter[0]
 	ofn.FilterIndex = 1
 	// Default extension used when the user types a name without one.
 	defExt := []uint16{'s', 'i', 'l', 'k', 'u', 'i', 0}
 	ofn.DefExt = &defExt[0]
-	ofn.Flags = win32.OFN_HIDEREADONLY | win32.OFN_OVERWRITEPROMPT
+	ofn.Flags = win32.OFN_HIDEREADONLY | win32.OFN_OVERWRITEPROMPT | win32.OFN_PATHMUSTEXIST | win32.OFN_NOCHANGEDIR
 	ok := win32.GetSaveFileName(&ofn)
 	if ok {
 		s := syscall.UTF16ToString(fileBuf)
 		s = strings.Replace(s, `\`, `/`, -1)
 		return s
 	}
+	if code := win32.CommDlgExtendedError(); code != 0 {
+		core.Warn(fmt.Sprintf("SaveFileDialog failed: CommDlgExtendedError=0x%X", code))
+	}
 	return ""
+}
+
+func fileDialogOwnerWindow(win *Window) win32.HWND {
+	for win != nil && win.wt == WtPopup {
+		win = win.popupOwner
+	}
+	if win != nil {
+		return win.hWnd
+	}
+	return 0
+}
+
+func nativeFileDialogOwner() win32.HWND {
+	// A thread's active HWND belongs to this application; never borrow another
+	// process's foreground window. Popups resolve back to their owning form.
+	if win := winMap[win32.GetActiveWindow()]; win != nil {
+		return fileDialogOwnerWindow(win)
+	}
+	return fileDialogOwnerWindow(activeForm)
 }
 
 const nc_active_hack_code = 11111
@@ -1192,6 +1245,18 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		noteUIInteraction(time.Now())
 	}
 	switch msg {
+	case win32.WM_SYSKEYDOWN:
+		// Alt menu accelerators are system-key messages, not WM_KEYDOWN.
+		// Preserve unhandled Alt+F4/Alt+Space native window behavior.
+		if lParam&0x40000000 == 0 && (win.dispatchShortcutOverride(int(wParam)) || dispatchShortcut(int(wParam))) {
+			return 0
+		}
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	case win32.WM_SYSCHAR:
+		if ShortcutHandler(currentMods(), int(unicode.ToUpper(rune(wParam)))) != nil {
+			return 0
+		}
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_KEYDOWN:
 		// The window-level key layer existed only in the GLFW backend, so on
 		// Windows every gui.RegisterShortcut was inert — the IDE's Ctrl+S,
@@ -1341,6 +1406,9 @@ func (win *Window) on_WM_PAINT(msg uint32, wParam, lParam uintptr) (ret uintptr)
 		return 0
 	}
 	winSurface := paint.NewWin32Surface(uintptr(paintStruct.Hdc))
+	// Borrowed BeginPaint HDC resources must be retired BEFORE EndPaint.
+	// Small Go wrappers otherwise keep native GDI objects alive until a GC.
+	defer paint.CloseSurface(winSurface)
 	defer winSurface.Finish()
 	width, height := win.widget.Size()
 	fresh := win.backBuffer == nil || (int(width)+15)/16*16 != win.backWidth || (int(height)+15)/16*16 != win.backHeight
@@ -1363,6 +1431,7 @@ func (win *Window) on_WM_PAINT(msg uint32, wParam, lParam uintptr) (ret uintptr)
 	backPainter.Restore()
 	backBuffer.Flush()
 	c := winSurface.NewPainter()
+	defer paint.ClosePainter(c)
 	c.Rectangle(float64(rc.Left), float64(rc.Top), float64(rc.Right-rc.Left), float64(rc.Bottom-rc.Top))
 	c.Clip()
 	c.DrawPixmap(backBuffer)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/uk0/silk/internal/processutil"
 	"os"
 	"os/exec"
 	"strconv"
@@ -94,6 +95,7 @@ func (g *GitOps) execGit(dir string, args ...string) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
+	processutil.NoConsoleWindow(cmd)
 	cmd.Dir = dir
 	cmd.Env = gitNonInteractiveEnviron(os.Environ())
 	var stdout, stderr bytes.Buffer

@@ -32,6 +32,12 @@ Windows/macOS application icons live in [assets/branding](assets/branding/README
 
 *Actual macOS arm64 window captured on 2026-09-11, using the dark theme and an isolated demo project. This is a running application, not a mockup.*
 
+![SilkIDE on Windows 10: grouped menus, searchable widget palette and nested GridLayout](screenshots/silkide-designer-windows.png)
+
+*Actual Windows 10 interactive desktop capture from the 2026-10-20 iteration (PDT), limited to the application frame. See [Windows rendering and SDK QA](WINDOWS_RENDERING_QA_20261020.md) for reproducible steps and remaining issues.*
+
+[Actual Windows menu capture](screenshots/silkide-menu-windows.png).
+
 ```bash
 make run-ide     # Qt Creator-style Go editing + visual design workbench
 make test-ide    # IDE, designer, widgets and tool-engine regression tests
@@ -56,6 +62,11 @@ make test-ide    # IDE, designer, widgets and tool-engine regression tests
   explicit project and run-directory settings take precedence.
 - Drag-and-drop respects nested container ownership and form bounds. HBox, VBox,
   Grid and Form layouts share selection/locking rules with the context menu.
+- File / Edit / View / Design / Build / Tools / Help menus group related actions,
+  show shortcuts in a separate column, and support Alt accelerators and arrows.
+  The searchable widget palette retains factory identity and drag/drop behavior.
+  Search fields support selection replacement and clipboard editing, with long
+  queries clipped away from the search/clear icons.
 - Menus support keyboard navigation, disabled actions and nested popup dismissal.
   Properties and View Code activate the corresponding dock instead of silently
   doing nothing; export reports the actual output path or an error.
@@ -72,11 +83,28 @@ IDE alone does not establish language-server or debugger availability.
 
 ### Validation Status
 
+The 2026-10-11 core iteration adds zero-allocation RGBA/NRGBA image uploads,
+damage-sized GLFW texture transfers, draw-time invalidation retention, and
+in-place activation of an existing free layout container. Real macOS GL texture
+readback covers PBO and direct-upload paths. See [Rendering QA](RENDERING_QA.md)
+for measurements, reproduction commands, and platform/UI verification limits.
+The Windows UI iteration adds owned native Open/Save dialogs, theme-aware object
+inspection, process-local Go tool discovery, and deterministic retirement of
+native paint resources. It also removes translation-only scaled-font cache keys.
+Integer properties now use an exact, registered editor; generated companions
+follow the neighboring Go package. Background Windows tool commands no longer
+open an intrusive console window.
+The 2026-10-20 native audit fixes `EndPaint` accidentally calling `BeginPaint`,
+owned window-icon retirement, and two additional misrouted SDK API wrappers.
+The reproduced repeated-menu GDI growth now plateaus in the bounded native run.
+The editor also supports document-boundary Ctrl/Cmd+Home/End navigation and
+Shift selection, including Unicode, folded EOF and viewport following.
+
 | Environment | Latest local evidence | Not established by this check |
 | --- | --- | --- |
-| macOS arm64 / Go 1.26.5 | Real desktop interaction with all 9 main-menu entries, native Open/Save sheets, About/Settings, canvas context actions and Run/Stop; 11-package regression plus saved-design runtime tests | Every secondary panel action, real gopls/dlv end-to-end workflows, mixed-DPI multi-monitor behavior |
-| Linux arm64 / Go 1.26.0 | Debian 12 build, four-package tests, vet and non-root Xvfb window-startup smoke | Interactive desktop/IME/font coverage; a portable dependency-free binary |
-| Windows amd64 | `silk_pure_go` test-binary type compilation for `ged` and `cmd/silkide` | Native Windows GUI/Cairo execution |
+| macOS arm64 / Go 1.26.5 | 2026-10-20 six-package regression, targeted race/vet and GL pixel readback; earlier ten-package run/build and 2026-09-11 desktop QA remain dated evidence | New seven-group menu desktop QA on macOS, every secondary panel action, real gopls/dlv workflows, mixed-DPI multi-monitor behavior |
+| Linux arm64 / Go 1.26.0 | Earlier Debian 12 build, four-package tests, vet and non-root Xvfb window-startup smoke; not rerun this iteration | Interactive desktop/IME/font coverage; a portable dependency-free binary |
+| Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Native twelve-package regressions; bounded GDI plateau in 120-cycle render / final 40-cycle UI runs, paint pairing, accelerator dispatch and icon lifetime; Label/Grid persistence, runtime resize, real Ctrl+End EOF save/readback and F6 build | Startup/input-latency certification, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
 
 Run/Build currently use **saved files on disk**; save edits before running.
 IDE symbol actions require `gopls` and report when it is unavailable. Some panels
@@ -86,7 +114,9 @@ external tools alone is not a full desktop compatibility claim.
 Detailed, dated verification records:
 [workbench](WORKBENCH_QA.md) · [menus and About](MENU_QA.md) ·
 [SDK/platform compatibility](SDK_COMPATIBILITY.md) ·
-[popup ownership](POPUP_AUDIT.md) · [designer gaps](DESIGNER_GAPS.md).
+[popup ownership](POPUP_AUDIT.md) · [designer gaps](DESIGNER_GAPS.md) ·
+[Windows desktop iteration](WINDOWS_UI_QA.md) ·
+[latest Windows rendering/SDK verification](WINDOWS_RENDERING_QA_20261020.md).
 Local `bin/qa-artifacts/` evidence mentioned in those records is not shipped in Git.
 
 ### Rendering performance
@@ -98,7 +128,15 @@ coalesced deadline timer rather than a paint-to-animation feedback loop;
 custom modal dialogs block waiting for messages instead of polling every 1 ms.
 Hidden busy widgets stop their animation. Text/modified-state/outline caches
 avoid repeated full-document work while idle. These are code-level fixes;
-**Windows native CPU/latency improvement still requires measurement**.
+Windows native idle/resource samples are recorded in [Windows UI QA](WINDOWS_UI_QA.md);
+**a full before/after CPU reduction or input-latency improvement is not established**.
+
+Windows previously requested macOS's Menlo font and resolved a proportional
+fallback, disabling the editor's ASCII measurement fast path. Platform defaults
+are now Consolas / Menlo / monospace. On the Windows QA machine, the isolated
+48-character measurement benchmark drops from 4.96–5.55 µs and 2 allocations
+to 77–97 ns and zero allocations. This is **one hot path**, not whole-IDE FPS;
+non-ASCII text and non-monospaced overrides retain native shaping.
 
 See [bounded CPU capture and Windows verification](PERFORMANCE-CAPTURE.md).
 Profiling is opt-in, local-only, and stops automatically after 30 seconds.

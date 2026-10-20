@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"github.com/uk0/silk/internal/processutil"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -247,7 +248,9 @@ func DetectToolVersion(name string) Tool {
 	defer cancel()
 	// CombinedOutput: `go version` writes to stdout, some wrappers to
 	// stderr; either way the banner is what we want.
-	out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	processutil.NoConsoleWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil && len(out) == 0 {
 		return t
 	}

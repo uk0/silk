@@ -3,6 +3,14 @@
 本轮关注设计文件实际加载、平台窗口事件、安装后的文件系统行为和交付链。
 编译通过、虚拟显示启动和人工桌面交互是不同等级的证据，不能互相替代。
 
+## 2026-10-20 原生 Windows 更新
+
+下文的 Windows 类型编译边界为历史记录。最新真机十二包回归为 4,595 个测试/子测试通过、38 跳过、0 失败；实际桌面拖放、Undo/Redo、保存回读、生成运行时 resize、Ctrl+End EOF 导航和 F6 构建均另有证据，详见 [Windows 绘制与 SDK 复验](WINDOWS_RENDERING_QA_20261020.md)。
+
+本轮修正 `EndPaint → BeginPaint`、`TranslateAccelerator → TranslateMessage`、`GetStockObject → GetDeviceCaps` 三处 SDK 错误转发，新增 192 项静态入口检查和真实原生绘制/加速键/stock object 测试；自有窗口图标在替换和销毁时释放。`MapVirtualKeyEx` 原先指向的 native API 本来正确，仅规范内部命名并增加显式布局对照测试。
+
+`win32` 纯 Go 测试程序的 Windows 386/ARM64 交叉编译通过，不等同于这些架构的 Cairo 链接或 GUI 运行通过。启动延迟、中文 IME、混合 DPI、多屏与长期全控件稳定性仍不能由这些结果替代。
+
 ## 安装目录与用户数据
 
 此前 `core.LocalDataDir` / `WorkspaceDir` / `TempDir` 把 `os.ModeDir` 作为权限

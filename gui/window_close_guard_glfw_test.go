@@ -29,6 +29,11 @@ func TestMain(m *testing.M) {
 			probeWindow = gw
 		}
 	}
+	if os.Getenv("SILK_TEST_NATIVE_RENDER") == "1" {
+		// The opt-in renderer probe also needs Cocoa's main thread. Assertions
+		// are reported by TestGLFWNativeRenderTransfers in the usual test run.
+		nativeRenderErr = runNativeRenderProbe()
+	}
 	code := m.Run()
 	// Destroying is main-thread-only for the same reason, so it happens here
 	// rather than in a t.Cleanup.

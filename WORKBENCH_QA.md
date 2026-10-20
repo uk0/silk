@@ -222,3 +222,49 @@ Windows 仍是类型/ABI 层检查，未冒充 Cairo/GUI 真机验收。先前�
 证据集中于 `bin/qa-artifacts/menu-round/`；当前运行日志 `macos-release-gui.log`。
 真实 LSP/dlv、Windows GUI、Linux 桌面交互和所有次级面板按钮仍需专门验收，
 不把单测或编译结果冒充这些能力已可用。
+
+## 2026-10-11：核心渲染与单容器布局迭代
+
+专项发现、性能基准和完整复验命令见 [RENDERING_QA.md](RENDERING_QA.md)。
+本轮修复通用图片写入崩溃／不可见、像素转换高分配、GLFW 全纹理上传及
+绘制中更新丢失；单个自由布局容器可原位启用同类型布局，撤销恢复子孙几何。
+
+- 最终 7 包回归 3915 项通过、5 项平台／opt-in 跳过；专项 race/checkptr、vet 通过。
+- 真实隐藏 GLFW 窗口逐像素回读通过，包括 PBO 和直接上传回退；测试局部
+  更新上传 2688 bytes，整帧 76800 bytes，不代表所有界面的整体提速比。
+- Grid/Form 的分组和原位布局两种生成代码均实际编译、执行、resize 验证。
+- Windows amd64 当前仅纯 Go 类型编译；增加的原生 Cairo CI 尚未执行。
+- Computer Use 对隔离 `SilkBaseline` 的访问未批准，因此没有新增交互截图，
+  不把隐藏 GL 测试等同于菜单、拖拽、输入法的完整屏幕验收。
+
+测试包位于 `bin/qa-artifacts/iteration-20261011/after/SilkIDE.app`，已构建并
+通过 ad-hoc 签名验证；未覆盖现有 `bin/SilkIDE.app`。本轮基线采样进程已关闭。
+所有新日志与前后基准位于 `bin/qa-artifacts/iteration-20261011/`。
+
+## Windows 10 真机迭代（2026-10-11，PDT）
+
+本节更新此前“Windows 未实测”的历史边界；Linux 本轮没有重新实测。
+使用 Claude `win10testcomputer` skill，在真实 Session 1 完成了过滤后拖入两枚 Button、Grid 布局、Undo/Redo、原生 Ctrl+S 保存、About/Settings 打开与 Escape 关闭、Open 取消，以及无 Go PATH 时 F6 构建。
+原生 Save 的 owner 是主 HWND，主窗口在模态期间 disabled。屏幕保存的 `windows-layout.silkui` 在 Windows 构造真实 GridLayout，三次 runtime resize 后两子控件仍属于容器且位于边界内。
+
+新增七组菜单、语义图标/快捷键列、控件库搜索、SDK SearchBox 选择与剪贴板、深色对象树，以及 native paint resource 的确定性释放。细节、资源复查、源文件/二进制与当前限制见 [WINDOWS_UI_QA.md](WINDOWS_UI_QA.md)。
+
+进一步实际操作发现并修复：缺失的 `prop.control.IntEdit` 注册、生成文件硬编码 `package ui` 与主工程冲突、F6 后 Go 子进程黑色控制台遮挡 IDE，以及 Windows 默认 Menlo 回退导致等宽测宽快速路径关闭。原生修改 Grid `ColumnSpan` 上下箭头、保存生成 `package main`、英文代码输入保存后磁盘回读与 F6 `build ok` 均复验。测宽专项基准为 4.96–5.55 µs / 2 alloc → 77–97 ns / 0 alloc，不是整体 UI 提速倍数。
+
+最终显式十一包 Windows 回归：4,572 个测试/子测试 pass，38 skip，0 fail；macOS 十个有测试的包：4,707 pass，9 skip，0 fail，另一个平台 helper 包无非 Windows 测试。跳过的 Git/gopls/dlv、POSIX 进程夹具等不计作通过；另跑 targeted race、vet、native GL 回读和原生构建。CI 新增原生字体与后台进程标志检查，但未声称已运行 GitHub Actions。
+
+GDI 问题尚未解决：生产构建连续 10/20/30 次菜单循环的 GDI 为 72/116/164，USER 固定 23。独立诊断构建中，强制 GC 前后数值不下降，Go painter/surface/font wrapper 和 font-key 数保持恒定；诊断代码已移除，生产未增加强制 GC。不能将资源接口改进或静态低 CPU 等同于原生泄漏已修复。
+
+英文输入通过实际 en-US HKL 验证；不能据此声称中文 IME 已兼容。启动 watchdog 和 GDI 长期趋势仍独立记录，不用正常截图掩盖性能缺口。
+
+## 2026-10-20：定位 GDI 根因与 SDK 原生入口
+
+SDK 的 `EndPaint` 错误调用 `BeginPaint`，每次绘制没有正确结束。原生同条件 100 次绘制从 GDI 10→210 变为 0→0，PAINTSTRUCT 覆盖由 105 次变为 0。debug=false 的真实 IDE 120 次菜单循环从 GDI 156/270/374/486/584/684 变为六次采样均 18，USER 均为 23。另修复自有窗口大小图标的释放，以及 TranslateAccelerator/GetStockObject 错误转发；192 项入口检查、真实加速键 WM_COMMAND 分派与图标句柄寿命复验通过。
+
+实际拖入 Label 至已有两 Button 的 Grid，保存回读、Undo/Redo 并再次保存；保留三控件快照在真实 SDK 做三种尺寸 resize，三个控件均在同一 Grid 内。英文编辑保存回读及 F6 `build ok` 另行复验，不把发出键鼠事件当作成功。
+
+API 修复阶段 Windows 十二包 4,593 pass / 38 skip / 0 fail；随后发现并补齐 Ctrl/Cmd+Home/End 文档导航，加入 Shift 选择、Unicode、折叠 EOF 与视口回归，并重新跑最终十二包：4,595 pass / 38 skip / 0 fail。macOS 最终六包 3,788 pass / 5 skip / 0 fail，另跑 targeted race/vet、native GL 回读、win32 386/ARM64 交叉编译。
+
+首次 F6 的缺少 go.sum 截图未算成功：移出 QA runtime 探针并在独立工程 go mod tidy 后，最终原生 Ctrl+End 输入确实落在最后非空行，Ctrl+S 磁盘回读与 F6 `build ok` 再验。最终导航进程 40 次菜单循环 GDI=82/82、USER=35/35，静置 20.229s 为 1.16% 单核 CPU，20 次均 Responding；不同已打开功能的资源基线不冒充同状态 A/B。
+
+详细步骤、75 文件源码/二进制身份和未完成边界见 [WINDOWS_RENDERING_QA_20261020.md](WINDOWS_RENDERING_QA_20261020.md)。没有以 GDI 修复冒充启动阻塞、中文 IME 或完整 Qt Creator 对等已解决。

@@ -446,6 +446,14 @@ func (this *Menu) OnLeftDown(x, y float64) {
 		return
 	}
 	if menu, ok := p.(IMenu); ok {
+		if bar, ok := p.(*Menu); ok && !bar.IsPopup() {
+			gx, gy := this.MapToGlobal(x, y)
+			bx, by := bar.MapFromGlobal(gx, gy)
+			if button, ok := bar.FindWidgetAt(bx, by).(*Button); ok && button.SubPopup() != nil && button.IsEnabled() {
+				button.ShowSubPopup()
+				return
+			}
+		}
 		menu.HideAllSubs()
 		return
 	}
@@ -674,15 +682,53 @@ func (this *Menu) OnKeyDown(key int, repeat bool) {
 					sub.setHighlight(idx)
 				}
 			}
+		} else if b := this.menuBarSibling(1); b != nil {
+			b.ShowSubPopup()
 		}
 	case KeyLeft:
 		// 关闭当前子菜单, 把焦点交还父菜单(若存在).
 		if parent, ok := this.Parent().(*Button); ok {
 			if pm, ok := parent.Parent().(*Menu); ok {
+				if !pm.IsPopup() {
+					if b := this.menuBarSibling(-1); b != nil {
+						b.ShowSubPopup()
+					}
+					return
+				}
 				parent.HideSubPopup()
 				pm.SetFocus()
 				return
 			}
 		}
 	}
+}
+
+// Only a direct menu-bar popup switches top-level groups. Left on a nested
+// submenu still returns to its popup parent; disabled/hidden headers are skipped.
+func (this *Menu) menuBarSibling(direction int) *Button {
+	parent, ok := this.Parent().(*Button)
+	if !ok {
+		return nil
+	}
+	bar, ok := parent.Parent().(*Menu)
+	if !ok || bar.IsPopup() || bar.IsVertical() {
+		return nil
+	}
+	index := -1
+	kinds := bar.itemKinds()
+	for i, item := range bar.items {
+		if item == parent {
+			index = i
+		}
+		button, ok := item.(*Button)
+		kinds[i].selectable = kinds[i].selectable && ok && button.SubPopup() != nil
+	}
+	if index < 0 {
+		return nil
+	}
+	if next := nextSelectableIndex(kinds, index, direction, true); next >= 0 && next != index {
+		button, _ := bar.items[next].(*Button)
+		return button
+	}
+	return nil
 }

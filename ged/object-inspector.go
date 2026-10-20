@@ -45,6 +45,9 @@ type ObjectInspector struct {
 	scrollY     float64
 	rowHeight   float64
 	cbSelect    func(graph.IItem)
+	fontFamily  string
+	rowFont     paint.Font
+	boldFont    paint.Font
 
 	filterBox  *gui.SearchBox
 	filterText string
@@ -92,8 +95,9 @@ func (this *ObjectInspector) contentTop() float64 {
 }
 
 func (this *ObjectInspector) Layout() {
-	w, _ := this.Size()
-	this.filterBox.SetBounds(4, inspectorHeaderH+2, w-8, inspectorFilterH-5)
+	w, h := this.Size()
+	x, y := math.Min(4, w), math.Min(inspectorHeaderH+2, h)
+	this.filterBox.SetBounds(x, y, math.Max(0, w-x-4), math.Max(0, math.Min(inspectorFilterH-5, h-y)))
 }
 
 // SetScene binds the inspector to a GedScene and rebuilds the item list.
@@ -265,6 +269,11 @@ func (this *ObjectInspector) rowOfItem(item graph.IItem) int {
 func (this *ObjectInspector) Draw(g paint.Painter) {
 	w, h := this.Size()
 	t := gui.Theme()
+	if this.rowFont == nil || this.fontFamily != t.Font.Family() {
+		this.fontFamily = t.Font.Family()
+		this.rowFont = paint.NewFont(this.fontFamily, 12, false, false)
+		this.boldFont = paint.NewFont(this.fontFamily, 12, true, false)
+	}
 
 	// Background
 	g.SetBrush1(t.ViewBGColor)
@@ -273,21 +282,20 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 
 	// Header
 	headerH := inspectorHeaderH
-	g.SetBrush1(paint.Color{235, 238, 245, 255})
+	g.SetBrush1(t.FormLightColor)
 	g.Rectangle(0, 0, w, headerH)
 	g.Fill()
-	g.SetPen1(paint.Color{200, 200, 210, 255}, 1)
+	g.SetPen1(t.BorderColor, 1)
 	g.MoveTo(0, headerH)
 	g.LineTo(w, headerH)
 	g.Stroke()
 
-	g.SetFont(paint.NewFont(t.Font.Family(), 12, true, false))
+	g.SetFont(this.boldFont)
 	g.SetBrush1(t.TextColor)
 	g.DrawText1(8, headerH-5, "Object Inspector")
 
 	// Rows
-	font := paint.NewFont(t.Font.Family(), 12, false, false)
-	boldFont := paint.NewFont(t.Font.Family(), 12, true, false)
+	font, boldFont := this.rowFont, this.boldFont
 	rh := this.rowHeight
 	top := this.contentTop()
 	startY := top - this.scrollY
@@ -303,21 +311,23 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 
 		// Hover highlight
 		if i == this.hoverIdx && i != this.selectedIdx && !isDragged {
-			g.SetBrush1(paint.Color{230, 235, 245, 255})
+			g.SetBrush1(t.ButtonHoverBGColor)
 			g.Rectangle(0, rowY, w, rh)
 			g.Fill()
 		}
 
 		// Selection highlight
 		if i == this.selectedIdx && !isDragged {
-			g.SetBrush1(paint.Color{51, 120, 215, 255})
+			g.SetBrush1(t.MenuActiveBGColor)
 			g.Rectangle(0, rowY, w, rh)
 			g.Fill()
 		}
 
 		// Dimmed background for dragged item
 		if isDragged {
-			g.SetBrush1(paint.Color{200, 210, 230, 80})
+			c := t.MenuActiveBGColor
+			c.A = 80
+			g.SetBrush1(c)
 			g.Rectangle(0, rowY, w, rh)
 			g.Fill()
 		}
@@ -327,7 +337,7 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 		// Tree connector lines
 		if item.depth > 0 {
 			lineX := 12.0 + float64(item.depth-1)*20.0 + 10.0
-			g.SetPen1(paint.Color{180, 180, 190, 255}, 1)
+			g.SetPen1(t.BorderColor, 1)
 			midY := rowY + rh*0.5
 			// Vertical line from parent
 			g.MoveTo(lineX, rowY)
@@ -343,10 +353,10 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 		textY := rowY + rh - 7
 		if isDragged {
 			// Dimmed text for dragged item
-			g.SetBrush1(paint.Color{150, 150, 165, 160})
+			g.SetBrush1(t.MenuGrayTextColor)
 			g.SetFont(font)
 		} else if i == this.selectedIdx {
-			g.SetBrush1(paint.Color{255, 255, 255, 255})
+			g.SetBrush1(t.MenuActiveTextColor)
 			g.SetFont(boldFont)
 		} else {
 			g.SetBrush1(t.TextColor)
@@ -358,11 +368,11 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 		if item.typeName != "" {
 			typeText := "(" + item.typeName + ")"
 			if isDragged {
-				g.SetBrush1(paint.Color{130, 130, 145, 100})
+				g.SetBrush1(t.MenuGrayTextColor)
 			} else if i == this.selectedIdx {
-				g.SetBrush1(paint.Color{200, 220, 255, 255})
+				g.SetBrush1(t.MenuActiveTextColor)
 			} else {
-				g.SetBrush1(paint.Color{130, 130, 145, 255})
+				g.SetBrush1(t.MenuGrayTextColor)
 			}
 			nameExt := font.TextExtents(item.name)
 			typeX := indent + nameExt.Width + 8
@@ -378,7 +388,7 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 
 		// Bottom separator
 		if i != this.selectedIdx {
-			g.SetPen1(paint.Color{230, 230, 235, 100}, 0.5)
+			g.SetPen1(t.SeperatorColor, 0.5)
 			g.MoveTo(0, rowY+rh)
 			g.LineTo(w, rowY+rh)
 			g.Stroke()
@@ -389,17 +399,17 @@ func (this *ObjectInspector) Draw(g paint.Painter) {
 	// insertion line where it would land between siblings.
 	if this.dragging && this.dropInto >= 0 {
 		intoY := startY + float64(this.dropInto)*rh
-		g.SetPen1(paint.Color{51, 120, 215, 255}, 2)
+		g.SetPen1(t.Accent, 2)
 		g.Rectangle(1, intoY+1, w-2, rh-2)
 		g.Stroke()
 	} else if this.dragging && this.dropIdx > 0 {
 		dropY := startY + float64(this.dropIdx)*rh
-		g.SetPen1(paint.Color{51, 120, 215, 255}, 2)
+		g.SetPen1(t.Accent, 2)
 		g.MoveTo(12, dropY)
 		g.LineTo(w-4, dropY)
 		g.Stroke()
 		// Small triangle indicator on the left
-		g.SetBrush1(paint.Color{51, 120, 215, 255})
+		g.SetBrush1(t.Accent)
 		g.MoveTo(4, dropY-4)
 		g.LineTo(12, dropY)
 		g.LineTo(4, dropY+4)

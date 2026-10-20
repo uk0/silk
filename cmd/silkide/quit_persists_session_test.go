@@ -47,6 +47,7 @@ func seedLastLaunch(t *testing.T) *preferences {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp) // Linux fallback path
 	t.Setenv("HOME", tmp)            // macOS Application Support path
+	t.Setenv("APPDATA", tmp)         // Windows Roaming path
 
 	seed := newPreferences()
 	seed.SetOpenSession([]string{lastLaunchPath})

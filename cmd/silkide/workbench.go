@@ -26,6 +26,7 @@ type workbench struct {
 	canvas         *ged.GedView
 	welcome        *ged.WelcomeScreen
 	palette        *ged.WidgetList
+	paletteView    gui.IWidget
 	buttons        map[workspaceMode]*gui.Button
 	lastMode       workspaceMode
 	designToolbar  *gui.ToolBar
@@ -82,7 +83,11 @@ func (w *workbench) activate(mode workspaceMode) {
 		dockSetActiveView(globalRightDock, globalOutline)
 	case modeDesign:
 		view = w.canvas
-		dockSetActiveView(globalLeftDock, w.palette)
+		palette := w.paletteView
+		if palette == nil {
+			palette = w.palette
+		}
+		dockSetActiveView(globalLeftDock, palette)
 		dockSetActiveView(globalRightDock, globalPropSheet)
 	default:
 		return

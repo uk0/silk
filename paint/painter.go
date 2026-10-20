@@ -163,12 +163,36 @@ func (this *cairoPainter) setFinalizer() {
 		core.Warn("seems cairo painter leaks, count = ", n)
 	}
 	runtime.SetFinalizer(this, func(p *cairoPainter) {
-		p.cairo.Destroy()
-		cairoPainterCount.Add(-1)
 		if p.CurrentState() != 0 {
 			core.Warn("unbalance save/restore of g: depth =", p.CurrentState())
 		}
+		p.releaseNative()
 	})
+}
+
+// ClosePainter releases an exclusively owned painter immediately. It does
+// not change Painter's interface, so custom painters remain compatible. The
+// caller must not draw through any aliases afterwards. Close painters before
+// closing their target surfaces; finalizers remain a safety net for old hosts.
+func ClosePainter(p Painter) {
+	if native, ok := p.(*cairoPainter); ok && native != nil {
+		runtime.SetFinalizer(native, nil)
+		native.releaseNative()
+	}
+}
+
+func (p *cairoPainter) releaseNative() {
+	if p.cairo == nil {
+		return
+	}
+	p.cairo.Destroy()
+	p.cairo = nil
+	p.sfont = nil
+	p.surface = nil
+	p.state = painterStateEx{}
+	p.stateStack = nil
+	p.glyphBuf = nil
+	cairoPainterCount.Add(-1)
 }
 
 func (this *cairoPainter) SetFont(f Font) {
