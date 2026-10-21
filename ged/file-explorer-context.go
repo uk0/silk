@@ -3,9 +3,12 @@ package ged
 import (
 	"errors"
 	"fmt"
+	"github.com/uk0/silk/diagnostic"
+	"github.com/uk0/silk/internal/fileops"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/uk0/silk/gui"
 )
@@ -42,84 +45,109 @@ func newItemDir(entry *fileEntry, root string) string {
 // separator. Returns nil for an acceptable single path component.
 func validateFileName(name string) error {
 	n := strings.TrimSpace(name)
+	fail := func(message string) error { return diagnostic.New(diagnostic.FileName, message, nil) }
 	if n == "" {
-		return errors.New("名称不能为空")
+		return fail("名称不能为空")
 	}
 	if n == "." || n == ".." {
-		return errors.New("无效的名称")
+		return fail("无效的名称")
 	}
-	if strings.ContainsAny(n, `/\`) {
-		return errors.New("名称不能包含路径分隔符")
+	if strings.ContainsAny(n, `/\:*?"<>|`) {
+		return fail("名称不能包含路径分隔符或保留字符")
+	}
+	for _, r := range n {
+		if unicode.IsControl(r) {
+			return fail("名称不能包含控制字符")
+		}
+	}
+	if strings.HasSuffix(n, ".") {
+		return fail("名称不能以句点结尾")
+	}
+	base := strings.ToUpper(strings.TrimSpace(strings.SplitN(n, ".", 2)[0]))
+	reserved := base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || base == "CONIN$" || base == "CONOUT$"
+	if strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT") {
+		tail := strings.TrimPrefix(strings.TrimPrefix(base, "COM"), "LPT")
+		reserved = reserved || (len([]rune(tail)) == 1 && strings.ContainsAny(tail, "123456789¹²³"))
+	}
+	if reserved {
+		return fail("名称是 Windows 保留设备名")
 	}
 	return nil
 }
 
-// fsCreateFile creates an empty file `name` inside `dir`. It fails if
-// the name is invalid or the target already exists (O_EXCL), so a
-// "New File" never silently truncates an existing file. Returns the
-// created path on success.
+func fileOperationError(path string, err error) error {
+	code := diagnostic.FileWrite
+	if errors.Is(err, os.ErrExist) {
+		code = diagnostic.FileConflict
+	}
+	return diagnostic.New(code, "", err).At(diagnostic.Location{File: path})
+}
+
+// O_EXCL protects existing contents, including dangling symlinks.
 func fsCreateFile(dir, name string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", diagnostic.New(diagnostic.FileName, "choose a project directory first", nil)
+	}
 	if err := validateFileName(name); err != nil {
 		return "", err
 	}
 	p := filepath.Join(dir, strings.TrimSpace(name))
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
-		if os.IsExist(err) {
-			return "", fmt.Errorf("%s 已存在", name)
-		}
-		return "", err
+		return "", fileOperationError(p, err)
 	}
-	f.Close()
+	if err = f.Close(); err != nil {
+		return "", fileOperationError(p, err)
+	}
 	return p, nil
 }
-
-// fsCreateFolder makes a directory `name` inside `dir`. Fails on an
-// invalid name or an existing target. Returns the created path.
 func fsCreateFolder(dir, name string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", diagnostic.New(diagnostic.FileName, "choose a project directory first", nil)
+	}
 	if err := validateFileName(name); err != nil {
 		return "", err
 	}
 	p := filepath.Join(dir, strings.TrimSpace(name))
-	if _, err := os.Stat(p); err == nil {
-		return "", fmt.Errorf("%s 已存在", name)
-	}
-	if err := os.Mkdir(p, 0o755); err != nil {
-		return "", err
+	if err := os.Mkdir(p, 0755); err != nil {
+		return "", fileOperationError(p, err)
 	}
 	return p, nil
 }
 
-// fsRename renames the entry at oldPath to newName within the same
-// parent directory. A no-op rename (newName equals the current base)
-// succeeds silently. Fails on an invalid name or a colliding target.
-// Returns the new path.
+// Unlike a Stat + Rename sequence, the kernel operation cannot overwrite a
+// target created between the check and the move (including dangling symlinks).
 func fsRename(oldPath, newName string) (string, error) {
 	if err := validateFileName(newName); err != nil {
 		return "", err
 	}
 	newName = strings.TrimSpace(newName)
 	if newName == filepath.Base(oldPath) {
+		if _, err := os.Lstat(oldPath); err != nil {
+			return "", fileOperationError(oldPath, err)
+		}
 		return oldPath, nil
 	}
 	np := filepath.Join(filepath.Dir(oldPath), newName)
-	if _, err := os.Stat(np); err == nil {
-		return "", fmt.Errorf("%s 已存在", newName)
-	}
-	if err := os.Rename(oldPath, np); err != nil {
-		return "", err
+	if err := fileops.RenameNoReplace(oldPath, np); err != nil {
+		return "", fileOperationError(np, err)
 	}
 	return np, nil
 }
 
-// fsDelete removes the file or directory tree at path. Directories are
-// removed recursively (os.RemoveAll) — the caller is expected to have
-// confirmed with the user first.
+// The caller confirms deletion and protects the explorer project root.
 func fsDelete(path string) error {
-	if strings.TrimSpace(path) == "" {
-		return errors.New("空路径")
+	clean := filepath.Clean(path)
+	if strings.TrimSpace(path) == "" || clean == "." || clean == ".." || filepath.Dir(clean) == clean {
+		return diagnostic.New(diagnostic.FileName, "refusing empty, current or filesystem-root deletion", nil)
 	}
-	return os.RemoveAll(path)
+	if _, err := os.Lstat(path); err != nil {
+		return fileOperationError(path, err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fileOperationError(path, err)
+	}
+	return nil
 }
 
 // --- GUI glue ---
@@ -128,6 +156,9 @@ func fsDelete(path string) error {
 // any) becomes the menu's target; a click on empty space targets the
 // explorer root so New File / New Folder still work there.
 func (this *FileExplorer) OnRightDown(x, y float64) {
+	if this.rootDir == "" {
+		return
+	}
 	this.SetFocus()
 	idx := this.hitTest(y)
 	var entry *fileEntry
@@ -156,6 +187,10 @@ func (this *FileExplorer) OnRightDown(x, y float64) {
 // promptNewFile asks for a filename and creates it inside the target
 // directory, then opens it in the editor so the user can start typing.
 func (this *FileExplorer) promptNewFile(entry *fileEntry) {
+	if this.renameBusy {
+		gui.ShowMessageBox(this.Self(), nil, "文件操作进行中", diagnostic.New(diagnostic.FileOperationBusy, "", nil).Error(), []string{"确定"})
+		return
+	}
 	dir := newItemDir(entry, this.rootDir)
 	name, ok := gui.ShowInputBox(this.Self(), nil, "新建文件", "文件名:", "")
 	if !ok {
@@ -176,6 +211,10 @@ func (this *FileExplorer) promptNewFile(entry *fileEntry) {
 // promptNewFolder asks for a folder name and creates it inside the
 // target directory.
 func (this *FileExplorer) promptNewFolder(entry *fileEntry) {
+	if this.renameBusy {
+		gui.ShowMessageBox(this.Self(), nil, "文件操作进行中", diagnostic.New(diagnostic.FileOperationBusy, "", nil).Error(), []string{"确定"})
+		return
+	}
 	dir := newItemDir(entry, this.rootDir)
 	name, ok := gui.ShowInputBox(this.Self(), nil, "新建文件夹", "文件夹名:", "")
 	if !ok {
@@ -191,6 +230,10 @@ func (this *FileExplorer) promptNewFolder(entry *fileEntry) {
 
 // promptRename asks for a new name for the entry and applies it.
 func (this *FileExplorer) promptRename(entry *fileEntry) {
+	if this.renameBusy {
+		gui.ShowMessageBox(this.Self(), nil, "文件操作进行中", diagnostic.New(diagnostic.FileOperationBusy, "", nil).Error(), []string{"确定"})
+		return
+	}
 	if entry == nil {
 		return
 	}
@@ -198,15 +241,27 @@ func (this *FileExplorer) promptRename(entry *fileEntry) {
 	if !ok {
 		return
 	}
-	if _, err := fsRename(entry.path, name); err != nil {
-		gui.ShowMessageBox(this.Self(), nil, "重命名失败", err.Error(), []string{"确定"})
-		return
+	report := func(err error) {
+		if err != nil {
+			message := err.Error()
+			var detail *diagnostic.Error
+			if errors.As(err, &detail) {
+				message += "\n" + detail.Hint
+			}
+			gui.ShowMessageBox(this.Self(), nil, "重命名失败", message, []string{"确定"})
+		}
 	}
-	this.refreshKeepingExpansion()
+	if err := this.RenamePath(entry.path, name, report); err != nil {
+		report(err)
+	}
 }
 
 // confirmDelete pops a confirmation and removes the entry on "删除".
 func (this *FileExplorer) confirmDelete(entry *fileEntry) {
+	if this.renameBusy {
+		gui.ShowMessageBox(this.Self(), nil, "文件操作进行中", diagnostic.New(diagnostic.FileOperationBusy, "", nil).Error(), []string{"确定"})
+		return
+	}
 	if entry == nil {
 		return
 	}
@@ -229,9 +284,13 @@ func (this *FileExplorer) confirmDelete(entry *fileEntry) {
 // freshly-created child is visible after the refresh. No-op when the
 // path isn't a directory node in the current tree.
 func (this *FileExplorer) expandDir(path string) {
-	var walk func(e *fileEntry)
+	if this.expanded == nil {
+		this.expanded = map[string]bool{}
+	}
+	this.expanded[path] = true
+	var walk func(*fileEntry)
 	walk = func(e *fileEntry) {
-		if e == nil || !e.isDir {
+		if e == nil {
 			return
 		}
 		if e.path == path {
@@ -244,25 +303,9 @@ func (this *FileExplorer) expandDir(path string) {
 	walk(this.root)
 }
 
-// refreshKeepingExpansion rescans the root directory while preserving
-// the user's expanded folders — unlike Refresh()/SetRootDir, which
-// reset every folder to collapsed (bar the top level). Used after every
-// create/rename/delete so the tree updates in place without yanking the
-// user back to a fully-collapsed view.
-func (this *FileExplorer) refreshKeepingExpansion() {
-	if this.rootDir == "" {
-		return
-	}
-	expanded := map[string]bool{}
-	collectExpandedPaths(this.root, expanded)
-	this.root = this.scanDir(this.rootDir, 0)
-	applyExpandedPaths(this.root, expanded)
-	this.rebuildFlatList()
-	if this.selectedIdx >= len(this.flatList) {
-		this.selectedIdx = len(this.flatList) - 1
-	}
-	this.Self().Update()
-}
+// Refresh retains expansion, selected path and scroll position. Results from
+// a previous root/generation are rejected even if already queued on the UI.
+func (this *FileExplorer) refreshKeepingExpansion() { this.requestScan() }
 
 // collectExpandedPaths records the paths of every expanded directory in
 // the tree into `set`.

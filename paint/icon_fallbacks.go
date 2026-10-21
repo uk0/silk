@@ -22,6 +22,7 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"arrow-tool":         drawArrowTool,
 	"rect-tool":          drawRectTool,
 	"menu":               drawMenuBars,
+	"toolbar-overflow":   drawToolbarOverflow,
 	"refresh":            drawRefreshArrow,
 	"plus":               drawPlus,
 	"search":             drawSearchGlass,
@@ -87,6 +88,19 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"handle-1-active":    drawResizeHandle(1, true),
 	"handle-2-normal":    drawResizeHandle(2, false),
 	"handle-2-active":    drawResizeHandle(2, true),
+}
+
+// A drawn double chevron avoids dependence on the text font's U+00BB glyph.
+// Procedural icons are rasterized at the requested physical size for HiDPI.
+func drawToolbarOverflow(size int, cc *cairo.Context) {
+	setIconStroke(cc, size)
+	s := float64(size)
+	for _, x := range []float64{0.24, 0.54} {
+		cc.MoveTo(x*s, 0.28*s)
+		cc.LineTo((x+0.22)*s, 0.5*s)
+		cc.LineTo(x*s, 0.72*s)
+		cc.Stroke()
+	}
 }
 
 // genProceduralIcon constructs an icon whose subs come from running

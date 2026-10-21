@@ -93,7 +93,7 @@ func (p *preferences) SetAppearance(a ideAppearance) error {
 			return err
 		}
 	}
-	return p.store.Sync()
+	return p.requestSave()
 }
 func applyEditorAppearance(ed *gui.CodeEditor, a ideAppearance) {
 	ed.SetFont(paint.NewFont(a.EditorFont, a.EditorSize, false, false))
@@ -218,7 +218,7 @@ func showAppearanceDialog(parent gui.IWidget) {
 			continue
 		}
 		applyIDEAppearance(a)
-		silkideToast(i18n.T("Appearance saved; language changes apply after restart"), gui.ToastSuccess)
+		silkideToast(i18n.T("Appearance applied; saving in background. Language changes apply after restart"), gui.ToastInfo)
 		break
 	}
 }

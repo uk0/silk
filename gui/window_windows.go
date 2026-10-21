@@ -113,6 +113,7 @@ type Window struct {
 
 	// 临时存放模块窗口的返回值
 	modalRet interface{}
+	modalErr error
 
 	lastDndWidget IWidget
 	dndContext    *dndContext
@@ -1255,12 +1256,12 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 	case win32.WM_SYSKEYDOWN:
 		// Alt menu accelerators are system-key messages, not WM_KEYDOWN.
 		// Preserve unhandled Alt+F4/Alt+Space native window behavior.
-		if lParam&0x40000000 == 0 && (win.dispatchShortcutOverride(int(wParam)) || dispatchShortcut(int(wParam))) {
+		if lParam&0x40000000 == 0 && win.dispatchWindowShortcut(int(wParam)) {
 			return 0
 		}
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_SYSCHAR:
-		if ShortcutHandler(currentMods(), int(unicode.ToUpper(rune(wParam)))) != nil {
+		if win.allowsApplicationShortcuts() && ShortcutHandler(currentMods(), int(unicode.ToUpper(rune(wParam)))) != nil {
 			return 0
 		}
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
@@ -1271,10 +1272,10 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		// not move focus. Both have to run ahead of focus routing: a focused
 		// CodeEditor would otherwise eat Ctrl+Z for its own undo first.
 		repeat := 0x40000000&lParam != 0
-		if win.dispatchEscape(int(wParam), repeat) {
+		if win.dispatchEscape(int(wParam), repeat) || win.dispatchMessageBoxEnter(int(wParam), repeat) {
 			return 0
 		}
-		if !repeat && (win.dispatchShortcutOverride(int(wParam)) || dispatchShortcut(int(wParam))) {
+		if !repeat && win.dispatchWindowShortcut(int(wParam)) {
 			return 0
 		}
 		if wParam == win32.VK_TAB && win.widget != nil {
@@ -2013,6 +2014,9 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	}
 
 	this.inModal = true
+	this.modalErr = nil
+	owner := this.ParentWindow()
+	restoreTarget := focusTargetForOwner(owner, focusWidget)
 
 	if this.wt == WtChild {
 		core.Warn("对子窗口调用ShowModal可能会引发混乱")
@@ -2020,6 +2024,30 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 
 	// 记住并修改祖先窗口的禁用状态
 	enabledMap := make(map[*Window]bool)
+	// Install rollback before native activation and user initialization.
+	defer func() {
+		if e := recover(); e != nil {
+			this.modalErr = reportModalPanic(e)
+			this.modalRet = nil // Failed initialization must never return acceptance.
+		}
+		this.inModal = false
+		retParam = this.modalRet
+		this.modalRet = nil
+
+		for pw := range enabledMap {
+			pw.SetEnabled(true)
+		}
+		this.Close()
+		// Destruction clears the modal's logical focus. Win32 reactivates the
+		// owner HWND, but does not know which Go widget should receive text.
+		// Restore only when nothing else explicitly claimed focus. Do not call
+		// SetForegroundWindow: closing a modal must not steal another app's focus.
+		if owner != nil && owner.IsVisible() && owner.IsEnabled() && focusWidget == nil {
+			if target := focusTargetForOwner(owner, restoreTarget); target != nil {
+				target.SetFocus()
+			}
+		}
+	}()
 
 	for pw := this.ParentWindow(); pw != nil; pw = pw.ParentWindow() {
 		if pw.IsEnabled() {
@@ -2036,20 +2064,6 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	if cbOnShow != nil {
 		cbOnShow()
 	}
-
-	defer func() {
-		if e := recover(); e != nil {
-			core.Warn(fmt.Sprintf("Recover modalLoop() : %v ", e))
-		}
-		this.inModal = false
-		retParam = this.modalRet
-		this.modalRet = nil
-
-		for pw := range enabledMap {
-			pw.SetEnabled(true)
-		}
-		this.Close()
-	}()
 
 	// TODO: 应该过滤掉所有其他窗口的鼠标/键盘消息
 

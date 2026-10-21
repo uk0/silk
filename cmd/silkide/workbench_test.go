@@ -16,10 +16,20 @@ import (
 func testWorkbench(t *testing.T) *workbench {
 	t.Helper()
 	old, oldEditors := globalWorkbench, openEditors
+	oldMacros := macroEditors
+	macroEditors = map[string]*macroEditorState{}
 	left, right, bottom := globalLeftDock, globalRightDock, globalBottomDock
 	globalLeftDock, globalRightDock, globalBottomDock = nil, nil, nil
 	openEditors = map[string]*gui.CodeEditor{}
 	t.Cleanup(func() {
+		for _, ed := range openEditors {
+			if ed != nil {
+				ed.CancelGitStatus()
+				delete(editorGitManualRefresh, ed)
+			}
+		}
+		retireMacroEditors()
+		macroEditors = oldMacros
 		globalWorkbench, openEditors = old, oldEditors
 		globalLeftDock, globalRightDock, globalBottomDock = left, right, bottom
 	})
@@ -232,7 +242,8 @@ func TestWorkspaceSessionRoundTripPreservesOrderActiveCursor(t *testing.T) {
 	activeEditor(w.tabs).SetScrollY(12)
 	state := captureWorkspaceSession(w.tabs, nil)
 	prefs.SetWorkspaceSession(state)
-	loaded, ok := newPreferences().WorkspaceSession()
+	flushTestPreferences(t, prefs)
+	loaded, ok := testPreferences(t).WorkspaceSession()
 	if !ok || !reflect.DeepEqual(state, loaded) {
 		t.Fatalf("session round trip: %+v", loaded)
 	}

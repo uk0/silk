@@ -10,7 +10,7 @@ import (
 
 // GL-free: every test here drives the outline panel's model only —
 // SetSymbols / filter / sort / revision plumbing plus the flat row list.
-// Nothing constructs a Frame, calls Draw or measures a font.
+// Nothing constructs a Frame; interaction tests use real font metrics for hit-testing.
 
 // sampleOutline is a representative semantic outline as a host would hand
 // it over after converting a documentSymbol response. It deliberately mixes
@@ -322,13 +322,16 @@ func TestOutlineRevisionInvalidation(t *testing.T) {
 // that row (not just top-level ones) and navigates to its line.
 func TestOutlineNestedExpandCollapse(t *testing.T) {
 	p := NewCodeOutlinePanel()
+	p.SetSize(300, 360)
+	hh := p.headerHeight()
+	rh := p.rowHeight
 	p.SetSymbols(sampleOutline())
 
 	var navigated []int
 	p.SetNavigateCallback(func(line int) { navigated = append(navigated, line) })
 
-	// Row 1 is Handler (depth 1, owns ServeHTTP): header 22 + row 22 + 5.
-	p.OnLeftDown(4, 22+22+5)
+	// Row 1 is Handler (depth 1, owns ServeHTTP), using the painted font metrics.
+	p.OnLeftDown(4, hh+rh+5)
 	if len(navigated) != 1 || navigated[0] != 12 {
 		t.Fatalf("navigate = %v, want [12] (Handler's line)", navigated)
 	}
@@ -338,7 +341,7 @@ func TestOutlineNestedExpandCollapse(t *testing.T) {
 	})
 
 	// Clicking again re-expands it.
-	p.OnLeftDown(4, 22+22+5)
+	p.OnLeftDown(4, hh+rh+5)
 	wantOutlineRows(t, p, []string{
 		"0:Server", "1:Handler", "2:ServeHTTP", "1:addr",
 		"0:Start", "0:config", "1:Debug", "0:helper",
@@ -348,7 +351,7 @@ func TestOutlineNestedExpandCollapse(t *testing.T) {
 	}
 
 	// A leaf click only navigates. Row 2 is ServeHTTP.
-	p.OnLeftDown(4, 22+2*22+5)
+	p.OnLeftDown(4, hh+2*rh+5)
 	if len(navigated) != 3 || navigated[2] != 13 {
 		t.Fatalf("navigate = %v, want ServeHTTP's line 13 last", navigated)
 	}

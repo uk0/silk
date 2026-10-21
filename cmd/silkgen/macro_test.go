@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"github.com/uk0/silk/diagnostic"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,5 +29,25 @@ func TestMacroCLIActualGenerationAndFailurePreservesOutput(t *testing.T) {
 	after, _ := os.ReadFile(out)
 	if string(after) != string(good) {
 		t.Fatal("failure changed generated file")
+	}
+}
+
+func TestMacroCLIJSONDiagnostic(t *testing.T) {
+	var out bytes.Buffer
+	err := diagnostic.New(diagnostic.MacroUnknown, "unknown macro Missing", nil).At(diagnostic.Location{File: "中文.silkgo", Line: 4, Column: 1})
+	if reportDiagnostic(&out, err, true) != 1 {
+		t.Fatal("exit code")
+	}
+	var got diagnostic.Error
+	if e := json.Unmarshal(out.Bytes(), &got); e != nil {
+		t.Fatal(e, out.String())
+	}
+	if got.Code != diagnostic.MacroUnknown || got.Location.Line != 4 || got.Hint == "" {
+		t.Fatal(got)
+	}
+	out.Reset()
+	reportDiagnostic(&out, err, false)
+	if !strings.Contains(out.String(), "[SILK-MAC008]") || !strings.Contains(out.String(), "Hint:") {
+		t.Fatal(out.String())
 	}
 }

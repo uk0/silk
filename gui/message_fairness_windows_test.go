@@ -1,6 +1,9 @@
 package gui
 
 import (
+	"context"
+	"os"
+	"os/exec"
 	"runtime"
 	"testing"
 	"time"
@@ -70,6 +73,23 @@ func TestWindowsMessageFairnessPreservesQuit(t *testing.T) {
 }
 
 func TestWindowsMessageFairnessNativeTimerProgressDuringPostBurst(t *testing.T) {
+	// A Go test goroutine can reuse an OS thread whose native queue still has
+	// window/caret timers from earlier tests. Such a WM_TIMER is legitimate
+	// progress, but cannot satisfy this test's exact NULL-HWND timer identity.
+	// Use a fresh process, not a weaker "any timer" assertion or queue draining
+	// that could consume another fixture's messages.
+	if os.Getenv("SILK_TEST_FAIRNESS_CHILD") != "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWindowsMessageFairnessNativeTimerProgressDuringPostBurst$", "-test.count=1", "-test.v")
+		cmd.Env = append(os.Environ(), "SILK_TEST_FAIRNESS_CHILD=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("isolated native timer probe: %v (context=%v)\n%s", err, ctx.Err(), out)
+		}
+		t.Logf("isolated native queue:\n%s", out)
+		return
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	resetUIQueue()
@@ -83,11 +103,14 @@ func TestWindowsMessageFairnessNativeTimerProgressDuringPostBurst(t *testing.T) 
 		t.Fatal("SetTimer failed")
 	}
 	defer win32.KillTimer(id)
-	// Post an ordinary application wake before the timer becomes due. The
-	// unfiltered Windows pump would keep choosing such posts before WM_TIMER.
+	// Queue a real burst before the timer becomes due. First prove the
+	// unfiltered pump chooses a wake; then the production fair selector must
+	// retrieve our exact timer ahead of the remaining posted messages.
 	thread := win32.GetCurrentThreadId()
-	if !win32.PostThreadMessage(thread, WM_UI_WAKEUP, 0, 0) {
-		t.Fatal("PostThreadMessage failed")
+	for i := 0; i < 64; i++ {
+		if !win32.PostThreadMessage(thread, WM_UI_WAKEUP, uintptr(i), 0) {
+			t.Fatal("PostThreadMessage failed")
+		}
 	}
 	defer func() {
 		for win32.PeekMessage(&msg, 0, WM_UI_WAKEUP, WM_UI_WAKEUP, win32.PM_REMOVE) {
@@ -95,11 +118,18 @@ func TestWindowsMessageFairnessNativeTimerProgressDuringPostBurst(t *testing.T) 
 	}()
 	Post(func() {})
 	time.Sleep(35 * time.Millisecond)
+	if ok, err := win32.GetMessageResult(&msg, 0, 0, 0); !ok || err != nil || msg.Message != WM_UI_WAKEUP || msg.WParam != 0 {
+		t.Fatalf("unfiltered control did not select the first posted wake: ok=%v err=%v msg=%+v", ok, err, msg)
+	}
 	windowsMessageTurn = 2 // timer's reserved turn
 	if ok, err := nextWindowsUIMessage(&msg); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	if msg.Message != win32.WM_TIMER || msg.WParam != id {
+	if msg.Message != win32.WM_TIMER || msg.Hwnd != 0 || msg.WParam != id {
 		t.Fatalf("posted wake starved native timer: %+v", msg)
 	}
+	if !win32.PeekMessage(&msg, 0, WM_UI_WAKEUP, WM_UI_WAKEUP, win32.PM_REMOVE) || msg.WParam != 1 {
+		t.Fatalf("timer selection consumed or reordered the remaining wake burst: %+v", msg)
+	}
+	t.Log("exact native timer progressed ahead of 63 pending wakes; unfiltered control chose a wake")
 }

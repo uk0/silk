@@ -65,7 +65,8 @@ func buildDesignToolBar(frame *gui.Frame, canvas *ged.GedView) {
 		return
 	}
 	bar := gui.NewToolBar()
-	bar.SetSpacing(4)
+	bar.SetCompact(true)
+	bar.SetSpacing(2)
 	var actions []designActionButton
 	for i, spec := range designerActionSpecs(canvas) {
 		if i == 4 || i == 5 {

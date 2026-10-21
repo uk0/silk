@@ -272,6 +272,18 @@ func (this *Button) SizeHints() SizeHints {
 // auditable.
 func (this *Button) computeSizeHints() SizeHints {
 	t := Theme()
+	if menu, ok := this.Parent().(*Menu); ok && menu.compact && !menu.IsVertical() && !menu.IsPopup() {
+		if !this.IsTextVisible() {
+			side := math.Ceil(math.Max(28, t.IconSize+8))
+			return SizeHints{Width: side, Height: side, Policy: GrowVertical}
+		}
+		ext := t.Font.TextExtents(this.Text())
+		w := math.Max(ext.Width, ext.XAdvance) + 20
+		if this.IsIconVisible() {
+			w += t.IconSize + 6
+		}
+		return SizeHints{Width: math.Ceil(w), Height: math.Ceil(math.Max(26, t.Font.FontExtents().Height+6)), Policy: GrowVertical}
+	}
 
 	if this.IsTextVisible() {
 

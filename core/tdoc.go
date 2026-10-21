@@ -10,8 +10,9 @@ import (
 	"os"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
+
+	"github.com/uk0/silk/internal/fileops"
 )
 
 const indentChar = '\t'
@@ -323,8 +324,7 @@ func (this *TDoc) SaveFile1(path string, compress bool) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	return this.Save1(file, compress)
+	return saveTDocAndClose(this, file, compress)
 }
 
 // 保存
@@ -333,27 +333,42 @@ func (this *TDoc) Save(w io.Writer) error {
 }
 
 // 保存
-func (this *TDoc) Save1(w io.Writer, compress bool) error {
+// Save1 flushes the complete encoding before reporting success, including the
+// gzip trailer and a caller-supplied bufio.Writer. It never closes the caller's
+// writer. On failure the destination may contain a partial document; use an
+// atomic temporary-file replacement when preserving an existing file matters.
+func (this *TDoc) Save1(w io.Writer, compress bool) (err error) {
 	if compress {
-		zw, err := gzip.NewWriterLevel(w, -1)
-		if err != nil {
-			return err
+		// A buffered destination sits outside gzip, so it must be flushed last.
+		if outer, ok := w.(*bufio.Writer); ok {
+			defer func() { err = errors.Join(err, outer.Flush()) }()
 		}
-		defer zw.Close()
+		zw := gzip.NewWriter(tdocCheckedWriter{w})
+		defer func() { err = errors.Join(err, zw.Close()) }()
 		w = zw
 	}
 	bw, ok := w.(*bufio.Writer)
 	if !ok {
 		bw = bufio.NewWriter(w)
 	}
+	defer func() { err = errors.Join(err, bw.Flush()) }()
+	return this.save(bw, 0)
+}
 
-	defer bw.Flush()
+// gzip does not normalize every short header/trailer write itself.
+type tdocCheckedWriter struct{ io.Writer }
 
-	if err := this.save(bw, 0); err != nil {
-		return err
+func (w tdocCheckedWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
 	}
+	return n, err
+}
 
-	return nil
+func saveTDocAndClose(doc *TDoc, w io.WriteCloser, compress bool) error {
+	err := doc.Save1(w, compress)
+	return errors.Join(err, w.Close())
 }
 
 func writeKey(w *bufio.Writer, s string) {
@@ -410,123 +425,18 @@ func (this *TDoc) save(w *bufio.Writer, indent int) error {
 	return nil
 }
 
-func skipSpace(reader *bufio.Reader) rune {
-	var ch rune
-	for {
-		ch, _, _ = reader.ReadRune()
-		if ch != ' ' && ch != '\t' {
-			reader.UnreadRune()
-			break
-		}
-	}
-	return ch
-}
-
-func readKey(reader *bufio.Reader) string {
-	var buf bytes.Buffer
-	var ch rune
-Outer:
-	for {
-		ch, _, _ = reader.ReadRune()
-		switch ch {
-		case '\\':
-			ch, _, _ = reader.ReadRune()
-			switch ch {
-			case 0:
-				break Outer
-			case '\n': // 行尾的反斜杠
-				break Outer
-			case 'n':
-				buf.WriteRune('\n')
-			case 'r':
-				buf.WriteRune('\r')
-			case '=':
-				buf.WriteRune('=')
-			default:
-				buf.WriteRune(ch)
-			}
-		case '=':
-			break Outer
-		case 0:
-			return buf.String()
-		default:
-			if ch <= 32 {
-				break Outer
-			}
-			buf.WriteRune(ch)
-		}
-	}
-	reader.UnreadRune()
-	return buf.String()
-}
-
-func readValue(reader *bufio.Reader) string {
-	var buf bytes.Buffer
-	var ch rune
-Outer:
-	for {
-		ch, _, _ = reader.ReadRune()
-		switch ch {
-		case '\r':
-			break Outer
-		case '\n':
-			break Outer
-		case 0:
-			return buf.String()
-		default:
-			buf.WriteRune(ch)
-		}
-	}
-	reader.UnreadRune()
-	return buf.String()
-}
-
-func readKeyValue(br *bufio.Reader) (string, string, rune, error) {
-	key := readKey(br)
-	ch := skipSpace(br)
-	var val string
-	if ch == '=' {
-		_, _, _ = br.ReadRune()
-		ch = skipSpace(br)
-		if ch != '\r' && ch != '\n' && ch != 0 {
-			if ch < 32 {
-				return "", "", 0, StrErr("Illegal space/control char detected")
-			}
-			val = readValue(br)
-			//Println(val)
-			ch = skipSpace(br)
-		}
-	}
-	return key, val, ch, nil
-}
-
-func nextLine(br *bufio.Reader, ch rune) {
-	if ch == 0 {
-		return
-	}
-	if ch == '\r' {
-		br.ReadRune()
-		ch, _, _ = br.ReadRune()
-		if ch != '\n' {
-			br.UnreadRune()
-		}
-	} else if ch == '\n' {
-		br.ReadRune()
-		ch, _, _ = br.ReadRune()
-		if ch != '\r' {
-			br.UnreadRune()
-		}
-	}
-}
-
 // lineLimit: 最多读的行数, 0表示无限
 func LoadTDocFile1(path string, lineLimit uint64) (*TDoc, error) {
-	file, err := os.Open(path)
+	file, err := fileops.OpenSnapshot(path)
 	if err != nil {
-		return nil, err
+		return nil, tdocFileError(err, path)
 	}
 	defer file.Close()
-	return LoadTDoc1(file, lineLimit)
+	doc, err := LoadTDoc1(file, lineLimit)
+	if err != nil {
+		return nil, tdocFileError(err, path)
+	}
+	return doc, nil
 }
 
 func LoadTDocFile(path string) (*TDoc, error) {
@@ -535,106 +445,6 @@ func LoadTDocFile(path string) (*TDoc, error) {
 
 func LoadTDoc(r io.Reader) (*TDoc, error) {
 	return LoadTDoc1(r, 0)
-}
-
-// lineLimit: 最多读的行数, 0表示无限
-func LoadTDoc1(r io.Reader, lineLimit uint64) (*TDoc, error) {
-
-	br, ok := r.(*bufio.Reader)
-	if !ok {
-		br = bufio.NewReader(r)
-	}
-
-	gzh, err := br.Peek(2)
-	if len(gzh) < 2 {
-		return nil, err
-	}
-
-	if gzh[0] == 0x1f && gzh[1] == 0x8b {
-		zr, err := gzip.NewReader(br)
-		if err != nil {
-			return nil, err
-		}
-		defer zr.Close()
-		br = bufio.NewReader(zr)
-	}
-
-	// root node
-	var ch rune
-	ch, _, _ = br.ReadRune()
-	if ch <= 32 {
-		return nil, StrErr("First line must not indented.")
-	}
-	br.UnreadRune()
-	key, val, ch, err := readKeyValue(br)
-	if err != nil {
-		return nil, err
-	}
-	nextLine(br, ch)
-
-	root := new(TDoc)
-	root.key = key
-	root.val = val
-
-	const MaxIndent = 128
-	var tracks [MaxIndent + 1]*TDoc // 每个层次的父结点
-	tracks[0] = root
-
-	var nc uint64 = 1
-	indent := 0
-
-Outer:
-	for lineLimit == 0 || nc < lineLimit {
-		i := 0
-		for {
-			ch, _, _ = br.ReadRune()
-			if ch != indentChar {
-				if ch == '\r' || ch == '\n' || ch == 0 {
-					break Outer
-				} else if ch <= 32 {
-					return nil, StrErr("Illegal indent char detected")
-				}
-				br.UnreadRune()
-				break
-			}
-			i++
-		}
-
-		key, val, ch, err := readKeyValue(br)
-		if err != nil {
-			return nil, err
-		}
-
-		di := i - indent
-		if di > 0 {
-			if di > 1 {
-				return nil, StrErr("Jump indent in line")
-			}
-			indent++
-			if indent >= MaxIndent {
-				return nil, StrErr("Indent exceed " + strconv.Itoa(MaxIndent))
-			}
-		} else {
-			indent = i
-		}
-
-		c := new(TDoc)
-		c.key = key
-		c.val = val
-
-		parent := tracks[indent]
-		if parent == nil {
-			return nil, StrErr("Jump indent in line")
-		}
-		parent.AddChild(c)
-
-		tracks[indent+1] = c
-
-		nextLine(br, ch)
-		nc++
-	}
-
-	return root, nil
 }
 
 func (this *TDoc) SetValue(val interface{}) (err error) {

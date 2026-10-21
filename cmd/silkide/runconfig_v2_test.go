@@ -16,10 +16,11 @@ func TestRunWorkingDirRoundTrip(t *testing.T) {
 
 	const dir = "/Users/test/projects/widget"
 
-	p := newPreferences()
+	p := testPreferences(t)
 	p.SetRunWorkingDir(dir)
+	flushTestPreferences(t, p)
 
-	got := newPreferences().RunWorkingDir()
+	got := testPreferences(t).RunWorkingDir()
 	if got != dir {
 		t.Errorf("RunWorkingDir() = %q, want %q", got, dir)
 	}
@@ -27,7 +28,8 @@ func TestRunWorkingDirRoundTrip(t *testing.T) {
 	// Clearing the override round-trips to empty (back to projectDir
 	// auto-detect).
 	p.SetRunWorkingDir("")
-	if got := newPreferences().RunWorkingDir(); got != "" {
+	flushTestPreferences(t, p)
+	if got := testPreferences(t).RunWorkingDir(); got != "" {
 		t.Errorf("RunWorkingDir() after clear = %q, want empty", got)
 	}
 }
@@ -48,17 +50,19 @@ func TestRunEnvRoundTrip(t *testing.T) {
 		"FOO=hello world",
 	}
 
-	p := newPreferences()
+	p := testPreferences(t)
 	p.SetRunEnv(env)
+	flushTestPreferences(t, p)
 
-	got := newPreferences().RunEnv()
+	got := testPreferences(t).RunEnv()
 	if !reflect.DeepEqual(got, env) {
 		t.Errorf("RunEnv() = %#v, want %#v", got, env)
 	}
 
 	// Clearing yields an empty / nil read on the next launch.
 	p.SetRunEnv(nil)
-	if got := newPreferences().RunEnv(); len(got) != 0 {
+	flushTestPreferences(t, p)
+	if got := testPreferences(t).RunEnv(); len(got) != 0 {
 		t.Errorf("RunEnv() after clear = %#v, want empty", got)
 	}
 }

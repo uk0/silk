@@ -42,7 +42,14 @@ func openEditedTab(t *testing.T, path, edited string) (*gui.TabWidget, *gui.Code
 	t.Helper()
 	saved := openEditors
 	openEditors = map[string]*gui.CodeEditor{}
-	t.Cleanup(func() { openEditors = saved })
+	t.Cleanup(func() {
+		for _, ed := range openEditors {
+			if ed != nil {
+				ed.CancelGitStatus()
+			}
+		}
+		openEditors = saved
+	})
 
 	tabs := buildEditorTabs(nil)
 	if !openFileInEditor(tabs, path) {

@@ -110,3 +110,11 @@ func TestRankFilesPreservesPath(t *testing.T) {
 		t.Errorf("Path not preserved: got %q, want %q", got[0].Path, abs)
 	}
 }
+
+func TestRankFilesAcceptsPortablePathSeparators(t *testing.T) {
+	file := fileEntry{Path: filepath.Join("project", "gui", "button.go"), Display: filepath.Join("gui", "button.go")}
+	got := rankFiles([]fileEntry{file}, "gui/butt")
+	if len(got) != 1 || got[0] != file {
+		t.Fatalf("slash query lost host-native path: %+v", got)
+	}
+}

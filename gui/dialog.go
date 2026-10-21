@@ -34,6 +34,8 @@ type Dialog struct {
 	cancelResult  DialogResult // Esc 关闭对话框返回的结果, 默认 DialogCancel
 	preferredW    float64
 	preferredH    float64
+	initialFocus  IWidget
+	lastError     error
 }
 
 // NewDialog creates a new Dialog with the given title and parent widget.
@@ -114,6 +116,7 @@ func (this *Dialog) markDefaultButton() {
 func (this *Dialog) ShowModal() DialogResult {
 	this.closed = false
 	this.result = DialogCancel
+	this.lastError = nil
 
 	this.SetVisible(false)
 	this.AttachWindow(WtForm)
@@ -131,11 +134,34 @@ func (this *Dialog) ShowModal() DialogResult {
 	}
 	win.MoveToCenter()
 
-	a := win.ShowModal(nil)
+	a := win.ShowModal(this.activateInitialFocus)
+	this.lastError = win.ModalError()
 	if r, ok := a.(DialogResult); ok {
 		this.result = r
 	}
 	return this.result
+}
+
+// LastError returns a recovered modal failure, or nil for normal acceptance/cancellation.
+// It is reset before each ShowModal call. Read it on the UI thread after return.
+func (this *Dialog) LastError() error { return this.lastError }
+
+// SetInitialFocus selects the child that receives keyboard input after native
+// activation. Unlike calling child.SetFocus before ShowModal, this preserves
+// the owner's current focus so cancellation can return to the original editor.
+// The target must be a visible/enabled descendant when the dialog is shown.
+func (this *Dialog) SetInitialFocus(target IWidget) { this.initialFocus = target }
+
+func (this *Dialog) activateInitialFocus() {
+	for p := this.initialFocus; p != nil; p = p.Parent() {
+		if !p.IsVisible() || !p.IsEnabled() {
+			return
+		}
+		if p == this.Self() {
+			this.initialFocus.SetFocus()
+			return
+		}
+	}
 }
 
 // Result returns the dialog result after ShowModal has returned.

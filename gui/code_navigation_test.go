@@ -291,8 +291,13 @@ func ( broken @@@`
 			t.Fatalf("panic on unparseable source: %v", r)
 		}
 	}()
-	if refs := FindReferences("broken", src); refs != nil {
-		t.Errorf("unparseable source should yield nil, got %+v", refs)
+	// Recovery exposes the real identifier in the unfinished receiver; it
+	// must retain the original byte position rather than inventing a target.
+	if refs := FindReferences("broken", src); len(refs) != 1 || refs[0] != (ReferenceMatch{Line: 1, Column: 7}) {
+		t.Errorf("recoverable identifier position lost: %+v", refs)
+	}
+	if refs := FindReferences("missing", src); len(refs) != 0 {
+		t.Fatal("parser invented references", refs)
 	}
 }
 

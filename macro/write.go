@@ -1,7 +1,8 @@
 package macro
 
 import (
-	"fmt"
+	"errors"
+	"github.com/uk0/silk/diagnostic"
 	"go/parser"
 	"go/token"
 	"os"
@@ -13,20 +14,26 @@ import (
 // file and rename (rename atomicity is OS-dependent). Never replace a handwritten
 // Go file or follow a symlink. The caller chooses the output path;
 // generation does not discover files, execute tools or write outside that path.
-func WriteFile(path string, data []byte) error {
+func WriteFile(path string, data []byte) (err error) {
+	defer func() {
+		var known *diagnostic.Error
+		if err != nil && !errors.As(err, &known) {
+			err = diagnostic.New(diagnostic.MacroOutputWrite, "cannot install macro output", err).At(diagnostic.Location{File: path})
+		}
+	}()
 	if !strings.HasSuffix(strings.ToLower(path), ".go") || !isGenerated(data) {
-		return fmt.Errorf("macro output must be a generated .go file")
+		return diagnostic.New(diagnostic.MacroOutputProtected, "macro output must be a generated .go file", nil).At(diagnostic.Location{File: path})
 	}
 	if st, err := os.Lstat(path); err == nil {
 		if !st.Mode().IsRegular() {
-			return fmt.Errorf("refusing non-regular output %s", path)
+			return diagnostic.New(diagnostic.MacroOutputProtected, "refusing non-regular output", nil).At(diagnostic.Location{File: path})
 		}
 		old, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		if !isGenerated(old) {
-			return fmt.Errorf("refusing to overwrite handwritten file %s", path)
+			return diagnostic.New(diagnostic.MacroOutputProtected, "refusing to overwrite handwritten file", nil).At(diagnostic.Location{File: path})
 		}
 	} else if !os.IsNotExist(err) {
 		return err

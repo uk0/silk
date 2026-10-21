@@ -19,6 +19,7 @@ func nilWidget(view gui.IWidget) bool {
 // Rebuild only on open, not on every idle/paint. Each header owns exactly one
 // popup tree; replacing it releases its native windows, including recent files.
 func buildWorkbenchMenu(frame *gui.Frame, tabs *gui.TabWidget, canvas *ged.GedView) {
+	frame.MainMenu().SetCompact(true)
 	for index, group := range []string{"File", "Edit", "View", "Design", "Build", "Tools", "Help"} {
 		_, header := frame.MainMenu().AddSubMenu(i18n.T(group), nil, nil)
 		header.Action().SetObjName("menu." + group)

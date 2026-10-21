@@ -29,6 +29,7 @@ func (this *InputBox) Init(iw IWidget) {
 	this.edit.SetParent(iw)
 	this.edit.SetMultiLine(false)
 	this.edit.SetNoFrame(false)
+	this.edit.SigSubmit(func(_ interface{}, _ string) { this.onBtnClick("@ok") })
 }
 
 func NewInputBox() *InputBox {
@@ -69,18 +70,24 @@ func (this *InputBox) ShowModal() bool {
 		this.Window().SetIcon(this.ico)
 	}
 	this.Window().MoveToCenter()
-	a := this.Window().ShowModal(nil)
+	a := this.Window().ShowModal(this.focusInput)
 	b, _ := a.(bool)
 	return b
 }
 
+// Native activation must finish before assigning logical input focus.
+func (this *InputBox) focusInput() {
+	this.edit.SetFocus()
+	this.edit.SelectAll()
+}
 func (this *InputBox) onBtnClick(s string) {
-	if s == "@ok" {
-		this.Window().EndModal(true)
-	} else {
-		this.Window().EndModal(false)
+	if win := this.Window(); win != nil {
+		win.EndModal(s == "@ok")
 	}
 }
+
+// Escape cancels this dialog regardless of which child owns the focus.
+func (this *InputBox) resolveCancel() { this.onBtnClick("@cancel") }
 
 func (this *InputBox) Draw(g paint.Painter) {
 	t := Theme()

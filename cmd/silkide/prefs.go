@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/graph"
@@ -19,7 +20,10 @@ import (
 // Support / %APPDATA% / ~/.config), so the persistence story is the
 // same on every supported platform.
 type preferences struct {
-	store *settings.Settings
+	store           *settings.Settings
+	saveOnce        sync.Once
+	writer          *preferenceWriter
+	lastSaveMessage string // UI-owned error de-duplication
 }
 
 // newPreferences returns the shared silkide preferences instance. The
@@ -44,13 +48,12 @@ func (p *preferences) WindowSize() (int, int) {
 	return w, h
 }
 
-// SetWindowSize persists a (width, height) pair. Errors are best-
-// effort: the IDE keeps running even if the settings file is read-
-// only.
+// SetWindowSize updates runtime geometry and queues background persistence.
+// Write errors are reported asynchronously; the runtime values remain usable.
 func (p *preferences) SetWindowSize(w, h int) {
 	_ = p.store.SetInt("window/width", int64(w))
 	_ = p.store.SetInt("window/height", int64(h))
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // WindowPos returns the saved window position. (-1, -1) means
@@ -71,7 +74,7 @@ func (p *preferences) WindowPos() (int, int) {
 func (p *preferences) SetWindowPos(x, y int) {
 	_ = p.store.SetInt("window/x", int64(x))
 	_ = p.store.SetInt("window/y", int64(y))
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // LastOpenedDir is the directory the next OpenFileDialog should start
@@ -82,7 +85,7 @@ func (p *preferences) LastOpenedDir() string {
 
 func (p *preferences) SetLastOpenedDir(dir string) {
 	_ = p.store.SetString("files/lastDir", dir)
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // RunArgs is the command-line argument string appended to `go run .`
@@ -94,12 +97,10 @@ func (p *preferences) RunArgs() string {
 	return p.store.String("run/args", "")
 }
 
-// SetRunArgs persists the run-args string. Best-effort Sync mirrors
-// LastOpenedDir / RecentFiles — the IDE keeps running even if the
-// settings file is read-only.
+// SetRunArgs updates runtime arguments and queues a coalesced background save.
 func (p *preferences) SetRunArgs(args string) {
 	_ = p.store.SetString("run/args", args)
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // RunWorkingDir is the project directory the runner should treat as
@@ -113,7 +114,7 @@ func (p *preferences) RunWorkingDir() string {
 // SetRunWorkingDir persists the run working-directory override.
 func (p *preferences) SetRunWorkingDir(dir string) {
 	_ = p.store.SetString("run/workingDir", dir)
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // RunEnv is the list of "KEY=value" environment variable lines forwarded
@@ -127,7 +128,7 @@ func (p *preferences) RunEnv() []string {
 // SetRunEnv persists the run environment-variable list.
 func (p *preferences) SetRunEnv(env []string) {
 	_ = p.store.SetStringList("run/env", env)
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // effectiveRunDir returns the directory the runner should use: the user-
@@ -193,7 +194,7 @@ func (p *preferences) AddRecentFile(path string) {
 		}
 	}
 	_ = p.store.SetStringList("files/recent", out)
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // filepathAbs delegates to filepath.Abs but isolates the import so
@@ -215,11 +216,11 @@ func (p *preferences) OpenSession() []string {
 
 // SetOpenSession persists the set of currently-open file paths so the
 // next launch can reopen them. Same string-list idiom as RecentFiles;
-// best-effort Sync so a read-only settings file doesn't crash the
-// close path.
+// background saving keeps the close callback responsive. The process joins
+// the actual writer after the event loop returns.
 func (p *preferences) SetOpenSession(paths []string) {
 	_ = p.store.SetStringList("session/open", paths)
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 // existingPaths filters a session path list down to the entries that
@@ -306,136 +307,165 @@ func registerSilkideTranslations() {
 		"Close":            "关闭",
 		"Recover Autosave": "从自动保存恢复",
 		"A more recent autosave was found for %s. Recover from it?": "检测到 %s 有更新的自动保存。是否恢复？",
-		"About":                                "关于",
-		"A visual designer for Go interfaces.": "面向 Go 界面的可视化设计器。",
-		"Drag, arrange and generate Go.":       "拖拽控件、编排布局、生成 Go 代码。",
-		"SDK version":                          "SDK 版本",
-		"App version":                          "应用版本",
-		"Development build":                    "开发构建",
-		"Build information unavailable":        "构建信息不可用",
-		"Working tree modified":                "工作区含未提交修改",
-		"Runtime":                              "运行时",
-		"Platform":                             "平台",
-		"Rendering":                            "渲染后端",
-		"Project settings could not be saved":  "项目设置保存失败",
-		"Project settings saved":               "项目设置已保存",
-		"No design to export":                  "没有可导出的设计文档",
-		"Accessibility tree unavailable":       "无障碍树暂不可用",
-		"Accessibility tree shown in Output":   "无障碍树已显示在输出面板",
-		"Open an editor document first":        "请先切换到已打开的代码文档",
-		"Run stopped":                          "运行已停止",
-		"All documents are saved":              "所有文档均已保存",
-		"Save All did not complete":            "全部保存未完成",
-		"No running process":                   "当前没有运行中的任务",
-		"build ok":                             "构建成功",
-		"build: error":                         "构建失败",
-		"build: %d errors":                     "构建错误: %d",
-		"Command Palette":                      "命令面板",
-		"Open Recent":                          "打开最近",
-		"Open Recent...":                       "打开最近...",
-		"(empty)":                              "(空)",
-		"Fit to View":                          "适应视口",
-		"Find in Files":                        "在文件中查找",
-		"Show Outline":                         "显示大纲",
-		"Show Problems":                        "显示问题",
-		"Show Bookmarks":                       "显示书签",
-		"Show Packages":                        "显示包列表",
-		"Refresh Packages":                     "刷新包列表",
-		"Add Bookmark":                         "添加书签",
-		"Rename Symbol":                        "重命名符号",
-		"New name:":                            "新名称：",
-		"Renamed %s → %s (%d occurrences)":     "已重命名 %s → %s (%d 处)",
-		"Rename failed: %v":                    "重命名失败: %v",
-		"Rename Symbol not available":          "暂不支持重命名符号",
-		"Configure Run...":                     "配置运行参数...",
-		"Run Configuration":                    "运行配置",
-		"OK":                                   "确定",
-		"Run arguments:":                       "运行参数:",
-		"Run args saved":                       "运行参数已保存",
-		"Run config saved":                     "运行配置已保存",
+		"About":                                     "关于",
+		"A visual designer for Go interfaces.":      "面向 Go 界面的可视化设计器。",
+		"Drag, arrange and generate Go.":            "拖拽控件、编排布局、生成 Go 代码。",
+		"SDK version":                               "SDK 版本",
+		"App version":                               "应用版本",
+		"Development build":                         "开发构建",
+		"Build information unavailable":             "构建信息不可用",
+		"Working tree modified":                     "工作区含未提交修改",
+		"Runtime":                                   "运行时",
+		"Platform":                                  "平台",
+		"Rendering":                                 "渲染后端",
+		"Project settings could not be saved":       "项目设置保存失败",
+		"Project settings saved":                    "项目设置已保存",
+		"No design to export":                       "没有可导出的设计文档",
+		"Accessibility tree unavailable":            "无障碍树暂不可用",
+		"Accessibility tree shown in Output":        "无障碍树已显示在输出面板",
+		"Open an editor document first":             "请先切换到已打开的代码文档",
+		"Run stopped":                               "运行已停止",
+		"All documents are saved":                   "所有文档均已保存",
+		"Save All did not complete":                 "全部保存未完成",
+		"No running process":                        "当前没有运行中的任务",
+		"build ok":                                  "构建成功",
+		"build: error":                              "构建失败",
+		"build: %d errors":                          "构建错误: %d",
+		"Command Palette":                           "命令面板",
+		"Open Recent":                               "打开最近",
+		"Open Recent...":                            "打开最近...",
+		"(empty)":                                   "(空)",
+		"Fit to View":                               "适应视口",
+		"Find in Files":                             "在文件中查找",
+		"Outline":                                   "大纲",
+		"No symbols":                                "暂无符号",
+		"Show Outline":                              "显示大纲",
+		"Show Files":                                "显示文件列表",
+		"Filter Project Files":                      "筛选项目文件",
+		"Refresh Editor Git Markers":                "刷新编辑器 Git 标记",
+		"Git markers refreshed":                     "Git 标记已刷新",
+		"Refresh Project Files":                     "刷新项目文件",
+		"Toggle Hidden Files":                       "切换隐藏文件显示",
+		"Reveal Active File in Explorer":            "在文件列表定位当前文件",
+		"The active file is not inside the project": "当前文件不在项目目录内",
+		"Filter Files":                              "筛选文件",
+		"Name or path contains:":                    "名称或路径包含：",
+		"No matching files":                         "没有匹配的文件",
+		"Open a project folder":                     "请打开项目文件夹",
+		"File scan":                                 "文件扫描",
+		"Show Problems":                             "显示问题",
+		"Show Bookmarks":                            "显示书签",
+		"Show Packages":                             "显示包列表",
+		"Refresh Packages":                          "刷新包列表",
+		"Add Bookmark":                              "添加书签",
+		"Rename Symbol":                             "重命名符号",
+		"New name:":                                 "新名称：",
+		"Renamed %s → %s (%d occurrences)":          "已重命名 %s → %s (%d 处)",
+		"Rename failed: %v":                         "重命名失败: %v",
+		"Rename Symbol not available":               "暂不支持重命名符号",
+		"Configure Run...":                          "配置运行参数...",
+		"Run Configuration":                         "运行配置",
+		"OK":                                        "确定",
+		"Run arguments:":                            "运行参数:",
+		"Run args saved":                            "运行参数已保存",
+		"Run config saved":                          "运行配置已保存",
 		"silkide: %d env entries configured (not yet forwarded to go run)": "silkide: 已配置 %d 项环境变量（暂未转发给 go run）",
-		"Open File":                       "打开文件",
-		"Quick Open File":                 "快速打开文件",
-		"Saved %s":                        "已保存 %s",
-		"Build successful":                "构建成功",
-		"Build failed":                    "构建失败",
-		"Running...":                      "运行中...",
-		"Running tests...":                "运行测试中...",
-		"Tests passed":                    "测试通过",
-		"Tests failed":                    "测试失败",
-		"Run Tests":                       "运行测试",
-		"Run with Coverage":               "运行测试 (覆盖率)",
-		"Show Coverage":                   "显示覆盖率",
-		"Running with coverage...":        "运行测试 (覆盖率) 中...",
-		"Coverage applied":                "覆盖率已应用",
-		"Coverage failed":                 "覆盖率运行失败",
-		"Run go vet":                      "运行 go vet",
-		"Running go vet...":               "运行 go vet 中...",
-		"go vet ok":                       "go vet 通过",
-		"go vet failed":                   "go vet 失败",
-		"Test Results":                    "测试结果",
-		"Show Test Results":               "显示测试结果",
-		"Show Diff vs Saved":              "对比已保存版本",
-		"Diff vs Saved: %s":               "对比已保存版本: %s",
-		"Diff vs HEAD":                    "对比 HEAD 版本",
-		"Diff vs HEAD: %s":                "对比 HEAD 版本: %s",
-		"No changes vs HEAD":              "与 HEAD 无差异",
-		"git diff failed (not a repo?)":   "git diff 失败（不是仓库？）",
-		"Show Log":                        "显示日志",
-		"Clear Log":                       "清空日志",
-		"Continue":                        "继续",
-		"Step Over":                       "单步跳过",
-		"Step Into":                       "单步进入",
-		"Step Out":                        "单步跳出",
-		"Show Debug":                      "显示调试",
-		"No debug session":                "无调试会话",
-		"LSP not running":                 "LSP 未运行",
-		"Go to Definition":                "跳转到定义",
-		"Format Document":                 "格式化文档",
-		"Format failed: %v":               "格式化失败: %v",
-		"Rename: no changes":              "重命名: 无改动",
-		"Rename aborted: buffer changed":  "重命名已取消: 缓冲区已改动",
-		"Renamed across %d file(s)":       "已重命名 %d 个文件",
-		"Find References":                 "查找引用",
-		"Go to Symbol in Workspace":       "跳转到工作区符号",
-		"Show Git Changes":                "显示 Git 更改",
-		"Refresh Git Changes":             "刷新 Git 更改",
-		"Scan TODOs":                      "扫描 TODO",
-		"Restart Debug":                   "重启调试",
-		"Trim Trailing Whitespace":        "清除行尾空白",
-		"Set variable failed: %v":         "设置变量失败: %v",
-		"Restart failed: %v":              "重启失败: %v",
-		"Unstage failed: %v":              "撤出暂存失败: %v",
-		"Show Git History":                "显示 Git 历史",
-		"No diff in commit":               "该提交无差异",
-		"Toggle Blame":                    "切换 Blame 标注",
-		"Committed %s":                    "已提交 %s",
-		"No references found":             "未找到引用",
-		"Code Actions":                    "代码操作",
-		"No code actions":                 "无可用操作",
-		"Code action has no edit":         "该操作无可应用编辑",
-		"Applied: %s":                     "已应用: %s",
-		"Open Project":                    "打开项目",
-		"Project: %s":                     "项目: %s",
-		"Failed to read saved file":       "读取已保存文件失败",
-		"Running %s...":                   "运行 %s 中...",
-		"gofmt failed; saved unformatted": "gofmt 失败，已按原样保存",
-		"Save failed: %v":                 "保存失败: %v",
-		"Run skipped: no main package":    "未找到 main 包，已跳过运行",
-		"Opened %s":                       "已打开 %s",
-		"Recovered from autosave":         "已从自动保存恢复",
-		"Exported to %s":                  "已导出到 %s",
-		"Print Design...":                 "打印设计...",
-		"Switch to Design mode to print":  "请切换到设计模式后打印",
-		"Cannot print a design with missing widgets":                   "设计存在缺失控件，不能打印",
+		"Open File":                      "打开文件",
+		"Quick Open File":                "快速打开文件",
+		"Saved %s":                       "已保存 %s",
+		"Build successful":               "构建成功",
+		"Build failed":                   "构建失败",
+		"Running...":                     "运行中...",
+		"Running tests...":               "运行测试中...",
+		"Tests passed":                   "测试通过",
+		"Tests failed":                   "测试失败",
+		"Run Tests":                      "运行测试",
+		"Run with Coverage":              "运行测试 (覆盖率)",
+		"Show Coverage":                  "显示覆盖率",
+		"Running with coverage...":       "运行测试 (覆盖率) 中...",
+		"Coverage applied":               "覆盖率已应用",
+		"Coverage failed":                "覆盖率运行失败",
+		"Run go vet":                     "运行 go vet",
+		"Running go vet...":              "运行 go vet 中...",
+		"go vet ok":                      "go vet 通过",
+		"go vet failed":                  "go vet 失败",
+		"Test Results":                   "测试结果",
+		"Show Test Results":              "显示测试结果",
+		"Show Diff vs Saved":             "对比已保存版本",
+		"Diff vs Saved: %s":              "对比已保存版本: %s",
+		"Diff vs HEAD":                   "对比 HEAD 版本",
+		"Diff vs HEAD: %s":               "对比 HEAD 版本: %s",
+		"No changes vs HEAD":             "与 HEAD 无差异",
+		"git diff failed (not a repo?)":  "git diff 失败（不是仓库？）",
+		"Show Log":                       "显示日志",
+		"Clear Log":                      "清空日志",
+		"Continue":                       "继续",
+		"Step Over":                      "单步跳过",
+		"Step Into":                      "单步进入",
+		"Step Out":                       "单步跳出",
+		"Show Debug":                     "显示调试",
+		"No debug session":               "无调试会话",
+		"LSP not running":                "LSP 未运行",
+		"Go to Definition":               "跳转到定义",
+		"Format Document":                "格式化文档",
+		"Format failed: %v":              "格式化失败: %v",
+		"Rename: no changes":             "重命名: 无改动",
+		"Rename aborted: buffer changed": "重命名已取消: 缓冲区已改动",
+		"Renamed across %d file(s)":      "已重命名 %d 个文件",
+		"Find References":                "查找引用",
+		"Go to Symbol in Workspace":      "跳转到工作区符号",
+		"Indexing project files...":      "正在索引项目文件…",
+		"Searching files...":             "正在搜索文件…",
+		"No files found":                 "未找到文件",
+		"[%s] Incomplete file index (%d matches)":    "[%s] 文件索引不完整（%d 个匹配）",
+		"Showing %d of %d files; refine your search": "显示 %d / %d 个文件，请细化搜索",
+		"%d files":                                     "%d 个文件",
+		"Language service disconnected":                "语言服务连接已断开",
+		"Language service failed to start":             "语言服务启动失败",
+		"Searching symbols...":                         "正在搜索符号…",
+		"Symbol search failed":                         "符号搜索失败",
+		"Symbol search cancelled":                      "符号搜索已取消",
+		"No symbols found":                             "未找到符号",
+		"Showing %d of %d symbols; refine your search": "显示 %d / %d 个符号，请缩小搜索范围",
+		"%d symbols":                                   "%d 个符号",
+		"Show Git Changes":                             "显示 Git 更改",
+		"Refresh Git Changes":                          "刷新 Git 更改",
+		"Scan TODOs":                                   "扫描 TODO",
+		"Restart Debug":                                "重启调试",
+		"Trim Trailing Whitespace":                     "清除行尾空白",
+		"Set variable failed: %v":                      "设置变量失败: %v",
+		"Restart failed: %v":                           "重启失败: %v",
+		"Unstage failed: %v":                           "撤出暂存失败: %v",
+		"Show Git History":                             "显示 Git 历史",
+		"No diff in commit":                            "该提交无差异",
+		"Toggle Blame":                                 "切换 Blame 标注",
+		"Committed %s":                                 "已提交 %s",
+		"No references found":                          "未找到引用",
+		"Code Actions":                                 "代码操作",
+		"No code actions":                              "无可用操作",
+		"Code action has no edit":                      "该操作无可应用编辑",
+		"Applied: %s":                                  "已应用: %s",
+		"Open Project":                                 "打开项目",
+		"Project: %s":                                  "项目: %s",
+		"Failed to read saved file":                    "读取已保存文件失败",
+		"Running %s...":                                "运行 %s 中...",
+		"gofmt failed; saved unformatted":              "gofmt 失败，已按原样保存",
+		"Save failed: %v":                              "保存失败: %v",
+		"Run skipped: no main package":                 "未找到 main 包，已跳过运行",
+		"Opened %s":                                    "已打开 %s",
+		"Recovered from autosave":                      "已从自动保存恢复",
+		"Exported to %s":                               "已导出到 %s",
+		"Print Design...":                              "打印设计...",
+		"Switch to Design mode to print":               "请切换到设计模式后打印",
+		"Cannot print a design with missing widgets":   "设计存在缺失控件，不能打印",
 		"Print backend accepted the document; check the printer queue": "打印后端已接收文档，请检查打印队列",
-		"Print job queued: %s":                                         "打印任务已入队：%s",
-		"Printing could not complete":                                  "打印未完成",
-		"Export failed":                                                "导出失败",
-		"main.go":                                                      "main.go",
-		"server.go":                                                    "server.go",
-		"go.mod":                                                       "go.mod",
-		"untitled":                                                     "未命名",
+		"Print job queued: %s":        "打印任务已入队：%s",
+		"Printing could not complete": "打印未完成",
+		"Export failed":               "导出失败",
+		"main.go":                     "main.go",
+		"server.go":                   "server.go",
+		"go.mod":                      "go.mod",
+		"untitled":                    "未命名",
 		// Status-bar message templates. i18n.Tf passes the format args
 		// through unchanged, so the "%s" / "%d" placeholders translate
 		// 1-for-1 from English to Chinese.
@@ -730,6 +760,6 @@ func registerAppearanceTranslations() {
 		"Appearance & Editor": "外观与编辑器", "Language (restart required)": "界面语言（重启生效）", "Theme": "主题", "Dark": "深色", "Light": "浅色",
 		"UI font": "界面字体", "UI font size": "界面字号", "Editor font": "编辑器字体", "Editor font size": "编辑器字号", "Tab width": "Tab 显示宽度",
 		"Accent (#RRGGBB)": "强调色（#RRGGBB）", "Editor background": "编辑器背景色", "Editor text": "代码文字颜色", "Keywords": "关键字颜色", "Comments": "注释颜色", "Strings": "字符串颜色",
-		"Empty color = theme default; colors use #RRGGBB": "颜色留空使用主题默认值；格式为 #RRGGBB", "Appearance saved; language changes apply after restart": "外观已保存，语言设置将在重启后生效",
+		"Empty color = theme default; colors use #RRGGBB": "颜色留空使用主题默认值；格式为 #RRGGBB", "Appearance applied; saving in background. Language changes apply after restart": "外观已应用，正在后台保存。语言设置将在重启后生效",
 	})
 }

@@ -39,21 +39,31 @@ import (
 
 // LSPClient 是一个跑着的 LSP 服务器子进程 + 跟它建立的 LSP 协议会话
 // 同一个 client 可以并发 SendRequest, ID 分配/pending 路由由 mu 保护,
-// 实际写 stdin 的字节流由 writeMu 串行化 -- WriteLSPMessage 内部分 "header 写"
+// 实际写 stdin 的字节流由可取消的 writeGate 串行化 -- framing 分 "header 写"
 // 和 "body 写" 两步, 多 goroutine 共用一个 pipe 时必须串起来, 否则两个并发
 // 请求的 header/body 会交错, 把帧搞乱.
 type LSPClient struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	stderr io.ReadCloser
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     *bufio.Reader
+	stdoutPipe io.ReadCloser
+	stderr     io.ReadCloser
 
 	nextID  int
 	mu      sync.Mutex // guards pending + nextID + closed
 	pending map[int]chan *LSPMessage
 	closed  bool
 
-	writeMu sync.Mutex // serializes WriteLSPMessage on stdin
+	writeOnce       sync.Once
+	writeJobs       chan *lspWriteJob
+	writeWorkerDone chan struct{}
+	writeGate       chan struct{}
+	writeStopped    chan struct{}
+	writeErr        error // guarded by mu; first terminal transport cause
+	cancelOnce      sync.Once
+	cancelIDs       chan int
+	cancelDone      chan struct{}
+	closeOnce       sync.Once
 
 	// handlerMu 单独护住 "宿主注册的回调 + 握手拿到的服务器状态".
 	// 刻意不复用 mu: mu 在 readLoop 路由消息期间被持有, 而回 server->client
@@ -67,15 +77,6 @@ type LSPClient struct {
 	notifications chan *LSPMessage // 服务器主动发的 notification 缓存给上层
 
 	done chan struct{} // 读循环退出时关闭
-}
-
-// writeFrame 在 writeMu 保护下把一条 LSP 消息原子写到 stdin
-// 抽出来是因为 SendRequest / SendNotification / shutdownBestEffort 都要保证
-// header 和 body 不被其他 goroutine 插队.
-func (c *LSPClient) writeFrame(m *LSPMessage) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteLSPMessage(c.stdin, m)
 }
 
 // LSPInitializeParams 是 "initialize" 请求体
@@ -221,7 +222,7 @@ func DefaultClientCapabilities() json.RawMessage {
 
 // defaultRequestTimeout 是 SendRequest 的默认超时
 // gopls 第一个 initialize 可能要等几百 ms 把工作区扫起来; 10s 留出充分
-// 余量. 后续具体 RPC 真要更长/更短的预算时, 再加 SendRequestContext 变体.
+// 余量. SendRequestContext 可传更短 deadline，覆盖排队、管道写入及响应等待.
 const defaultRequestTimeout = 10 * time.Second
 
 // LaunchLSPClient 拉起 serverCmd args... 并建立 LSP 长连接
@@ -268,6 +269,7 @@ func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 		cmd:           cmd,
 		stdin:         stdin,
 		stdout:        bufio.NewReader(stdout),
+		stdoutPipe:    stdout,
 		stderr:        stderr,
 		pending:       make(map[int]chan *LSPMessage),
 		notifications: make(chan *LSPMessage, 64),
@@ -297,10 +299,15 @@ func (c *LSPClient) readLoop() {
 		m, err := ReadLSPMessage(c.stdout)
 		if err != nil {
 			// 读侧失败一般是子进程退出 / pipe 关闭
-			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			c.mu.Lock()
+			teardown := c.closed || c.writeErr != nil
+			c.mu.Unlock()
+			expectedClose := teardown && (errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe))
+			if !errors.Is(err, io.EOF) && !expectedClose {
 				fmt.Fprintf(os.Stderr, "lspclient: read loop: %v\n", err)
 			}
 			// 把所有 pending 全部 fail 掉, 让 SendRequest 的等待方早退
+			c.abortTransport(err)
 			c.failAllPending()
 			// readLoop 是 notifications 的唯一发送方 (routeMessage 只在本循环
 			// 里被调用); 读侧终结后不会再有投递, 这里 close 掉, 让上层的
@@ -793,13 +800,14 @@ func (c *LSPClient) requestOptional(method, provider string, params interface{})
 //   - 把 pending[id] 清掉, 防止读循环之后误送到一个无人监听的 chan
 //   - 返回 context-deadline 风格错误
 //
-// 不取消子进程: 单条请求超时不应该直接撕掉整个会话, 上层若决定终止, 自行 Close.
+// 响应等待超时不终止会话；写入中断会关闭可能残缺的帧流，要求重启服务。
 func (c *LSPClient) SendRequest(method string, params interface{}) (*LSPMessage, error) {
 	return c.SendRequestContext(context.Background(), method, params)
 }
 
-// SendRequestContext cancels obsolete language requests and removes their
-// pending slots. A default deadline still bounds callers without a deadline.
+// SendRequestContext bounds serialization waiting, native pipe writes and the
+// response wait. A canceled active request returns immediately while the writer
+// finishes or retires its partial frame within a bounded drain grace.
 func (c *LSPClient) SendRequestContext(ctx context.Context, method string, params interface{}) (*LSPMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
 	defer cancel()
@@ -811,6 +819,11 @@ func (c *LSPClient) SendRequestContext(ctx context.Context, method string, param
 		return nil, errors.New("lspclient: empty method")
 	}
 	c.mu.Lock()
+	if c.writeErr != nil {
+		err := c.writeErr
+		c.mu.Unlock()
+		return nil, err
+	}
 	if c.closed {
 		c.mu.Unlock()
 		return nil, errors.New("lspclient: closed")
@@ -827,7 +840,7 @@ func (c *LSPClient) SendRequestContext(ctx context.Context, method string, param
 		c.removePending(id)
 		return nil, fmt.Errorf("lspclient: build request %s: %w", method, err)
 	}
-	if err := c.writeFrame(req); err != nil {
+	if err := c.writeFrameContext(ctx, req); err != nil {
 		c.removePending(id)
 		return nil, fmt.Errorf("lspclient: write request %s: %w", method, err)
 	}
@@ -837,19 +850,26 @@ func (c *LSPClient) SendRequestContext(ctx context.Context, method string, param
 	case m := <-ch:
 		c.removePending(id)
 		if m.Error != nil {
+			c.mu.Lock()
+			transportErr := c.writeErr
+			c.mu.Unlock()
+			if transportErr != nil {
+				return m, transportErr
+			}
 			// 把 server-side error 一并返回, 但保留 message 供上层判别
 			return m, fmt.Errorf("lspclient: %s server error: code=%d msg=%s", method, m.Error.Code, m.Error.Message)
 		}
 		return m, nil
 	case <-ctx.Done():
 		c.removePending(id)
-		// The peer must stop expensive completion/analysis for obsolete positions.
-		// This method already runs off the UI thread, preserving wire ordering.
-		_ = c.SendNotification("$/cancelRequest", map[string]int{"id": id})
+		c.cancelRequest(id)
 		return nil, fmt.Errorf("lspclient: %s: %w", method, ctx.Err())
+	case <-c.writeStopped:
+		c.removePending(id)
+		return nil, fmt.Errorf("lspclient: %s aborted: %w", method, c.transportError())
 	case <-c.done:
 		c.removePending(id)
-		return nil, fmt.Errorf("lspclient: %s aborted: server connection closed", method)
+		return nil, fmt.Errorf("lspclient: %s aborted: %w", method, c.transportError())
 	}
 }
 
@@ -861,27 +881,10 @@ func (c *LSPClient) removePending(id int) {
 	c.mu.Unlock()
 }
 
-// SendNotification 发一条无 ID 的 LSP 通知, 立刻返回
-// 服务器不会回; 失败仅意味着写 pipe 失败 (子进程死了等).
+// SendNotification writes a whole notification with the default deadline.
+// Use SendNotificationContext for a shorter deadline or owner cancellation.
 func (c *LSPClient) SendNotification(method string, params interface{}) error {
-	if method == "" {
-		return errors.New("lspclient: empty method")
-	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return errors.New("lspclient: closed")
-	}
-	c.mu.Unlock()
-
-	note, err := NewNotification(method, params)
-	if err != nil {
-		return fmt.Errorf("lspclient: build notification %s: %w", method, err)
-	}
-	if err := c.writeFrame(note); err != nil {
-		return fmt.Errorf("lspclient: write notification %s: %w", method, err)
-	}
-	return nil
+	return c.SendNotificationContext(context.Background(), method, params)
 }
 
 // DidOpen 发 textDocument/didOpen 通知, 把一个文件注册给服务器
@@ -1424,8 +1427,15 @@ type LSPWorkspaceSymbol struct {
 // null/空数组 -> 空切片, 不当错误; server 端错误经 SendRequest 包好后原样透出.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) WorkspaceSymbol(query string) ([]LSPWorkspaceSymbol, error) {
+	return c.WorkspaceSymbolContext(context.Background(), query)
+}
+
+// WorkspaceSymbolContext is the cancellable workspace-symbol query. Positions
+// remain zero-based UTF-16, like other LSP APIs. It uses SendRequestContext's
+// timeout/cancellation policy and preserves the legacy result decoder.
+func (c *LSPClient) WorkspaceSymbolContext(ctx context.Context, query string) ([]LSPWorkspaceSymbol, error) {
 	params := map[string]interface{}{"query": query}
-	resp, err := c.SendRequest("workspace/symbol", params)
+	resp, err := c.SendRequestContext(ctx, "workspace/symbol", params)
 	if err != nil {
 		return nil, err
 	}
@@ -1924,49 +1934,46 @@ func (c *LSPClient) Notifications() <-chan *LSPMessage { return c.notifications 
 // 任何一步出错都不阻断后续: 最终目标是把子进程清掉, 不漏 fd / 进程.
 // 跟 dlv.go 里 Close 的写法保持一致: 锁内只翻 closed 标志, 实际清理放在锁外.
 func (c *LSPClient) Close() error {
-	c.mu.Lock()
-	if c.closed {
+	c.closeOnce.Do(func() {
+		c.initTransport()
+		c.mu.Lock()
+		c.closed = true
+		failed := c.writeErr != nil
 		c.mu.Unlock()
-		return nil
-	}
-	c.closed = true
-	c.mu.Unlock()
-
-	// A stalled server may stop reading stdin entirely. Closing the pipe from
-	// the deadline callback unblocks both shutdown and any blocked writeFrame.
-	deadline := time.AfterFunc(500*time.Millisecond, func() {
+		if !failed {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			c.shutdownBestEffort(ctx)
+			cancel()
+		}
+		c.stopWrites(errors.New("lspclient: closed"))
 		if c.stdin != nil {
 			_ = c.stdin.Close()
 		}
+		if c.stdoutPipe != nil {
+			_ = c.stdoutPipe.Close()
+		}
 		if c.cmd != nil && c.cmd.Process != nil {
 			_ = c.cmd.Process.Kill()
+			_ = c.cmd.Wait()
+		}
+		select {
+		case <-c.writeWorkerDone:
+		case <-time.After(500 * time.Millisecond):
+		}
+		if c.done != nil {
+			select {
+			case <-c.done:
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
 	})
-	defer deadline.Stop()
-	c.shutdownBestEffort()
-
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-	}
-
-	// 给读循环一点时间自然退出 (stdin 关后 gopls 通常会自己退)
-	select {
-	case <-c.done:
-	case <-time.After(500 * time.Millisecond):
-	}
-
-	if c.cmd != nil && c.cmd.Process != nil {
-		// 即便已经退出, Kill 也是安全的 (返回 process already finished)
-		_ = c.cmd.Process.Kill()
-		_, _ = c.cmd.Process.Wait()
-	}
 	return nil
 }
 
 // shutdownBestEffort 在 Close 期间尝试一次 "shutdown" 请求 + "exit" 通知
 // 任何错误都吞掉. 这里不复用 SendRequest 是因为 closed 已经为 true 让它早退;
 // 用一对独立的 write 走最短路径, 给 server 一个体面退场的机会.
-func (c *LSPClient) shutdownBestEffort() {
+func (c *LSPClient) shutdownBestEffort(ctx context.Context) {
 	if c.stdin == nil {
 		return
 	}
@@ -1975,11 +1982,11 @@ func (c *LSPClient) shutdownBestEffort() {
 	id := c.nextID
 	c.mu.Unlock()
 	if req, err := NewRequest(id, "shutdown", nil); err == nil {
-		_ = c.writeFrame(req)
+		_ = c.writeFrameContext(ctx, req)
 	}
 	// shutdown 之后规范要求紧跟 exit notification (无 params)
 	if note, err := NewNotification("exit", nil); err == nil {
-		_ = c.writeFrame(note)
+		_ = c.writeFrameContext(ctx, note)
 	}
 }
 

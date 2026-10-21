@@ -69,7 +69,7 @@ func TestOpenedEditorContextCommandsReportMissingLSPWithoutLocalFallback(t *test
 	for _, action := range []func(){ed.RequestRenameSymbol, ed.RequestGoToDefinition, ed.RequestFindReferences} {
 		before := len(messages)
 		action() // Rename must return before opening any native input dialog.
-		if len(messages) != before+1 || messages[before] != i18n.T("LSP not running") {
+		if len(messages) != before+1 || messages[before] != "[SILK-LSP001] "+i18n.T("LSP not running") {
 			t.Fatalf("missing-LSP command was silent: %v", messages)
 		}
 		if ed.Text() != source || ed.CursorLine() != 2 || ed.CursorCol() != 18 || ed.Modified() {
@@ -78,7 +78,7 @@ func TestOpenedEditorContextCommandsReportMissingLSPWithoutLocalFallback(t *test
 	}
 	// The F2 entry point uses exactly the same unavailable-service guard.
 	renameSymbolAtActiveEditor(tabs)
-	if len(messages) != 4 || messages[3] != i18n.T("LSP not running") {
+	if len(messages) != 4 || messages[3] != "[SILK-LSP001] "+i18n.T("LSP not running") {
 		t.Fatal("F2 rename differs from context rename")
 	}
 }

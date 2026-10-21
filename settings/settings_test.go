@@ -295,16 +295,21 @@ func TestSyncCreatesParentDir(t *testing.T) {
 
 // TestStatusReturnsLastError.
 func TestStatusReturnsLastError(t *testing.T) {
-	// Try to write to an unwritable path. We use /dev/null/foo which
-	// should fail mkdir on most systems.
-	s := New("/dev/null/badpath/x.silkui")
-	s.SetValue("k", "v")
-	err := s.Sync()
-	if err == nil {
-		t.Skip("system allowed write to /dev/null subpath; skipping error path test")
+	// Use an owned regular file as the parent. /dev/null is not portable and
+	// could create real C:\dev paths on Windows instead of exercising failure.
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("owned fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(blocker, "prefs.silkui"))
+	if err := s.SetValue("k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Sync(); err == nil {
+		t.Fatal("regular-file parent unexpectedly accepted")
 	}
 	if s.Status() == nil {
-		t.Errorf("Status() should mirror last Sync error")
+		t.Fatal("Status must retain actual I/O failure")
 	}
 }
 

@@ -555,23 +555,36 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 	} else {
 		// Modern programmatic button drawing (no pixmap faces)
 		m := t.ButtonMargin
+		iconSize := t.IconSize
+		compact := false
+		if tb, ok := btn.Parent().(*ToolBar); ok {
+			iconSize = float64(tb.IconSize())
+			compact = tb.IsCompact()
+			if compact {
+				m = Margin{8, 8, 4, 4}
+			}
+		}
+		if menu, ok := btn.Parent().(*Menu); ok && menu.compact && !menu.IsVertical() && !menu.IsPopup() {
+			compact = true
+			m = Margin{10, 10, 3, 3}
+		}
 		radius := 4.0
 
-		if !btn.IsEnabled() {
+		if !btn.IsEnabled() && !compact {
 			// Disabled state follows the active theme, not a hard-coded light face.
 			roundedRect(g, 0, 0, w, h, radius)
 			g.SetBrush1(t.FormLightColor)
 			g.FillPreserve()
 			g.SetPen1(t.BorderColor, 1)
 			g.Stroke()
-		} else if btn.IsSubPopupVisible() || btn.IsChecked() || (btn.IsPushed() && btn.IsHover()) {
+		} else if btn.IsEnabled() && (btn.IsSubPopupVisible() || btn.IsChecked() || (btn.IsPushed() && btn.IsHover())) {
 			// Pressed / checked: darker blue
 			roundedRect(g, 0, 0, w, h, radius)
 			g.SetBrush1(paint.Color{37, 99, 235, 255}) // blue-600
 			g.FillPreserve()
 			g.SetPen1(paint.Color{29, 78, 216, 255}, 1) // blue-700
 			g.Stroke()
-		} else if btn.IsPushed() || btn.IsHover() {
+		} else if btn.IsEnabled() && (btn.IsPushed() || btn.IsHover()) {
 			// Hover: subtle tint. The label keeps TextColor here, so the fill
 			// has to come from the theme or it inverts in dark mode.
 			roundedRect(g, 0, 0, w, h, radius)
@@ -581,7 +594,7 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.Stroke()
 		}
 
-		if btn.IsEnabled() && !btn.IsSubPopupVisible() && !btn.IsChecked() && !btn.IsPushed() && !btn.IsHover() {
+		if !compact && btn.IsEnabled() && !btn.IsSubPopupVisible() && !btn.IsChecked() && !btn.IsPushed() && !btn.IsHover() {
 			face := btn.normalFace(t.FormLightColor, t.FormColor, h)
 			roundedRect(g, 0.5, 0.5, math.Max(0, w-1), math.Max(0, h-1), radius)
 			g.SetBrush(face)
@@ -602,9 +615,12 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 		icon := btn.Icon()
 		if icon != nil {
 			xi := m.L
-			yi := 0.5 * (h - t.IconSize)
+			if compact && !btn.IsTextVisible() {
+				xi = 0.5 * (w - iconSize)
+			}
+			yi := 0.5 * (h - iconSize)
 			g.Translate(xi, yi)
-			g.DrawIcon(icon, t.IconSize, !btn.IsEnabled())
+			g.DrawIcon(icon, iconSize, !btn.IsEnabled())
 			g.Translate(-xi, -yi)
 		}
 
@@ -622,10 +638,19 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			ext := g.Font().TextExtents(text)
 			xt := m.L
 			if icon != nil {
-				xt = m.L*2 + t.IconSize
+				xt = m.L*2 + iconSize
+				if compact {
+					xt = m.L + iconSize + 6
+				}
+			} else if compact {
+				xt = (w - math.Max(ext.Width, ext.XAdvance)) / 2
 			}
 			xt -= ext.XBearing
 			yt := 0.5*(h+ext.YBearing) - ext.YBearing
+			if compact {
+				fe := t.Font.FontExtents()
+				yt = 0.5*(h-fe.Ascent-fe.Descent) + fe.Ascent
+			}
 			g.Translate(xt, yt)
 			g.DrawText(text)
 			g.Translate(-xt, -yt)

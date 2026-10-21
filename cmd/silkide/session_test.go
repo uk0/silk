@@ -55,10 +55,11 @@ func TestOpenSessionRoundTrip(t *testing.T) {
 		filepath.Join(tmp, "main.go"),
 	}
 
-	p := newPreferences()
+	p := testPreferences(t)
 	p.SetOpenSession(paths)
+	flushTestPreferences(t, p)
 
-	got := newPreferences().OpenSession()
+	got := testPreferences(t).OpenSession()
 	if len(got) != len(paths) {
 		t.Fatalf("OpenSession() = %v, want %v", got, paths)
 	}
@@ -70,7 +71,8 @@ func TestOpenSessionRoundTrip(t *testing.T) {
 
 	// Round-tripping an empty session yields nothing to restore.
 	p.SetOpenSession(nil)
-	if got := newPreferences().OpenSession(); len(got) != 0 {
+	flushTestPreferences(t, p)
+	if got := testPreferences(t).OpenSession(); len(got) != 0 {
 		t.Errorf("OpenSession() after clear = %v, want empty", got)
 	}
 }

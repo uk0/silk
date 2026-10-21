@@ -2,7 +2,6 @@ package gui
 
 import (
 	"go/ast"
-	"go/parser"
 	gotoken "go/token"
 	"os"
 	"path/filepath"
@@ -19,6 +18,10 @@ func isActionModifier() bool {
 	}
 	return IsKeyDown(KeyCtrl)
 }
+
+// IsActionModifier reports whether the platform's primary shortcut modifier is
+// held (Command on macOS, Ctrl elsewhere). Call on the UI thread during input.
+func IsActionModifier() bool { return isActionModifier() }
 
 // NavigationTarget represents a found definition location.
 type NavigationTarget struct {
@@ -87,8 +90,8 @@ func (ns *NavigationStack) GoForward() (NavPosition, bool) {
 // Resolution within a single file is AST-based (go/parser): it understands
 // func/type/var/const declarations, methods, and function-local declarations
 // (params, named results, and short variable declarations). If the source
-// fails to parse (e.g. mid-edit), it falls back to a tolerant line scanner so
-// navigation keeps working on partial code.
+// is incomplete (e.g. mid-edit), valid recovered AST nodes remain navigable;
+// comments and strings never turn into fake declarations.
 func FindDefinition(word string, currentFile string, currentContent string) *NavigationTarget {
 	if word == "" {
 		return nil
@@ -150,39 +153,31 @@ func FindDefinition(word string, currentFile string, currentContent string) *Nav
 	return nil
 }
 
-// findInContent searches for a definition of word within the given file content.
-// It parses the source with go/ast for accurate results and falls back to a
-// line scanner when the source does not parse.
+// findInContent searches the recoverable AST of the actual buffer. Lexical
+// comments/strings never become fallback declarations, including while typing.
 func findInContent(word, filePath, content string) *NavigationTarget {
-	if target := findDefinitionAST(word, filePath, content); target != nil {
-		return target
-	}
-	return findInContentRegex(word, filePath, content)
+	return findDefinitionAST(word, filePath, content)
 }
 
-// findDefinitionAST resolves a definition using the Go AST. It returns nil if
-// the source cannot be parsed or the name has no declaration in this file.
-//
-// Top-level declarations (func/type/var/const/method) are preferred, matching
-// click-to-definition on an exported API symbol. If the name is only declared
-// locally (a parameter, named result, or short variable declaration), the
-// innermost such declaration is returned.
+// findDefinitionAST remains name-based, not cursor/scope-aware. Package-level
+// declarations take precedence; local candidates use the existing depth policy.
+// An incomplete function or package-less snippet does not erase prior targets.
 func findDefinitionAST(word, filePath, content string) *NavigationTarget {
-	fset := gotoken.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, content, parser.SkipObjectResolution)
-	if err != nil || file == nil {
+	if word == "" || word == "_" {
 		return nil
 	}
-
-	// Top-level declarations win: this is what a user clicking an API symbol
-	// almost always wants to reach.
-	if t := topLevelDecl(word, filePath, file, fset); t != nil {
-		return t
+	_, fset, file, _, prefixLines := parseRecoverableGo(content, false)
+	if file == nil {
+		return nil
 	}
-
-	// Otherwise resolve a function-local declaration, preferring the innermost
-	// (deepest) enclosing scope.
-	return localDecl(word, filePath, file, fset)
+	target := topLevelDecl(word, filePath, file, fset)
+	if target == nil {
+		target = localDecl(word, filePath, file, fset)
+	}
+	if target != nil {
+		target.Line -= prefixLines
+	}
+	return target
 }
 
 // topLevelDecl returns the package-level declaration of word, if any.
@@ -315,14 +310,13 @@ type ReferenceMatch struct {
 //
 // Resolution is name-based and scoped to this single file: cross-package
 // resolution and shadowing analysis are out of scope. The source is parsed
-// with go/parser; if it does not parse, an empty slice is returned.
+// with recoverable go/parser syntax; incomplete source retains valid identifiers.
 func FindReferences(word, content string) []ReferenceMatch {
 	if word == "" {
 		return nil
 	}
-	fset := gotoken.NewFileSet()
-	file, err := parser.ParseFile(fset, "", content, parser.SkipObjectResolution)
-	if err != nil || file == nil {
+	_, fset, file, prefix, prefixLines := parseRecoverableGo(content, false)
+	if file == nil {
 		return nil
 	}
 
@@ -336,8 +330,12 @@ func FindReferences(word, content string) []ReferenceMatch {
 		if id == file.Name {
 			return true
 		}
-		pos := fset.Position(id.Pos())
-		matches = append(matches, ReferenceMatch{Line: pos.Line - 1, Column: pos.Column - 1})
+		pos := fset.PositionFor(id.Pos(), false)
+		offset := pos.Offset - prefix
+		if offset < 0 || offset+len(word) > len(content) || content[offset:offset+len(word)] != word {
+			return true
+		}
+		matches = append(matches, ReferenceMatch{Line: pos.Line - 1 - prefixLines, Column: pos.Column - 1})
 		return true
 	})
 	return matches
@@ -352,57 +350,15 @@ type OutlineSymbol struct {
 	Column   int    // 0-based
 }
 
-// OutlineSymbols returns the top-level functions, methods, types, vars and
-// consts declared in content, in source order, using the Go AST. It returns
-// nil if the source does not parse.
+// OutlineSymbols returns recoverable top-level declarations in source order.
+// It shares the editor's Go declaration model and accepts incomplete source and
+// package-less snippets. Columns are original UTF-8 byte offsets, not //line
+// remappings, runes or UTF-16. Invalid/blank placeholder names are omitted.
 func OutlineSymbols(content string) []OutlineSymbol {
-	fset := gotoken.NewFileSet()
-	file, err := parser.ParseFile(fset, "", content, parser.SkipObjectResolution)
-	if err != nil || file == nil {
-		return nil
-	}
-
 	var out []OutlineSymbol
-	add := func(name, kind, recv string, pos gotoken.Pos) {
-		p := fset.Position(pos)
-		out = append(out, OutlineSymbol{
-			Name:     name,
-			Kind:     kind,
-			Receiver: recv,
-			Line:     p.Line - 1,
-			Column:   p.Column - 1,
-		})
-	}
-
-	for _, decl := range file.Decls {
-		switch d := decl.(type) {
-		case *ast.FuncDecl:
-			if d.Name == nil {
-				continue
-			}
-			if d.Recv != nil && len(d.Recv.List) > 0 {
-				add(d.Name.Name, "method", receiverType(d.Recv), d.Name.Pos())
-			} else {
-				add(d.Name.Name, "func", "", d.Name.Pos())
-			}
-		case *ast.GenDecl:
-			for _, spec := range d.Specs {
-				switch s := spec.(type) {
-				case *ast.TypeSpec:
-					if s.Name != nil {
-						add(s.Name.Name, "type", "", s.Name.Pos())
-					}
-				case *ast.ValueSpec:
-					kind := "var"
-					if d.Tok == gotoken.CONST {
-						kind = "const"
-					}
-					for _, name := range s.Names {
-						add(name.Name, kind, "", name.Pos())
-					}
-				}
-			}
-		}
+	for _, d := range goDeclarations(content) {
+		out = append(out, OutlineSymbol{Name: d.symbol.Name, Kind: declarationKind(d.symbol.Kind),
+			Receiver: d.receiver, Line: d.symbol.Line, Column: d.column})
 	}
 	return out
 }
@@ -427,7 +383,7 @@ func receiverType(recv *ast.FieldList) string {
 // navTarget builds a NavigationTarget from a token position. Line and Column
 // are 0-based to match the editor's coordinate system.
 func navTarget(filePath string, pos gotoken.Pos, fset *gotoken.FileSet, name, kind string) *NavigationTarget {
-	p := fset.Position(pos)
+	p := fset.PositionFor(pos, false)
 	return &NavigationTarget{
 		FilePath: filePath,
 		Line:     p.Line - 1,
@@ -435,58 +391,6 @@ func navTarget(filePath string, pos gotoken.Pos, fset *gotoken.FileSet, name, ki
 		Name:     name,
 		Kind:     kind,
 	}
-}
-
-// findInContentRegex is the tolerant fallback used when source does not parse.
-// It scans for a definition of word line by line.
-func findInContentRegex(word, filePath, content string) *NavigationTarget {
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// func FuncName( ... or func (receiver) MethodName( ...
-		if strings.HasPrefix(trimmed, "func ") {
-			rest := trimmed[5:]
-			kind := "func"
-			// Check for method: func (r *Type) Name(
-			if strings.HasPrefix(rest, "(") {
-				closeP := strings.Index(rest, ")")
-				if closeP >= 0 {
-					rest = strings.TrimSpace(rest[closeP+1:])
-					kind = "method"
-				}
-			}
-			// rest now starts with the function/method name
-			nameEnd := strings.IndexAny(rest, "( \t")
-			if nameEnd > 0 {
-				name := rest[:nameEnd]
-				if name == word {
-					return &NavigationTarget{FilePath: filePath, Line: i, Name: name, Kind: kind}
-				}
-			}
-		}
-
-		// type TypeName struct/interface/...
-		if strings.HasPrefix(trimmed, "type ") {
-			parts := strings.Fields(trimmed)
-			if len(parts) >= 2 && parts[1] == word {
-				return &NavigationTarget{FilePath: filePath, Line: i, Name: word, Kind: "type"}
-			}
-		}
-
-		// var VarName ... or const ConstName ...
-		if strings.HasPrefix(trimmed, "var ") || strings.HasPrefix(trimmed, "const ") {
-			parts := strings.Fields(trimmed)
-			if len(parts) >= 2 {
-				// Strip trailing type annotation or '='
-				name := strings.TrimRight(parts[1], "=")
-				if name == word {
-					return &NavigationTarget{FilePath: filePath, Line: i, Name: word, Kind: "var"}
-				}
-			}
-		}
-	}
-	return nil
 }
 
 // findGuiPackageDir walks up from the current file's directory looking for

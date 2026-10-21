@@ -492,7 +492,7 @@ func TestRecentFilesRoundTrip(t *testing.T) {
 		}
 	}
 
-	p := newPreferences()
+	p := testPreferences(t)
 
 	// Push in order a → b → c. Front-of-list is c, then b, then a.
 	for _, path := range paths {
@@ -538,14 +538,15 @@ func TestPreferencesWindowSize(t *testing.T) {
 	t.Setenv("HOME", tmp)            // macOS Application Support path
 	t.Setenv("APPDATA", tmp)         // Windows Roaming path
 
-	p := newPreferences()
+	p := testPreferences(t)
 	w, h := p.WindowSize()
 	if w < 320 || h < 240 {
 		t.Errorf("default WindowSize = (%d, %d), expected ≥ (320, 240)", w, h)
 	}
 
 	p.SetWindowSize(1500, 950)
-	p2 := newPreferences()
+	flushTestPreferences(t, p)
+	p2 := testPreferences(t)
 	if w2, h2 := p2.WindowSize(); w2 != 1500 || h2 != 950 {
 		t.Errorf("after SetWindowSize(1500, 950): WindowSize() = (%d, %d)", w2, h2)
 	}

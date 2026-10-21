@@ -25,6 +25,7 @@ const (
 	SymVar    = 2
 	SymConst  = 3
 	SymMethod = 4
+	SymMacro  = 5
 )
 
 // SymbolKindLabel returns a short display label for a symbol kind (exported).
@@ -48,6 +49,8 @@ func symbolKindLabel(kind int) string {
 		return "v"
 	case SymConst:
 		return "c"
+	case SymMacro:
+		return "M"
 	case SymMethod:
 		return "m"
 	default:
@@ -66,6 +69,8 @@ func symbolKindColor(kind int) paint.Color {
 		return paint.Color{R: 206, G: 145, B: 120, A: 255} // orange
 	case SymConst:
 		return paint.Color{R: 181, G: 137, B: 214, A: 255} // purple
+	case SymMacro:
+		return paint.Color{R: 181, G: 137, B: 214, A: 255}
 	case SymMethod:
 		return paint.Color{R: 78, G: 201, B: 176, A: 255} // teal
 	default:
@@ -76,7 +81,7 @@ func symbolKindColor(kind int) paint.Color {
 // --- Symbol Parser ---
 
 // ParseSymbols returns an independent snapshot of the current Go declarations
-// found by simple line-by-line pattern matching. Parsing is shared with the
+// found by a tolerant, comment/string-aware Go declaration model. Parsing is shared with the
 // breadcrumb and test gutter and runs once per text revision. Modifying the
 // returned slice cannot change the editor's cached symbols.
 func (this *CodeEditor) ParseSymbols() []CodeSymbol {
@@ -84,98 +89,10 @@ func (this *CodeEditor) ParseSymbols() []CodeSymbol {
 }
 
 func parseGoCodeSymbols(lines []string) []CodeSymbol {
+	declarations := goDeclarations(strings.Join(lines, "\n"))
 	var symbols []CodeSymbol
-	inVarBlock := false
-	inConstBlock := false
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Skip empty lines and comments
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
-			continue
-		}
-
-		// Detect var/const block open
-		if trimmed == "var (" {
-			inVarBlock = true
-			continue
-		}
-		if trimmed == "const (" {
-			inConstBlock = true
-			continue
-		}
-
-		// Detect block close
-		if (inVarBlock || inConstBlock) && trimmed == ")" {
-			inVarBlock = false
-			inConstBlock = false
-			continue
-		}
-
-		// Inside var block
-		if inVarBlock {
-			name := extractBlockDeclName(trimmed)
-			if name != "" {
-				symbols = append(symbols, CodeSymbol{
-					Name:   name,
-					Kind:   SymVar,
-					Line:   i,
-					Detail: "var",
-				})
-			}
-			continue
-		}
-
-		// Inside const block
-		if inConstBlock {
-			name := extractBlockDeclName(trimmed)
-			if name != "" {
-				symbols = append(symbols, CodeSymbol{
-					Name:   name,
-					Kind:   SymConst,
-					Line:   i,
-					Detail: "const",
-				})
-			}
-			continue
-		}
-
-		// func declarations
-		if strings.HasPrefix(trimmed, "func ") {
-			sym := parseFuncLine(trimmed, i)
-			if sym != nil {
-				symbols = append(symbols, *sym)
-			}
-			continue
-		}
-
-		// type declarations
-		if strings.HasPrefix(trimmed, "type ") {
-			sym := parseTypeLine(trimmed, i)
-			if sym != nil {
-				symbols = append(symbols, *sym)
-			}
-			continue
-		}
-
-		// Single-line var
-		if strings.HasPrefix(trimmed, "var ") {
-			sym := parseVarLine(trimmed, i)
-			if sym != nil {
-				symbols = append(symbols, *sym)
-			}
-			continue
-		}
-
-		// Single-line const
-		if strings.HasPrefix(trimmed, "const ") {
-			sym := parseConstLine(trimmed, i)
-			if sym != nil {
-				symbols = append(symbols, *sym)
-			}
-			continue
-		}
+	for _, declaration := range declarations {
+		symbols = append(symbols, declaration.symbol)
 	}
 	return symbols
 }

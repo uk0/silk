@@ -37,9 +37,8 @@ var paletteCommands []paletteCommand
 // re-implementing the action body.
 //
 // Every silkide action that has a stable user-facing name should
-// land here. Actions that aren't safe to run from the palette (e.g.
-// modal dialogs that the palette dialog itself can't dismiss
-// cleanly) should be left out.
+// land here. Commands run after the palette's modal loop has completely
+// unwound, so a command can safely open its own modal dialog.
 func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	paletteCommands = nil
 	add := func(name, hint string, fn func()) {
@@ -184,7 +183,39 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	})
 	add("Fit to View", actionKeyHint()+"+Shift+0", func() { fitCanvasToView(designCanvas) })
 
+	add("Refresh Editor Git Markers", "", func() { refreshActiveEditorGit(editorTabs) })
 	// Navigation.
+	add("Show Files", "", func() {
+		if globalFileExplorer != nil {
+			dockSetActiveView(globalLeftDock, globalFileExplorer)
+			globalFileExplorer.SetFocus()
+		}
+	})
+	add("Filter Project Files", "", func() {
+		if globalFileExplorer != nil {
+			dockSetActiveView(globalLeftDock, globalFileExplorer)
+			globalFileExplorer.ShowFilterDialog()
+		}
+	})
+	add("Refresh Project Files", "", func() {
+		if globalFileExplorer != nil {
+			globalFileExplorer.Refresh()
+		}
+	})
+	add("Toggle Hidden Files", "", func() {
+		if globalFileExplorer != nil {
+			globalFileExplorer.SetShowHidden(!globalFileExplorer.ShowHidden())
+		}
+	})
+	add("Reveal Active File in Explorer", "", func() {
+		path := activeEditorPath(editorTabs)
+		if path == "" || globalFileExplorer == nil || !globalFileExplorer.RevealPath(path) {
+			silkideToast(i18n.T("The active file is not inside the project"), gui.ToastInfo)
+			return
+		}
+		dockSetActiveView(globalLeftDock, globalFileExplorer)
+		globalFileExplorer.SetFocus()
+	})
 	add("Find in Files", "Cmd+Shift+F", func() {
 		if globalSearch != nil {
 			dockSetActiveView(globalLeftDock, globalSearch)
@@ -391,6 +422,36 @@ func showCommandPalette(parent gui.IWidget) {
 		return
 	}
 
+	dlg, selection := newCommandPalette(parent)
+	// EndModal requests exit; it does not unwind the native modal loop or
+	// re-enable its owner immediately. Opening another dialog inside the submit
+	// callback leaves both modals alive and input routed to a disabled owner.
+	result := dlg.ShowModal()
+	if reportDialogFailure(dlg.LastError()) {
+		return
+	}
+	selection.run(result)
+}
+
+type paletteSelection struct{ command *paletteCommand }
+
+func (s *paletteSelection) choose(dlg *gui.Dialog, command paletteCommand) {
+	if s.command != nil {
+		return
+	}
+	s.command = &command
+	dismissDialog(dlg)
+}
+func (s *paletteSelection) run(result gui.DialogResult) {
+	command := s.command
+	s.command = nil // consume before invoking a possibly reentrant command
+	if result == gui.DialogOK && command != nil && command.Fn != nil {
+		command.Fn()
+	}
+}
+
+func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
+	selection := &paletteSelection{}
 	dlg := gui.NewDialog(i18n.T("Command Palette"), parent)
 	box := gui.NewVBox()
 	box.SetSpacing(6)
@@ -399,6 +460,7 @@ func showCommandPalette(parent gui.IWidget) {
 	box.AddWidget(input)
 
 	list := gui.NewListWidget()
+	list.SetFillAvailable(true)
 	list.SetSelectionVisible(true)
 	box.AddWidget(list)
 
@@ -424,8 +486,7 @@ func showCommandPalette(parent gui.IWidget) {
 			return
 		}
 		if cmd, ok := list.Item(0).Data.(paletteCommand); ok {
-			dismissDialog(dlg)
-			cmd.Fn()
+			selection.choose(dlg, cmd)
 		}
 	})
 
@@ -436,14 +497,13 @@ func showCommandPalette(parent gui.IWidget) {
 			return
 		}
 		if cmd, ok := list.Item(idx).Data.(paletteCommand); ok {
-			dismissDialog(dlg)
-			cmd.Fn()
+			selection.choose(dlg, cmd)
 		}
 	})
 
 	dlg.SetContent(box)
 	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
 	dlg.SetSize(520, 420)
-	input.SetFocus()
-	dlg.ShowModal()
+	dlg.SetInitialFocus(input)
+	return dlg, selection
 }

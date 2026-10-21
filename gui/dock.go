@@ -50,15 +50,16 @@ type Dock struct {
 	Widget
 	Brick
 
-	tabH    float64
-	headH   float64 // tab + toolbar
-	menuW   float64
-	menuH   float64
-	tabbar  *TabBar
-	minBtn  *Button
-	maxBtn  *Button
-	hoverHT dockHitTest
-	downHT  dockHitTest
+	tabH           float64
+	headH          float64 // tab + toolbar
+	menuW          float64
+	menuH          float64
+	compactActions bool
+	tabbar         *TabBar
+	minBtn         *Button
+	maxBtn         *Button
+	hoverHT        dockHitTest
+	downHT         dockHitTest
 
 	isMainDock bool
 	isDown     bool
@@ -608,9 +609,25 @@ func (this *Dock) loadViewMenu(view IWidget) (menu *Menu) {
 	if menu == nil {
 		core.Debug("(*Dock) loadViewMenu(...): failed to load menu.")
 	} else {
+		menu.SetCompact(this.compactActions)
 		menu.SetParent(this)
 	}
 	return
+}
+
+// SetCompactActions applies the same density to cached and subsequently-created
+// view action strips, without changing the view's own form controls.
+func (this *Dock) SetCompactActions(on bool) {
+	if this.compactActions == on {
+		return
+	}
+	this.compactActions = on
+	for _, menu := range this.menuCache {
+		if menu != nil {
+			menu.SetCompact(on)
+		}
+	}
+	this.Layout()
 }
 
 func (this *Dock) switchMenu() { //core.Debug("(this *Dock) switchMenu(view IWidget)")

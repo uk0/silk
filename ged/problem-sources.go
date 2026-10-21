@@ -29,6 +29,9 @@ const (
 	// ProblemDesign is a widget in the scene the generator cannot build,
 	// recomputed each time 预览/导出/运行 asks.
 	ProblemDesign
+	// ProblemLanguage and ProblemMacro own per-document editor diagnostics.
+	ProblemLanguage
+	ProblemMacro
 )
 
 // ProblemSource identifies the rows one writer owns. It is comparable, so a

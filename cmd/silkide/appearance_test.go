@@ -18,6 +18,7 @@ func TestAppearancePersistsAndAppliesWithoutChangingBuffer(t *testing.T) {
 	if err := p.SetAppearance(a); err != nil {
 		t.Fatal(err)
 	}
+	flushTestPreferences(t, p)
 	q := &preferences{store: settings.New(p.store.Path())}
 	if q.Appearance() != a {
 		t.Fatalf("readback %#v", q.Appearance())

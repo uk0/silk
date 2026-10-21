@@ -140,6 +140,7 @@ type Window struct {
 	hasPendingPos   bool
 
 	modalRet interface{}
+	modalErr error
 
 	lastDndWidget IWidget
 	dndCtx        *dndContext
@@ -176,10 +177,10 @@ func init() {
 		return 1
 	})
 	glfwReady = glfwInitErr == nil
-	if glfwReady {
-		// Only initialized GLFW may be called by off-thread Post() wakeups.
-		SetUIWakeup(glfwWakeup.wake)
-	}
+	// A successful GLFW probe does not mean Cocoa's event queue is ready.
+	// Off-thread PostEmptyEvent before the first native window can SIGTRAP
+	// inside AppKit. Keep model-only / pre-window Post purely in Go; create()
+	// installs the wake hook after a real window has initialized the backend.
 	core.Debug("Main screen DPI: ", screenDpi)
 
 	initCursors()
@@ -399,6 +400,7 @@ func (this *Window) create(p *Window, wt WindowType) error {
 		gw.SetSizeLimits(320, 240, glfw.DontCare, glfw.DontCare)
 	}
 
+	SetUIWakeup(glfwWakeup.wake) // also wakes tasks queued before this window
 	core.Debug("window create succeed.")
 	return nil
 }
@@ -1568,7 +1570,7 @@ func markAllWindowsDirty() {
 		w.dirty = true
 	}
 	// Wake the event loop so the repaint happens promptly.
-	if glfwReady {
+	if glfwReady && len(winMap) > 0 {
 		glfw.PostEmptyEvent()
 	}
 }
@@ -2285,7 +2287,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	if vk == 0 {
 		return
 	}
-	if (action == glfw.Press || action == glfw.Repeat) && win.dispatchEscape(vk, action == glfw.Repeat) {
+	if (action == glfw.Press || action == glfw.Repeat) && (win.dispatchEscape(vk, action == glfw.Repeat) || win.dispatchMessageBoxEnter(vk, action == glfw.Repeat)) {
 		core.Debug("key Escape routed: receiver=", reflect.TypeOf(win.widget), ", modal=", win.inModal)
 		return
 	}
@@ -2293,7 +2295,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	// Global F12: toggle the perf-stats overlay. Handled at the window
 	// layer so it works regardless of which widget has focus (otherwise a
 	// focused CodeEditor would consume the key). Only fires on press.
-	if vk == KeyF12 && action == glfw.Press && ShortcutHandler(currentMods(), vk) == nil {
+	if vk == KeyF12 && action == glfw.Press && win.allowsApplicationShortcuts() && ShortcutHandler(currentMods(), vk) == nil {
 		GlobalPerfStats.Toggle()
 		return
 	}
@@ -2303,7 +2305,7 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	// would eat Cmd+Z for its own undo before the IDE's design-canvas
 	// undo could fire. dispatchShortcut returns true when the key was
 	// consumed by a registered shortcut.
-	if action == glfw.Press && (win.dispatchShortcutOverride(vk) || dispatchShortcut(vk)) {
+	if action == glfw.Press && win.dispatchWindowShortcut(vk) {
 		return
 	}
 
@@ -2544,6 +2546,7 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	}
 
 	this.inModal = true
+	this.modalErr = nil
 	owner := this.ParentWindow()
 	restoreTarget := focusTargetForOwner(owner, focusWidget)
 
@@ -2552,6 +2555,24 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	}
 
 	enabledMap := make(map[*Window]bool)
+	// Install rollback before native activation and user initialization.
+	defer func() {
+		if e := recover(); e != nil {
+			this.modalErr = reportModalPanic(e)
+			this.modalRet = nil // Failed initialization must never return acceptance.
+		}
+		this.inModal = false
+		retParam = this.modalRet
+		this.modalRet = nil
+		focusReturn := prepareTransientFocusReturn(this, owner, restoreTarget, nativeWindowFocused)
+
+		for pw := range enabledMap {
+			pw.SetEnabled(true)
+		}
+		this.Close()
+		focusReturn.queue()
+	}()
+
 	for pw := this.ParentWindow(); pw != nil; pw = pw.ParentWindow() {
 		if pw.IsEnabled() {
 			enabledMap[pw] = true
@@ -2567,22 +2588,6 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 	if cbOnShow != nil {
 		cbOnShow()
 	}
-
-	defer func() {
-		if e := recover(); e != nil {
-			core.Warn(fmt.Sprintf("Recover modalLoop() : %v ", e))
-		}
-		this.inModal = false
-		retParam = this.modalRet
-		this.modalRet = nil
-		focusReturn := prepareTransientFocusReturn(this, owner, restoreTarget, nativeWindowFocused)
-
-		for pw := range enabledMap {
-			pw.SetEnabled(true)
-		}
-		this.Close()
-		focusReturn.queue()
-	}()
 
 	for this.inModal && !shouldQuit {
 		waitAdaptiveGLFWFrame()

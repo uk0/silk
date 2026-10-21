@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"fmt"
+	"github.com/uk0/silk/diagnostic"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,20 +15,23 @@ import (
 
 var macroBusy bool // UI-thread-owned; serializes explicit expansion requests.
 func canExpandMacro(tabs *gui.TabWidget, canvas *ged.GedView) bool {
-	return !macroBusy && documentMode(tabs, canvas) == modeEdit && activeEditor(tabs) != nil && strings.EqualFold(filepath.Ext(activeEditorPath(tabs)), ".silkgo")
+	return !macroBusy && activeFileRename == nil && documentMode(tabs, canvas) == modeEdit && activeEditor(tabs) != nil && strings.EqualFold(filepath.Ext(activeEditorPath(tabs)), ".silkgo")
 }
 func macroOutputPath(path string) string {
 	return strings.TrimSuffix(path, filepath.Ext(path)) + "_gen.go"
 }
 func writeMacroOutput(tabs *gui.TabWidget, path string, data []byte) error {
 	output := macroOutputPath(path)
+	if fileRenameAffects(path) || fileRenameAffects(output) {
+		return renameBusyError(path, "rename is still running")
+	}
 	if target := openEditors[output]; target != nil {
 		disk, err := os.ReadFile(output)
 		if err != nil {
-			return err
+			return diagnostic.New(diagnostic.FileRead, "cannot read generated output", err).At(diagnostic.Location{File: output})
 		}
 		if target.Text() != string(disk) {
-			return fmt.Errorf("generated output has unsaved edits: %s", output)
+			return diagnostic.New(diagnostic.MacroUnsaved, "generated output has unsaved edits", nil).At(diagnostic.Location{File: output})
 		}
 	}
 	if err := macro.WriteFile(output, data); err != nil {
@@ -42,8 +45,11 @@ func writeMacroOutput(tabs *gui.TabWidget, path string, data []byte) error {
 	return nil
 }
 func expandActiveMacro(tabs *gui.TabWidget, canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if !canExpandMacro(tabs, canvas) {
-		silkideToast(i18n.T("Open a saved .silkgo document first"), gui.ToastWarning)
+		silkideToast(diagnostic.New(diagnostic.MacroUnsaved, i18n.T("Open a saved .silkgo document first"), nil).Error(), gui.ToastWarning)
 		return
 	}
 	path := activeEditorPath(tabs)
@@ -51,7 +57,7 @@ func expandActiveMacro(tabs *gui.TabWidget, canvas *ged.GedView) {
 	source := editor.Text()
 	disk, err := os.ReadFile(path)
 	if err != nil || string(disk) != source {
-		silkideToast(i18n.T("Save the macro source before expanding"), gui.ToastWarning)
+		silkideToast(diagnostic.New(diagnostic.MacroUnsaved, i18n.T("Save the macro source before expanding"), err).At(diagnostic.Location{File: path}).Error(), gui.ToastWarning)
 		return
 	}
 	macroBusy = true
@@ -65,7 +71,7 @@ func expandActiveMacro(tabs *gui.TabWidget, canvas *ged.GedView) {
 			}
 			current, readErr := os.ReadFile(path)
 			if readErr != nil || !bytes.Equal(current, disk) {
-				silkideToast(i18n.T("Macro source changed; expand again"), gui.ToastWarning)
+				silkideToast(diagnostic.New(diagnostic.MacroStale, i18n.T("Macro source changed; expand again"), readErr).Error(), gui.ToastWarning)
 				return
 			}
 			if err == nil {
@@ -74,7 +80,7 @@ func expandActiveMacro(tabs *gui.TabWidget, canvas *ged.GedView) {
 			if err != nil {
 				reportBuildOutput("macro: " + err.Error())
 				dockSetActiveView(globalBottomDock, globalBuildOutput)
-				silkideToast(i18n.T("Macro expansion failed; output unchanged"), gui.ToastError)
+				silkideToast("["+string(diagnostic.CodeOf(err))+"] "+i18n.T("Macro expansion failed; output unchanged"), gui.ToastError)
 				return
 			}
 			output := macroOutputPath(path)

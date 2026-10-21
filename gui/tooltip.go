@@ -157,6 +157,16 @@ func HideToolTip() {
 	hideToolTipLocked()
 }
 
+// HideToolTipFor dismisses only this owner's hint; a background editor update
+// must not remove a tooltip belonging to another editor or toolbar button.
+func HideToolTipFor(owner IWidget) {
+	tooltipMu.Lock()
+	defer tooltipMu.Unlock()
+	if currentTooltip != nil && currentTooltip.owner == owner {
+		hideToolTipLocked()
+	}
+}
+
 // IsToolTipVisible returns true if a tooltip is currently shown.
 func IsToolTipVisible() bool {
 	tooltipMu.Lock()

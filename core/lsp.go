@@ -130,26 +130,44 @@ func ReadLSPMessage(r *bufio.Reader) (*LSPMessage, error) {
 //
 // JSONRPC 字段为空时默认填 "2.0", 让调用方可以省事地只填 Method/Params
 func WriteLSPMessage(w io.Writer, m *LSPMessage) error {
-	if w == nil {
-		return errors.New("lsp: nil writer")
+	header, body, err := marshalLSPFrame(m)
+	if err != nil {
+		return err
 	}
+	return writeLSPFrame(w, header, body)
+}
+
+func marshalLSPFrame(m *LSPMessage) (string, []byte, error) {
 	if m == nil {
-		return errors.New("lsp: nil message")
+		return "", nil, errors.New("lsp: nil message")
 	}
-	// 不修改调用方传入的对象: 复制一份再写回 JSONRPC
 	out := *m
 	if out.JSONRPC == "" {
 		out.JSONRPC = "2.0"
 	}
 	body, err := json.Marshal(&out)
 	if err != nil {
-		return fmt.Errorf("lsp: encode body: %w", err)
+		return "", nil, fmt.Errorf("lsp: encode body: %w", err)
 	}
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))
-	if _, err := io.WriteString(w, header); err != nil {
+	return fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body)), body, nil
+}
+
+func writeLSPFrame(w io.Writer, header string, body []byte) error {
+	if w == nil {
+		return errors.New("lsp: nil writer")
+	}
+	n, err := io.WriteString(w, header)
+	if err == nil && n != len(header) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		return fmt.Errorf("lsp: write header: %w", err)
 	}
-	if _, err := w.Write(body); err != nil {
+	n, err = w.Write(body)
+	if err == nil && n != len(body) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		return fmt.Errorf("lsp: write body: %w", err)
 	}
 	return nil

@@ -26,6 +26,23 @@ type Menu struct {
 	// 鼠标悬停仍走全局 mouseHoverWidget; 键盘高亮通过把高亮项设为
 	// 悬停项来复用既有的菜单项高亮绘制(见 setHighlight).
 	highlight int
+	compact   bool
+}
+
+// SetCompact opts a horizontal menu bar into dense desktop chrome. Popup menu
+// row metrics remain unchanged so text, shortcuts and keyboard targets still fit.
+func (this *Menu) SetCompact(on bool) {
+	if this.compact == on {
+		return
+	}
+	this.compact = on
+	for _, item := range this.items {
+		if b, ok := item.(*Button); ok {
+			b.invalidateHints()
+		}
+	}
+	this.Layout()
+	this.Update()
 }
 
 // 新建菜单

@@ -50,7 +50,7 @@ func (p *preferences) SetWorkspaceSession(state workspaceSession) {
 	_ = p.store.SetString("session/workspace", string(encoded))
 	// Keep the old list readable by earlier releases and fallback recovery.
 	_ = p.store.SetStringList("session/open", state.paths())
-	_ = p.store.Sync()
+	_ = p.requestSave()
 }
 
 func captureWorkspaceSession(tabs *gui.TabWidget, canvas *ged.GedView) workspaceSession {

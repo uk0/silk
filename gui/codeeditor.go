@@ -225,12 +225,17 @@ const (
 // CodeEditor is a syntax-highlighted code editing widget with line numbers,
 // cursor, and basic editing support, designed for Go source code.
 type CodeEditor struct {
-	onCompletionRequested func()
-	customColors          EditorColors
-	customPalette         *editorPalette
-	paletteRev            uint64
-	tabSize               int
-	savedText             string
+	syntaxHighlights          map[int][]SyntaxHighlight
+	syntaxRevision            uint64
+	additionalSymbols         []CodeSymbol
+	additionalSymbolsRevision uint64
+	symbolsRevision           uint64 // text and asynchronous provider invalidation
+	onCompletionRequested     func()
+	customColors              EditorColors
+	customPalette             *editorPalette
+	paletteRev                uint64
+	tabSize                   int
+	savedText                 string
 	Widget
 	// Text and its derived metadata are refreshed at the edit boundary, never
 	// by idle title polling or painting. Low-level splice helpers mark dirty
@@ -378,8 +383,9 @@ type CodeEditor struct {
 	// hoverReqLine/hoverReqCol track the identifier (line, word-start col) last
 	// reported via cbHoverRequested so we fire exactly once per identifier as the
 	// mouse moves, instead of on every pixel. -1 means "nothing reported yet".
-	hoverReqLine int
-	hoverReqCol  int
+	hoverReqLine         int
+	hoverReqCol          int
+	languageHintRevision uint64
 
 	// --- Run-Test Gutter Marker ---
 	// cbTestRun is fired when the user clicks the run-test ▶ gutter marker next
@@ -396,7 +402,12 @@ type CodeEditor struct {
 	cbBreakpointToggled func(line int, on bool)
 
 	// --- Git Gutter ---
-	gitStatus map[int]GitLineStatus
+	gitStatus          map[int]GitLineStatus
+	gitSlot            *gitStatusSlot
+	gitService         *gitStatusService // private deterministic scheduler seam
+	gitLoading         bool
+	gitErr             error
+	cbGitStatusChanged func()
 
 	// --- Coverage Gutter ---
 	// coverage maps line (0-based, matching breakpoints/bookmarks) -> covered.
@@ -497,9 +508,10 @@ type CodeEditor struct {
 // alongside tokens because tokenizeLine returns both and downstream code
 // (drawHighlightedLine, minimap) consumes both.
 type tokenCacheEntry struct {
-	hash      uint64
-	tokens    []token
-	nextBlock bool
+	syntaxRevision uint64
+	hash           uint64
+	tokens         []token
+	nextBlock      bool
 }
 
 // NewCodeEditor creates a new code editor widget.
@@ -677,6 +689,8 @@ func (this *CodeEditor) cacheText(text string) {
 	if text != this.text {
 		this.text = text
 		this.textRevision++
+		this.symbolsRevision++
+		this.DismissLanguageHints()
 		this.textRuneCount = utf8.RuneCountInString(text)
 	}
 	this.textDirty = false
@@ -798,29 +812,9 @@ func utf16ColumnOf(line string, runeCol int) int {
 	return col
 }
 
-// runeColFromUTF16 is the inverse of utf16ColumnOf: given a UTF-16 code-unit
-// column (as LSP reports), return the rune index in line. Clamps to the line's
-// rune length. A UTF-16 column landing mid-surrogate rounds down to that rune.
+// runeColFromUTF16 is kept internal for occurrence-range conversion.
 func runeColFromUTF16(line string, utf16Col int) int {
-	if utf16Col <= 0 {
-		return 0
-	}
-	runes := []rune(line)
-	units := 0
-	for i, r := range runes {
-		n := utf16.RuneLen(r)
-		if n <= 0 {
-			n = 1
-		}
-		if units+n > utf16Col {
-			return i
-		}
-		units += n
-		if units == utf16Col {
-			return i + 1
-		}
-	}
-	return len(runes)
+	return RuneColumnFromUTF16(line, utf16Col)
 }
 
 // HighlightRange is a host-fed occurrence-highlight range in LSP coordinates:
@@ -944,22 +938,24 @@ func (this *CodeEditor) SigWidgetClicked(fn func(string)) {
 
 // SetFilePath stores the file path this editor is editing and refreshes git status.
 func (this *CodeEditor) SetFilePath(path string) {
+	if this.filePath != path {
+		this.CancelGitStatus()
+		this.gitStatus = nil
+		this.gitErr = nil
+	}
 	this.filePath = path
 	this.RefreshGitStatus()
+	this.Update()
 }
 
-// RefreshGitStatus re-runs git diff and updates the gutter markers.
-func (this *CodeEditor) RefreshGitStatus() {
-	if this.filePath != "" {
-		this.gitStatus = GitDiff(this.filePath)
-	} else {
-		this.gitStatus = nil
-	}
-}
-
-// GitStatus returns the git line status map (1-based line numbers).
+// GitLineStatuses returns an owned copy (1-based lines). Like all editor state,
+// call on the UI thread; use GitStatusLoading to distinguish pending work.
 func (this *CodeEditor) GitLineStatuses() map[int]GitLineStatus {
-	return this.gitStatus
+	out := make(map[int]GitLineStatus, len(this.gitStatus))
+	for line, status := range this.gitStatus {
+		out[line] = status
+	}
+	return out
 }
 
 // FilePath returns the file path this editor is editing.
@@ -1099,8 +1095,9 @@ func (this *CodeEditor) ScrollToLine(line int) {
 }
 
 // ScrollToLineCol is ScrollToLine that also lands the caret on col (clamped to
-// the line). Used by LSP go-to-definition so F12 puts the cursor on the symbol,
-// not just its line. col < 0 behaves like ScrollToLine (col 0).
+// the line). Both coordinates are zero-based; col counts Unicode code points,
+// not bytes or UTF-16 units. LSP hosts should use ScrollToUTF16Position.
+// col < 0 behaves like ScrollToLine (col 0).
 func (this *CodeEditor) ScrollToLineCol(line, col int) {
 	this.ScrollToLine(line)
 	if col > 0 && this.cursorLine >= 0 && this.cursorLine < len(this.lines) {
@@ -4068,50 +4065,37 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	sfe := smallFont.FontExtents()
 	textY := y + sfe.Ascent + (sbH-sfe.Height)/2
 
-	// Line:Column
-	g.SetBrush1(pal.panelText)
-	lnCol := fmt.Sprintf("Ln %d, Col %d", this.cursorLine+1, this.cursorCol+1)
-	g.DrawText1(10, textY, lnCol)
-
-	// Character count / Line count
 	this.Text() // also covers an unpublished low-level splice
-	charCount := this.textRuneCount
-	lineCount := len(this.lines)
-	countStr := fmt.Sprintf("%d chars, %d lines", charCount, lineCount)
-	lnColExt := smallFont.TextExtents(lnCol)
-	g.SetBrush1(pal.panelDimText)
-	g.DrawText1(lnColExt.XAdvance+30, textY, countStr)
-
-	// Right-aligned items
-	rightX := w - 10.0
-
-	// Word wrap status
 	wrapStr := "Wrap: Off"
 	if this.wordWrap {
 		wrapStr = "Wrap: On"
 	}
-	wrapExt := smallFont.TextExtents(wrapStr)
-	rightX -= wrapExt.XAdvance
-	g.SetBrush1(pal.panelDimText)
-	g.DrawText1(rightX, textY, wrapStr)
-
-	rightX -= 20
-
-	// Language
-	langStr := "Go"
-	langExt := smallFont.TextExtents(langStr)
-	rightX -= langExt.XAdvance
-	g.SetBrush1(pal.panelDimText)
-	g.DrawText1(rightX, textY, langStr)
-
-	rightX -= 20
-
-	// Encoding
-	encStr := "UTF-8"
-	encExt := smallFont.TextExtents(encStr)
-	rightX -= encExt.XAdvance
-	g.SetBrush1(pal.panelDimText)
-	g.DrawText1(rightX, textY, encStr)
+	labels := [5]string{
+		fmt.Sprintf("Ln %d, Col %d", this.cursorLine+1, this.cursorCol+1),
+		fmt.Sprintf("%d chars, %d lines", this.textRuneCount, len(this.lines)),
+		"UTF-8", "Go", wrapStr,
+	}
+	var widths [5]float64
+	for i, label := range labels {
+		ext := smallFont.TextExtents(label)
+		widths[i] = math.Max(ext.Width, ext.XAdvance)
+	}
+	if widths[0] > w-20 {
+		labels[0] = fmt.Sprintf("%d:%d", this.cursorLine+1, this.cursorCol+1)
+		ext := smallFont.TextExtents(labels[0])
+		widths[0] = math.Max(ext.Width, ext.XAdvance)
+	}
+	for i, x := range editorStatusSlots(w, widths) {
+		if x < 0 {
+			continue
+		}
+		if i == 0 {
+			g.SetBrush1(pal.panelText)
+		} else {
+			g.SetBrush1(pal.panelDimText)
+		}
+		g.DrawText1(x, textY, labels[i])
+	}
 }
 
 // ----- Tokenizer -----
@@ -4346,14 +4330,19 @@ func tokenLineHash(line string, inBlock bool) uint64 {
 // is small (one token), and a hash hit still skips the per-rune scan.
 func (this *CodeEditor) tokenizeLineCached(idx int, line string, inBlock bool) ([]token, bool) {
 	h := tokenLineHash(line, inBlock)
-	if e, ok := this.tokenCache[idx]; ok && e.hash == h {
+	var overlayRevision uint64
+	if this.syntaxRevision == this.TextRevision() && len(this.syntaxHighlights[idx]) > 0 {
+		overlayRevision = this.syntaxRevision
+	}
+	if e, ok := this.tokenCache[idx]; ok && e.hash == h && e.syntaxRevision == overlayRevision {
 		return e.tokens, e.nextBlock
 	}
 	tokens, next := tokenizeLine(line, inBlock)
+	tokens = this.overlayTokens(idx, tokens)
 	if this.tokenCache == nil {
 		this.tokenCache = make(map[int]tokenCacheEntry)
 	}
-	this.tokenCache[idx] = tokenCacheEntry{hash: h, tokens: tokens, nextBlock: next}
+	this.tokenCache[idx] = tokenCacheEntry{hash: h, tokens: tokens, nextBlock: next, syntaxRevision: overlayRevision}
 	return tokens, next
 }
 
@@ -4432,6 +4421,7 @@ func (this *CodeEditor) posFromXY(x, y float64) (int, int) {
 }
 
 func (this *CodeEditor) OnLeftDown(x, y float64) {
+	this.DismissLanguageHints()
 	this.SetFocus()
 
 	// If clicking in status bar area, ignore
@@ -4679,10 +4669,12 @@ func (this *CodeEditor) OnMouseMove(x, y float64) {
 		line, _ := this.posFromXY(x, y)
 		if msg, ok := this.errorLines[line]; ok {
 			if this.hoverErrorLine != line {
+				this.DismissLanguageHints()
 				this.hoverErrorLine = line
 				gx, gy := this.MapToGlobal(x, y)
 				ShowToolTip(gx, gy, msg)
 			}
+			return // diagnostics own this hover; an LSP response must not replace it
 		} else {
 			if this.hoverErrorLine >= 0 {
 				this.hoverErrorLine = -1
@@ -4713,18 +4705,21 @@ func (this *CodeEditor) maybeFireHover(x, y float64) {
 		return
 	}
 	if this.completion != nil && this.completion.visible {
+		this.DismissLanguageHints()
 		return
 	}
 	line, col, ok := this.hoverIdentAt(x, y)
 	if !ok {
 		// Off any identifier: reset so re-entering the same word re-fires.
-		this.hoverReqLine = -1
-		this.hoverReqCol = -1
+		if this.hoverReqLine >= 0 {
+			this.DismissLanguageHints()
+		}
 		return
 	}
 	if line == this.hoverReqLine && col == this.hoverReqCol {
 		return // still the same identifier — host already got this event
 	}
+	this.DismissLanguageHints()
 	this.hoverReqLine = line
 	this.hoverReqCol = col
 	gx, gy := this.MapToGlobal(x, y)
@@ -4946,6 +4941,7 @@ func (this *CodeEditor) repositionCaretForRightClick(x, y float64) {
 // the word the user actually right-clicked, not wherever the caret
 // happened to be.
 func (this *CodeEditor) OnRightDown(x, y float64) {
+	this.DismissLanguageHints()
 	this.SetFocus()
 	this.repositionCaretForRightClick(x, y)
 
@@ -4989,6 +4985,7 @@ func (this *CodeEditor) posInSelection(line, col int) bool {
 
 // OnMouseLeave clears hover link state when the cursor leaves the editor.
 func (this *CodeEditor) OnMouseLeave() {
+	this.DismissLanguageHints()
 	if this.hoverLinkLine >= 0 {
 		this.hoverLinkLine = -1
 		this.hoverLinkWord = ""
@@ -5001,6 +4998,7 @@ func (this *CodeEditor) OnMouseLeave() {
 }
 
 func (this *CodeEditor) OnTextInput(s string) {
+	this.DismissLanguageHints()
 	// A snippet session that has advanced past its final stop ($0) ends as soon
 	// as buffer content is typed again; while it is still active, typing edits
 	// the current placeholder and leaves the session in place.
@@ -5271,6 +5269,7 @@ func (this *CodeEditor) currentWordPrefix() string {
 }
 
 func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
+	this.DismissLanguageHints()
 	// --- Rename refactoring key routing ---
 	if this.renameActive {
 		switch key {
@@ -6261,6 +6260,7 @@ func (this *CodeEditor) pasteClipboard() {
 }
 
 func (this *CodeEditor) OnMouseWheel(x, y, z float64) {
+	this.DismissLanguageHints()
 	fe := this.font.FontExtents()
 	lh := fe.Height + 2
 

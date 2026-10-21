@@ -2,13 +2,12 @@ package settings
 
 import (
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/diagnostic"
 )
 
 // Settings holds an in-memory TDoc-backed key/value store. Reads and
@@ -22,6 +21,14 @@ import (
 // no-ops.
 type Settings struct {
 	mu sync.RWMutex
+
+	// All writer state is protected by mu. The worker copies doc while holding
+	// mu, then performs encoding and disk I/O without it. No idle goroutine.
+	version       uint64
+	flight        *syncFlight
+	pending       bool
+	loadErr       error                          // sticky: never replace a file we failed to load
+	writeSnapshot func(string, *core.TDoc) error // private deterministic I/O seam
 
 	// path is the on-disk file location. Empty for in-memory-only
 	// instances (NewMemory).
@@ -49,8 +56,7 @@ type Settings struct {
 	lastErr error
 
 	// loaded tracks whether the file has been read from disk. We
-	// defer the read to first access so callers that always SetValue
-	// without reading don't pay the IO cost.
+	// defer the read to first access. SetValue also loads existing keys.
 	loaded bool
 }
 
@@ -64,7 +70,7 @@ type arrayContext struct {
 
 // New constructs a Settings rooted at path. The file is not loaded
 // until the first read or write. A path of "" yields an in-memory
-// instance (Sync is then a no-op + sets Status to errInMemoryOnly).
+// instance (Sync is then a no-op and returns nil).
 //
 // For platform-default paths use Default(org, app) — that path
 // resolution is OS-aware (macOS Application Support, XDG on Linux,
@@ -108,13 +114,25 @@ func (s *Settings) loadOnce() {
 		s.doc = core.NewTDoc()
 		return
 	}
-	d, err := core.LoadTDocFile(s.path)
+	// Reject special files and symlinks before opening; preferences are regular
+	// files, not streams. In particular, do not wait on a FIFO during first use.
+	info, statErr := os.Lstat(s.path)
+	var d *core.TDoc
+	err := statErr
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			err = errors.New("settings path is not a regular file")
+		} else {
+			d, err = readSettingsDoc(s.path)
+		}
+	}
 	if err != nil {
-		// Missing file: start empty. Other read errors get surfaced via
-		// Status() but don't prevent runtime use — a fresh Sync will
-		// overwrite if writable.
+		// Runtime defaults remain usable, but never silently overwrite a file
+		// whose original contents we could not read. Recovery requires backing up
+		// and repairing the file, then constructing a fresh Settings instance.
 		if !os.IsNotExist(err) {
-			s.lastErr = err
+			s.loadErr = diagnostic.New(diagnostic.SettingsRead, "cannot load settings; original file protected", err).At(diagnostic.Location{File: s.path})
+			s.lastErr = s.loadErr
 		}
 		s.doc = core.NewTDoc()
 		return
@@ -198,6 +216,7 @@ func (s *Settings) SetValue(key string, value interface{}) error {
 		return err
 	}
 	s.dirty = true
+	s.version++
 	return nil
 }
 
@@ -267,6 +286,7 @@ func (s *Settings) Remove(key string) {
 		node.Clear()
 	}
 	s.dirty = true
+	s.version++
 }
 
 // Clear empties the entire settings store, including all groups.
@@ -274,9 +294,10 @@ func (s *Settings) Remove(key string) {
 func (s *Settings) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.loaded = true
+	s.loadOnce()
 	s.doc = core.NewTDoc()
 	s.dirty = true
+	s.version++
 }
 
 // AllKeys returns every leaf key (no group prefixes), filtered to the
@@ -328,41 +349,6 @@ func collectLeafKeys(node *core.TDoc, prefix string, out *[]string) {
 }
 
 // --- Sync + status ---------------------------------------------------
-
-// Sync flushes pending writes to disk. No-op when nothing has changed
-// since the last Sync, or when this is an in-memory instance. Errors
-// are saved into Status() and returned from this call.
-//
-// Creates parent directories as needed — apps invoked from a fresh
-// install on a host with no ~/.config/MyOrg can still persist on first
-// run.
-func (s *Settings) Sync() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.path == "" {
-		// In-memory mode: no-op success. Marking !dirty so subsequent
-		// calls don't block on the path-empty check repeatedly.
-		s.dirty = false
-		return nil
-	}
-	if !s.loaded {
-		s.loadOnce()
-	}
-	if !s.dirty {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
-		s.lastErr = fmt.Errorf("settings: mkdir %s: %w", filepath.Dir(s.path), err)
-		return s.lastErr
-	}
-	if err := s.doc.SaveFile(s.path); err != nil {
-		s.lastErr = fmt.Errorf("settings: write %s: %w", s.path, err)
-		return s.lastErr
-	}
-	s.dirty = false
-	s.lastErr = nil
-	return nil
-}
 
 // Status returns the most recent IO error, or nil. Cleared on the next
 // successful Sync. Useful for hosts that want to surface a "settings

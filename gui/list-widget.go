@@ -54,8 +54,9 @@ type ListWidget struct {
 	downCol    int
 	isLeftDown bool
 
-	showHover  bool
-	showSelect bool
+	showHover     bool
+	showSelect    bool
+	fillAvailable bool // opt-in viewport sizing; independent of the item count
 
 	sigDragStart func(idx []int) ([]interface{}, DndAction)
 }
@@ -66,6 +67,23 @@ func (this *ListWidget) Init(iw IWidget) {
 	this.activeIndex = -1
 	this.hoverIndex = -1
 	this.showSelect = true
+}
+
+// FillAvailable reports whether layout containers treat this list as a
+// stretchable viewport instead of sizing it to its current item count.
+func (this *ListWidget) FillAvailable() bool { return this.fillAvailable }
+
+// SetFillAvailable opts into filling the parent layout's remaining space.
+// Use it for asynchronously populated search/results panes: an empty list must
+// still have a usable viewport. The default is false for compatibility with
+// content-sized lists and popup hosts. This does not change selection or rows.
+func (this *ListWidget) SetFillAvailable(fill bool) {
+	if this.fillAvailable == fill {
+		return
+	}
+	this.fillAvailable = fill
+	this.InvalidateParentLayout()
+	this.Update()
 }
 
 func (this *ListWidget) IsSelectionVisible() bool {
@@ -516,6 +534,10 @@ func (this *ListWidget) ActiveItem() ListItem {
 
 func (this *ListWidget) SizeHints() SizeHints {
 	m := this.padding
+	if this.fillAvailable {
+		return SizeHints{Width: 100 + m.L + m.R, Height: 6*this.RowHeight() + m.T + m.B,
+			Stretch: 1, Policy: GrowHorizontal | GrowVertical}
+	}
 	w := 100.0
 	h := this.RowHeight() * float64(this.Count())
 	w += m.L + m.R
@@ -524,6 +546,7 @@ func (this *ListWidget) SizeHints() SizeHints {
 }
 
 func (this *ListWidget) EnumProperties(list core.IPropertyList) {
+	list.AddProperty("填满可用空间", this.FillAvailable, this.SetFillAvailable)
 	list.AddProperty("显示图标", this.IsIconVisible, this.SetIconVisible)
 	list.AddProperty("显示复选框", this.IsCheckBoxVisible, this.SetCheckBoxVisible)
 }

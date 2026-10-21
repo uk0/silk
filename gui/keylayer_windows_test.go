@@ -3,6 +3,7 @@
 package gui
 
 import (
+	"github.com/uk0/silk/win32"
 	"os"
 	"strings"
 	"testing"
@@ -15,17 +16,17 @@ import (
 // never moved focus. Both have to run ahead of focus routing, or a focused
 // CodeEditor consumes the key for its own undo first.
 //
-// The dispatch happens inside a window procedure driven by the OS, which a test
-// process has no window to drive, so this reads the source. Crude, but it is the
-// only form of the invariant that can fail when someone removes the call.
+// Keep this source-order guard alongside the actual HWND message test below.
+// The window wrapper is required: direct dispatchShortcut bypasses modal and
+// focused-control isolation.
 func TestWin32KeyDownRunsTheWindowLayer(t *testing.T) {
 	body := wndProcKeyDownCase(t)
-	shortcut := strings.Index(body, "dispatchShortcut(")
+	shortcut := strings.Index(body, "dispatchWindowShortcut(")
 	tab := strings.Index(body, "VK_TAB")
 	focus := strings.Index(body, "IEventKeyDown")
 
 	if shortcut < 0 {
-		t.Error("WM_KEYDOWN does not consult dispatchShortcut; registered shortcuts are dead on Windows")
+		t.Error("WM_KEYDOWN does not consult dispatchWindowShortcut; registered shortcuts are dead on Windows")
 	}
 	if tab < 0 {
 		t.Error("WM_KEYDOWN does not handle Tab; focus cannot be moved from the keyboard on Windows")
@@ -56,4 +57,29 @@ func wndProcKeyDownCase(t *testing.T) string {
 		t.Fatal("WM_KEYDOWN case is not terminated by WM_KEYUP")
 	}
 	return rest[:end]
+}
+
+func TestWindowsKeyLayerNativeShortcutRepeatAndFocus(t *testing.T) {
+	editor := nativeModalOwner(t)
+	editor.SetFocus()
+	mods := currentMods()
+	if mods != 0 {
+		t.Fatalf("native fixture requires released modifiers, got %d", mods)
+	}
+	old := ShortcutHandler(0, KeyF6)
+	t.Cleanup(func() { RegisterShortcut(0, KeyF6, old) })
+	calls := 0
+	RegisterShortcut(0, KeyF6, func() { calls++ })
+	win32.SendMessage(editor.Window().hWnd, win32.WM_KEYDOWN, win32.VK_F6, 0)
+	if calls != 1 {
+		t.Fatal("real WM_KEYDOWN did not reach application shortcut")
+	}
+	win32.SendMessage(editor.Window().hWnd, win32.WM_KEYDOWN, win32.VK_F6, 1<<30)
+	if calls != 1 {
+		t.Fatal("key repeat re-executed application shortcut")
+	}
+	win32.SendMessage(editor.Window().hWnd, win32.WM_CHAR, 'x', 1)
+	if editor.Text() != "x" || focusWidget != editor {
+		t.Fatal("shortcut lost focused editor input")
+	}
 }

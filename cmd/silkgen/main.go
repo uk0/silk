@@ -27,9 +27,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/uk0/silk/diagnostic"
 	"io"
 	"os"
 
@@ -44,10 +46,11 @@ func run(args []string) int {
 	defer core.Close()
 	flags := flag.NewFlagSet("silkgen", flag.ContinueOnError)
 	var (
-		macroMode   = flags.Bool("macro", false, "expand .silkgo macros into standard Go (no code execution)")
-		outFile     = flags.String("o", "", "write output to file (default stdout)")
-		packageName = flags.String("package", "ui", "package name in the generated file")
-		funcName    = flags.String("func", "", "function name (default Build<Stem> derived from input filename)")
+		jsonDiagnostics = flags.Bool("diagnostics-json", false, "emit structured macro diagnostics as JSON on stderr")
+		macroMode       = flags.Bool("macro", false, "expand .silkgo macros into standard Go (no code execution)")
+		outFile         = flags.String("o", "", "write output to file (default stdout)")
+		packageName     = flags.String("package", "ui", "package name in the generated file")
+		funcName        = flags.String("func", "", "function name (default Build<Stem> derived from input filename)")
 	)
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: silkgen [-o out.go] [-package P] [-func F] input.silkui\n       silkgen -macro [-o generated.go] input.silkgo")
@@ -66,27 +69,28 @@ func run(args []string) int {
 	in := flags.Arg(0)
 
 	if *macroMode {
+		report := func(err error) int { return reportDiagnostic(os.Stderr, err, *jsonDiagnostics) }
 		f, err := os.Open(in)
 		if err != nil {
-			return fail("read %s: %v", in, err)
+			return report(diagnostic.New(diagnostic.FileRead, "cannot read macro source", err).At(diagnostic.Location{File: in}))
 		}
 		src, err := io.ReadAll(io.LimitReader(f, macro.MaxSourceBytes+1))
 		f.Close()
 		if err != nil {
-			return fail("read %s: %v", in, err)
+			return report(diagnostic.New(diagnostic.FileRead, "cannot read macro source", err).At(diagnostic.Location{File: in}))
 		}
 		generated, err := macro.Expand(in, src)
 		if err != nil {
-			return fail("%v", err)
+			return report(err)
 		}
 		if *outFile == "" {
 			if _, err := os.Stdout.Write(generated); err != nil {
-				return fail("write: %v", err)
+				return report(diagnostic.New(diagnostic.FileWrite, "cannot write generated Go to stdout", err))
 			}
 			return 0
 		}
 		if err := macro.WriteFile(*outFile, generated); err != nil {
-			return fail("%v", err)
+			return report(err)
 		}
 		return 0
 	}
@@ -119,5 +123,20 @@ func run(args []string) int {
 
 func fail(format string, args ...interface{}) int {
 	fmt.Fprintf(os.Stderr, "silkgen: "+format+"\n", args...)
+	return 1
+}
+
+// stderr is a structured channel only when explicitly requested; successful Go
+// output remains on stdout. errors.As preserves existing SDK codes and causes.
+func reportDiagnostic(w io.Writer, err error, asJSON bool) int {
+	var d *diagnostic.Error
+	if !errors.As(err, &d) {
+		d = diagnostic.New(diagnostic.Internal, "operation failed", err)
+	}
+	if asJSON {
+		_ = json.NewEncoder(w).Encode(d)
+	} else {
+		fmt.Fprintf(w, "silkgen: %s\nHint: %s\n", d.Error(), d.Hint)
+	}
 	return 1
 }

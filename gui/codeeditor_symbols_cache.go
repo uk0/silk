@@ -1,5 +1,7 @@
 package gui
 
+import "sort"
+
 // CodeEditor currently has one symbol dialect: the Go heuristic parser. Keep
 // the dialect in the key so a future language selector cannot reuse Go results
 // for unchanged text in a different language. File extensions do not currently
@@ -68,5 +70,12 @@ func (c *codeSymbolCache) functionAt(line int) *CodeSymbol {
 // The public ParseSymbols method returns a copy instead of exposing this slice.
 func (this *CodeEditor) cachedSymbols() []CodeSymbol {
 	key := codeSymbolCacheKey{revision: this.TextRevision(), language: codeSymbolLanguageGo}
-	return this.symbolCache.load(key, this.lines, parseGoCodeSymbols)
+	return this.symbolCache.load(key, this.lines, func(lines []string) []CodeSymbol {
+		symbols := parseGoCodeSymbols(lines)
+		if this.additionalSymbolsRevision == this.TextRevision() {
+			symbols = append(symbols, this.additionalSymbols...)
+			sort.SliceStable(symbols, func(i, j int) bool { return symbols[i].Line < symbols[j].Line })
+		}
+		return symbols
+	})
 }

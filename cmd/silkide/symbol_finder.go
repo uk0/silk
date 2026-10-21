@@ -1,96 +1,151 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/diagnostic"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
 )
 
-// showSymbolFinder pops a "Go to Symbol in Workspace" modal (Cmd+T): the user
-// types a query, gopls' workspace/symbol returns matches across the whole
-// project, and selecting one jumps to its file:line. Mirrors showFileFinder,
-// but the data source is an async LSP RPC instead of a local file walk — each
-// keystroke fires a query; a generation counter drops stale responses so a
-// slow earlier query can't overwrite a newer one's results.
+const symbolFinderLimit = 500
+
+// UI-thread-owned dialog state; all RPC work and coalescing live in worker.
+type symbolFinder struct {
+	dialog              *gui.Dialog
+	input               *gui.Edit
+	list                *gui.ListWidget
+	status              *gui.Label
+	worker              *symbolSearchWorker
+	closed, unavailable bool
+	resultClient        *core.LSPClient
+	selected            *core.LSPWorkspaceSymbol
+}
+
 func showSymbolFinder(parent gui.IWidget, tabs *gui.TabWidget) {
 	if parent == nil {
 		return
 	}
 	if globalLSP == nil {
-		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		reportLSPUnavailable()
 		return
 	}
+	finder := newSymbolFinder(parent, func(ctx context.Context, q symbolSearchQuery) ([]core.LSPWorkspaceSymbol, error) {
+		return q.client.WorkspaceSymbolContext(ctx, q.text)
+	}, gui.Post)
+	defer finder.close()
+	result := finder.dialog.ShowModal()
+	finder.close()
+	if reportDialogFailure(finder.dialog.LastError()) {
+		return
+	}
+	if result == gui.DialogOK && finder.selected != nil && tabs != nil {
+		// Never focus/open another editor before the native modal has unwound.
+		s := finder.selected
+		openFileInEditorAtLSP(tabs, uriToPath(s.URI), core.LSPPosition{Line: s.Line, Character: s.Character})
+	}
+}
 
-	dlg := gui.NewDialog(i18n.T("Go to Symbol in Workspace"), parent)
+func newSymbolFinder(parent gui.IWidget, request symbolSearchRequest, post func(func())) *symbolFinder {
+	f := &symbolFinder{dialog: gui.NewDialog(i18n.T("Go to Symbol in Workspace"), parent),
+		input: gui.NewEdit(), list: gui.NewListWidget(), status: gui.NewLabel(i18n.T("Searching symbols..."))}
 	box := gui.NewVBox()
 	box.SetSpacing(6)
-
-	input := gui.NewEdit()
-	box.AddWidget(input)
-
-	list := gui.NewListWidget()
-	list.SetSelectionVisible(true)
-	box.AddWidget(list)
-
-	// gen guards against out-of-order async results: only the response whose
-	// generation still matches the latest query is applied.
-	var gen int
-	query := func(q string) {
-		gen++
-		myGen := gen
-		lsp := globalLSP
-		if lsp == nil {
+	box.AddWidget(f.input)
+	f.list.SetFillAvailable(true)
+	f.list.SetSelectionVisible(true)
+	box.AddWidget(f.list)
+	box.AddWidget(f.status)
+	f.worker = newSymbolSearchWorker(90*time.Millisecond, request, post, func(r symbolSearchResult) {
+		if f.closed {
 			return
 		}
-		go func() {
-			syms, err := lsp.WorkspaceSymbol(q)
-			if err != nil {
-				return
+		if r.query.client != globalLSP {
+			f.query(f.input.Text())
+			return
+		}
+		if r.err != nil {
+			if err := reportLSPRequestError(i18n.T("Go to Symbol in Workspace"), "", r.err); err != nil {
+				f.status.SetText(fmt.Sprintf("[%s] %s", err.Code, i18n.T("Symbol search failed")))
+				gui.SetToolTip(f.status, err.Error()+"\n"+err.Hint)
+			} else {
+				f.status.SetText(i18n.T("Symbol search cancelled"))
 			}
-			gui.Post(func() {
-				if myGen != gen {
-					return // a newer keystroke superseded this query
-				}
-				items := make([]gui.ListItem, 0, len(syms))
-				for _, s := range syms {
-					label := s.Name
-					if s.ContainerName != "" {
-						label = s.ContainerName + "." + s.Name
-					}
-					items = append(items, gui.ListItem{Text: label, Data: s})
-				}
-				fillFinderList(list, items)
-			})
-		}()
-	}
-	query("")
-
-	input.SigTextChanged(func(_ interface{}, q string) { query(q) })
-
-	openSelected := func(idx int) {
-		if idx < 0 || idx >= list.Count() {
 			return
 		}
-		s, ok := list.Item(idx).Data.(core.LSPWorkspaceSymbol)
-		if !ok {
-			return
+		count := min(len(r.symbols), symbolFinderLimit)
+		items := make([]gui.ListItem, 0, count)
+		for _, s := range r.symbols[:count] {
+			label := s.Name
+			if s.ContainerName != "" {
+				label = s.ContainerName + "." + s.Name
+			}
+			items = append(items, gui.ListItem{Text: label, Data: s})
 		}
-		dismissDialog(dlg)
-		if tabs != nil {
-			// LSPWorkspaceSymbol.Line is 0-based; openFileInEditorAt wants
-			// 1-based. URI → filesystem path via the shared uriToPath.
-			openFileInEditorAt(tabs, uriToPath(s.URI), s.Line+1, s.Character)
+		fillFinderList(f.list, items)
+		f.resultClient = r.query.client
+		switch {
+		case len(r.symbols) == 0:
+			f.status.SetText(i18n.T("No symbols found"))
+		case len(r.symbols) > count:
+			f.status.SetText(fmt.Sprintf(i18n.T("Showing %d of %d symbols; refine your search"), count, len(r.symbols)))
+		default:
+			f.status.SetText(fmt.Sprintf(i18n.T("%d symbols"), count))
 		}
+	})
+	f.input.SigTextChanged(func(_ interface{}, q string) { f.query(q) })
+	f.input.SigSubmit(func(_ interface{}, _ string) { f.choose(f.list.ActiveIndex()) })
+	f.list.SigSubmit(func(interface{}) { f.choose(f.list.ActiveIndex()) })
+	f.dialog.SetContent(box)
+	f.dialog.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	f.dialog.SetSize(560, 480)
+	f.dialog.SetInitialFocus(f.input)
+	f.query("")
+	return f
+}
+
+func (f *symbolFinder) query(q string) {
+	if f.closed {
+		return
 	}
+	// An old selected result must not remain actionable during debounce/RPC.
+	fillFinderList(f.list, nil)
+	f.resultClient = nil
+	gui.SetToolTip(f.status, "")
+	f.worker.update(globalLSP, q)
+	if globalLSP == nil {
+		f.status.SetText(fmt.Sprintf("[%s] %s", diagnostic.LSPUnavailable, i18n.T("LSP not running")))
+		if !f.unavailable {
+			reportLSPUnavailable()
+			f.unavailable = true
+		}
+	} else {
+		f.unavailable = false
+		f.status.SetText(i18n.T("Searching symbols..."))
+	}
+}
 
-	// Enter on the search field opens the top match.
-	input.SigSubmit(func(_ interface{}, _ string) { openSelected(0) })
-	// Enter / double-click on the list opens the selected entry.
-	list.SigSubmit(func(o interface{}) { openSelected(list.ActiveIndex()) })
+func (f *symbolFinder) choose(idx int) {
+	if f.closed || idx < 0 || idx >= f.list.Count() {
+		return
+	}
+	if f.resultClient != globalLSP {
+		f.query(f.input.Text())
+		return
+	}
+	if s, ok := f.list.Item(idx).Data.(core.LSPWorkspaceSymbol); ok {
+		f.selected = &s
+		dismissDialog(f.dialog)
+	}
+}
 
-	dlg.SetContent(box)
-	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
-	dlg.SetSize(560, 480)
-	input.SetFocus()
-	dlg.ShowModal()
+func (f *symbolFinder) close() {
+	if f.closed {
+		return
+	}
+	f.closed = true
+	f.worker.close()
 }

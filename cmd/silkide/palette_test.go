@@ -1,6 +1,9 @@
 package main
 
 import (
+	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"strings"
 	"testing"
 )
@@ -108,4 +111,117 @@ func names(cmds []paletteCommand) []string {
 		out[i] = c.Name
 	}
 	return out
+}
+
+func TestExplorerPaletteCommandsAndHiddenToggle(t *testing.T) {
+	saved, tree := paletteCommands, globalFileExplorer
+	t.Cleanup(func() { paletteCommands = saved; globalFileExplorer = tree })
+	globalFileExplorer = ged.NewFileExplorer()
+	registerPaletteCommands(nil, nil)
+	for _, name := range []string{"Show Files", "Filter Project Files", "Refresh Project Files", "Toggle Hidden Files", "Reveal Active File in Explorer"} {
+		found := false
+		for _, cmd := range paletteCommands {
+			if cmd.Name == i18n.T(name) {
+				found = true
+				if name == "Toggle Hidden Files" {
+					cmd.Fn()
+					if !globalFileExplorer.ShowHidden() {
+						t.Fatal("toggle did not enable")
+					}
+					cmd.Fn()
+					if globalFileExplorer.ShowHidden() {
+						t.Fatal("toggle did not disable")
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatal("missing command", name)
+		}
+	}
+}
+
+func TestPaletteSubmitsOnlyAfterModalUnwind(t *testing.T) {
+	old := paletteCommands
+	t.Cleanup(func() { paletteCommands = old })
+	for _, from := range []string{"input", "list", "cancel"} {
+		t.Run(from, func(t *testing.T) {
+			first, second := 0, 0
+			paletteCommands = []paletteCommand{{Name: "first", Fn: func() { first++ }}, {Name: "second", Fn: func() { second++ }}}
+			dlg, selection := newCommandPalette(gui.NewFrame())
+			var input *gui.Edit
+			var list *gui.ListWidget
+			var visit func(gui.IWidget)
+			visit = func(w gui.IWidget) {
+				if e, ok := w.(*gui.Edit); ok {
+					input = e
+				}
+				if l, ok := w.(*gui.ListWidget); ok {
+					list = l
+				}
+				for _, c := range w.Children() {
+					visit(c)
+				}
+			}
+			visit(dlg)
+			if input == nil || list == nil {
+				t.Fatal("palette input/list missing")
+			}
+			if list.ActiveIndex() != 0 {
+				t.Fatal("palette initial selection missing")
+			}
+			input.SetText("sec")
+			if list.Count() != 1 || list.ActiveIndex() != 0 || list.Item(0).Data.(paletteCommand).Name != "second" {
+				t.Fatal("filter lost selection/payload")
+			}
+			input.SetText("")
+			if from == "list" {
+				list.SetActiveIndex(1)
+				list.OnKeyDown(gui.KeyEnter, false)
+			} else {
+				input.OnKeyDown(gui.KeyEnter, false)
+			}
+			if first != 0 || second != 0 || selection.command == nil {
+				t.Fatal("command ran before native modal teardown")
+			}
+			// Repeated submit events before the loop exits must not execute twice.
+			input.OnKeyDown(gui.KeyEnter, false)
+			result := gui.DialogOK
+			if from == "cancel" {
+				result = gui.DialogCancel
+			}
+			selection.run(result)
+			selection.run(gui.DialogOK)
+			if from == "input" && (first != 1 || second != 0) || from == "list" && (first != 0 || second != 1) || from == "cancel" && (first != 0 || second != 0) {
+				t.Fatalf("wrong command / duplicate: %d %d", first, second)
+			}
+		})
+	}
+}
+
+func TestCommandPaletteHasVisibleResultsViewport(t *testing.T) {
+	old := paletteCommands
+	defer func() { paletteCommands = old }()
+	paletteCommands = []paletteCommand{{Name: "Only result", Fn: func() {}}}
+	dlg, _ := newCommandPalette(nil)
+	dlg.Layout()
+	box := dlg.Content().(*gui.VBox)
+	box.Layout()
+	var list *gui.ListWidget
+	for _, c := range box.Children() {
+		if v, ok := c.(*gui.ListWidget); ok {
+			list = v
+		}
+	}
+	if list == nil || !list.FillAvailable() || list.Height() < 200 || list.Width() != box.Width() {
+		t.Fatal("palette results are collapsed or clipped")
+	}
+	if list.Y()+list.Height() > box.Height() {
+		t.Fatal("palette list covers dialog footer")
+	}
+	fillFinderList(list, nil)
+	box.Layout()
+	if list.Height() < 200 {
+		t.Fatal("empty query collapsed list before async refill")
+	}
 }

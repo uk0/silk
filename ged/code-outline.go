@@ -8,6 +8,7 @@ import (
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 )
 
@@ -38,7 +39,7 @@ const (
 // before handing the slice over, so the panel never has to know about LSP
 // wire types or numeric kind enums — the same split ReferencesPanel uses
 // for ReferenceLoc. When no symbols are supplied the panel falls back to
-// the heuristic CodeEditor.ParseSymbols scan.
+// the tolerant CodeEditor.ParseSymbols scan.
 //
 // Field semantics:
 //
@@ -68,13 +69,16 @@ type OutlineSymbol struct {
 
 // outlineNode represents one entry in the outline tree.
 type outlineNode struct {
-	symbol   gui.CodeSymbol
-	children []outlineNode
-	depth    int
-	expanded bool
-	endLine  int   // 0-based last line of the declaration, 0 when unknown
-	exported bool  // part of the file's public API
-	path     []int // index path into tree, so nested rows can be collapsed
+	symbol     gui.CodeSymbol
+	children   []outlineNode
+	depth      int
+	expanded   bool
+	endLine    int   // 0-based last line of the declaration, 0 when unknown
+	exported   bool  // part of the file's public API
+	path       []int // index path into tree, so nested rows can be collapsed
+	text       string
+	textWidth  float64
+	fontSerial uint64
 }
 
 // CodeOutlinePanel is a persistent symbol tree panel that shows all
@@ -101,9 +105,17 @@ type CodeOutlinePanel struct {
 	// The editor owns its content revision, so unchanged Draw calls check one
 	// integer instead of walking every line. Hosts can additionally invalidate
 	// semantic data through SetRevision without changing the editor text.
-	lastTextRevision uint64
-	revision         int
-	dirty            bool
+	lastTextRevision    uint64
+	lastSymbolsRevision uint64
+	revision            int
+	dirty               bool
+
+	// Fonts and visible labels are cached; idle paints do not allocate fonts,
+	// remeasure long names, or scan every symbol to follow an unchanged caret.
+	normalFont, boldFont    paint.Font
+	fontSerial              uint64
+	cursorCached            bool
+	cursorLine, cursorIndex int
 }
 
 func NewCodeOutlinePanel() *CodeOutlinePanel {
@@ -115,15 +127,23 @@ func NewCodeOutlinePanel() *CodeOutlinePanel {
 func (this *CodeOutlinePanel) Init(self gui.IWidget) {
 	this.Widget.Init(self)
 	this.rowHeight = 22
+	this.SetFocusPolicy(gui.TabFocus)
 	this.hoverIdx = -1
 	this.selectedIdx = -1
 }
 
 // SetEditor binds the outline panel to a code editor and refreshes symbols.
 func (this *CodeOutlinePanel) SetEditor(editor *gui.CodeEditor) {
+	if editor != nil && this.editor == editor {
+		if this.RefreshIfStale() {
+			this.Self().Update()
+		}
+		return
+	}
 	this.editor = editor
+	this.semantic = nil
+	this.scrollY = 0
 	this.RefreshSymbols()
-	this.seedContentCache()
 	this.Self().Update()
 }
 
@@ -140,9 +160,22 @@ func (this *CodeOutlinePanel) SetNavigateCallback(fn func(line int)) {
 // which is also what an editor with no language server keeps using.
 func (this *CodeOutlinePanel) SetSymbols(syms []OutlineSymbol) {
 	this.semantic = cloneOutlineSymbols(syms)
-	this.RefreshSymbols()
 	this.seedContentCache()
+	this.RefreshSymbols()
 	this.Self().Update()
+}
+
+// SetSymbolsForEditor installs a response only if it still belongs to the bound
+// editor and exact text revision captured when the request started. Call on the
+// UI thread after marshaling the asynchronous result. A stale response is ignored
+// without changing the view. SetSymbols remains the synchronous compatibility API;
+// hosts with asynchronous providers should use this guarded form instead.
+func (this *CodeOutlinePanel) SetSymbolsForEditor(editor *gui.CodeEditor, revision uint64, syms []OutlineSymbol) bool {
+	if editor == nil || editor != this.editor || revision != editor.TextRevision() {
+		return false
+	}
+	this.SetSymbols(syms)
+	return true
 }
 
 // SetFilter narrows the tree to symbols whose name contains text
@@ -214,11 +247,9 @@ func (this *CodeOutlinePanel) SetRevision(rev int) {
 // same-length edits which the old text-size fingerprint could not detect.
 func (this *CodeOutlinePanel) RefreshIfStale() bool {
 	revision := this.editorTextRevision()
-	if !this.dirty && revision == this.lastTextRevision {
+	if !this.dirty && revision == this.lastTextRevision && this.editorSymbolsRevision() == this.lastSymbolsRevision {
 		return false
 	}
-	this.lastTextRevision = revision
-	this.dirty = false
 	this.RefreshSymbols()
 	return true
 }
@@ -230,10 +261,18 @@ func (this *CodeOutlinePanel) editorTextRevision() uint64 {
 	return this.editor.TextRevision()
 }
 
+func (this *CodeOutlinePanel) editorSymbolsRevision() uint64 {
+	if this.editor == nil {
+		return 0
+	}
+	return this.editor.SymbolsRevision()
+}
+
 // seedContentCache records the current editor revision as the baseline for
 // RefreshIfStale, so a refresh that just ran is not repeated next frame.
 func (this *CodeOutlinePanel) seedContentCache() {
 	this.lastTextRevision = this.editorTextRevision()
+	this.lastSymbolsRevision = this.editorSymbolsRevision()
 	this.dirty = false
 }
 
@@ -241,6 +280,7 @@ func (this *CodeOutlinePanel) seedContentCache() {
 // exported-only) changed and pulls the scroll back to the top so the new
 // first row is on screen.
 func (this *CodeOutlinePanel) applyView() {
+	this.selectedIdx, this.hoverIdx = -1, -1
 	this.buildTree()
 	this.rebuildFlatList()
 	this.scrollY = 0
@@ -251,12 +291,20 @@ func (this *CodeOutlinePanel) applyView() {
 // semantic symbols pushed in by the host when there are any, otherwise a
 // heuristic re-parse of the bound editor.
 func (this *CodeOutlinePanel) RefreshSymbols() {
+	if this.dirty || this.editorTextRevision() != this.lastTextRevision {
+		// A server response for old text must never hide the edited declarations.
+		this.semantic = nil
+	}
+	this.seedContentCache()
+	this.selectedIdx, this.hoverIdx = -1, -1
+	this.cursorCached = false
 	this.symbols = nil
 	this.tree = nil
 	this.flatList = nil
 
 	if len(this.semantic) == 0 {
 		if this.editor == nil {
+			this.scrollY = 0
 			return
 		}
 		this.symbols = this.editor.ParseSymbols()
@@ -310,7 +358,7 @@ func outlineNodesFromSymbols(syms []OutlineSymbol) []outlineNode {
 	return out
 }
 
-// heuristicNodes builds the fallback two-level tree out of the line-based
+// heuristicNodes builds the fallback two-level tree out of the tolerant
 // CodeEditor.ParseSymbols scan: types at the top, their receiver methods
 // underneath, everything else at the top. Parents are addressed by index
 // rather than by pointer — appending to the top-level slice can move its
@@ -331,7 +379,11 @@ func (this *CodeOutlinePanel) heuristicNodes() []outlineNode {
 			continue
 		}
 		if sym.Kind == gui.SymMethod && sym.Receiver != "" {
-			if idx, ok := typeIdx[sym.Receiver]; ok {
+			receiver := strings.TrimPrefix(strings.TrimSpace(sym.Receiver), "*")
+			if bracket := strings.IndexByte(receiver, '['); bracket >= 0 {
+				receiver = strings.TrimSpace(receiver[:bracket])
+			}
+			if idx, ok := typeIdx[receiver]; ok {
 				top[idx].children = append(top[idx].children, outlineHeuristicNode(sym))
 				continue
 			}
@@ -358,6 +410,8 @@ func outlineKindOf(kind string) int {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "type", "struct", "interface", "class", "enum":
 		return gui.SymType
+	case "macro":
+		return gui.SymMacro
 	case "method", "constructor":
 		return gui.SymMethod
 	case "var", "variable", "field", "property", "parameter":
@@ -476,6 +530,7 @@ func (this *CodeOutlinePanel) nodeAtPath(path []int) *outlineNode {
 
 // rebuildFlatList flattens the tree respecting expanded state, at any depth.
 func (this *CodeOutlinePanel) rebuildFlatList() {
+	this.cursorCached = false
 	this.flatList = nil
 	this.appendFlat(this.tree)
 	if this.selectedIdx >= len(this.flatList) {
@@ -506,11 +561,15 @@ func (this *CodeOutlinePanel) currentSymbolIndex() int {
 		return -1
 	}
 	cursorLine := this.editor.CursorLine()
+	if this.cursorCached && this.cursorLine == cursorLine {
+		return this.cursorIndex
+	}
+	this.cursorCached, this.cursorLine = true, cursorLine
 	bestIdx := -1
 	bestDepth := -1
 	aboveIdx := -1
 	for i, node := range this.flatList {
-		if node.symbol.Line <= cursorLine {
+		if node.symbol.Line <= cursorLine && (aboveIdx < 0 || node.symbol.Line >= this.flatList[aboveIdx].symbol.Line) {
 			aboveIdx = i
 		}
 		if node.endLine <= 0 || node.symbol.Line > cursorLine || cursorLine > node.endLine {
@@ -521,130 +580,137 @@ func (this *CodeOutlinePanel) currentSymbolIndex() int {
 			bestIdx = i
 		}
 	}
+	this.cursorIndex = aboveIdx
 	if bestIdx >= 0 {
-		return bestIdx
+		this.cursorIndex = bestIdx
 	}
-	return aboveIdx
+	return this.cursorIndex
 }
 
-// Draw renders the code outline panel.
+func (this *CodeOutlinePanel) ensureFonts() {
+	f := gui.Theme().Font
+	if this.normalFont != nil && this.normalFont.Family() == f.Family() && this.normalFont.Size() == f.Size() && this.normalFont.Bold() == f.Bold() && this.normalFont.Italic() == f.Italic() {
+		return
+	}
+	this.normalFont = f.Dup()
+	this.boldFont = paint.NewFont(f.Family(), f.Size(), true, f.Italic())
+	this.rowHeight = math.Ceil(math.Max(22, math.Max(this.normalFont.FontExtents().Height, this.boldFont.FontExtents().Height)+8))
+	this.fontSerial++
+}
+
+func (this *CodeOutlinePanel) headerHeight() float64 {
+	this.ensureFonts()
+	return this.rowHeight
+}
+
+func (this *CodeOutlinePanel) clampScroll() {
+	this.ensureFonts()
+	body := math.Max(0, this.Height()-this.rowHeight)
+	this.scrollY = math.Max(0, math.Min(this.scrollY, math.Max(0, float64(len(this.flatList))*this.rowHeight-body)))
+}
+
+func (this *CodeOutlinePanel) visibleRows(height float64) (int, int) {
+	first := max(0, min(len(this.flatList), int(math.Floor(this.scrollY/this.rowHeight))))
+	last := max(first, min(len(this.flatList), int(math.Ceil((this.scrollY+height-this.headerHeight())/this.rowHeight))))
+	return first, last
+}
+
+// Draw clips both the dock and its scrollable body. Only visible rows are
+// visited; dark/light themes and user font preferences share the same geometry
+// with hit-testing and keyboard navigation.
 func (this *CodeOutlinePanel) Draw(g paint.Painter) {
-	// Auto-refresh when the revision moved or the content size changed
 	this.RefreshIfStale()
-
+	this.clampScroll()
 	w, h := this.Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
 	t := gui.Theme()
-
-	// Background
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, 0, w, h)
+	g.Clip()
 	g.SetBrush1(t.ViewBGColor)
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
-
-	// Header
-	headerH := 22.0
-	g.SetBrush1(paint.Color{R: 235, G: 238, B: 245, A: 255})
-	g.Rectangle(0, 0, w, headerH)
+	hh := this.headerHeight()
+	g.SetBrush1(t.FormColor)
+	g.Rectangle(0, 0, w, hh)
 	g.Fill()
-	g.SetPen1(paint.Color{R: 200, G: 200, B: 210, A: 255}, 1)
-	g.MoveTo(0, headerH)
-	g.LineTo(w, headerH)
+	g.SetPen1(t.BorderColor, 1)
+	g.MoveTo(0, hh-.5)
+	g.LineTo(w, hh-.5)
 	g.Stroke()
-
-	headerFont := paint.NewFont(t.Font.Family(), 12, true, false)
-	g.SetFont(headerFont)
-	g.SetBrush1(t.TextColor)
-	g.DrawText1(8, headerH-5, "大纲")
-
-	if len(this.flatList) == 0 {
-		normalFont := paint.NewFont(t.Font.Family(), 11, false, false)
-		g.SetFont(normalFont)
-		g.SetBrush1(paint.Color{R: 150, G: 150, B: 160, A: 200})
-		g.DrawText1(8, headerH+20, "No symbols")
+	drawPanelText(g, this.boldFont, i18n.T("Outline"), 8, 0, w-16, hh, t.TextColor)
+	if h <= hh {
 		return
 	}
-
-	normalFont := paint.NewFont(t.Font.Family(), 11, false, false)
-	boldFont := paint.NewFont(t.Font.Family(), 11, true, false)
-	kindFont := paint.NewFont(t.Font.Family(), 10, true, false)
-	rh := this.rowHeight
-	startY := headerH - this.scrollY
+	g.Rectangle(0, hh, w, h-hh)
+	g.Clip()
+	if len(this.flatList) == 0 {
+		drawPanelText(g, this.normalFont, i18n.T("No symbols"), 8, hh, w-16, this.rowHeight, t.TextColor)
+		return
+	}
 	curIdx := this.currentSymbolIndex()
-
-	for i, node := range this.flatList {
-		rowY := startY + float64(i)*rh
-		if rowY+rh < headerH || rowY > h {
-			continue
+	first, last := this.visibleRows(h)
+	for i := first; i < last; i++ {
+		node := &this.flatList[i]
+		rh := this.rowHeight
+		y := hh - this.scrollY + float64(i)*rh
+		selected := i == this.selectedIdx
+		if selected {
+			g.SetBrush1(t.HighLightColor)
+		} else {
+			g.SetBrush1(t.ButtonHoverBGColor)
 		}
-
-		indent := float64(node.depth) * 16.0
-		textX := 8 + indent
-
-		// Current symbol highlight (blue background)
-		if i == curIdx {
-			g.SetBrush1(paint.Color{R: 40, G: 80, B: 160, A: 60})
-			g.Rectangle(0, rowY, w, rh)
+		if selected || i == this.hoverIdx || i == curIdx {
+			g.Rectangle(0, y, w, rh)
 			g.Fill()
 		}
-
-		// Selected highlight
-		if i == this.selectedIdx {
-			g.SetBrush1(paint.Color{R: 51, G: 120, B: 215, A: 255})
-			g.Rectangle(0, rowY, w, rh)
-			g.Fill()
-		} else if i == this.hoverIdx {
-			g.SetBrush1(paint.Color{R: 230, G: 235, B: 245, A: 255})
-			g.Rectangle(0, rowY, w, rh)
-			g.Fill()
+		color := t.TextColor
+		if selected {
+			color = t.MenuActiveTextColor
 		}
-
-		// Expand/collapse triangle for any node with children
+		x := 8 + float64(node.depth)*16
 		if len(node.children) > 0 {
-			triX := textX
-			triY := rowY + rh/2
+			cy := y + rh/2
 			if node.expanded {
-				g.MoveTo(triX, triY-3)
-				g.LineTo(triX+6, triY-3)
-				g.LineTo(triX+3, triY+3)
+				g.MoveTo(x, cy-3)
+				g.LineTo(x+6, cy-3)
+				g.LineTo(x+3, cy+3)
 			} else {
-				g.MoveTo(triX, triY-4)
-				g.LineTo(triX+6, triY)
-				g.LineTo(triX, triY+4)
+				g.MoveTo(x, cy-4)
+				g.LineTo(x+6, cy)
+				g.LineTo(x, cy+4)
 			}
-			g.SetBrush1(paint.Color{R: 120, G: 120, B: 130, A: 255})
+			g.SetBrush1(color)
 			g.Fill()
-			textX += 10
-		} else {
-			textX += 10
 		}
-
-		// Kind icon
-		kindColor := gui.SymbolKindColor(node.symbol.Kind)
-		kindLabel := gui.SymbolKindLabel(node.symbol.Kind)
-		g.SetFont(kindFont)
-		g.SetBrush1(kindColor)
-		g.DrawText1(textX, rowY+rh-6, kindLabel)
-		textX += 14
-
-		// Symbol name
-		isType := node.symbol.Kind == gui.SymType
-		if isType {
-			g.SetFont(boldFont)
-		} else {
-			g.SetFont(normalFont)
+		x += 10
+		label := gui.SymbolKindLabel(node.symbol.Kind)
+		kindWidth := math.Max(14, explorerTextWidth(this.boldFont, label)+4)
+		// A theme text color also keeps badges legible in light/high-contrast
+		// themes and while selected, unlike fixed dark-theme-only accent colors.
+		drawPanelText(g, this.boldFont, label, x, y, math.Min(kindWidth, w-8-x), rh, color)
+		x += kindWidth
+		font := this.normalFont
+		if node.symbol.Kind == gui.SymType {
+			font = this.boldFont
 		}
-		if i == this.selectedIdx {
-			g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
-		} else {
-			g.SetBrush1(t.TextColor)
+		width := math.Max(0, w-8-x)
+		if node.fontSerial != this.fontSerial || node.textWidth != width {
+			node.text = explorerElide(font, explorerDisplayName(node.symbol.Name), width)
+			node.fontSerial, node.textWidth = this.fontSerial, width
 		}
-		g.DrawText1(textX, rowY+rh-6, node.symbol.Name)
+		drawPanelText(g, font, node.text, x, y, width, rh, color)
 	}
 }
 
 // hitTest returns the flat list index for a given y coordinate, or -1.
 func (this *CodeOutlinePanel) hitTest(y float64) int {
-	headerH := 22.0
-	if y < headerH {
+	this.clampScroll()
+	headerH := this.headerHeight()
+	if y < headerH || y >= this.Height() {
 		return -1
 	}
 	idx := int(math.Floor((y - headerH + this.scrollY) / this.rowHeight))
@@ -656,6 +722,10 @@ func (this *CodeOutlinePanel) hitTest(y float64) int {
 
 // OnLeftDown handles click events.
 func (this *CodeOutlinePanel) OnLeftDown(x, y float64) {
+	this.RefreshIfStale()
+	if x < 0 || x >= this.Width() {
+		return
+	}
 	this.SetFocus()
 	idx := this.hitTest(y)
 	if idx < 0 {
@@ -684,7 +754,11 @@ func (this *CodeOutlinePanel) OnLeftDown(x, y float64) {
 
 // OnMouseMove updates hover state.
 func (this *CodeOutlinePanel) OnMouseMove(x, y float64) {
-	idx := this.hitTest(y)
+	this.RefreshIfStale()
+	idx := -1
+	if x >= 0 && x < this.Width() {
+		idx = this.hitTest(y)
+	}
 	if idx != this.hoverIdx {
 		this.hoverIdx = idx
 		this.Self().Update()
@@ -701,18 +775,95 @@ func (this *CodeOutlinePanel) OnMouseLeave() {
 
 // OnMouseWheel handles scrolling.
 func (this *CodeOutlinePanel) OnMouseWheel(x, y, z float64) {
+	this.RefreshIfStale()
+	if math.IsNaN(z) || math.IsInf(z, 0) {
+		return
+	}
 	this.scrollY -= z * 3
-	headerH := 22.0
-	totalRows := float64(len(this.flatList))
-	maxScroll := totalRows*this.rowHeight - (this.Height() - headerH)
-	if maxScroll < 0 {
-		maxScroll = 0
+	this.clampScroll()
+	this.Self().Update()
+}
+
+func (this *CodeOutlinePanel) ensureSelectionVisible() {
+	this.clampScroll()
+	if this.selectedIdx < 0 {
+		return
 	}
-	if this.scrollY < 0 {
-		this.scrollY = 0
+	top := float64(this.selectedIdx) * this.rowHeight
+	body := math.Max(this.rowHeight, this.Height()-this.headerHeight())
+	if top < this.scrollY {
+		this.scrollY = top
+	} else if top+this.rowHeight > this.scrollY+body {
+		this.scrollY = top + this.rowHeight - body
 	}
-	if this.scrollY > maxScroll {
-		this.scrollY = maxScroll
+	this.clampScroll()
+}
+
+// Arrow keys select/expand without stealing focus back to the editor. Enter
+// explicitly navigates. This also makes deep outlines usable without a mouse.
+func (this *CodeOutlinePanel) OnKeyDown(key int, repeat bool) {
+	if !this.IsEnabled() {
+		return
 	}
+	this.RefreshIfStale()
+	this.ensureFonts()
+	if len(this.flatList) == 0 {
+		return
+	}
+	i := this.selectedIdx
+	page := max(1, int((this.Height()-this.headerHeight())/this.rowHeight))
+	switch key {
+	case gui.KeyDown:
+		i = min(len(this.flatList)-1, i+1)
+	case gui.KeyUp:
+		if i < 0 {
+			i = 0
+		} else {
+			i = max(0, i-1)
+		}
+	case gui.KeyHome:
+		i = 0
+	case gui.KeyEnd:
+		i = len(this.flatList) - 1
+	case gui.KeyPageDown:
+		i = min(len(this.flatList)-1, max(0, i)+page)
+	case gui.KeyPageUp:
+		i = max(0, i-page)
+	case gui.KeyRight, gui.KeyLeft:
+		if i < 0 {
+			i = 0
+			break
+		}
+		node := this.flatList[i]
+		if target := this.nodeAtPath(node.path); target != nil {
+			if key == gui.KeyRight {
+				if len(node.children) > 0 && !target.expanded {
+					target.expanded = true
+					this.rebuildFlatList()
+				} else if len(node.children) > 0 {
+					i++
+				}
+			} else if len(node.children) > 0 && target.expanded {
+				target.expanded = false
+				this.rebuildFlatList()
+			} else {
+				for j := i - 1; j >= 0; j-- {
+					if this.flatList[j].depth < node.depth {
+						i = j
+						break
+					}
+				}
+			}
+		}
+	case gui.KeyEnter:
+		if !repeat && i >= 0 && this.cbNavigate != nil {
+			this.cbNavigate(this.flatList[i].symbol.Line)
+		}
+		return
+	default:
+		return
+	}
+	this.selectedIdx, this.hoverIdx = i, -1
+	this.ensureSelectionVisible()
 	this.Self().Update()
 }

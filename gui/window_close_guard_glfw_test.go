@@ -21,7 +21,7 @@ var probeWindow *glfw.Window
 // already pinned the main goroutine to that thread and initialised GLFW, and
 // TestMain is the one test entry point that still runs on it.
 func TestMain(m *testing.M) {
-	if glfwReady {
+	if glfwReady && os.Getenv("SILK_TEST_PREWINDOW_POST") != "1" {
 		glfw.WindowHint(glfw.Visible, glfw.False)
 		// Close-veto semantics need an NSWindow, not a GPU pixel format.
 		glfw.WindowHint(glfw.ClientAPI, glfw.NoAPI)

@@ -49,11 +49,12 @@ func seedLastLaunch(t *testing.T) *preferences {
 	t.Setenv("HOME", tmp)            // macOS Application Support path
 	t.Setenv("APPDATA", tmp)         // Windows Roaming path
 
-	seed := newPreferences()
+	seed := testPreferences(t)
 	seed.SetOpenSession([]string{lastLaunchPath})
 	seed.SetWindowSize(lastLaunchWidth, lastLaunchHeight)
 	seed.SetWindowPos(lastLaunchX, lastLaunchY)
-	return newPreferences()
+	flushTestPreferences(t, seed)
+	return testPreferences(t)
 }
 
 // openDesignCanvas returns a canvas holding the .silkui at path, the way the
@@ -106,8 +107,11 @@ func TestCmdQPersistsThisSessionNotLastLaunchs(t *testing.T) {
 	quits := recordQuit(t)
 
 	cmdQ(t, tabs)()
+	if err := finishPreferenceSaves(prefs); err != nil {
+		t.Fatal(err)
+	}
 
-	got := newPreferences().OpenSession()
+	got := testPreferences(t).OpenSession()
 	if reflect.DeepEqual(got, []string{lastLaunchPath}) {
 		t.Fatalf("the store still holds last launch's session %v after Cmd+Q: the close wrote nothing, so the next launch reopens a session the user is two runs past", got)
 	}
@@ -123,11 +127,11 @@ func TestCmdQPersistsThisSessionNotLastLaunchs(t *testing.T) {
 	// Window is dereferenced on the way out of every quit, and a persist that
 	// reached for bounds it does not have would stamp 0x0 over the real
 	// geometry the user set.
-	if w, h := newPreferences().WindowSize(); w != lastLaunchWidth || h != lastLaunchHeight {
+	if w, h := testPreferences(t).WindowSize(); w != lastLaunchWidth || h != lastLaunchHeight {
 		t.Errorf("window size = (%d, %d), want the geometry the close captured (%d, %d)",
 			w, h, lastLaunchWidth, lastLaunchHeight)
 	}
-	if x, y := newPreferences().WindowPos(); x != lastLaunchX || y != lastLaunchY {
+	if x, y := testPreferences(t).WindowPos(); x != lastLaunchX || y != lastLaunchY {
 		t.Errorf("window pos = (%d, %d), want the position the close captured (%d, %d)",
 			x, y, lastLaunchX, lastLaunchY)
 	}
@@ -170,7 +174,7 @@ func TestCmdQCancelledPersistsNothingAndClosesNothing(t *testing.T) {
 	if *quits != 0 {
 		t.Errorf("a cancelled Cmd+Q ended the event loop %d times, want 0", *quits)
 	}
-	if got, want := newPreferences().OpenSession(), []string{lastLaunchPath}; !reflect.DeepEqual(got, want) {
+	if got, want := testPreferences(t).OpenSession(), []string{lastLaunchPath}; !reflect.DeepEqual(got, want) {
 		t.Errorf("a cancelled Cmd+Q left session %v on disk, want last launch's %v untouched", got, want)
 	}
 	if got := ed.Text(); got != quitEditedA {

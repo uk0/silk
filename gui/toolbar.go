@@ -19,6 +19,7 @@ type ToolBar struct {
 	orientation int     // 0=horizontal, 1=vertical
 	iconSize    int     // icon display size in pixels
 	spacing     float64 // gap between items
+	compact     bool    // opt-in dense desktop tool chrome; ordinary forms unchanged
 	overflow    []IWidget
 	overflowBtn *Button
 }
@@ -113,6 +114,31 @@ func (this *ToolBar) Spacing() float64 {
 	return this.spacing
 }
 
+// SetCompact uses square icon targets and flat button faces, with font-aware
+// label widths. Metrics are logical units; the window's DPI transform is applied
+// once by the painter. It does not shrink arbitrary embedded widgets.
+func (this *ToolBar) SetCompact(on bool) {
+	if this.compact == on {
+		return
+	}
+	this.compact = on
+	this.Layout()
+	this.Update()
+}
+
+func (this *ToolBar) IsCompact() bool { return this.compact }
+
+func (this *ToolBar) chromeMargin() Margin {
+	if this.compact {
+		return Margin{6, 6, 3, 3}
+	}
+	return Theme().ButtonMargin
+}
+
+func (this *ToolBar) compactButtonHeight() float64 {
+	return math.Ceil(math.Max(28, math.Max(float64(this.iconSize), Theme().Font.FontExtents().Height)+8))
+}
+
 func (this *ToolBar) SetSpacing(s float64) {
 	if math.IsNaN(s) || math.IsInf(s, 0) || s < 0 {
 		s = 0
@@ -160,8 +186,28 @@ func (this *ToolBar) Layout() {
 // it anyway both wastes horizontal space and under-reports text-only heights.
 func (this *ToolBar) itemSizeHints(item IWidget) SizeHints {
 	t := Theme()
-	m := t.ButtonMargin
+	m := this.chromeMargin()
 	icon := float64(this.iconSize)
+	if this.compact {
+		h := this.compactButtonHeight()
+		if _, ok := item.(*Separator); ok {
+			if this.IsVertical() {
+				return SizeHints{Width: h, Height: 8}
+			}
+			return SizeHints{Width: 8, Height: h}
+		}
+		if btn, ok := item.(*Button); ok {
+			if !btn.IsTextVisible() {
+				return SizeHints{Width: h, Height: h}
+			}
+			ext := t.Font.TextExtents(btn.Text())
+			w := math.Max(ext.Width, ext.XAdvance) + 16
+			if btn.Icon() != nil && !btn.Icon().IsAir() {
+				w += icon + 6
+			}
+			return SizeHints{Width: math.Ceil(math.Max(w, h)), Height: h}
+		}
+	}
 	if _, ok := item.(*Separator); ok {
 		if this.IsVertical() {
 			return SizeHints{Width: icon + m.L + m.R + 4, Height: t.SeparatorSize}
@@ -194,8 +240,7 @@ func toolbarDimension(value float64) float64 {
 }
 
 func (this *ToolBar) layoutHorizontal() {
-	t := Theme()
-	m := t.ButtonMargin
+	m := this.chromeMargin()
 	w, h := this.Self().Size()
 	w, h = toolbarDimension(w), toolbarDimension(h)
 	type itemGeom struct{ y, w, h float64 }
@@ -216,6 +261,9 @@ func (this *ToolBar) layoutHorizontal() {
 	}
 
 	ovW := float64(this.iconSize) + m.L + m.R + 4
+	if this.compact {
+		ovW = this.compactButtonHeight()
+	}
 	avail := math.Max(0, w-m.R)
 	total := m.L
 	for i, g := range geom {
@@ -261,6 +309,9 @@ func (this *ToolBar) layoutHorizontal() {
 	btn := this.overflowButton()
 	btnW := math.Min(ovW, w)
 	btnH := math.Min(float64(this.iconSize)+m.T+m.B+4, h)
+	if this.compact {
+		btnH = math.Min(this.compactButtonHeight(), h)
+	}
 	btn.SetVisible(true)
 	btn.SetBounds(math.Max(0, avail-btnW), (h-btnH)/2, btnW, btnH)
 }
@@ -276,7 +327,8 @@ func (this *ToolBar) OverflowItems() []IWidget {
 // deliberately kept out of this.items: it is not part of the run it cuts.
 func (this *ToolBar) overflowButton() *Button {
 	if this.overflowBtn == nil {
-		btn := NewButton1("»", nil)
+		btn := NewButton1("More tools", paint.LoadIcon("toolbar-overflow"))
+		btn.SetTextVisible(false)
 		btn.SetParent(this)
 		SetToolTip(btn, "更多工具")
 		btn.Action().BindFunc0(func() {
@@ -316,8 +368,11 @@ func (this *ToolBar) showOverflow() {
 	}
 	btn := this.overflowButton()
 	xg, yg := btn.MapToGlobal(0, 0)
-	_, bh := btn.Size()
-	showToolBarPopup(menu, xg, yg+bh)
+	bw, bh := btn.Size()
+	// Anchor the menu's trailing edge to the chevron, not its leading edge.
+	// Otherwise a right-edge toolbar opens almost the entire menu outside its
+	// owner even when it would fit inside. LayoutPopup still clamps to screen.
+	showToolBarPopup(menu, xg+bw-menu.SizeHints().Width, yg+bh)
 }
 
 // toolBarOverflowAction preserves dynamic checked/enabled state while giving
@@ -364,7 +419,7 @@ func (a *toolBarOverflowAction) Trigger(interface{}) {
 }
 
 func (this *ToolBar) layoutVertical() {
-	m := Theme().ButtonMargin
+	m := this.chromeMargin()
 	w, _ := this.Self().Size()
 	w = toolbarDimension(w)
 	// Horizontal overflow is a previous orientation's state, not an explicit
@@ -412,7 +467,7 @@ func (this *ToolBar) Draw(g paint.Painter) {
 }
 
 func (this *ToolBar) SizeHints() SizeHints {
-	m := Theme().ButtonMargin
+	m := this.chromeMargin()
 	var main, cross float64
 	for i, item := range this.items {
 		hints := this.itemSizeHints(item)
@@ -427,7 +482,13 @@ func (this *ToolBar) SizeHints() SizeHints {
 		}
 	}
 	if this.IsVertical() {
+		if this.compact {
+			cross += m.L + m.R
+		}
 		return SizeHints{Width: cross, Height: main + m.T + m.B, Policy: GrowVertical}
+	}
+	if this.compact {
+		cross += m.T + m.B
 	}
 	return SizeHints{Width: main + m.L + m.R, Height: cross, Policy: GrowHorizontal}
 }

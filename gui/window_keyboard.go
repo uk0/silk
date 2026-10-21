@@ -43,3 +43,41 @@ func (win *Window) dispatchEscape(key int, repeat bool) bool {
 	}
 	return false
 }
+
+// Modal dialogs and their popups use their own focused controls. Application
+// bindings (Open, Save, Undo, Quit) must not mutate a disabled editor behind them.
+func (win *Window) allowsApplicationShortcuts() bool {
+	for current := win; current != nil; {
+		if current.inModal {
+			return false
+		}
+		if current.wt == WtPopup {
+			current = current.popupOwner
+		} else if current.wt == WtChild {
+			current = current.ParentWindow()
+		} else {
+			break
+		}
+	}
+	return true
+}
+func (win *Window) dispatchWindowShortcut(key int) bool {
+	if win.dispatchShortcutOverride(key) {
+		return true
+	}
+	return win.allowsApplicationShortcuts() && dispatchShortcut(key)
+}
+
+// A MessageBox contains read-only selectable text, not an editable multi-line
+// field. Enter acknowledges it even when that text has focus; real Dialog/Edit
+// multi-line fields keep their existing newline behavior.
+func (win *Window) dispatchMessageBoxEnter(key int, repeat bool) bool {
+	box, ok := win.widget.(*MessageBox)
+	if !ok || key != KeyEnter || !box.IsVisible() || currentMods() != 0 {
+		return false
+	}
+	if !repeat {
+		box.resolveDefault()
+	}
+	return true
+}

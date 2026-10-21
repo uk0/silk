@@ -1046,7 +1046,7 @@ func (this *Edit) Layout() {
 	}
 
 	sw := Theme().ScrollWidth
-	this.TextBlock.Layout(w - sw)
+	this.TextBlock.Layout(math.Max(1, w-sw))
 
 	//	width, height := this.Self().Size()
 
@@ -1068,7 +1068,7 @@ func (this *Edit) Layout() {
 	}
 	vs := this.VertScrollBar()
 	//	vs.SetBounds(width-sw, 0, sw, height-sw)
-	vs.SetRange(0, sh-ph)
+	vs.SetRange(0, math.Max(0, sh-ph))
 	vs.SetDelta(1, ph)
 
 	//	hs := this.HorzScrollBar()

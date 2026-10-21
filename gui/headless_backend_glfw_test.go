@@ -3,10 +3,14 @@
 package gui
 
 import (
+	"context"
 	"errors"
 	"math"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/uk0/silk/core"
@@ -124,5 +128,26 @@ func TestNoDisplayInitializationKeepsLogicalDefaults(t *testing.T) {
 	}
 	if DefaultCursor() == nil || LoadCursor("hand") == nil {
 		t.Fatal("no-display import failed to register logical system cursors")
+	}
+}
+
+// Fresh process is required: queue tests deliberately clear global hooks and
+// would hide the original Cocoa SIGTRAP when a worker posts before any window.
+func TestPostBeforeFirstNativeWindow(t *testing.T) {
+	if os.Getenv("SILK_TEST_PREWINDOW_POST") == "1" {
+		if probeWindow != nil || len(nativeRenderEvidence) != 0 {
+			t.Fatal("pre-window test created a native window")
+		}
+		done := make(chan struct{})
+		go func() { Post(func() {}); close(done) }()
+		<-done
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPostBeforeFirstNativeWindow$")
+	cmd.Env = append(os.Environ(), "SILK_TEST_PREWINDOW_POST=1", "SILK_TEST_NATIVE_RENDER=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("pre-window background Post: %v\n%s", err, out)
 	}
 }

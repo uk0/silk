@@ -1,11 +1,14 @@
 package main
 
 import (
-	"io/fs"
+	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
-	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/diagnostic"
+	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/locator"
@@ -27,6 +30,7 @@ type fileEntry struct {
 // dotfile directories that bloat the index.
 var fileFinderSkipDirs = map[string]bool{
 	"vendor":       true,
+	"local":        true,
 	"node_modules": true,
 	"target":       true,
 	"build":        true,
@@ -63,59 +67,11 @@ var fileFinderSkipExts = map[string]bool{
 	".class": true,
 }
 
-// walkProjectFiles returns every regular file under root (recursively)
-// excluding hidden dirs/files, vendor-style trees, and known binary
-// extensions. Display is set to the path relative to root using the
-// host's separator — on macOS / Linux that's a forward slash, which
-// matches what users typically type in a file finder.
-//
-// Walks once per call. For projects with thousands of files this is
-// O(n) but takes well under 10 ms in practice — silkide is not
-// targeting million-file monorepos. If that changes, the call site
-// can cache the slice and refresh on filesystem events from
-// silk/fswatch.
-//
-// Returns empty slice when root is empty or unreachable; an empty
-// slice yields an empty list dialog, not an error popup.
+// Compatibility helper for pure walker tests. Interactive UI always uses the
+// bounded asynchronous service; do not call this from a native event callback.
 func walkProjectFiles(root string) []fileEntry {
-	if root == "" {
-		return nil
-	}
-	var out []fileEntry
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// One unreadable subtree shouldn't kill the whole walk.
-			// Returning nil here lets WalkDir keep going on siblings;
-			// SkipDir would only stop the current dir.
-			return nil
-		}
-		if path == root {
-			return nil
-		}
-		name := d.Name()
-		if d.IsDir() {
-			if strings.HasPrefix(name, ".") {
-				return filepath.SkipDir
-			}
-			if fileFinderSkipDirs[name] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-		if fileFinderSkipExts[strings.ToLower(filepath.Ext(name))] {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		out = append(out, fileEntry{Path: path, Display: rel})
-		return nil
-	})
-	return out
+	files, _ := scanFileFinder(context.Background(), root)
+	return files
 }
 
 // rankFiles filters and ranks entries against query using the shared
@@ -139,7 +95,7 @@ func rankFiles(files []fileEntry, query string) []fileEntry {
 	for i, f := range files {
 		items[i] = locator.Item{Name: f.Display, Detail: f.Path, Kind: "file"}
 	}
-	ranked := locator.Match(strings.TrimSpace(query), items)
+	ranked := locator.Match(filepath.FromSlash(strings.TrimSpace(query)), items)
 	out := make([]fileEntry, len(ranked))
 	for i, it := range ranked {
 		out[i] = fileEntry{Path: it.Detail, Display: it.Name}
@@ -147,82 +103,106 @@ func rankFiles(files []fileEntry, query string) []fileEntry {
 	return out
 }
 
-// showFileFinder opens the modal Cmd+P quick-open dialog. The list
-// is built fresh each invocation by walking root once — predictable
-// over caching when the user creates files in a side editor and
-// expects them to show up on the next Cmd+P.
-//
-// Enter on the search field opens the top match; Enter / double-
-// click on the list opens whatever is selected. Both paths route
-// through openFileInEditor, which knows how to dispatch .silkui
-// files into the design canvas vs everything else into a new tab.
-//
-// parent owns the modal so the dialog inherits the IDE's window
-// position; tabs is the editor TabWidget that catches non-.silkui
-// files. canvas is required for the .silkui open path.
+type fileFinder struct {
+	dialog   *gui.Dialog
+	input    *gui.Edit
+	list     *gui.ListWidget
+	status   *gui.Label
+	service  *fileSearchService
+	session  *fileSearchSession
+	closed   bool
+	selected *fileEntry
+	reported bool
+}
+
+// Construction never scans, ranks or waits for disk I/O on the GUI thread.
 func showFileFinder(parent gui.IWidget, root string, tabs *gui.TabWidget) {
 	if parent == nil {
 		return
 	}
-	files := walkProjectFiles(root)
-	if len(files) == 0 {
-		// Nothing to show — popping an empty modal would just confuse
-		// the user. Log so a regression that breaks walking still
-		// surfaces in the dev console.
-		core.Warn("file finder: 0 files under ", root)
+	f := newFileFinder(parent, root, quickOpenSearch)
+	defer f.close()
+	result := f.dialog.ShowModal()
+	f.close()
+	if reportDialogFailure(f.dialog.LastError()) {
 		return
 	}
-
-	dlg := gui.NewDialog(i18n.T("Open File"), parent)
+	if result == gui.DialogOK && f.selected != nil && tabs != nil {
+		openFileInEditor(tabs, f.selected.Path)
+	}
+}
+func newFileFinder(parent gui.IWidget, root string, service *fileSearchService) *fileFinder {
+	f := &fileFinder{dialog: gui.NewDialog(i18n.T("Open File"), parent), input: gui.NewEdit(), list: gui.NewListWidget(), status: gui.NewLabel(i18n.T("Indexing project files...")), service: service}
 	box := gui.NewVBox()
 	box.SetSpacing(6)
-
-	input := gui.NewEdit()
-	box.AddWidget(input)
-
-	list := gui.NewListWidget()
-	list.SetSelectionVisible(true)
-	box.AddWidget(list)
-
-	repopulate := func(query string) {
-		ranked := rankFiles(files, query)
-		items := make([]gui.ListItem, 0, len(ranked))
-		for _, f := range ranked {
-			items = append(items, gui.ListItem{Text: f.Display, Data: f})
-		}
-		fillFinderList(list, items)
-	}
-	repopulate("")
-
-	input.SigTextChanged(func(_ interface{}, q string) { repopulate(q) })
-
-	openSelected := func(idx int) {
-		if idx < 0 || idx >= list.Count() {
+	box.AddWidget(f.input)
+	f.list.SetFillAvailable(true)
+	f.list.SetSelectionVisible(true)
+	box.AddWidget(f.list)
+	box.AddWidget(f.status)
+	f.session = service.open(root, func(r fileSearchResult) {
+		if f.closed {
 			return
 		}
-		f, ok := list.Item(idx).Data.(fileEntry)
-		if !ok {
+		items := make([]gui.ListItem, 0, len(r.files))
+		for _, entry := range r.files {
+			items = append(items, gui.ListItem{Text: entry.Display, Data: entry})
+		}
+		fillFinderList(f.list, items)
+		switch {
+		case r.err != nil && !errors.Is(r.err, context.Canceled):
+			code := diagnostic.CodeOf(r.err)
+			f.status.SetText(fmt.Sprintf(i18n.T("[%s] Incomplete file index (%d matches)"), code, r.total))
+			var d *diagnostic.Error
+			hint := ""
+			if errors.As(r.err, &d) {
+				hint = d.Hint
+			}
+			gui.SetToolTip(f.status, r.err.Error()+"\n"+hint)
+			if !f.reported {
+				f.reported = true
+				logEvent(ged.LogWarn, r.err.Error()+"\n"+hint)
+			}
+		case len(r.files) == 0:
+			f.status.SetText(i18n.T("No files found"))
+		case r.total > len(r.files):
+			f.status.SetText(fmt.Sprintf(i18n.T("Showing %d of %d files; refine your search"), len(r.files), r.total))
+		default:
+			f.status.SetText(fmt.Sprintf(i18n.T("%d files"), r.total))
+		}
+	})
+	f.input.SigTextChanged(func(_ interface{}, q string) {
+		if f.closed {
 			return
 		}
-		dismissDialog(dlg)
-		if tabs != nil {
-			openFileInEditor(tabs, f.Path)
-		}
+		fillFinderList(f.list, nil) // Old rows cannot be opened while a new query runs.
+		f.status.SetText(i18n.T("Searching files..."))
+		gui.SetToolTip(f.status, "")
+		f.service.update(f.session, q)
+	})
+	f.input.SigSubmit(func(_ interface{}, _ string) { f.choose(f.list.ActiveIndex()) })
+	f.list.SigSubmit(func(interface{}) { f.choose(f.list.ActiveIndex()) })
+	f.dialog.SetContent(box)
+	f.dialog.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	f.dialog.SetSize(560, 480)
+	f.dialog.SetInitialFocus(f.input)
+	return f
+}
+func (f *fileFinder) choose(idx int) {
+	if f.closed || idx < 0 || idx >= f.list.Count() {
+		return
 	}
-
-	// Enter on the search field opens the top match.
-	input.SigSubmit(func(_ interface{}, _ string) {
-		openSelected(0)
-	})
-
-	// Enter / double-click on the list opens the selected entry.
-	list.SigSubmit(func(o interface{}) {
-		openSelected(list.ActiveIndex())
-	})
-
-	dlg.SetContent(box)
-	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
-	dlg.SetSize(560, 480)
-	input.SetFocus()
-	dlg.ShowModal()
+	entry, ok := f.list.Item(idx).Data.(fileEntry)
+	if !ok {
+		return
+	}
+	f.selected = &entry
+	dismissDialog(f.dialog)
+}
+func (f *fileFinder) close() {
+	if f.closed {
+		return
+	}
+	f.closed = true
+	f.service.close(f.session)
 }

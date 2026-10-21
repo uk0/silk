@@ -1,6 +1,8 @@
 package ged
 
 import (
+	"errors"
+	"github.com/uk0/silk/diagnostic"
 	"os"
 	"path/filepath"
 	"testing"
@@ -168,7 +170,7 @@ func TestFsDelete(t *testing.T) {
 // TestRefreshKeepingExpansionPreservesOpenFolders builds a small tree on
 // disk, expands a nested folder, then refreshes after creating a sibling
 // file and confirms the nested folder stays expanded (unlike the plain
-// Refresh()/SetRootDir which collapse everything but the root).
+// SetRootDir which collapses everything but the root).
 func TestRefreshKeepingExpansionPreservesOpenFolders(t *testing.T) {
 	root := t.TempDir()
 	pkg := filepath.Join(root, "pkg")
@@ -179,8 +181,9 @@ func TestRefreshKeepingExpansionPreservesOpenFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fe := NewFileExplorer()
+	fe, wait := testExplorer(t)
 	fe.SetRootDir(root)
+	wait()
 
 	// Expand the nested "pkg" folder in the model.
 	fe.expandDir(pkg)
@@ -191,6 +194,7 @@ func TestRefreshKeepingExpansionPreservesOpenFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	fe.refreshKeepingExpansion()
+	wait()
 
 	// Find the pkg node post-refresh and confirm it is still expanded.
 	var found *fileEntry
@@ -217,5 +221,45 @@ func TestRefreshKeepingExpansionPreservesOpenFolders(t *testing.T) {
 	// The new file must appear in the rescanned tree.
 	if _, err := os.Stat(filepath.Join(root, "new.go")); err != nil {
 		t.Errorf("new.go missing on disk: %v", err)
+	}
+}
+
+func TestExplorerFilesystemErrorsPortableAndTyped(t *testing.T) {
+	for _, create := range []func(string, string) (string, error){fsCreateFile, fsCreateFolder} {
+		if _, err := create("", "fixture"); diagnostic.CodeOf(err) != diagnostic.FileName {
+			t.Fatal("empty root accepted", err)
+		}
+	}
+	for _, name := range []string{"CON", "nul.txt", "AUX.go", "COM1.log", "LPT9", "COM².txt", "CONIN$", "bad.", "a:b", "q?", "star*", "a\x00b", "a\nb"} {
+		if err := validateFileName(name); diagnostic.CodeOf(err) != diagnostic.FileName {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	for _, name := range []string{"company.go", "com0", "LPT10", "正常.go"} {
+		if err := validateFileName(name); err != nil {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	dir := t.TempDir()
+	path, err := fsCreateFile(dir, "a.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fsCreateFile(dir, "a.go")
+	if diagnostic.CodeOf(err) != diagnostic.FileConflict || !errors.Is(err, os.ErrExist) {
+		t.Fatalf("conflict lost: %v", err)
+	}
+	_, err = fsRename(path, "a.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fsRename(filepath.Join(dir, "missing"), "missing")
+	if diagnostic.CodeOf(err) != diagnostic.FileWrite || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing source: %v", err)
+	}
+	for _, path := range []string{".", "..", string(filepath.Separator)} {
+		if diagnostic.CodeOf(fsDelete(path)) != diagnostic.FileName {
+			t.Fatal("unsafe delete accepted", path)
+		}
 	}
 }

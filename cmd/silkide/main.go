@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/uk0/silk/a11y"
 	"github.com/uk0/silk/core"
@@ -176,6 +177,18 @@ func main() {
 
 	frame.Show()
 	core.EventLoop()
+	finishPreferenceSaves(prefs)
+	// Stop and join gutter workers only after UI dispatch ends. Merely canceling
+	// at tab/window close can let the process exit before the child is reaped.
+	gitShutdown, cancelGitShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := gui.ShutdownEditorGit(gitShutdown); err != nil {
+		core.Warn("[SILK-GIT002] editor Git shutdown: ", err)
+	}
+	cancelGitShutdown()
+	if globalFileExplorer != nil {
+		globalFileExplorer.CancelScan()
+	}
+	retireMacroEditors()
 	if lspStartCancel != nil {
 		lspStartCancel()
 	}
@@ -299,7 +312,8 @@ func composeTitle(canvas *ged.GedView) string {
 // opens in a code editor tab.
 func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	tb := gui.NewToolBar()
-	tb.SetSpacing(4)
+	tb.SetCompact(true)
+	tb.SetSpacing(2)
 	addWorkspaceActions(tb)
 
 	// addIconAction wraps tb.AddAction + gui.SetToolTip so every
@@ -457,6 +471,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	if !ok || dock == nil {
 		return nil, nil
 	}
+	dock.SetCompactActions(true)
 
 	editorTabs := buildEditorTabs(dock)
 	dock.AddView(editorTabs)
@@ -508,6 +523,9 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		fileExplorer := ged.NewFileExplorer()
 		fileExplorer.SetRootDir(".")
 		globalFileExplorer = fileExplorer
+		fileExplorer.SetRenamePreparation(func(oldPath, newPath string) (ged.RenamePreparation, error) {
+			return prepareEditorRename(editorTabs, designCanvas, oldPath, newPath)
+		})
 		fileExplorer.SigFileOpen(func(path string) {
 			openFromTree(path, editorTabs, designCanvas, dock)
 		})
@@ -603,11 +621,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// BuildOutput pane uses). syncOutlineToActiveEditor keeps it in
 		// step with the editor tabs.
 		outline := ged.NewCodeOutlinePanel()
-		outline.SetNavigateCallback(func(line int) {
-			if ed := activeEditor(editorTabs); ed != nil {
-				ed.ScrollToLine(line)
-			}
-		})
+		configureOutlineNavigation(outline, editorTabs)
 		globalOutline = outline
 		rightDock.AddView(outline)
 
@@ -964,6 +978,9 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 			}
 		}
 	}
+	if rejectBusyFile(path) {
+		return false
+	}
 	if ed != nil && path != "" && editorDiffersFromDisk(ed, path) {
 		switch askDirty(func() gui.DialogResult { return askCloseDirtyEditor(ed, path) }) {
 		case gui.DialogOK:
@@ -976,6 +993,8 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 		}
 	}
 	if path != "" {
+		ed.CancelGitStatus()
+		delete(editorGitManualRefresh, ed)
 		delete(openEditors, path)
 		lspDidCloseFile(path) // tell gopls + drop diag/version state
 	}
@@ -1140,6 +1159,9 @@ var askQuitDirtyEditors = func(paths []string) gui.DialogResult {
 // design scene first (it's the one File→New already guards), then the editor
 // buffers.
 func canQuit(canvas *ged.GedView) bool {
+	if rejectDuringRename() {
+		return false
+	}
 	return confirmDiscardDirty(canvas) && confirmQuitDirtyEditors()
 }
 
@@ -1167,13 +1189,21 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 	// Capture before CloseAllViews detaches the active dock/tab; afterwards
 	// documentMode can no longer distinguish design from a hidden editor.
 	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
-	frame.SetClosedCallback(func(*gui.Frame) { quitApp() })
+	frame.SetClosedCallback(func(*gui.Frame) {
+		for _, ed := range openEditors {
+			if ed != nil {
+				ed.CancelGitStatus()
+			}
+		}
+		quitApp()
+	})
 }
 
 // lspDidCloseFile notifies gopls a document closed and drops its client-side
 // state (version + diagnostics), so gopls doesn't keep a ghost document and
 // the Problems panel doesn't show a closed file's stale entries.
 func lspDidCloseFile(path string) {
+	closeMacroEditor(path)
 	if !isGoFile(path) {
 		return
 	}
@@ -1181,11 +1211,7 @@ func lspDidCloseFile(path string) {
 	if _, had := lspDiagnostics[path]; had {
 		delete(lspDiagnostics, path)
 		if globalProblems != nil {
-			var all []ged.Problem
-			for _, ps := range lspDiagnostics {
-				all = append(all, ps...)
-			}
-			globalProblems.SetProblems(all)
+			globalProblems.SetProblems(ged.MergeProblems(globalProblems.Problems(), ged.ProblemSource{Kind: ged.ProblemLanguage, Doc: path}, nil))
 		}
 	}
 	closeLSPDocument(path)
@@ -1610,6 +1636,9 @@ func itemBoundsLabel(item graph.IItem) string {
 // MRU list survives across launches. The package-level globalPrefs
 // reference is set in main() right after newPreferences().
 func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerDock *gui.Dock) {
+	if rejectBusyFile(path) {
+		return
+	}
 	if filepath.Ext(path) == ".silkui" {
 		if canvas == nil {
 			return
@@ -2065,7 +2094,7 @@ func splitRunArgs(s string) []string {
 // never disguised as a successful single-buffer textual replacement.
 func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 	if globalLSP == nil {
-		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		reportLSPUnavailable()
 		return
 	}
 	ed := activeEditor(tabs)
@@ -3108,6 +3137,13 @@ func saveActiveEditorToDisk(tabs *gui.TabWidget) bool {
 // tab: closeEditorTab saves the tab being closed, which a middle-click
 // close never activates.
 func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
+	if ed == nil || rejectBusyFile(path) {
+		return false
+	}
+	if ed.FilePath() != "" && ed.FilePath() != path {
+		silkideToast(renameBusyError(path, "save target no longer matches editor identity").Error(), gui.ToastError)
+		return false
+	}
 	text := ed.Text()
 	out := text
 	if strings.EqualFold(filepath.Ext(path), ".go") {
@@ -3125,6 +3161,7 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 		ed.ReplaceAllText(out)
 	}
 	ed.MarkSaved()
+	ed.RefreshGitStatus()
 	if parent := ed.Parent(); parent != nil {
 		if tabs, ok := parent.Parent().(*gui.TabWidget); ok {
 			refreshEditorTab(tabs, ed, path)
@@ -3464,6 +3501,9 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 		return false
 	}
 	path = filepath.Clean(absPath)
+	if rejectBusyFile(path) {
+		return false
+	}
 	if tabs == nil {
 		return false
 	}
@@ -3479,6 +3519,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// Give the editor its path so RefreshGitStatus → git diff lights up
 	// the change gutter (added/modified/removed bars). Without this the
 	// gutter stays empty regardless of uncommitted changes.
+	configureEditorGitFeedback(ed)
 	ed.SetFilePath(path)
 	ed.MarkSaved()
 	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
@@ -3493,18 +3534,42 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// (see lspOnEditorChanged) before the async fetch, so the column lines
 	// up with the edit that triggered it.
 	ed.SigChanged(func(text string) {
+		path := ed.FilePath()
+		if openEditors[path] != ed {
+			return
+		}
 		refreshEditorTab(tabs, ed, path)
+		if fileRenameAffects(path) {
+			return
+		}
 		lspOnEditorChanged(path, ed, text)
+		updateMacroEditor(tabs, path, ed)
 	})
 	// LSP hover + signature help: the editor fires position events; silkide
 	// does the async gopls fetch + ShowToolTip off the main thread. Hover
 	// carries a precise global anchor; signature help anchors near the
 	// editor (precise caret anchoring is a follow-up).
-	ed.SigCompletionRequested(func() { requestLSPCompletion(path, ed) })
+	ed.SigCompletionRequested(func() {
+		path := ed.FilePath()
+		if openEditors[path] != ed || fileRenameAffects(path) {
+			return
+		}
+		if !requestMacroCompletion(path, ed) {
+			requestLSPCompletion(path, ed)
+		}
+	})
 	ed.SigHoverRequested(func(line, col int, gx, gy float64) {
+		path := ed.FilePath()
+		if openEditors[path] != ed || fileRenameAffects(path) {
+			return
+		}
 		hoverViaLSP(path, line, col, gx, gy)
 	})
 	ed.SigSignatureRequested(func(line, col int) {
+		path := ed.FilePath()
+		if openEditors[path] != ed || fileRenameAffects(path) {
+			return
+		}
 		signatureHelpViaLSP(ed, path, line, col)
 	})
 	// Keep a live dlv session in step with the gutter: runProjectInDebugger
@@ -3514,6 +3579,10 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// Wiring it here (rather than at launch) covers both cases: every editor
 	// silkide registers gets the hook, whenever it was opened.
 	ed.SigBreakpointToggled(func(line int, on bool) {
+		path := ed.FilePath() // snapshot identity on the UI thread before RPC
+		if openEditors[path] != ed || fileRenameAffects(path) {
+			return
+		}
 		sess := globalDebug // UI-thread read, same as debugContinue
 		if sess == nil {
 			return
@@ -3541,13 +3610,15 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// hover/definition/completion (next commit) have something to work
 	// against. nil-safe when LSP launch failed at startup.
 	lspDidOpenFile(path, string(data))
+	updateMacroEditor(tabs, path, ed)
 	return true
 }
 
 // openFileInEditorAt is openFileInEditor + ScrollToLine; the entry
 // point BuildOutput's SigErrorClick uses to jump to a compile error.
 // `line` is 1-based per the standard Go error format; CodeEditor
-// uses 0-based indexing internally.
+// uses 0-based indexing internally. col is a zero-based rune column; LSP
+// callers must use openFileInEditorAtLSP instead.
 func openFileInEditorAt(tabs *gui.TabWidget, path string, line, col int) {
 	if !openFileInEditor(tabs, path) {
 		return
@@ -3684,8 +3755,8 @@ func addBookmarkAtCursor(tabs *gui.TabWidget) {
 // is looking at. Called once at startup and again on every tab switch
 // (editorTabs.SetCurrentChangedCallback). SetEditor re-parses symbols
 // immediately; the panel keeps following content edits on its own via
-// a Draw-time line-count/length hash, so no per-keystroke hook is
-// needed here. No-op when the active tab isn't a code editor.
+// the editor text revision, so no per-keystroke hook is needed here.
+// Switching to a non-code tab clears the outline.
 func syncOutlineToActiveEditor(tabs *gui.TabWidget) {
 	if globalOutline == nil {
 		return
@@ -3801,6 +3872,9 @@ var globalLSP *core.LSPClient
 // message and bail. The session pointer is stored in globalDebug so
 // stopDebugger can tear it down cleanly via the palette.
 func runProjectInDebugger(canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if globalDebug != nil {
 		// Already debugging: Shift+F5 now means "continue to the next
 		// stop" instead of erroring, so the user drives the whole
@@ -4042,9 +4116,8 @@ func centerEditorTabs() *gui.TabWidget {
 // startLSPBackground kicks off gopls on a goroutine so the IDE main
 // thread keeps painting through the initialize handshake. The client
 // is stored in globalLSP on success; failure (gopls not on PATH, or
-// initialize timed out) is logged via core.Warn and silently dropped
-// -- silkide is meant to keep working without LSP, so this never
-// toasts.
+// initialize timed out) retains a stable error code/cause and recovery hint.
+// The editor remains usable; stale-session cancellation does not show a banner.
 //
 // A second goroutine drains the Notifications channel and forwards
 // each message to core.Log; unexpected payloads are not fatal. Both
@@ -4065,8 +4138,7 @@ func startLSPBackground(projectDir string) {
 				if epoch != lspSessionGeneration || ctx.Err() != nil {
 					return
 				}
-				core.Warn("silkide: gopls not available: ", err)
-				logEvent(ged.LogWarn, "gopls unavailable")
+				reportLSPStartFailure(epoch, err)
 			})
 			return
 		}
@@ -4080,12 +4152,13 @@ func startLSPBackground(projectDir string) {
 			RootURI:      rootURI,
 			Capabilities: ideLSPCapabilities(),
 		}); initErr != nil {
+			// Snapshot external cancellation BEFORE our cleanup cancels ctx.
+			// Otherwise the posted failure always observes ctx.Err()!=nil and vanishes.
+			cancelled := ctx.Err() != nil
 			gui.Post(func() {
-				if epoch != lspSessionGeneration || ctx.Err() != nil {
-					return
+				if !cancelled {
+					reportLSPStartFailure(epoch, initErr)
 				}
-				core.Warn("silkide: gopls initialize: ", initErr)
-				logEvent(ged.LogWarn, "gopls unavailable")
 			})
 			abort()
 			cancel()
@@ -4149,14 +4222,7 @@ func startLSPBackground(projectDir string) {
 				}
 				core.Log("lsp: ", m.Method)
 			}
-			gui.Post(func() {
-				if globalLSP == client && epoch == lspSessionGeneration {
-					globalLSP = nil
-					retireLSPDocuments()
-					logEvent(ged.LogWarn, "gopls disconnected; use Restart LSP to reconnect")
-					go client.Close()
-				}
-			})
+			gui.Post(func() { finishLSPConnection(client, epoch) })
 		}(client.Notifications())
 	}()
 }
@@ -4241,8 +4307,11 @@ func documentHighlightViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 // opens the target file:line. Bound to F12. The AST-based context-menu
 // "跳转定义" stays as the offline fallback; this is the cross-package path.
 func goToDefinitionViaLSP(tabs *gui.TabWidget) {
+	if goToMacroDefinition(tabs) {
+		return
+	}
 	if globalLSP == nil {
-		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		reportLSPUnavailable()
 		return
 	}
 	ed := activeEditor(tabs)
@@ -4265,7 +4334,7 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
 					return
 				}
-				silkideToast(i18n.Tf("Go to definition failed: %v", err), gui.ToastError)
+				reportLSPRequestError(i18n.T("Go to Definition"), path, err)
 			})
 			return
 		}
@@ -4282,14 +4351,13 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 		if target == "" {
 			return
 		}
-		dstLine := locs[0].Range.Start.Line + 1 // LSP 0-based → 1-based
-		dstCol := locs[0].Range.Start.Character
+		position := locs[0].Range.Start
 		gui.Post(func() {
 			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
 				return
 			}
 
-			openFileInEditorAt(tabs, target, dstLine, dstCol)
+			openFileInEditorAtLSP(tabs, target, position)
 		})
 	}()
 }
@@ -4298,8 +4366,11 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 // caret and lists them in the ReferencesPanel. Bound to Shift+F12. The RPC
 // runs off the main thread; results post back via gui.Post.
 func findReferencesViaLSP(tabs *gui.TabWidget) {
+	if findMacroReferences(tabs) {
+		return
+	}
 	if globalLSP == nil {
-		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		reportLSPUnavailable()
 		return
 	}
 	ed := activeEditor(tabs)
@@ -4318,6 +4389,12 @@ func findReferencesViaLSP(tabs *gui.TabWidget) {
 		}
 		locs, err := lsp.References(uri, line, col, true)
 		if err != nil {
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				reportLSPRequestError(i18n.T("Find References"), path, err)
+			})
 			return
 		}
 		if len(locs) == 0 {
@@ -4340,12 +4417,10 @@ func findReferencesViaLSP(tabs *gui.TabWidget) {
 			refs := make([]ged.ReferenceLoc, 0, len(locs))
 			for _, l := range locs {
 				p := uriToPath(l.URI)
-				refs = append(refs, ged.ReferenceLoc{
-					File:    p,
-					Line:    l.Range.Start.Line + 1, // 0-based LSP → 1-based
-					Col:     l.Range.Start.Character,
-					Preview: referencePreview(p, l.Range.Start.Line),
-				})
+				if p == "" {
+					continue
+				}
+				refs = append(refs, lspReferenceLocation(p, l.Range.Start, referenceSourceLine(p, l.Range.Start.Line)))
 			}
 			if globalReferencesPanel != nil {
 				globalReferencesPanel.SetLocations(refs)
@@ -4358,6 +4433,12 @@ func findReferencesViaLSP(tabs *gui.TabWidget) {
 // referencePreview returns the trimmed source line (0-based) for a
 // reference row — from the open buffer if the file is open, else from disk.
 func referencePreview(path string, line0 int) string {
+	return strings.TrimSpace(referenceSourceLine(path, line0))
+}
+
+// referenceSourceLine retains indentation: LSP columns are relative to the
+// original line, never to the trimmed preview shown in the references pane.
+func referenceSourceLine(path string, line0 int) string {
 	var lines []string
 	if ed, ok := openEditors[path]; ok && ed != nil {
 		lines = ed.Lines()
@@ -4365,7 +4446,7 @@ func referencePreview(path string, line0 int) string {
 		lines = strings.Split(string(data), "\n")
 	}
 	if line0 >= 0 && line0 < len(lines) {
-		return strings.TrimSpace(lines[line0])
+		return lines[line0]
 	}
 	return ""
 }
@@ -4378,9 +4459,13 @@ var lspSigGen int
 // hoverViaLSP fetches gopls hover docs for the identifier the mouse is over
 // and shows them in a tooltip at the editor-provided global anchor.
 func hoverViaLSP(path string, line, col int, gx, gy float64) {
-	if globalLSP == nil || !isGoFile(path) {
+	ed := openEditors[path]
+	if globalLSP == nil || !isGoFile(path) || ed == nil {
 		return
 	}
+	hint := captureEditorHint(ed, path)
+	// The editor reports rune columns; LSP requires UTF-16 code units.
+	col = utf16ColForRune(ed, line, col)
 	lspHoverGen++
 	gen := lspHoverGen
 	uri := fileURIOf(path)
@@ -4399,7 +4484,7 @@ func hoverViaLSP(path string, line, col int, gx, gy float64) {
 				return
 			}
 
-			if lspHoverGen != gen {
+			if lspHoverGen != gen || !hint.current() {
 				return // a newer hover superseded this one
 			}
 			gui.ShowToolTip(gx, gy, h.Contents)
@@ -4417,6 +4502,7 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 	}
 	lspSigGen++
 	gen := lspSigGen
+	hint := captureEditorHint(ed, path)
 	uri := fileURIOf(path)
 	lsp := globalLSP
 	// Signature help fires on the caret (after typing '(' / ','); use the
@@ -4441,7 +4527,7 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 				return
 			}
 
-			if lspSigGen != gen {
+			if lspSigGen != gen || !hint.current() {
 				return
 			}
 			// Anchor the hint just under the caret (CaretGlobalXY returns the
@@ -4468,7 +4554,7 @@ func formatSignature(sh *core.LSPSignatureHelp) string {
 // menu is built on the main thread anchored near the caret.
 func codeActionsViaLSP(tabs *gui.TabWidget) {
 	if globalLSP == nil {
-		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		reportLSPUnavailable()
 		return
 	}
 	ed := activeEditor(tabs)
@@ -4488,6 +4574,12 @@ func codeActionsViaLSP(tabs *gui.TabWidget) {
 		}
 		actions, err := lsp.CodeAction(uri, line, col, line, col)
 		if err != nil {
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				reportLSPRequestError(i18n.T("Code Actions"), path, err)
+			})
 			return
 		}
 		if len(actions) == 0 {
@@ -4566,7 +4658,7 @@ func applyCodeAction(a core.LSPCodeAction) {
 // unchanged (a stale-guard against edits made during the round-trip).
 func formatDocumentViaLSP(tabs *gui.TabWidget) {
 	if globalLSP == nil {
-		silkideToast(i18n.T("LSP not running"), gui.ToastWarning)
+		reportLSPUnavailable()
 		return
 	}
 	ed := activeEditor(tabs)
@@ -4588,7 +4680,7 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
 					return
 				}
-				silkideToast(i18n.Tf("Format failed: %v", err), gui.ToastError)
+				reportLSPRequestError(i18n.T("Format Document"), path, err)
 			})
 			return
 		}
@@ -4602,7 +4694,7 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 					return
 				}
 
-				silkideToast(i18n.Tf("Format failed: %v", applyErr), gui.ToastError)
+				reportLSPRequestError(i18n.T("Format Document"), path, applyErr)
 			})
 			return
 		}
@@ -4687,19 +4779,19 @@ func handlePublishDiagnosticsForSession(m *core.LSPMessage, epoch uint64) {
 		if epoch != 0 && (epoch != lspSessionGeneration || globalLSP == nil) {
 			return
 		}
+		if fileRenameAffects(path) {
+			return
+		}
 		if p.Version != nil && *p.Version != lspVersions[path] {
 			return
 		}
 		if epoch != 0 && openEditors[path] == nil {
 			return
 		}
+		normalizeLSPProblemColumns(probs, openEditors[path])
 		lspDiagnostics[path] = probs
-		var all []ged.Problem
-		for _, ps := range lspDiagnostics {
-			all = append(all, ps...)
-		}
 		if globalProblems != nil {
-			globalProblems.SetProblems(all)
+			globalProblems.SetProblems(ged.MergeProblems(globalProblems.Problems(), ged.ProblemSource{Kind: ged.ProblemLanguage, Doc: path}, probs))
 		}
 		if ed, ok := openEditors[path]; ok && ed != nil {
 			ed.SetErrors(squig)
@@ -4725,7 +4817,13 @@ func restartLSP(canvas *ged.GedView) {
 	lspCompletionGen = map[string]int{}
 	lspDiagnostics = map[string][]ged.Problem{}
 	if globalProblems != nil {
-		globalProblems.SetProblems(nil)
+		var keep []ged.Problem
+		for _, p := range globalProblems.Problems() {
+			if p.Source.Kind != ged.ProblemLanguage {
+				keep = append(keep, p)
+			}
+		}
+		globalProblems.SetProblems(keep)
 	}
 	startLSPBackground(projectDir(canvas))
 	silkideToast(i18n.T("Restarting LSP..."), gui.ToastInfo)

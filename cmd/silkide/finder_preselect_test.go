@@ -191,16 +191,16 @@ func TestFillFinderListKeepsEveryRowsPayload(t *testing.T) {
 // finderDialogs maps each finder that rebuilds a ListWidget to the file it
 // lives in.
 var finderDialogs = map[string]string{
-	"showCommandPalette": "palette.go",
-	"showFileFinder":     "file_finder.go",
-	"showSymbolFinder":   "symbol_finder.go",
+	"newCommandPalette": "palette.go",
+	"newFileFinder":     "file_finder.go",
+	"newSymbolFinder":   "symbol_finder.go",
 }
 
 // TestEveryFinderFillsThroughFillFinderList: the test above proves the seam
 // works, not that the dialogs use it — converting two of the three would leave
 // the third opening with a dead Enter and the package still green. So this
-// reads the three functions out of the syntax tree (they open modal dialogs and
-// cannot be called from a test) and pins that each one fills through
+// reads the list-construction functions out of the syntax tree (the palette
+// now has a separately testable builder) and pins that each one fills through
 // fillFinderList and none of them clears the list behind its back.
 func TestEveryFinderFillsThroughFillFinderList(t *testing.T) {
 	for name, file := range finderDialogs {

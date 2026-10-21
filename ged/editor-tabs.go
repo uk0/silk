@@ -166,6 +166,8 @@ func (this *EditorTabs) CloseTab(idx int) {
 	}
 
 	tab := this.tabs[idx]
+	// Retire background gutter work before detaching this editor.
+	tab.editor.CancelGitStatus()
 	// Detach editor from parent
 	tab.editor.SetParent(nil)
 

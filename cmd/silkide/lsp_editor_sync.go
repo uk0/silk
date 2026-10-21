@@ -26,14 +26,20 @@ func ideLSPCapabilities() json.RawMessage {
 func mustLSPJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 
 func openLSPDocument(path, text string) {
-	if globalLSP == nil || !isGoFile(path) {
+	openLSPDocumentAfter(path, text, nil)
+}
+
+// previous orders renamed documents after the old URI didClose without blocking the UI.
+func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
+	if globalLSP == nil || !isGoFile(path) || fileRenameAffects(path) {
 		return
 	}
 	lspVersions[path] = 1
-	var previous <-chan struct{}
 	if old := lspDocuments[path]; old != nil {
 		old.close()
-		previous = old.done
+		if previous == nil {
+			previous = old.done
+		}
 	}
 	client := globalLSP
 	ed := openEditors[path]
@@ -66,7 +72,7 @@ func openLSPDocument(path, text string) {
 	lspDocuments[path] = doc
 }
 func updateLSPDocument(path string, ed *gui.CodeEditor, text string) {
-	if globalLSP == nil || !isGoFile(path) {
+	if globalLSP == nil || !isGoFile(path) || fileRenameAffects(path) {
 		return
 	}
 	d := lspDocuments[path]
