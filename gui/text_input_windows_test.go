@@ -42,6 +42,38 @@ func TestWindowsTextInputSurrogatePair(t *testing.T) {
 	}
 }
 
+func TestWindowsCtrlSpaceRequestsCompletionWithoutInsertingSpace(t *testing.T) {
+	e := nativeTextInputEditor(t)
+	e.SetText("fmt.Pr")
+	e.ScrollToLineCol(0, 6)
+	requests := 0
+	e.SigCompletionRequested(func() { requests++ })
+	user32 := syscall.NewLazyDLL("user32.dll")
+	get, set := user32.NewProc("GetKeyboardState"), user32.NewProc("SetKeyboardState")
+	var original [256]byte
+	if ok, _, _ := get.Call(uintptr(unsafe.Pointer(&original[0]))); ok == 0 {
+		t.Fatal("GetKeyboardState")
+	}
+	defer set.Call(uintptr(unsafe.Pointer(&original[0])))
+	state := [256]byte{}
+	state[KeyCtrl] = 0x80
+	if ok, _, _ := set.Call(uintptr(unsafe.Pointer(&state[0]))); ok == 0 {
+		t.Fatal("SetKeyboardState")
+	}
+	h := e.Window().hWnd
+	win32.SendMessage(h, win32.WM_KEYDOWN, uintptr(KeySpace), 1)
+	win32.SendMessage(h, win32.WM_CHAR, ' ', 1)
+	if e.Text() != "fmt.Pr" || requests != 1 || !e.CompletionVisible() {
+		t.Fatalf("text=%q requests=%d popup=%v", e.Text(), requests, e.CompletionVisible())
+	}
+	state[win32.VK_MENU] = 0x80 // AltGr still delivers ordinary text.
+	set.Call(uintptr(unsafe.Pointer(&state[0])))
+	win32.SendMessage(h, win32.WM_CHAR, ' ', 1)
+	if e.Text() != "fmt.Pr " {
+		t.Fatalf("AltGr input lost: %q", e.Text())
+	}
+}
+
 func TestWindowsTextInputUnicodeMessage(t *testing.T) {
 	e := nativeTextInputEditor(t)
 	h := e.Window().hWnd

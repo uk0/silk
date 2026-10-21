@@ -89,6 +89,11 @@ func (this *_Tab) Text() string {
 }
 
 func (this *_Tab) realText() (s string) {
+	if view, ok := this.data.(interface{ DockTitle() string }); ok {
+		if title := view.DockTitle(); title != "" {
+			return title
+		}
+	}
 	if iTitle, ok := this.data.(ITitle); ok {
 		s = iTitle.Title()
 	} else if iText, ok := this.data.(IText); ok {

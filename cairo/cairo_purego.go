@@ -37,7 +37,10 @@ type (
 )
 
 const (
-	STATUS_SUCCESS = purecairo.STATUS_SUCCESS
+	// Pure renderer ignores Cairo hinting options, retaining API compatibility.
+	HINT_STYLE_FULL = 4
+	HINT_METRICS_ON = 2
+	STATUS_SUCCESS  = purecairo.STATUS_SUCCESS
 
 	FORMAT_INVALID   = purecairo.FORMAT_INVALID
 	FORMAT_ARGB32    = purecairo.FORMAT_ARGB32

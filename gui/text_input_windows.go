@@ -26,6 +26,13 @@ func (win *Window) textInputTarget() IEventTextInput {
 }
 
 func (win *Window) dispatchUTF16(unit uint16) bool {
+	// TranslateMessage emits a printable WM_CHAR for Ctrl+Space too. The
+	// keydown already requested completion; inserting that space immediately
+	// cancels it and changes the buffer. Keep AltGr (Ctrl+Alt) text input intact.
+	if unit == ' ' && IsKeyDown(KeyCtrl) && !IsKeyDown(win32.VK_MENU) {
+		win.textInput.reset()
+		return true
+	}
 	input := win.textInputTarget()
 	if input == nil {
 		win.textInput.reset()

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/paint"
+	"math"
 	"sort"
 	"strings"
 )
@@ -16,10 +17,13 @@ const (
 
 // CompletionItem represents a single auto-completion suggestion.
 type CompletionItem struct {
+	apply  *completionApply
 	Text   string
 	Kind   int // CikKeyword, CikType, CikFunction, CikVariable
 	Detail string
 }
+
+type completionApply struct{ run func(*CodeEditor) }
 
 // CompletionPopup manages the auto-completion dropdown for a CodeEditor.
 type CompletionPopup struct {
@@ -150,6 +154,10 @@ func (this *CompletionPopup) Accept(editor *CodeEditor) {
 	}
 	item := this.filtered[this.selectedIdx]
 	this.visible = false
+	if item.apply != nil {
+		item.apply.run(editor)
+		return
+	}
 
 	// Replace the current prefix with the completion text
 	prefixLen := len([]rune(this.prefix))
@@ -211,6 +219,13 @@ func (this *CompletionPopup) buildItems(editor *CodeEditor) {
 // (see RankCompletions / fuzzyMatch) and ranks survivors by score.
 func (this *CompletionPopup) filter() {
 	this.filtered = RankCompletions(this.items, this.prefix)
+	// Semantic provider edits are authoritative for this position. Local
+	// identifier guesses include the fragment currently being typed (e.g. Pr),
+	// whose exact fuzzy match would otherwise hide Println behind a no-op.
+	// Keep fuzzy ordering within each group and preserve standalone ranking.
+	sort.SliceStable(this.filtered, func(i, j int) bool {
+		return this.filtered[i].apply != nil && this.filtered[j].apply == nil
+	})
 	// Limit to a reasonable number
 	if len(this.filtered) > 50 {
 		this.filtered = this.filtered[:50]
@@ -425,7 +440,11 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 		visibleCount = this.maxVisible
 	}
 
-	popupW := 300.0
+	edW, edH := editor.Size()
+	popupW := math.Min(math.Max(300, fe.Height*20), math.Min(480, edW-editor.gutterW-10))
+	if popupW < 40 {
+		return
+	}
 	popupH := float64(visibleCount) * itemH
 
 	// Position below cursor
@@ -442,8 +461,6 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 	cy := float64(editor.cursorLine+1)*lh - editor.scrollY + topOff
 
 	// Ensure popup doesn't go off-screen
-	_, edH := editor.Size()
-	edW, _ := editor.Size()
 	if cx+popupW > edW {
 		cx = edW - popupW - 5
 	}
@@ -454,9 +471,13 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 		// Show above cursor
 		cy = float64(editor.cursorLine)*lh - editor.scrollY + topOff - popupH
 	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(cx, cy, popupW, popupH)
+	g.Clip()
 
 	// Background
-	g.SetBrush1(paint.Color{R: 40, G: 40, B: 50, A: 245})
+	g.SetBrush1(paint.Color{R: 40, G: 40, B: 50, A: 255})
 	g.Rectangle(cx, cy, popupW, popupH)
 	g.Fill()
 
@@ -492,13 +513,13 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 		} else {
 			g.SetBrush1(paint.Color{R: 200, G: 200, B: 210, A: 255})
 		}
-		g.DrawText1(cx+24, iy+fe.Ascent+3, item.Text)
+		label, detail, detailX := completionRowText(editor.font, item, popupW)
+		g.DrawText1(cx+24, iy+fe.Ascent+3, label)
 
-		// Detail text (right-aligned)
-		if item.Detail != "" {
-			g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 255})
-			detailExt := editor.font.TextExtents(item.Detail)
-			g.DrawText1(cx+popupW-detailExt.XAdvance-8, iy+fe.Ascent+3, item.Detail)
+		// Detail occupies only the remaining column, never the label or code.
+		if detail != "" {
+			g.SetBrush1(paint.Color{R: 170, G: 180, B: 200, A: 255})
+			g.DrawText1(cx+detailX, iy+fe.Ascent+3, detail)
 		}
 	}
 
@@ -514,4 +535,44 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 		g.Rectangle(cx+popupW-4, scrollBarY, 3, scrollBarH)
 		g.Fill()
 	}
+}
+
+func completionRowText(font paint.Font, item CompletionItem, width float64) (label, detail string, detailX float64) {
+	label = completionElide(font, strings.Join(strings.Fields(item.Text), " "), math.Max(0, width-32))
+	start := 24 + completionTextWidth(font, label) + 16
+	text := strings.Join(strings.Fields(item.Detail), " ")
+	detail = completionElide(font, text, math.Max(0, width-8-start))
+	detailX = math.Max(start, width-8-completionTextWidth(font, detail))
+	return
+}
+
+// Fallback fonts can advance farther than their ink bounds (notably CJK on
+// Windows). Reserve both, so right-aligned details cannot invade the label.
+func completionTextWidth(font paint.Font, text string) float64 {
+	e := font.TextExtents(text)
+	return math.Max(e.XAdvance, e.XBearing+e.Width)
+}
+
+func completionElide(font paint.Font, text string, width float64) string {
+	if completionTextWidth(font, text) <= width {
+		return text
+	}
+	if completionTextWidth(font, elideMark) > width {
+		return ""
+	}
+	// Measure only logarithmically many prefixes of long server signatures.
+	// Retain a measured, rune-safe candidate rather than estimating glyph widths.
+	runes := []rune(text)
+	lo, hi := 0, len(runes)
+	fit := elideMark
+	for lo+1 < hi {
+		mid := lo + (hi-lo)/2
+		candidate := string(runes[:mid]) + elideMark
+		if completionTextWidth(font, candidate) <= width {
+			lo, fit = mid, candidate
+		} else {
+			hi = mid
+		}
+	}
+	return fit
 }

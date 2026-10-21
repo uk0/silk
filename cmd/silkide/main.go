@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,13 +56,13 @@ func main() {
 	defer core.Close()
 	stopPerformanceCapture := startPerformanceCapture()
 	defer stopPerformanceCapture()
+	prefs := newPreferences()
+	globalPrefs = prefs
 	installLocale()
 	// Dark theme by default: the editor and bottom panels already render
 	// dark, so a dark shell unifies the IDE (VS Code / JetBrains style)
 	// instead of the old light-shell-around-dark-editor mismatch.
-	gui.SetThemeMode(gui.ThemeDark)
-	prefs := newPreferences()
-	globalPrefs = prefs
+	applyIDEAppearance(prefs.Appearance())
 
 	gui.SetAppIcon(silkIDEIcon())
 	frame := gui.NewFrameWindow()
@@ -80,6 +81,7 @@ func main() {
 	// through to GedScene.OpenFile / Save without the global plumbing
 	// SuggestDocDock would otherwise force.
 	editorTabs, designCanvas := buildPanels(frame)
+	localizeWorkbenchPanels()
 	wireDesignerContextPanels(designCanvas)
 	// Bridge core's log stream into the bottom-dock Log panel now that
 	// buildPanels has constructed it — registered before the background
@@ -174,6 +176,15 @@ func main() {
 
 	frame.Show()
 	core.EventLoop()
+	if lspStartCancel != nil {
+		lspStartCancel()
+	}
+	lspSessionGeneration++
+	retireLSPDocuments()
+	if globalLSP != nil {
+		_ = globalLSP.Close()
+		globalLSP = nil
+	}
 }
 
 // idTitle composes the window title in JetBrains style: "<project> —
@@ -1177,12 +1188,7 @@ func lspDidCloseFile(path string) {
 			globalProblems.SetProblems(all)
 		}
 	}
-	if globalLSP == nil {
-		return
-	}
-	lsp := globalLSP
-	uri := fileURIOf(path)
-	go func() { _ = lsp.DidClose(uri) }()
+	closeLSPDocument(path)
 }
 
 // makeCodeEditor seeds a CodeEditor with the given text. The editor
@@ -1190,6 +1196,9 @@ func lspDidCloseFile(path string) {
 // silk theme.
 func makeCodeEditor(text string) *gui.CodeEditor {
 	ed := gui.NewCodeEditor()
+	if globalPrefs != nil {
+		applyEditorAppearance(ed, globalPrefs.Appearance())
+	}
 	ed.SetText(text)
 	// Run-test gutter: clicking the ▶ next to a TestXxx/BenchmarkXxx/FuzzXxx
 	// in a _test.go file runs that single test. The editor only shows the
@@ -2101,17 +2110,35 @@ func renameSymbolViaLSP(ed *gui.CodeEditor, path, newName string) {
 	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	origin := ed.Text()        // stale-guard: abort if the trigger buffer changes mid-RPC
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		we, err := lsp.Rename(uri, line, col, newName)
 		if err != nil {
-			gui.Post(func() { silkideToast(i18n.Tf("Rename failed: %v", err), gui.ToastError) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.Tf("Rename failed: %v", err), gui.ToastError)
+			})
 			return
 		}
 		if we == nil || len(we.Changes) == 0 {
-			gui.Post(func() { silkideToast(i18n.T("Rename: no changes"), gui.ToastInfo) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.T("Rename: no changes"), gui.ToastInfo)
+			})
 			return
 		}
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			if ed.Text() != origin {
 				silkideToast(i18n.T("Rename aborted: buffer changed"), gui.ToastWarning)
 				return
@@ -2172,14 +2199,7 @@ func applyWorkspaceEdit(we *core.LSPWorkspaceEdit) (int, error) {
 // later hover/definition/diagnostics desync. Version bump on the main thread;
 // the pipe write (which can block on a big buffer) runs off-thread.
 func lspNotifyDidChange(path, text string) {
-	if globalLSP == nil || !isGoFile(path) {
-		return
-	}
-	lspVersions[path]++
-	ver := lspVersions[path]
-	lsp := globalLSP
-	uri := fileURIOf(path)
-	go func() { _ = lsp.DidChange(uri, ver, text) }()
+	updateLSPDocument(path, openEditors[path], text)
 }
 
 // configureRun pops a structured "Run Configuration" modal — a Dialog
@@ -3480,6 +3500,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// does the async gopls fetch + ShowToolTip off the main thread. Hover
 	// carries a precise global anchor; signature help anchors near the
 	// editor (precise caret anchoring is a follow-up).
+	ed.SigCompletionRequested(func() { requestLSPCompletion(path, ed) })
 	ed.SigHoverRequested(func(line, col int, gx, gy float64) {
 		hoverViaLSP(path, line, col, gx, gy)
 	})
@@ -4030,27 +4051,44 @@ func centerEditorTabs() *gui.TabWidget {
 // goroutines exit when the client closes (notifications channel is
 // closed by readLoop's failAllPending path).
 func startLSPBackground(projectDir string) {
+	if lspStartCancel != nil {
+		lspStartCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	lspStartCancel = cancel
+	lspSessionGeneration++
+	epoch := lspSessionGeneration
 	go func() {
 		client, err := core.LaunchLSPClient("gopls")
 		if err != nil {
 			gui.Post(func() {
+				if epoch != lspSessionGeneration || ctx.Err() != nil {
+					return
+				}
 				core.Warn("silkide: gopls not available: ", err)
 				logEvent(ged.LogWarn, "gopls unavailable")
 			})
 			return
 		}
+		abort := context.AfterFunc(ctx, func() { _ = client.Close() })
 		rootURI := ""
 		if projectDir != "" {
 			rootURI = fileURIOf(projectDir)
 		}
 		if _, initErr := client.Initialize(core.LSPInitializeParams{
-			ProcessID: os.Getpid(),
-			RootURI:   rootURI,
+			ProcessID:    os.Getpid(),
+			RootURI:      rootURI,
+			Capabilities: ideLSPCapabilities(),
 		}); initErr != nil {
 			gui.Post(func() {
+				if epoch != lspSessionGeneration || ctx.Err() != nil {
+					return
+				}
 				core.Warn("silkide: gopls initialize: ", initErr)
 				logEvent(ged.LogWarn, "gopls unavailable")
 			})
+			abort()
+			cancel()
 			_ = client.Close()
 			return
 		}
@@ -4060,6 +4098,13 @@ func startLSPBackground(projectDir string) {
 		// or all open files after a restart — never got didOpen while globalLSP
 		// was nil, so LSP would be silently dead for them.
 		gui.Post(func() {
+			if epoch != lspSessionGeneration || ctx.Err() != nil {
+				go client.Close()
+				return
+			}
+			abort()
+			lspStartCancel = nil
+			cancel()
 			globalLSP = client
 			core.Log("silkide: gopls ready (rootURI=", rootURI, ")")
 			logEvent(ged.LogInfo, "gopls started")
@@ -4081,7 +4126,7 @@ func startLSPBackground(projectDir string) {
 					continue
 				}
 				if m.Method == "textDocument/publishDiagnostics" {
-					handlePublishDiagnostics(m)
+					handlePublishDiagnosticsForSession(m, epoch)
 					continue
 				}
 				// window/showMessage and window/logMessage carry the reason
@@ -4104,6 +4149,14 @@ func startLSPBackground(projectDir string) {
 				}
 				core.Log("lsp: ", m.Method)
 			}
+			gui.Post(func() {
+				if globalLSP == client && epoch == lspSessionGeneration {
+					globalLSP = nil
+					retireLSPDocuments()
+					logEvent(ged.LogWarn, "gopls disconnected; use Restart LSP to reconnect")
+					go client.Close()
+				}
+			})
 		}(client.Notifications())
 	}()
 }
@@ -4113,22 +4166,7 @@ func startLSPBackground(projectDir string) {
 // to launch; non-.go paths are skipped (gopls would reject them, and
 // .silkui has no language server here).
 func lspDidOpenFile(path string, text string) {
-	if globalLSP == nil {
-		return
-	}
-	if !isGoFile(path) {
-		return
-	}
-	lspVersions[path] = 1
-	lsp := globalLSP
-	uri := fileURIOf(path)
-	go func() {
-		// didOpen writes the whole file into the pipe (can exceed the 64KB pipe
-		// buffer and stall); keep it off the UI thread.
-		if err := lsp.DidOpen(uri, "go", text, 1); err != nil {
-			core.Warn("lsp: didOpen ", path, ": ", err)
-		}
-	}()
+	openLSPDocument(path, text)
 }
 
 // lspVersions tracks the monotonic textDocument version per open file.
@@ -4149,59 +4187,7 @@ var lspDiagnostics = map[string][]ged.Problem{}
 // the cursor position on the main thread, then fires didChange + completion
 // off-thread — gopls RPCs block up to 10s and must never run on the UI loop.
 func lspOnEditorChanged(path string, ed *gui.CodeEditor, text string) {
-	if globalLSP == nil || ed == nil || !isGoFile(path) {
-		return
-	}
-	line := ed.CursorLine()
-	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
-	lspVersions[path]++
-	ver := lspVersions[path]
-	lspCompletionGen[path]++
-	gen := lspCompletionGen[path]
-	uri := fileURIOf(path)
-	lsp := globalLSP // capture: restartLSP may nil the global mid-flight
-	go func() {
-		if err := lsp.DidChange(uri, ver, text); err != nil {
-			return
-		}
-		items, err := lsp.Completion(uri, line, col)
-		if err != nil || len(items) == 0 {
-			return
-		}
-		conv := make([]gui.ExternalCompletion, 0, len(items))
-		for _, it := range items {
-			ins := it.InsertText
-			if ins == "" {
-				ins = it.Label
-			}
-			conv = append(conv, gui.ExternalCompletion{
-				Label:  it.Label,
-				Detail: it.Detail,
-				Insert: ins,
-			})
-		}
-		gui.Post(func() {
-			// Stale-guard: a newer edit superseded this fetch — drop it.
-			if lspCompletionGen[path] != gen {
-				return
-			}
-			if e, ok := openEditors[path]; ok && e == ed {
-				ed.SetExternalCompletions(conv)
-				// Only REFRESH an already-open popup — never force-open one.
-				// The editor's own typing trigger opens completion for
-				// identifier chars; force-opening here would hijack Enter /
-				// arrows after a newline, paste, undo, or a programmatic
-				// format/rename (all of which fire SigChanged).
-				if ed.CompletionVisible() {
-					ed.TriggerCompletion()
-				}
-			}
-		})
-	}()
-	// Also refresh same-symbol occurrence highlights for the caret. No pure
-	// caret-moved signal exists yet, so this piggybacks on edits (SigChanged);
-	// caret-only moves won't refresh until a gui signal lands.
-	documentHighlightViaLSP(ed, path, line, col)
+	updateLSPDocument(path, ed, text)
 }
 
 // lspHighlightGen drops stale async document-highlight fetches.
@@ -4219,7 +4205,11 @@ func documentHighlightViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 	gen := lspHighlightGen[path]
 	uri := fileURIOf(path)
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		hls, err := lsp.DocumentHighlight(uri, line, col)
 		if err != nil {
 			return
@@ -4233,6 +4223,10 @@ func documentHighlightViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 			})
 		}
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			if lspHighlightGen[path] != gen {
 				return
 			}
@@ -4260,14 +4254,28 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	uri := fileURIOf(path)
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		locs, err := lsp.Definition(uri, line, col)
 		if err != nil {
-			gui.Post(func() { silkideToast(i18n.Tf("Go to definition failed: %v", err), gui.ToastError) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.Tf("Go to definition failed: %v", err), gui.ToastError)
+			})
 			return
 		}
 		if len(locs) == 0 {
-			gui.Post(func() { silkideToast(i18n.T("No definition found"), gui.ToastInfo) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.T("No definition found"), gui.ToastInfo)
+			})
 			return
 		}
 		target := uriToPath(locs[0].URI)
@@ -4277,6 +4285,10 @@ func goToDefinitionViaLSP(tabs *gui.TabWidget) {
 		dstLine := locs[0].Range.Start.Line + 1 // LSP 0-based → 1-based
 		dstCol := locs[0].Range.Start.Character
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			openFileInEditorAt(tabs, target, dstLine, dstCol)
 		})
 	}()
@@ -4299,19 +4311,32 @@ func findReferencesViaLSP(tabs *gui.TabWidget) {
 	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
 	uri := fileURIOf(path)
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		locs, err := lsp.References(uri, line, col, true)
 		if err != nil {
 			return
 		}
 		if len(locs) == 0 {
-			gui.Post(func() { silkideToast(i18n.T("No references found"), gui.ToastInfo) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.T("No references found"), gui.ToastInfo)
+			})
 			return
 		}
 		// Build the rows on the MAIN thread: referencePreview reads openEditors
 		// and the live editor buffer (ed.Lines()), which are not safe to touch
 		// from this goroutine (concurrent map read + torn slice with the UI).
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			refs := make([]ged.ReferenceLoc, 0, len(locs))
 			for _, l := range locs {
 				p := uriToPath(l.URI)
@@ -4360,12 +4385,20 @@ func hoverViaLSP(path string, line, col int, gx, gy float64) {
 	gen := lspHoverGen
 	uri := fileURIOf(path)
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		h, err := lsp.Hover(uri, line, col)
 		if err != nil || h == nil || h.Contents == "" {
 			return
 		}
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			if lspHoverGen != gen {
 				return // a newer hover superseded this one
 			}
@@ -4390,7 +4423,11 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 	// UTF-16 column so non-BMP text on the line doesn't skew the position.
 	line = ed.CursorLine()
 	col = ed.CursorUTF16Col()
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		sh, err := lsp.SignatureHelp(uri, line, col)
 		if err != nil || sh == nil || len(sh.Signatures) == 0 {
 			return
@@ -4400,6 +4437,10 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 			return
 		}
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			if lspSigGen != gen {
 				return
 			}
@@ -4440,16 +4481,29 @@ func codeActionsViaLSP(tabs *gui.TabWidget) {
 	uri := fileURIOf(path)
 	gx, gy := ed.MapToGlobal(80, 60)
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		actions, err := lsp.CodeAction(uri, line, col, line, col)
 		if err != nil {
 			return
 		}
 		if len(actions) == 0 {
-			gui.Post(func() { silkideToast(i18n.T("No code actions"), gui.ToastInfo) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.T("No code actions"), gui.ToastInfo)
+			})
 			return
 		}
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			menu := gui.NewPopupMenu()
 			menu.SetParent(ed)
 			for _, a := range actions {
@@ -4523,10 +4577,19 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 	uri := fileURIOf(path)
 	original := ed.Text()
 	lsp := globalLSP
+	doc := lspDocuments[path]
 	go func() {
+		if !flushLSPDocument(doc) {
+			return
+		}
 		edits, err := lsp.Formatting(uri)
 		if err != nil {
-			gui.Post(func() { silkideToast(i18n.Tf("Format failed: %v", err), gui.ToastError) })
+			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+				silkideToast(i18n.Tf("Format failed: %v", err), gui.ToastError)
+			})
 			return
 		}
 		if len(edits) == 0 {
@@ -4535,11 +4598,19 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 		formatted, applyErr := core.ApplyTextEdits(original, edits)
 		if applyErr != nil {
 			gui.Post(func() {
+				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+					return
+				}
+
 				silkideToast(i18n.Tf("Format failed: %v", applyErr), gui.ToastError)
 			})
 			return
 		}
 		gui.Post(func() {
+			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				return
+			}
+
 			// Only apply if the buffer hasn't changed out from under us.
 			if e, ok := openEditors[path]; ok && e == ed && ed.Text() == original {
 				// ReplaceAllText preserves undo + caret/scroll and fires
@@ -4554,16 +4625,19 @@ func formatDocumentViaLSP(tabs *gui.TabWidget) {
 // of fileURIOf). Handles the Windows "file:///C:/..." form by dropping the
 // spurious leading slash before a drive letter.
 func uriToPath(uri string) string {
-	p := strings.TrimPrefix(uri, "file://")
-	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
-		p = p[1:] // "/C:/foo" → "C:/foo"; POSIX paths have no "X:" at index 1-2
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" {
+		return ""
 	}
-	// gopls percent-encodes spaces / non-ASCII in the URIs it returns; decode
-	// so paths like "/Users/.../证书/x.go" match openEditors keys and open.
-	if dec, err := url.PathUnescape(p); err == nil {
-		p = dec
+	p := u.Path
+	if u.Host != "" && u.Host != "localhost" {
+		p = "//" + u.Host + p
+	}
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
 	}
 	return filepath.FromSlash(p)
+
 }
 
 // handlePublishDiagnostics decodes a textDocument/publishDiagnostics
@@ -4571,9 +4645,12 @@ func uriToPath(uri string) string {
 // red-squiggle markers (0-based), accumulating per file so one file's
 // diagnostics don't wipe another's. Runs on the notification goroutine;
 // all GUI mutation is marshalled through gui.Post.
-func handlePublishDiagnostics(m *core.LSPMessage) {
+func handlePublishDiagnostics(m *core.LSPMessage) { handlePublishDiagnosticsForSession(m, 0) }
+
+func handlePublishDiagnosticsForSession(m *core.LSPMessage, epoch uint64) {
 	var p struct {
 		URI         string `json:"uri"`
+		Version     *int   `json:"version"`
 		Diagnostics []struct {
 			Range struct {
 				Start struct {
@@ -4592,10 +4669,7 @@ func handlePublishDiagnostics(m *core.LSPMessage) {
 	probs := make([]ged.Problem, 0, len(p.Diagnostics))
 	squig := map[int]string{}
 	for _, d := range p.Diagnostics {
-		sev := ged.SeverityWarning
-		if d.Severity == 1 {
-			sev = ged.SeverityError
-		}
+		sev := lspProblemSeverity(d.Severity)
 		probs = append(probs, ged.Problem{
 			File:     path,
 			Line:     d.Range.Start.Line + 1,
@@ -4603,9 +4677,22 @@ func handlePublishDiagnostics(m *core.LSPMessage) {
 			Severity: sev,
 			Message:  d.Message,
 		})
-		squig[d.Range.Start.Line] = d.Message
+		// The editor's SetErrors API draws red error markers. Do not turn
+		// modernize/style hints (or warnings) into apparent compile failures.
+		if sev == ged.SeverityError {
+			squig[d.Range.Start.Line] = d.Message
+		}
 	}
 	gui.Post(func() {
+		if epoch != 0 && (epoch != lspSessionGeneration || globalLSP == nil) {
+			return
+		}
+		if p.Version != nil && *p.Version != lspVersions[path] {
+			return
+		}
+		if epoch != 0 && openEditors[path] == nil {
+			return
+		}
 		lspDiagnostics[path] = probs
 		var all []ged.Problem
 		for _, ps := range lspDiagnostics {
@@ -4625,6 +4712,7 @@ func handlePublishDiagnostics(m *core.LSPMessage) {
 // palette command -- handy when gopls gets wedged or the project's
 // go.mod changes and we want a clean index.
 func restartLSP(canvas *ged.GedView) {
+	retireLSPDocuments()
 	if globalLSP != nil {
 		old := globalLSP
 		globalLSP = nil
@@ -4662,7 +4750,7 @@ func fileURIOf(path string) string {
 	if len(abs) > 0 && abs[0] != '/' {
 		abs = "/" + abs
 	}
-	return "file://" + abs
+	return (&url.URL{Scheme: "file", Path: abs}).String()
 }
 
 // isGoFile returns true when path looks like a Go source file. Tests

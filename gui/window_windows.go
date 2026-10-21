@@ -133,6 +133,7 @@ func init() {
 	// process. window_glfw.go does the same for the GLFW backend.
 	runtime.LockOSThread()
 	uiThreadId = win32.GetCurrentThreadId()
+	initializeWindowsDPI()
 
 	// Let an off-thread gui.Post nudge the pump: GetMessage blocks until this
 	// thread's queue has something in it, so without a wakeup a posted task
@@ -151,7 +152,9 @@ func init() {
 
 	registerWndClasses()
 	idleTimer.Start(47, onIdleTimer)
-	screenDpi = float64(win32.GetDeviceCaps(0, win32.LOGPIXELSX))
+	dc := win32.GetDC(0)
+	screenDpi = float64(win32.GetDeviceCaps(dc, win32.LOGPIXELSX))
+	win32.ReleaseDC(0, dc)
 	if screenDpi == 0 {
 		screenDpi = 96
 	}

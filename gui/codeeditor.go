@@ -192,12 +192,13 @@ type cursorPos struct {
 
 // editAction records a single undoable edit operation.
 type editAction struct {
-	kind    int // 0=insert, 1=delete, 2=replace
-	line    int
-	col     int
-	text    string // inserted text (kind 0,2) or deleted text (kind 1)
-	oldText string // original text before replace (kind 2)
-	stamp   time.Time
+	kind       int // 0=insert, 1=delete, 2=replace
+	line       int
+	col        int
+	text       string // inserted text (kind 0,2) or deleted text (kind 1)
+	oldText    string // original text before replace (kind 2)
+	stamp      time.Time
+	redoCursor *cursorPos // optional post-edit caret for atomic provider edits
 }
 
 // findMatch records a single search hit location.
@@ -224,7 +225,12 @@ const (
 // CodeEditor is a syntax-highlighted code editing widget with line numbers,
 // cursor, and basic editing support, designed for Go source code.
 type CodeEditor struct {
-	savedText string
+	onCompletionRequested func()
+	customColors          EditorColors
+	customPalette         *editorPalette
+	paletteRev            uint64
+	tabSize               int
+	savedText             string
 	Widget
 	// Text and its derived metadata are refreshed at the edit boundary, never
 	// by idle title polling or painting. Low-level splice helpers mark dirty
@@ -682,15 +688,29 @@ func (this *CodeEditor) cacheText(text string) {
 // change. Records one kind-3 (full-text-replace) undo entry, fires SigChanged
 // so the host re-syncs gopls, and no-ops when s equals the current text.
 func (this *CodeEditor) ReplaceAllText(s string) {
+	this.replaceAllText(s, nil)
+}
+
+// ReplaceAllTextAt applies an atomic edit with its final rune-based caret.
+// Changed callbacks and redo observe that caret, while undo restores the old
+// position. This is required when completion also inserts imports above it.
+func (this *CodeEditor) ReplaceAllTextAt(s string, line, col int) {
+	this.replaceAllText(s, &cursorPos{line: line, col: col})
+}
+
+func (this *CodeEditor) replaceAllText(s string, after *cursorPos) {
 	oldFull := this.Text()
 	if s == oldFull {
 		return
 	}
 	saveLine, saveCol := this.cursorLine, this.cursorCol
-	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: s, oldText: oldFull})
+	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: s, oldText: oldFull, redoCursor: after})
 	this.lines = strings.Split(s, "\n")
 	if len(this.lines) == 0 {
 		this.lines = []string{""}
+	}
+	if after != nil {
+		this.cursorLine, this.cursorCol = after.line, after.col
 	}
 	this.clampCursor()
 	this.clearSelection()
@@ -704,7 +724,10 @@ func (this *CodeEditor) ReplaceAllText(s string) {
 
 // SetFont sets the editor's monospace font.
 func (this *CodeEditor) SetFont(f paint.Font) {
-	this.font = f
+	if f == nil {
+		return
+	}
+	this.font = f.Dup()
 	this.fontMetricsValid = false // recompute charWidth/monoFont for the new font
 	this.Self().Update()
 }
@@ -1111,16 +1134,36 @@ func (this *CodeEditor) fontExtents() *paint.FontExtents {
 	return this.font.FontExtents()
 }
 
-// measureText returns the pixel width of text using the editor font.
-//
-// Monospace fast path: when the font is monospace (see ensureFontMetrics) and
-// s is pure printable ASCII, the width is exactly len(s)*charWidth — for such
-// glyphs runeCount == len(s) and each advances by charWidth, so the result is
-// byte-identical to Cairo shaping while skipping the cgo TextExtents call (and
-// its C.CString heap allocation). Anything with a tab, high-bit/UTF-8 rune, or
-// control byte, or any non-monospace font, falls back to the measured advance,
-// so rendering stays pixel-identical in every case.
+// measureText uses the same tab stops as painting, caret and hit testing.
 func (this *CodeEditor) measureText(s string) float64 {
+	return this.measureTextAt(s, 0)
+}
+
+// start is the advance from the line origin, not the screen x coordinate.
+// Keeping it across syntax runs makes tabs align even in strings/comments.
+func (this *CodeEditor) measureTextAt(s string, start float64) float64 {
+	x := start
+	for len(s) > 0 {
+		i := strings.IndexByte(s, '\t')
+		if i < 0 {
+			return x - start + this.measurePlainText(s)
+		}
+		x += this.measurePlainText(s[:i])
+		x = this.nextTabStop(x)
+		s = s[i+1:]
+	}
+	return x - start
+}
+
+func (this *CodeEditor) nextTabStop(x float64) float64 {
+	width := this.measurePlainText(" ") * float64(this.TabSize())
+	if width <= 0 {
+		width = 4
+	}
+	return (math.Floor((x+0.000001)/width) + 1) * width
+}
+
+func (this *CodeEditor) measurePlainText(s string) float64 {
 	if s == "" {
 		return 0
 	}
@@ -1128,8 +1171,24 @@ func (this *CodeEditor) measureText(s string) float64 {
 	if this.monoFont && isASCIIPrintable(s) {
 		return float64(len(s)) * this.charWidth
 	}
-	ext := this.font.TextExtents(s)
-	return ext.XAdvance
+	return this.font.TextExtents(s).XAdvance
+}
+
+// TabSize is the display tab width. Original source bytes are never expanded.
+func (this *CodeEditor) TabSize() int {
+	if this.tabSize < 1 {
+		return 4
+	}
+	return this.tabSize
+}
+
+func (this *CodeEditor) SetTabSize(n int) {
+	if n < 1 || n > 16 {
+		n = 4
+	}
+	this.tabSize = n
+	this.ensureCursorVisible()
+	this.Self().Update()
 }
 
 // ensureFontMetrics derives the cached single-character advance (charWidth) and
@@ -2083,6 +2142,9 @@ func (this *CodeEditor) redo() {
 		}
 		this.cursorLine = a.line
 		this.cursorCol = a.col
+		if a.redoCursor != nil {
+			this.cursorLine, this.cursorCol = a.redoCursor.line, a.redoCursor.col
+		}
 		this.undoStack = append(this.undoStack, a)
 	}
 	this.clearSelection()
@@ -3210,7 +3272,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 	// Palette selected by the active theme. Dark is the default and stays
 	// byte-identical to the original hardcoded scheme; light is its counterpart.
-	pal := editorColorsFor(CurrentThemeMode())
+	pal := this.editorColors()
 
 	// Editor background
 	g.SetBrush1(pal.bg)
@@ -3366,7 +3428,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 					continue
 				}
 				ox := textOffX + this.measureText(string(lineRunes[:mc]))
-				ow := this.measureText(string(lineRunes[mc:me]))
+				ow := this.measureText(string(lineRunes[:me])) - this.measureText(string(lineRunes[:mc]))
 				g.SetBrush1(paint.Color{R: 120, G: 130, B: 150, A: 60})
 				g.Rectangle(ox, y, ow, lh)
 				g.Fill()
@@ -3387,7 +3449,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 						me = len(lineRunes)
 					}
 					mx := textOffX + this.measureText(string(lineRunes[:mc]))
-					mw := this.measureText(string(lineRunes[mc:me]))
+					mw := this.measureText(string(lineRunes[:me])) - this.measureText(string(lineRunes[:mc]))
 					if idx == this.findCurrentIdx {
 						g.SetBrush1(paint.Color{R: 255, G: 152, B: 0, A: 120})
 					} else {
@@ -3843,27 +3905,14 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 		return
 	}
 	line := this.lines[lineIdx]
-	tabWidth := this.measureText("    ") // 4-space equivalent
-
-	// Count indent levels: each tab = 1 level, every 4 spaces = 1 level
-	level := 0
-	spaces := 0
-	for _, r := range line {
-		if r == '\t' {
-			if spaces > 0 {
-				level += spaces / 4
-				spaces = 0
-			}
-			level++
-		} else if r == ' ' {
-			spaces++
-		} else {
-			break
-		}
+	tabWidth := this.measurePlainText(" ") * float64(this.TabSize())
+	if tabWidth <= 0 {
+		return
 	}
-	level += spaces / 4
+	indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+	level := int((this.measureText(indent) + 0.000001) / tabWidth)
 
-	guideColor := editorColorsFor(CurrentThemeMode()).indentGuide
+	guideColor := this.editorColors().indentGuide
 	for i := 1; i <= level; i++ {
 		gx := this.gutterW + 10 - this.scrollX + float64(i)*tabWidth
 		// Draw dotted vertical line (small segments every 3px)
@@ -3880,26 +3929,37 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 // idx is the line's index in this.lines and feeds the tokenization cache.
 func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line string, x, y float64, inBlock bool) bool {
 	tokens, newInBlock := this.tokenizeLineCached(idx, line, inBlock)
-	pal := editorColorsFor(CurrentThemeMode())
+	pal := this.editorColors()
+	origin := x
 	for _, tok := range tokens {
 		c, ok := pal.tokens[tok.typ]
 		if !ok {
 			c = pal.tokens[tokNormal]
 		}
 		g.SetBrush1(c)
-		g.DrawText1(x, y, tok.text)
-		// Advance x by the token width. measureText takes the monospace fast
-		// path for the common ASCII token, avoiding a per-token cgo TextExtents
-		// call (~one C.CString alloc + Cairo shaping per visible token); it
-		// falls back to measured advance for tabs / non-ASCII, so x is identical.
-		x += this.measureText(tok.text)
+		text := tok.text
+		for len(text) > 0 {
+			i := strings.IndexByte(text, '\t')
+			if i < 0 {
+				g.DrawText1(x, y, text)
+				x += this.measurePlainText(text)
+				break
+			}
+			if i > 0 {
+				g.DrawText1(x, y, text[:i])
+				x += this.measurePlainText(text[:i])
+			}
+			x = origin + this.nextTabStop(x-origin)
+			text = text[i+1:]
+		}
 	}
+
 	return newInBlock
 }
 
 // drawMinimap renders a scaled-down code overview on the right edge of the editor.
 func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64, startLine, visibleLines int) {
-	pal := editorColorsFor(CurrentThemeMode())
+	pal := this.editorColors()
 	// Background
 	g.SetBrush1(pal.minimapBG)
 	g.Rectangle(x, y, mmW, mmH)
@@ -3991,7 +4051,7 @@ func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64,
 // drawStatusBar renders the editor status bar at the bottom.
 func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	y := h - sbH
-	pal := editorColorsFor(CurrentThemeMode())
+	pal := this.editorColors()
 
 	// Background
 	g.SetBrush1(pal.gutter)
@@ -4352,19 +4412,21 @@ func (this *CodeEditor) posFromXY(x, y float64) (int, int) {
 	if xOff >= 0 {
 		runes := []rune(this.lines[line])
 		col = len(runes)
-		for c := 0; c <= len(runes); c++ {
-			cw := this.measureText(string(runes[:c]))
-			if cw > xOff {
-				col = c
-				if c > 0 {
-					prevW := this.measureText(string(runes[:c-1]))
-					if xOff-prevW < cw-xOff {
-						col = c - 1
-					}
+		// Binary search avoids O(n²) prefix shaping on long source lines.
+		c := sort.Search(len(runes)+1, func(c int) bool {
+			return this.measureText(string(runes[:c])) > xOff
+		})
+		if c <= len(runes) {
+			col = c
+			if c > 0 {
+				prev := this.measureText(string(runes[:c-1]))
+				next := this.measureText(string(runes[:c]))
+				if xOff-prev < next-xOff {
+					col = c - 1
 				}
-				break
 			}
 		}
+
 	}
 	return line, col
 }
@@ -5460,6 +5522,9 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 
 	// Ctrl+Space triggers completion
 	if ctrl && key == KeySpace {
+		if this.onCompletionRequested != nil {
+			this.onCompletionRequested()
+		}
 		prefix := this.currentWordPrefix()
 		this.showCompletion(prefix)
 		this.Self().Update()
@@ -7223,9 +7288,10 @@ func (this *CodeEditor) clampCursorVisible() {
 // (e.g. an LSP server). The host converts its protocol items into this shape;
 // the editor merges them with its built-in candidates in the same popup.
 type ExternalCompletion struct {
-	Label  string // shown in the list
-	Detail string // right-aligned hint (type/signature)
-	Insert string // text inserted on accept (defaults to Label if empty)
+	Apply  func(*CodeEditor) // optional host-owned atomic edit; called on the UI thread
+	Label  string            // shown in the list
+	Detail string            // right-aligned hint (type/signature)
+	Insert string            // text inserted on accept (defaults to Label if empty)
 }
 
 // SetExternalCompletions replaces the injected candidate set. Pass the items a
@@ -7260,7 +7326,12 @@ func externalToItem(e ExternalCompletion) CompletionItem {
 	if text == "" {
 		text = e.Label
 	}
-	return CompletionItem{Text: text, Kind: CikFunction, Detail: e.Detail}
+	var action *completionApply
+	if e.Apply != nil {
+		text = e.Label
+		action = &completionApply{run: e.Apply}
+	}
+	return CompletionItem{Text: text, Kind: CikFunction, Detail: e.Detail, apply: action}
 }
 
 // mergeCompletions appends external candidates to the built-in ones, deduping
@@ -7294,3 +7365,6 @@ func mergeCompletions(builtin []CompletionItem, external []ExternalCompletion) [
 	}
 	return out
 }
+
+// SigCompletionRequested is the explicit Ctrl+Space provider request.
+func (e *CodeEditor) SigCompletionRequested(fn func()) { e.onCompletionRequested = fn }

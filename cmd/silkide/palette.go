@@ -71,6 +71,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Undo", actionKeyHint()+"+Z", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
 	add("Redo", actionKeyHint()+"+Shift+Z", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
 	add("Expand Silk Macros", "", func() { expandActiveMacro(editorTabs, designCanvas) })
+	add("Appearance & Editor", "", func() { showAppearanceDialog(globalFrame) })
 	// File actions.
 	add("New", "Cmd+N", func() { newDesignCanvas(designCanvas) })
 	add("Open", "Cmd+O", func() {

@@ -3,7 +3,9 @@ package gui
 import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
+	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Global tooltip state
@@ -60,24 +62,26 @@ func (this *tooltipWindow) Draw(g paint.Painter) {
 	g.SetFont(tipFont)
 	g.SetBrush1(paint.Color{240, 240, 240, 255})
 
-	ext := tipFont.TextExtents(this.text)
-	xt := padX - ext.XBearing
-	yt := padY + (h-2*padY+ext.YBearing)*0.5 - ext.YBearing
-	g.Translate(xt, yt)
-	g.DrawText(this.text)
-	g.Translate(-xt, -yt)
+	fe := tipFont.FontExtents()
+	for i, line := range tooltipLines(this.text) {
+		g.DrawText1(padX, padY+fe.Ascent+float64(i)*(fe.Height+2), line)
+	}
+
 }
 
 func (this *tooltipWindow) SizeHints() SizeHints {
 	t := Theme()
 	tipFont := paint.NewFont(t.Font.Family(), 12, false, false)
-	ext := tipFont.TextExtents(this.text)
 	fe := tipFont.FontExtents()
-	padX := 8.0
-	padY := 4.0
-	w := ext.Width + padX*2 + 4 // +4 for border + shadow
-	h := fe.Height + padY*2 + 4
-	return SizeHints{Width: w, Height: h}
+	lines := tooltipLines(this.text)
+	w := 0.0
+	for _, line := range lines {
+		if v := tipFont.TextExtents(line).XAdvance; v > w {
+			w = v
+		}
+	}
+	return SizeHints{Width: w + 20, Height: float64(len(lines))*(fe.Height+2) + 8}
+
 }
 
 // --- Public tooltip API ---
@@ -192,4 +196,29 @@ func CheckToolTip(xg, yg float64) {
 // OnMouseMoveToolTip should be called when the mouse moves to hide the tooltip.
 func OnMouseMoveToolTip() {
 	HideToolTip()
+}
+
+// Tooltips are multiline text, not one Cairo glyph run. Bound remote LSP
+// documentation and expand tabs so control characters never become tofu.
+func tooltipLines(text string) []string {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\t", "    ")
+	lines := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			continue
+		}
+		for utf8.RuneCountInString(line) > 100 {
+			r := []rune(line)
+			lines = append(lines, string(r[:100]))
+			line = string(r[100:])
+			if len(lines) >= 16 {
+				return append(lines, "…")
+			}
+		}
+		lines = append(lines, line)
+		if len(lines) >= 16 {
+			return append(lines, "…")
+		}
+	}
+	return lines
 }

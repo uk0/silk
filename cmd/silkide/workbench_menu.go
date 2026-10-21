@@ -131,6 +131,7 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("build.debug", "Debug", "debug", "Shift+F5", true, func() { runProjectInDebugger(canvas) })
 		add("build.stop", "Stop", "stop", "", true, stopProjectExecution)
 	case "Tools":
+		add("tools.appearance", "Appearance & Editor", "settings", "", true, func() { showAppearanceDialog(globalFrame) })
 		add("tools.expandMacro", "Expand Silk Macros", "build", "", canExpandMacro(tabs, canvas), func() { expandActiveMacro(tabs, canvas) })
 		add("project.settings", "Project Settings", "settings", "", true, func() { showProjectSettingsDialog(canvas) })
 		add("tools.packages", "Refresh Packages", "packages", "", true, func() { refreshPackages(canvas) })

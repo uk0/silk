@@ -254,7 +254,7 @@ func existingPaths(paths []string) []string {
 // need their own strings translated should register in their own
 // init().
 func installLocale() {
-	if v := os.Getenv("SILKIDE_LOCALE"); v != "" {
+	if v := appearanceLocale(globalPrefs); v != "" {
 		switch strings.ToLower(strings.ReplaceAll(v, "_", "-")) {
 		case "zh", "zh-cn", "zh-hans", "zh-sg":
 			v = "zh-CN"
@@ -262,6 +262,7 @@ func installLocale() {
 		i18n.SetLocale(v)
 	}
 	registerSilkideTranslations()
+	registerAppearanceTranslations()
 }
 
 // registerSilkideTranslations adds the silkide-internal Chinese
@@ -721,4 +722,14 @@ func actionKeyHint() string {
 		return "Cmd"
 	}
 	return "Ctrl"
+}
+
+func registerAppearanceTranslations() {
+	i18n.AddMany("zh-CN", map[string]string{
+		"Apply": "应用", "Properties": "属性", "Welcome": "欢迎",
+		"Appearance & Editor": "外观与编辑器", "Language (restart required)": "界面语言（重启生效）", "Theme": "主题", "Dark": "深色", "Light": "浅色",
+		"UI font": "界面字体", "UI font size": "界面字号", "Editor font": "编辑器字体", "Editor font size": "编辑器字号", "Tab width": "Tab 显示宽度",
+		"Accent (#RRGGBB)": "强调色（#RRGGBB）", "Editor background": "编辑器背景色", "Editor text": "代码文字颜色", "Keywords": "关键字颜色", "Comments": "注释颜色", "Strings": "字符串颜色",
+		"Empty color = theme default; colors use #RRGGBB": "颜色留空使用主题默认值；格式为 #RRGGBB", "Appearance saved; language changes apply after restart": "外观已保存，语言设置将在重启后生效",
+	})
 }

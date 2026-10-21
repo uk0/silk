@@ -304,7 +304,7 @@ func TestMeasureTextMonospaceMatchesShaping(t *testing.T) {
 func TestMeasureTextNonASCIIFallback(t *testing.T) {
 	e := NewCodeEditor()
 	requireMonoFont(t, e)
-	for _, s := range []string{"\tindented", "func\tx", "héllo", "日本語", "café"} {
+	for _, s := range []string{"héllo", "日本語", "café"} {
 		if isASCIIPrintable(s) {
 			t.Fatalf("test string %q should not be ASCII-printable", s)
 		}

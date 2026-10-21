@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — PDF editor feedback and LSP reliability
+
+- Fix Windows indentation tofu by displaying tabs at consistent tab stops across
+  syntax runs, caret/selection and hit testing; preserve source tab bytes.
+- Draw bounded multiline tooltips instead of rendering newline/tab glyphs.
+- Enable system DPI awareness before Win32 windows and use full grayscale font
+  hinting; mixed-DPI per-monitor transitions remain a limitation.
+- Add persistent Tools / command-palette Appearance & Editor settings for
+  English/Chinese (restart), fonts, light/dark theme, tab width and custom colors.
+  Normalize IDE-owned dock captions to the selected language.
+- Coalesce gopls updates in one ordered worker per document; cancel superseded
+  completion requests, reject stale diagnostics/results and retire old sessions.
+- Apply completion replacement/auto-import edits atomically with undo/redo caret
+  restoration, prioritize provider candidates over local guesses, request
+  plain-text completions, flush unsaved text before explicit commands and escape
+  file URI reserved characters. Bound shutdown against a non-reading server.
+- Keep long completion signatures inside their own column, including Windows
+  CJK fallback fonts; use opaque, clipped popups and rune-safe elision.
+- Prevent Win32 Ctrl+Space from inserting a space and dismissing completion;
+  preserve AltGr input. Separate informational/hint diagnostics from errors.
+
 ## Unreleased — satin sprites, HMI and compile-time macros
 
 - Embed a generated 16-icon satin atlas, calibrated object crops, bounded

@@ -26,6 +26,8 @@ func newUIFontOptions() *cairo.FontOptions {
 		// scaled or viewed remotely. Explicit grayscale AA is orientation-neutral
 		// and also avoids inheriting disabled font smoothing from an RDP session.
 		options.SetAntialias(cairo.ANTIALIAS_GRAY)
+		options.SetHintStyle(cairo.HINT_STYLE_FULL)
+		options.SetHintMetrics(cairo.HINT_METRICS_ON)
 	}
 	return options
 }

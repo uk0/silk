@@ -3,6 +3,7 @@ package core
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -794,6 +795,18 @@ func (c *LSPClient) requestOptional(method, provider string, params interface{})
 //
 // 不取消子进程: 单条请求超时不应该直接撕掉整个会话, 上层若决定终止, 自行 Close.
 func (c *LSPClient) SendRequest(method string, params interface{}) (*LSPMessage, error) {
+	return c.SendRequestContext(context.Background(), method, params)
+}
+
+// SendRequestContext cancels obsolete language requests and removes their
+// pending slots. A default deadline still bounds callers without a deadline.
+func (c *LSPClient) SendRequestContext(ctx context.Context, method string, params interface{}) (*LSPMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if method == "" {
 		return nil, errors.New("lspclient: empty method")
 	}
@@ -828,9 +841,12 @@ func (c *LSPClient) SendRequest(method string, params interface{}) (*LSPMessage,
 			return m, fmt.Errorf("lspclient: %s server error: code=%d msg=%s", method, m.Error.Code, m.Error.Message)
 		}
 		return m, nil
-	case <-time.After(defaultRequestTimeout):
+	case <-ctx.Done():
 		c.removePending(id)
-		return nil, fmt.Errorf("lspclient: %s timed out after %s", method, defaultRequestTimeout)
+		// The peer must stop expensive completion/analysis for obsolete positions.
+		// This method already runs off the UI thread, preserving wire ordering.
+		_ = c.SendNotification("$/cancelRequest", map[string]int{"id": id})
+		return nil, fmt.Errorf("lspclient: %s: %w", method, ctx.Err())
 	case <-c.done:
 		c.removePending(id)
 		return nil, fmt.Errorf("lspclient: %s aborted: server connection closed", method)
@@ -1079,7 +1095,12 @@ func textDocumentPositionParams(uri string, line, character int) map[string]inte
 // 这里都接住: 先按 CompletionList 解, items 非空就用; 否则当裸数组解.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) Completion(uri string, line, character int) ([]LSPCompletionItem, error) {
-	resp, err := c.SendRequest("textDocument/completion", textDocumentPositionParams(uri, line, character))
+	return c.CompletionContext(context.Background(), uri, line, character)
+}
+
+func (c *LSPClient) CompletionContext(ctx context.Context, uri string, line, character int) ([]LSPCompletionItem, error) {
+
+	resp, err := c.SendRequestContext(ctx, "textDocument/completion", textDocumentPositionParams(uri, line, character))
 	if err != nil {
 		return nil, err
 	}
@@ -1091,7 +1112,7 @@ func (c *LSPClient) Completion(uri string, line, character int) ([]LSPCompletion
 		IsIncomplete bool                `json:"isIncomplete"`
 		Items        []LSPCompletionItem `json:"items"`
 	}
-	if err := json.Unmarshal(resp.Result, &list); err == nil && list.Items != nil {
+	if err := json.Unmarshal(resp.Result, &list); err == nil && len(bytes.TrimSpace(resp.Result)) > 0 && bytes.TrimSpace(resp.Result)[0] == '{' {
 		return list.Items, nil
 	}
 	// 退化到 raw []CompletionItem -- 规范允许, 一些 server 这么发
@@ -1911,7 +1932,17 @@ func (c *LSPClient) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 
-	// shutdown 是 best-effort. 设短超时, 防止已经死掉的 gopls 拖住 Close.
+	// A stalled server may stop reading stdin entirely. Closing the pipe from
+	// the deadline callback unblocks both shutdown and any blocked writeFrame.
+	deadline := time.AfterFunc(500*time.Millisecond, func() {
+		if c.stdin != nil {
+			_ = c.stdin.Close()
+		}
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = c.cmd.Process.Kill()
+		}
+	})
+	defer deadline.Stop()
 	c.shutdownBestEffort()
 
 	if c.stdin != nil {

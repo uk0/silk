@@ -19,6 +19,41 @@ signed/notarized standalone apps.
 
 ---
 
+## Editor and language-service fixes (development)
+
+Open **Tools → Appearance & Editor** (or the command palette) to select English
+or 简体中文, dark/light theme, UI/editor font families and sizes, tab width,
+accent color, and editor background/text/keyword/comment/string colors. Empty
+colors restore theme defaults. Font/color changes apply immediately; the UI
+language is saved and applied on restart. `SILKIDE_LOCALE` overrides the saved
+language when explicitly set.
+
+- Source tabs render as real tab stops, not missing-glyph boxes; caret, selection
+  and mouse positioning use the same widths without rewriting the source.
+- Windows declares **system DPI awareness before creating windows** and uses
+  grayscale, fully hinted text. This prevents primary/system-DPI bitmap
+  virtualization; mixed-DPI per-monitor scaling is still not implemented.
+- gopls document open/change/close are ordered. A 90 ms quiet-period worker keeps
+  only the latest edit, cancels obsolete completion requests, and rejects stale
+  document/session results. Explicit commands flush unsaved text first.
+- Completion respects UTF-16 text edits and auto-import edits as one undoable
+  change with correct redo caret restoration. Semantic candidates rank before
+  local guesses; long signatures are clipped/elided without overlapping labels.
+  The IDE requests plain-text completions, not LSP snippets.
+  Ctrl+Space requests fresh candidates without inserting a space on Windows;
+  informational diagnostics no longer paint red error markers. `gopls` remains an
+  external tool, not bundled by this source change.
+
+See [verification and remaining limits](EDITOR_LSP_QA_20261020.md).
+
+![Native Windows editor: Chinese text, Unicode and consistent tab stops](screenshots/silkide-editor-lsp-windows.png)
+
+*Windows 10 native desktop, 2026-10-21 PDT; persisted custom fonts/colors.
+[Appearance settings](screenshots/silkide-appearance-windows.png),
+[completion](screenshots/silkide-completion-windows.png), and
+[English workbench with gopls hover](screenshots/silkide-hover-windows.png).
+Win11 and mixed-DPI monitor transitions remain unverified.*
+
 ## Current development iteration: satin sprites, HMI and macros
 
 This work is **not part of the published v0.1.5 package**.

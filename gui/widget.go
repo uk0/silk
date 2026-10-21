@@ -124,6 +124,7 @@ type IWidget interface {
 }
 
 type Widget struct {
+	dockTitle string // optional host-owned dock caption; independent of content
 	//	core.Obj
 	self       IWidget
 	x, y, w, h float64

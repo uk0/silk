@@ -20,7 +20,7 @@ func init() {
 	})
 }
 
-// Severity classifies a Problem as an error or a warning. BuildOutput
+// Severity classifies a Problem as an error, warning, information or hint. BuildOutput
 // only ever flags a line as error/not-error; the Problems pane needs
 // the finer distinction so it can render the right glyph and tally the
 // header counts separately.
@@ -29,6 +29,8 @@ type Severity int
 const (
 	SeverityError Severity = iota
 	SeverityWarning
+	SeverityInfo
+	SeverityHint
 )
 
 // Problem is one structured diagnostic. Where BuildOutput keeps the raw
@@ -177,6 +179,18 @@ func (this *ProblemsPanel) WarningCount() int {
 	return n
 }
 
+// InfoCount includes informational diagnostics and optional improvement hints.
+// Neither indicates a compile failure or contributes to the warning count.
+func (this *ProblemsPanel) InfoCount() int {
+	n := 0
+	for _, p := range this.problems {
+		if p.Severity == SeverityInfo || p.Severity == SeverityHint {
+			n++
+		}
+	}
+	return n
+}
+
 // SortByFile stably reorders the problems by file name, then by line
 // within a file. Stability keeps same-(file,line) diagnostics in their
 // original arrival order, which matches how the compiler emitted them.
@@ -215,6 +229,9 @@ func (this *ProblemsPanel) Draw(g paint.Painter) {
 	g.SetBrush1(paint.Color{R: 200, G: 200, B: 210, A: 255})
 	header := strconv.Itoa(this.ErrorCount()) + " errors, " +
 		strconv.Itoa(this.WarningCount()) + " warnings"
+	if n := this.InfoCount(); n > 0 {
+		header += ", " + strconv.Itoa(n) + " notes"
+	}
 	g.DrawText1(8, fe.Ascent+4, header)
 
 	if len(this.problems) == 0 {
@@ -276,6 +293,11 @@ func (this *ProblemsPanel) drawSeverityGlyph(g paint.Painter, sev Severity, y, r
 	cx := 12.0
 	cy := y + rh/2
 	d := 4.0
+	if sev == SeverityInfo || sev == SeverityHint {
+		g.SetBrush1(paint.Color{R: 112, G: 174, B: 225, A: 255})
+		g.DrawText1(cx-2, cy+4, "i")
+		return
+	}
 	if sev == SeverityWarning {
 		// Amber exclamation: a vertical stroke plus a dot below.
 		g.MoveTo(cx, cy-d)
