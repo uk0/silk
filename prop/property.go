@@ -327,7 +327,7 @@ func propertyConfigFilePath(name string) string {
 
 func loadPropertyConfigFile(userPath, resourcePath string) (*core.TDoc, error) {
 	doc, err := core.LoadTDocFile(userPath)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return core.LoadTDocFile(resourcePath)
 	}
 	return doc, err

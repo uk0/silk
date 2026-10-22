@@ -49,6 +49,8 @@ type FileExplorer struct {
 	scanGeneration                      uint64
 	scanErr                             error
 	scanWorker                          *explorerScanWorker
+	gitWorker                           *explorerScanWorker
+	gitGeneration                       uint64
 	post                                func(func())
 	onScanError                         func(error)
 	normalFont, boldFont                paint.Font

@@ -171,103 +171,87 @@ func findLineEnd(s []rune) int {
 	return -1
 }
 
+// Layout shapes each logical line once, then slices/rebases its glyphs into
+// visual rows. Never reshape the remaining suffix at every wrap (quadratic for
+// long lines in narrow dialogs). The glyph/rune contract matches paint.Font.
 func (this *TextBlock) Layout(w float64) {
-
-	wrap := this.wrap && this.ml
-	//if wrap && w != this.pw {
 	this.rows = nil
-	//}
 	this.pw = w
-	//if this.rows == nil {
-	//	this.pos = 0
-	//}
-	ln := 0
-	//if ln >= toLn {
-	//	return
-	//}
-
-	total := len(this.text) - 1
-	//if this.pos >= total {
-	//	return
-	//}
-
-	sf := this.Font().ScaledFont(nil)
-	fe := this.fontExtents()
-
-	begin := 0
-	s := this.text[begin:]
-
-	tmp := sf.TextToGlyphs(0, 0, " ")
-	blank := tmp[0]
-
-	y := float64(ln) * fe.Height
-	for len(s) > 0 {
-		var pos int
+	if len(this.text) == 0 {
+		return
+	}
+	wrap := this.wrap && this.ml && w > 0
+	sf, fe := this.Font().ScaledFont(nil), this.fontExtents()
+	blankGlyphs := sf.TextToGlyphs(0, 0, " ")
+	if len(blankGlyphs) == 0 {
+		return
+	}
+	blank := blankGlyphs[0]
+	for begin := 0; begin < len(this.text); {
+		pos := len(this.text) - begin - 1
 		if this.ml {
-			pos = findLineEnd(s)
-		} else {
-			pos = total
+			pos = findLineEnd(this.text[begin:])
 		}
-		if pos == -1 {
-			// 这是额外附加的空行
+		if pos < 0 {
 			break
 		}
-		var n = pos + 1
-		if s[pos] == '\n' {
-			if pos+1 < len(s) && s[pos+1] == '\r' {
-				n = pos + 2
-			}
-		} else {
-			if pos+1 < len(s) && s[pos+1] == '\n' {
-				n = pos + 2
-			}
+		end := begin + pos
+		next := end + 1
+		if next < len(this.text) && ((this.text[end] == '\r' && this.text[next] == '\n') || (this.text[end] == '\n' && this.text[next] == '\r')) {
+			next++
 		}
-		wraped := false
-		text := s[:pos+1]
-		glyphs := sf.TextToGlyphs(0, y+fe.Ascent, string(text))
-		if wrap {
-			i := len(glyphs) - 1
-			for i > 1 && glyphs[i].X >= w {
-				i--
-			}
-			if i < len(glyphs)-1 {
-				j := i
-				for j > 1 && !canBreak(text[j-1], text[j]) {
-					j--
+		text := this.text[begin : end+1]
+		glyphs := sf.TextToGlyphs(0, 0, string(text))
+		if len(glyphs) < len(text) {
+			return
+		}
+		for start := 0; ; {
+			stop := pos
+			origin := glyphs[start].X
+			if wrap {
+				stop = start + 1
+				for stop < pos && glyphs[stop+1].X-origin <= w {
+					stop++
 				}
-				if j > 1 {
-					i = j
+				if stop > pos {
+					stop = pos
 				}
-				pos = pos - len(glyphs) + 1 + i
-				n = pos
-				wraped = true
+				if stop < pos {
+					j := stop
+					for j > start && !canBreak(text[j-1], text[j]) {
+						j--
+					}
+					if j > start {
+						stop = j
+					}
+				}
 			}
+			row := sRow{text: this.text[begin+start : begin+stop], begin: begin + start, end: begin + stop}
+			y := float64(len(this.rows))*fe.Height + fe.Ascent
+			row.glyphs = make([]paint.Glyph, 0, stop-start+1)
+			for j := start; j < stop; j++ {
+				g := glyphs[j]
+				g.A = uint32(glyphs[j+1].X - g.X)
+				g.X -= origin
+				g.Y = y
+				row.glyphs = append(row.glyphs, g)
+			}
+			if stop == pos {
+				row.end = next
+				g := blank
+				g.X = glyphs[pos].X - origin
+				g.Y = y
+				g.A = 165536
+				row.glyphs = append(row.glyphs, g)
+			}
+			this.rows = append(this.rows, row)
+			if stop == pos {
+				break
+			}
+			start = stop
 		}
-		row := sRow{
-			s[:pos],
-			begin, begin + n,
-			make([]paint.Glyph, 0, pos+1)} // 用新的slice节省内存, 因为旧的有冗余
-		for j := 0; j < pos; j++ {
-			g := glyphs[j]
-			g.A = uint32(glyphs[j+1].X - g.X)
-			row.glyphs = append(row.glyphs, g)
-		}
-		if !wraped {
-			// 在行尾加空格做换行符, 因回车字符可能可见, 所以不能直接用回车
-			b1 := blank
-			b1.X = glyphs[pos].X
-			b1.Y = glyphs[pos].Y
-			b1.A = 165536 // 超宽的换行符, 保证点行尾时不跑到另一行
-			row.glyphs = append(row.glyphs, b1)
-		}
-		this.rows = append(this.rows, row)
-		begin += n
-		s = s[n:]
-		ln++
-		y += fe.Height
+		begin = next
 	}
-
-	//	this.pos = begin
 }
 
 func (this *TextBlock) fontExtents() *paint.FontExtents {

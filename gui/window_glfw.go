@@ -2261,7 +2261,14 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 	}
 }
 
+var glfwCompositionActive = nativeHasMarkedText
+
 func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
+	// Cocoa delivers GLFW keys before interpretKeyEvents/insertText. While
+	// composing, IME owns the keystroke; do not submit/cancel/navigate the form.
+	if glfwReady && glfwCompositionActive(gw) {
+		return
+	}
 	noteUIInteraction(time.Now())
 	previousMods := eventModifiers
 	eventModifiers = &mods

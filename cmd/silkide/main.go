@@ -89,6 +89,9 @@ func main() {
 	// refreshes below kick off so their core.Warn failures land in the
 	// pane rather than only on stderr.
 	installCoreLogSink()
+	if backup := prefs.store.RecoveryBackup(); backup != "" {
+		core.Warn("Recovered corrupt preferences; original preserved at ", backup)
+	}
 	// Kick off the initial `go list -json` walk on a goroutine so the
 	// frame keeps painting while it runs. globalPackages.SetPackages
 	// is goroutine-safe enough for our purposes (single writer, panel
@@ -4533,7 +4536,7 @@ func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 			// Anchor the hint just under the caret (CaretGlobalXY returns the
 			// line's bottom), not the crude editor top-left.
 			gx, gy := ed.CaretGlobalXY()
-			gui.ShowToolTip(gx, gy, text)
+			ed.ShowSignatureHint(gx, gy, text)
 		})
 	}()
 }

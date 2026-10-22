@@ -30,7 +30,6 @@ type fileEntry struct {
 // dotfile directories that bloat the index.
 var fileFinderSkipDirs = map[string]bool{
 	"vendor":       true,
-	"local":        true,
 	"node_modules": true,
 	"target":       true,
 	"build":        true,

@@ -35,8 +35,9 @@ type explorerScanResult struct {
 	gitOnly    bool
 }
 
-// scanExplorer opens a rooted directory capability. Children are never stat'ed
-// through symlinks; os.Root also refuses a concurrent replacement escaping the
+// scanExplorer opens a rooted directory capability. Linked children are never
+// traversed; only their target kind is inspected for presentation. os.Root also
+// refuses a concurrent replacement escaping the
 // chosen root. ReadDir is batched, traversal/count/depth bounded, and cancellation
 // is checked between entries. A blocked filesystem syscall itself is not
 // preemptible; it never holds the GUI thread.
@@ -117,7 +118,8 @@ func scanExplorer(ctx context.Context, req explorerScanRequest) explorerScanResu
 				childRel := filepath.Join(rel, name)
 				// DirEntry.IsDir does not follow symlinks or junctions.
 				var child *fileEntry
-				if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+				linked := entry.Type()&(os.ModeSymlink|os.ModeIrregular) != 0
+				if entry.IsDir() && !linked {
 					child = read(childRel, name, depth+1)
 					if query != "" && child != nil && !strings.Contains(strings.ToLower(childRel), query) && len(child.children) == 0 {
 						continue
@@ -126,7 +128,12 @@ func scanExplorer(ctx context.Context, req explorerScanRequest) explorerScanResu
 					if query != "" && !strings.Contains(strings.ToLower(childRel), query) {
 						continue
 					}
-					child = &fileEntry{name: name, path: filepath.Join(req.root, childRel), depth: depth + 1, isSymlink: entry.Type()&os.ModeSymlink != 0, loaded: true}
+					child = &fileEntry{name: name, path: filepath.Join(req.root, childRel), depth: depth + 1, isSymlink: linked, loaded: true}
+					if linked {
+						if info, err := os.Stat(child.path); err == nil {
+							child.isDir = info.IsDir()
+						}
+					}
 				}
 				if child != nil {
 					e.children = append(e.children, child)
@@ -149,8 +156,8 @@ func scanExplorer(ctx context.Context, req explorerScanRequest) explorerScanResu
 	return result
 }
 
-// At most one worker per explorer, one pending request, and one queued UI
-// delivery per scan phase. Idle workers exit instead of living until shutdown.
+// One worker per phase (tree/Git), one pending request per worker, and one
+// queued UI delivery per phase. Idle workers exit instead of living until shutdown.
 type explorerScanWorker struct {
 	mu      sync.Mutex
 	pending *explorerScanRequest
@@ -210,15 +217,18 @@ func (w *explorerScanWorker) run() {
 }
 
 type explorerOutput struct {
-	bytes.Buffer
-	limit int
+	buffer bytes.Buffer
+	limit  int
 }
+
+func (b *explorerOutput) Bytes() []byte { return b.buffer.Bytes() }
+func (b *explorerOutput) Len() int      { return b.buffer.Len() }
 
 func (b *explorerOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > b.limit {
 		return 0, io.ErrShortBuffer
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 func scanExplorerGit(parent context.Context, dir string) map[string]rune {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)

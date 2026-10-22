@@ -210,6 +210,12 @@ The earlier `silk_pure_go` dash, icon color/path and allocation failures are
 fixed and its 192-case rendering run passes on macOS and Windows. This does not
 certify complete native Cairo parity, complex shaping or every desktop path.
 
+2026-10-22 review/security follow-up: [15-finding fixes and CVE audit](REVIEW_FIXES_20261022.md).
+The module now requires **Go 1.26.10**; use a security-patched toolchain
+(1.26.10, or at least 1.27.3 on the 1.27 branch). Upgraded Go networking/image/system
+modules and a pinned `govulncheck` workflow check for the audited vulnerable versions.
+Existing binaries must be rebuilt; the historical platform evidence above is not automatically upgraded.
+
 Detailed, dated verification records:
 [workbench](WORKBENCH_QA.md) · [menus and About](MENU_QA.md) ·
 [SDK/platform compatibility](SDK_COMPATIBILITY.md) ·

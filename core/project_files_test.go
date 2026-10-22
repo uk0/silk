@@ -76,6 +76,7 @@ func TestProjectFilesCancellationAndRelativeRoot(t *testing.T) {
 	}
 	root := t.TempDir()
 	projectTestFile(t, root, "main.go")
+	t.Chdir(root) // TempDir and checkout may be on different Windows drives.
 	cwd, e := os.Getwd()
 	if e != nil {
 		t.Fatal(e)

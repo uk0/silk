@@ -1,0 +1,48 @@
+name: Go security audit
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, opengl]
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - '.github/workflows/security.yml'
+permissions:
+  contents: read
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install native build dependencies
+        run: bash scripts/install-linux-deps.sh
+      - name: Install pinned scanner
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Audit all selected module versions and application call paths
+        # Text mode propagates vulnerability failures. JSON mode alone can exit
+        # zero even when findings are present. No recursive scan of local data.
+        run: |
+          govulncheck -scan module
+          govulncheck ./cmd/silkide ./gateway ./scada
+          root="$PWD"
+          # The legacy name mod/map is rejected by go/packages. Source scanning
+          # accepts explicit files. For module-only scanning, copy the manifest
+          # under a temporary valid identity without changing selected versions.
+          (cd mod/map && govulncheck ./map-scene.go ./map-view.go)
+          audit="$(mktemp -d)"
+          cp mod/map/go.mod mod/map/go.sum "$audit/"
+          (
+            cd "$audit"
+            go mod edit -module=audit.silk.invalid/map "-replace=github.com/uk0/silk=$root"
+            printf 'package audit\n' > audit.go
+            govulncheck -scan module
+          )
+          # Do not silently audit a different dependency graph.
+          diff -u \
+            <(cd mod/map && go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all | sed '/^$/d') \
+            <(cd "$audit" && go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all | sed '/^$/d')

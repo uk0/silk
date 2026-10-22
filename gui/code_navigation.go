@@ -2,6 +2,7 @@ package gui
 
 import (
 	"go/ast"
+	"go/scanner"
 	gotoken "go/token"
 	"os"
 	"path/filepath"
@@ -156,7 +157,51 @@ func FindDefinition(word string, currentFile string, currentContent string) *Nav
 // findInContent searches the recoverable AST of the actual buffer. Lexical
 // comments/strings never become fallback declarations, including while typing.
 func findInContent(word, filePath, content string) *NavigationTarget {
-	return findDefinitionAST(word, filePath, content)
+	if target := findDefinitionAST(word, filePath, content); target != nil {
+		return target
+	}
+	// A named func declaration cannot be nested in another function. Recover
+	// its token header even when an earlier unfinished body swallowed its AST.
+	// Unlike regex, scanner never sees declarations inside comments/raw strings.
+	var scan scanner.Scanner
+	fset := gotoken.NewFileSet()
+	f := fset.AddFile(filePath, -1, len(content))
+	scan.Init(f, []byte(content), nil, 0)
+	for {
+		_, tok, _ := scan.Scan()
+		if tok == gotoken.EOF {
+			return nil
+		}
+		if tok != gotoken.FUNC {
+			continue
+		}
+		pos, tok, name := scan.Scan()
+		kind := "func"
+		if tok == gotoken.LPAREN {
+			depth := 1
+			for depth > 0 {
+				_, tok, _ = scan.Scan()
+				if tok == gotoken.EOF {
+					return nil
+				}
+				if tok == gotoken.LPAREN {
+					depth++
+				}
+				if tok == gotoken.RPAREN {
+					depth--
+				}
+			}
+			pos, tok, name = scan.Scan()
+			kind = "method"
+		}
+		if tok != gotoken.IDENT || name != word {
+			continue
+		}
+		_, next, _ := scan.Scan()
+		if next == gotoken.LPAREN || next == gotoken.LBRACK {
+			return navTarget(filePath, pos, fset, word, kind)
+		}
+	}
 }
 
 // findDefinitionAST remains name-based, not cursor/scope-aware. Package-level

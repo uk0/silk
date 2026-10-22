@@ -175,7 +175,7 @@ func TestExplorerScanDoesNotFollowSymlinks(t *testing.T) {
 		t.Fatal(r.err)
 	}
 	e := findEntry(r.root, filepath.Join(root, "outside"))
-	if e == nil || !e.isSymlink || e.isDir || len(e.children) != 0 {
+	if e == nil || !e.isSymlink || !e.isDir || len(e.children) != 0 {
 		t.Fatalf("followed external link: %+v", e)
 	}
 	req.filter = "secret"

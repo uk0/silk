@@ -50,6 +50,7 @@ func TestSnapshotErrorsRetainPathAndCause(t *testing.T) {
 
 func TestSnapshotLongUnicodeAndRelativeNames(t *testing.T) {
 	dir := t.TempDir()
+	t.Chdir(dir) // Keep relative paths on the same volume on Windows runners.
 	for i := 0; i < 9; i++ {
 		dir = filepath.Join(dir, "long-document-component-0123456789")
 	}

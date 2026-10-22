@@ -53,6 +53,10 @@ func (e *FileExplorer) RenameBusy() bool { return e.renameBusy }
 // The root itself cannot be renamed. Pending OS I/O is not cancellable: the host
 // must keep its event loop alive until completion, even after CancelScan.
 func (e *FileExplorer) RenamePath(path, name string, done func(error)) error {
+	return e.renamePath(path, name, done, false)
+}
+
+func (e *FileExplorer) renamePath(path, name string, done func(error), compatible bool) error {
 	if e.renameBusy {
 		return diagnostic.New(diagnostic.FileOperationBusy, "rename is still running", nil)
 	}
@@ -87,7 +91,7 @@ func (e *FileExplorer) RenamePath(path, name string, done func(error)) error {
 		post = gui.Post
 	}
 	if rename == nil {
-		rename = fsRename
+		rename = func(path, name string) (string, error) { return fsRenameMode(path, name, compatible) }
 	}
 	waitTimeout := e.renameWaitTimeout
 	if waitTimeout <= 0 {

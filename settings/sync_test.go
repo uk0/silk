@@ -149,12 +149,10 @@ func TestSettingsWriteFailureIsCodedDirtyAndRetryable(t *testing.T) {
 	}
 }
 
-func TestSettingsUnreadableOriginalCannotBeOverwritten(t *testing.T) {
+func TestSettingsCorruptOriginalIsBackedUpBeforeRecovery(t *testing.T) {
 	for _, clear := range []bool{false, true} {
 		path := filepath.Join(t.TempDir(), "prefs")
-		// TDoc permits bare text as a root; a truncated gzip header is a real
-		// decoder error, not an assumption about the text grammar.
-		original := []byte{0x1f, 0x8b, 0x08}
+		original := []byte{0x1f, 0x8b, 8}
 		if err := os.WriteFile(path, original, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -164,19 +162,24 @@ func TestSettingsUnreadableOriginalCannotBeOverwritten(t *testing.T) {
 		} else {
 			settingsSet(t, s, "new")
 		}
-		err := s.Sync()
-		if diagnostic.CodeOf(err) != diagnostic.SettingsRead {
-			t.Fatalf("load error = %v", err)
+		backup := s.RecoveryBackup()
+		got, err := os.ReadFile(backup)
+		if err != nil || !bytes.Equal(got, original) {
+			t.Fatalf("missing exact backup: %q %v", backup, err)
 		}
-		if !s.IsDirty() {
-			t.Fatal("runtime edits were discarded")
+		got, _ = os.ReadFile(path)
+		if !bytes.Equal(got, original) {
+			t.Fatal("load mutated original")
 		}
-		got, _ := os.ReadFile(path)
-		if string(got) != string(original) {
-			t.Fatal("unreadable original was replaced")
-		}
-		if err = s.RequestSync(); diagnostic.CodeOf(err) != diagnostic.SettingsRead {
+		if err = s.Sync(); err != nil {
 			t.Fatal(err)
+		}
+		if !clear && New(path).String("key", "") != "new" {
+			t.Fatal("recovered preferences not saved")
+		}
+		got, _ = os.ReadFile(backup)
+		if !bytes.Equal(got, original) {
+			t.Fatal("sync damaged backup")
 		}
 	}
 }
@@ -345,14 +348,14 @@ func TestSettingsValidatesCompressedTrailerBeforeAcceptingFile(t *testing.T) {
 				}
 				return
 			}
-			if value != "" || diagnostic.CodeOf(s.Status()) != diagnostic.SettingsRead {
+			if value != "" || s.RecoveryBackup() == "" {
 				t.Fatalf("corrupt gzip accepted: %q %v", value, s.Status())
 			}
 			settingsSet(t, s, "new")
-			if err := s.Sync(); diagnostic.CodeOf(err) != diagnostic.SettingsRead {
+			if err := s.Sync(); err != nil {
 				t.Fatal(err)
 			}
-			got, _ := os.ReadFile(path)
+			got, _ := os.ReadFile(s.RecoveryBackup())
 			if !bytes.Equal(got, data) {
 				t.Fatal("corrupt file overwritten")
 			}

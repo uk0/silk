@@ -135,10 +135,26 @@ func (e *CodeEditor) SymbolsRevision() uint64 {
 func (e *CodeEditor) LanguageHintRevision() uint64 { return e.languageHintRevision }
 
 func (e *CodeEditor) DismissLanguageHints() {
+	e.signatureHintVisible = false
+	e.invalidateHoverHint()
+}
+
+// Input retires async replies and hover text, but a call signature already
+// shown remains useful while typing an argument (including modifier keys).
+func (e *CodeEditor) invalidateHoverHint() {
 	e.languageHintRevision++
 	e.hoverReqLine, e.hoverReqCol = -1, -1
 	e.hoverErrorLine = -1
-	HideToolTipFor(e.Self())
+	if !e.signatureHintVisible {
+		HideToolTipFor(e.Self())
+	}
+}
+
+// ShowSignatureHint distinguishes call help from short-lived hover tooltips.
+// UI-thread only; hosts must first reject stale asynchronous responses.
+func (e *CodeEditor) ShowSignatureHint(x, y float64, text string) {
+	e.signatureHintVisible = text != ""
+	ShowToolTipFor(e.Self(), x, y, text)
 }
 
 func (e *CodeEditor) OnFocusChanged(newFocusWidget, oldFocusWidget IWidget) {

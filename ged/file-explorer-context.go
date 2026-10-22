@@ -76,6 +76,11 @@ func validateFileName(name string) error {
 }
 
 func fileOperationError(path string, err error) error {
+	if errors.Is(err, fileops.ErrRenameUnsupported) {
+		d := diagnostic.New(diagnostic.FileWrite, "Filesystem cannot perform an atomic no-replace rename", err).At(diagnostic.Location{File: path})
+		d.Hint = "Use compatibility rename only after stopping other applications writing to this directory. The destination check cannot be atomic on this volume."
+		return d
+	}
 	code := diagnostic.FileWrite
 	if errors.Is(err, os.ErrExist) {
 		code = diagnostic.FileConflict
@@ -118,6 +123,10 @@ func fsCreateFolder(dir, name string) (string, error) {
 // Unlike a Stat + Rename sequence, the kernel operation cannot overwrite a
 // target created between the check and the move (including dangling symlinks).
 func fsRename(oldPath, newName string) (string, error) {
+	return fsRenameMode(oldPath, newName, false)
+}
+
+func fsRenameMode(oldPath, newName string, compatible bool) (string, error) {
 	if err := validateFileName(newName); err != nil {
 		return "", err
 	}
@@ -129,7 +138,11 @@ func fsRename(oldPath, newName string) (string, error) {
 		return oldPath, nil
 	}
 	np := filepath.Join(filepath.Dir(oldPath), newName)
-	if err := fileops.RenameNoReplace(oldPath, np); err != nil {
+	rename := fileops.RenameNoReplace
+	if compatible {
+		rename = fileops.RenameCompatible
+	}
+	if err := rename(oldPath, np); err != nil {
 		return "", fileOperationError(np, err)
 	}
 	return np, nil
@@ -251,8 +264,21 @@ func (this *FileExplorer) promptRename(entry *fileEntry) {
 			gui.ShowMessageBox(this.Self(), nil, "重命名失败", message, []string{"确定"})
 		}
 	}
-	if err := this.RenamePath(entry.path, name, report); err != nil {
+	path := entry.path
+	complete := func(err error) {
+		if errors.Is(err, fileops.ErrRenameUnsupported) {
+			message := "此磁盘不支持原子防覆盖重命名。兼容模式会检查目标是否存在，但其他程序同时写入时仍可能发生覆盖。请先停止其他程序对此目录的写入。"
+			if gui.ShowMessageBox(this.Self(), nil, "兼容模式重命名", message, []string{"取消", "兼容重命名"}) == "兼容重命名" {
+				if e := this.renamePath(path, name, report, true); e != nil {
+					report(e)
+				}
+			}
+			return
+		}
 		report(err)
+	}
+	if err := this.RenamePath(path, name, complete); err != nil {
+		complete(err)
 	}
 }
 

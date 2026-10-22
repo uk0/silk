@@ -53,7 +53,7 @@ func (w *preferenceWriter) run(f *preferenceFlight) {
 		err := w.save() // no host or UI lock held while SDK writes/joins
 		w.mu.Lock()
 		w.lastErr = err
-		if err == nil && w.pending {
+		if w.pending {
 			w.mu.Unlock()
 			continue
 		}

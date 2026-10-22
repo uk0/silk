@@ -12,6 +12,35 @@ import (
 	"github.com/uk0/silk/internal/fileops"
 )
 
+// Only decoder failures are recoverable by backing up the bytes. Permission,
+// device and snapshot I/O errors must never be mistaken for corrupt settings.
+type settingsDecodeError struct {
+	err  error
+	data []byte
+}
+
+func (e *settingsDecodeError) Error() string { return e.err.Error() }
+func (e *settingsDecodeError) Unwrap() error { return e.err }
+
+func backupCorruptSettings(path string, data []byte) (name string, err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".corrupt-*")
+	if err != nil {
+		return "", err
+	}
+	name = f.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(name)
+		}
+	}()
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	err = errors.Join(err, f.Close())
+	return name, err
+}
+
 // Same-directory temporary file: an encoding, fsync, close or rename failure
 // never truncates the previous settings. No remove-then-rename fallback.
 // Atomic visibility depends on the local filesystem's rename guarantees;
@@ -78,16 +107,24 @@ func readSettingsDoc(path string) (*core.TDoc, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(data) == 0 {
+		return core.NewTDoc(), nil
+	}
+	original := data
 	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
 		zr, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
-			return nil, err
+			return nil, &settingsDecodeError{err, original}
 		}
 		data, err = io.ReadAll(zr)
 		err = errors.Join(err, zr.Close())
 		if err != nil {
-			return nil, err
+			return nil, &settingsDecodeError{err, original}
 		}
 	}
-	return core.LoadTDoc(bytes.NewReader(data))
+	doc, err := core.LoadTDoc(bytes.NewReader(data))
+	if err != nil {
+		return nil, &settingsDecodeError{err, original}
+	}
+	return doc, nil
 }

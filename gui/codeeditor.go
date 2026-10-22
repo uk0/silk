@@ -310,9 +310,12 @@ type CodeEditor struct {
 	// --- Code Completion ---
 	completion *CompletionPopup
 	// externalCompletions holds candidates injected by an external provider
-	// (e.g. silkide's gopls LSP client). They persist until replaced or
-	// cleared and are merged into the popup on every (re)build.
-	externalCompletions []ExternalCompletion
+	// (e.g. silkide's gopls LSP client). Candidates expire on text/caret changes
+	// and are merged into the popup while their snapshot remains current.
+	externalCompletions                           []ExternalCompletion
+	externalCompletionRevision                    uint64
+	externalCompletionLine, externalCompletionCol int
+	signatureHintVisible                          bool
 
 	// --- Symbol Navigation ---
 	symbolPopup *SymbolPopup
@@ -646,6 +649,7 @@ func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
 
 // SetText replaces the entire editor content.
 func (this *CodeEditor) SetText(s string) {
+	this.DismissLanguageHints()
 	this.lines = strings.Split(s, "\n")
 	if len(this.lines) == 0 {
 		this.lines = []string{""}
@@ -690,7 +694,8 @@ func (this *CodeEditor) cacheText(text string) {
 		this.text = text
 		this.textRevision++
 		this.symbolsRevision++
-		this.DismissLanguageHints()
+		this.invalidateHoverHint()
+		this.ClearExternalCompletions()
 		this.textRuneCount = utf8.RuneCountInString(text)
 	}
 	this.textDirty = false
@@ -4998,7 +5003,11 @@ func (this *CodeEditor) OnMouseLeave() {
 }
 
 func (this *CodeEditor) OnTextInput(s string) {
-	this.DismissLanguageHints()
+	if strings.ContainsAny(s, ")\r\n") {
+		this.DismissLanguageHints()
+	} else {
+		this.invalidateHoverHint()
+	}
 	// A snippet session that has advanced past its final stop ($0) ends as soon
 	// as buffer content is typed again; while it is still active, typing edits
 	// the current placeholder and leaves the session in place.
@@ -5218,8 +5227,9 @@ func (this *CodeEditor) tryTriggerCompletion(typed string) {
 
 // showCompletion opens the popup for prefix, then merges any externally
 // injected candidates into it. It is the single internal entry point for
-// (re)building the popup so external items survive every keystroke re-trigger.
+// (re)building the popup; only current provider snapshots may be merged.
 func (this *CodeEditor) showCompletion(prefix string) {
+	this.expireExternalCompletions()
 	if this.completion == nil {
 		this.completion = NewCompletionPopup(this)
 	}
@@ -5232,6 +5242,7 @@ func (this *CodeEditor) showCompletion(prefix string) {
 // current prefix. No-op when there are no external items so the built-in
 // behaviour is unchanged.
 func (this *CodeEditor) mergeExternalIntoPopup() {
+	this.expireExternalCompletions()
 	if this.completion == nil || len(this.externalCompletions) == 0 {
 		return
 	}
@@ -5269,7 +5280,13 @@ func (this *CodeEditor) currentWordPrefix() string {
 }
 
 func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
-	this.DismissLanguageHints()
+	this.expireExternalCompletions()
+	switch key {
+	case KeyEsc, KeyLeft, KeyRight, KeyUp, KeyDown, KeyHome, KeyEnd, KeyPageUp, KeyPageDown, KeyEnter:
+		this.DismissLanguageHints()
+	default:
+		this.invalidateHoverHint()
+	}
 	// --- Rename refactoring key routing ---
 	if this.renameActive {
 		switch key {
@@ -7273,12 +7290,9 @@ func (this *CodeEditor) clampCursorVisible() {
 // the host converts its protocol items into ExternalCompletion values and
 // pushes them in via SetExternalCompletions.
 //
-// Lifetime: injected items PERSIST until replaced by another
-// SetExternalCompletions call or removed by ClearExternalCompletions. They are
-// merged into the popup on every (re)build (see showCompletion), so they keep
-// showing as the user types and the prefix narrows — matching how an LSP
-// completion list behaves. The host is responsible for clearing them when they
-// go stale (e.g. on file/cursor change or when the popup is dismissed).
+// Lifetime: injected items belong to the current buffer snapshot. Text edits
+// (including undo/redo) invalidate them and close the old popup. Hosts must
+// reject stale async responses before injection and request fresh candidates.
 //
 // Dedup precedence: on a label (CompletionItem.Text) collision between a
 // built-in and an external candidate, the EXTERNAL one wins — the LSP knows the
@@ -7296,15 +7310,30 @@ type ExternalCompletion struct {
 
 // SetExternalCompletions replaces the injected candidate set. Pass the items a
 // host fetched from its provider; they are merged into the popup on the next
-// (re)build and persist until replaced or cleared. A nil/empty slice is
+// (re)build and expire on text mutation. A nil/empty slice is
 // equivalent to ClearExternalCompletions.
 func (this *CodeEditor) SetExternalCompletions(items []ExternalCompletion) {
-	this.externalCompletions = items
+	if len(items) == 0 {
+		this.ClearExternalCompletions()
+		return
+	}
+	this.externalCompletionRevision = this.TextRevision()
+	this.externalCompletionLine, this.externalCompletionCol = this.cursorLine, this.cursorCol
+	this.externalCompletions = append([]ExternalCompletion(nil), items...)
+}
+
+func (this *CodeEditor) expireExternalCompletions() {
+	if len(this.externalCompletions) > 0 && (this.externalCompletionRevision != this.TextRevision() || this.externalCompletionLine != this.cursorLine || this.externalCompletionCol != this.cursorCol) {
+		this.ClearExternalCompletions()
+	}
 }
 
 // ClearExternalCompletions drops all injected candidates, returning the popup
 // to its built-in sources.
 func (this *CodeEditor) ClearExternalCompletions() {
+	if len(this.externalCompletions) > 0 && this.completion != nil {
+		this.completion.Dismiss()
+	}
 	this.externalCompletions = nil
 }
 
@@ -7313,6 +7342,7 @@ func (this *CodeEditor) ClearExternalCompletions() {
 // provider results (e.g. an LSP completion response) and injecting them via
 // SetExternalCompletions.
 func (this *CodeEditor) TriggerCompletion() {
+	this.expireExternalCompletions()
 	this.showCompletion(this.currentWordPrefix())
 	this.Self().Update()
 }

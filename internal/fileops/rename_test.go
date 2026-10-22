@@ -76,3 +76,48 @@ func TestRenameNoReplaceDirectoryAndDanglingSymlink(t *testing.T) {
 		t.Fatal("symlink replaced", err)
 	}
 }
+
+func TestCompatibleRenameRequiresUnsupportedAndProtectsExisting(t *testing.T) {
+	root := t.TempDir()
+	src, dst := filepath.Join(root, "src"), filepath.Join(root, "dst")
+	unsupported := func(string, string) error { return ErrRenameUnsupported }
+	if err := os.WriteFile(src, []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameCompatible(src, dst, func(string, string) error { return os.ErrPermission }); !os.IsPermission(err) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Fatal("permission failure mutated source")
+	}
+	if err := os.WriteFile(dst, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameCompatible(src, dst, unsupported); !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dst)
+	if string(got) != "original" {
+		t.Fatal("existing target replaced")
+	}
+	if err := os.Remove(dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameCompatible(src, dst, unsupported); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(dst)
+	if string(got) != "source" {
+		t.Fatal("compatibility rename lost content")
+	}
+	if err := os.WriteFile(src, []byte("second"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(filepath.Join(root, "missing"), link); err != nil {
+		t.Skip(err)
+	}
+	if err := renameCompatible(src, link, unsupported); !os.IsExist(err) {
+		t.Fatal("dangling link replaced", err)
+	}
+}

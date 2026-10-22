@@ -1,6 +1,7 @@
 package ged
 
 import (
+	"context"
 	"errors"
 	"math"
 	"path/filepath"
@@ -18,11 +19,14 @@ func (e *FileExplorer) Loading() bool               { return e.loading }
 func (e *FileExplorer) LastError() error            { return e.scanErr }
 func (e *FileExplorer) Filter() string              { return e.filter }
 func (e *FileExplorer) SigScanError(fn func(error)) { e.onScanError = fn }
-func (e *FileExplorer) SetEntryLimit(n int)         { e.entryLimit = max(1, min(n, 1000000)); e.requestScan() }
+func (e *FileExplorer) SetEntryLimit(n int) {
+	e.entryLimit = max(1, min(n, 1000000))
+	e.requestTreeScan(false)
+}
 func (e *FileExplorer) SetShowHidden(v bool) {
 	if e.showHidden != v {
 		e.showHidden = v
-		e.requestScan()
+		e.requestTreeScan(false)
 	}
 }
 func (e *FileExplorer) ShowHidden() bool { return e.showHidden }
@@ -31,7 +35,7 @@ func (e *FileExplorer) SetExcludedDirs(names []string) {
 	for _, n := range names {
 		e.excluded[n] = true
 	}
-	e.requestScan()
+	e.requestTreeScan(false)
 }
 func (e *FileExplorer) SetFilter(query string) {
 	query = strings.TrimSpace(query)
@@ -45,7 +49,7 @@ func (e *FileExplorer) SetFilter(query string) {
 	e.filter = query
 	e.searchCollapsed = map[string]bool{}
 	e.scrollY = 0
-	e.requestScan()
+	e.requestTreeScan(false)
 }
 func (e *FileExplorer) SelectedPath() string {
 	if e.selectedIdx >= 0 && e.selectedIdx < len(e.flatList) {
@@ -77,7 +81,7 @@ func (e *FileExplorer) RevealPath(path string) bool {
 			break
 		}
 	}
-	e.requestScan()
+	e.requestTreeScan(false)
 	return true
 }
 func copyExplorerSet(in map[string]bool) map[string]bool {
@@ -87,7 +91,9 @@ func copyExplorerSet(in map[string]bool) map[string]bool {
 	}
 	return out
 }
-func (e *FileExplorer) requestScan() {
+func (e *FileExplorer) requestScan() { e.requestTreeScan(true) }
+
+func (e *FileExplorer) requestTreeScan(refreshGit bool) {
 	if e.rootDir == "" {
 		return
 	}
@@ -96,7 +102,7 @@ func (e *FileExplorer) requestScan() {
 	}
 	e.scanGeneration++
 	e.loading = true
-	req := explorerScanRequest{root: e.rootDir, filter: e.filter, expanded: copyExplorerSet(e.expanded), collapsed: copyExplorerSet(e.searchCollapsed), excluded: copyExplorerSet(e.excluded), hidden: e.showHidden, git: true, limit: e.entryLimit, generation: e.scanGeneration}
+	req := explorerScanRequest{root: e.rootDir, filter: e.filter, expanded: copyExplorerSet(e.expanded), collapsed: copyExplorerSet(e.searchCollapsed), excluded: copyExplorerSet(e.excluded), hidden: e.showHidden, limit: e.entryLimit, generation: e.scanGeneration}
 	if e.scanWorker == nil {
 		post := e.post
 		if post == nil {
@@ -106,20 +112,36 @@ func (e *FileExplorer) requestScan() {
 		e.scanWorker = &explorerScanWorker{scan: scanExplorer, deliver: delivery.offer}
 	}
 	e.scanWorker.submit(req)
+	if refreshGit {
+		e.gitGeneration++
+		if e.gitWorker == nil {
+			post := e.post
+			if post == nil {
+				post = gui.Post
+			}
+			delivery := &explorerDelivery{post: post, apply: e.applyScan}
+			e.gitWorker = &explorerScanWorker{deliver: delivery.offer, scan: func(ctx context.Context, r explorerScanRequest) explorerScanResult {
+				return explorerScanResult{generation: r.generation, gitOnly: true, gitStatus: scanExplorerGit(ctx, r.root)}
+			}}
+		}
+		e.gitWorker.submit(explorerScanRequest{root: e.rootDir, generation: e.gitGeneration})
+	}
 	e.Update()
 }
 func (e *FileExplorer) applyScan(r explorerScanResult) {
-	if r.generation != e.scanGeneration {
-		return
-	}
 	if r.gitOnly {
+		if r.generation != e.gitGeneration {
+			return
+		}
 		e.gitStatus = r.gitStatus
 		e.Update()
 		return
 	}
+	if r.generation != e.scanGeneration {
+		return
+	}
 	e.loading = false
 	e.root = r.root
-	e.gitStatus = nil
 	e.scanErr = r.err
 	e.hoverIdx = -1
 	e.rebuildFlatList()
@@ -145,13 +167,21 @@ func (e *FileExplorer) applyScan(r explorerScanResult) {
 // explorer is being permanently removed. A later SetRootDir can reuse it.
 func (e *FileExplorer) CancelScan() {
 	e.scanGeneration++
+	e.gitGeneration++
 	e.loading = false
 	if e.scanWorker != nil {
 		e.scanWorker.stop()
 	}
+	if e.gitWorker != nil {
+		e.gitWorker.stop()
+	}
 }
 func (e *FileExplorer) setExpanded(entry *fileEntry, expanded bool) {
 	if entry == nil || !entry.isDir {
+		return
+	}
+	if entry.isSymlink {
+		gui.SetToolTip(e, "Linked directory: open it as a project root to browse its contents.")
 		return
 	}
 	if e.filter != "" {
@@ -169,7 +199,7 @@ func (e *FileExplorer) setExpanded(entry *fileEntry, expanded bool) {
 			break
 		}
 	}
-	e.requestScan()
+	e.requestTreeScan(false)
 }
 func (e *FileExplorer) ensureFonts() {
 	f := gui.Theme().Font

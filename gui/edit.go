@@ -1036,6 +1036,11 @@ func (this *Edit) Layout() {
 	m := this.padding
 	w := this.w - m.L - m.R
 	h := this.h - m.B - m.T
+	// Construction assigns text before geometry. Defer wrapping until layout
+	// has an actual viewport instead of creating thousands of one-rune rows.
+	if this.wrap && (w <= 0 || h <= 0) {
+		return
+	}
 
 	if h <= 0 {
 		h = 1

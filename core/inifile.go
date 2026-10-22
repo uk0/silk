@@ -50,6 +50,7 @@ type TDocIni struct {
 	stime    time.Time
 	mtime    time.Time
 	readonly bool
+	loadErr  error // Never persist an empty fallback over an unreadable original.
 }
 
 // 加载TDoc格式的ini文件
@@ -67,6 +68,9 @@ func (this *TDocIni) load() {
 	var err error
 	this.doc, err = LoadTDocFile(this.fname)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			this.loadErr = err
+		}
 		Trace(`failed to load ini file: "` + this.fname + `"`)
 		this.doc = NewTDoc()
 		// Loading defaults (including missing read-only defaults) must not
@@ -85,6 +89,9 @@ func (this *TDocIni) WriteAttr(path string, data interface{}) error {
 	if this.doc == nil {
 		this.load()
 	}
+	if this.loadErr != nil {
+		return this.loadErr
+	}
 
 	err := this.doc.WriteAttr(path, data)
 	if err == nil {
@@ -97,6 +104,9 @@ func (this *TDocIni) WriteAttr(path string, data interface{}) error {
 func (this *TDocIni) ReadAttr(path string, ptr interface{}) error {
 	if this.doc == nil {
 		this.load()
+	}
+	if this.loadErr != nil {
+		return this.loadErr
 	}
 	return this.doc.ReadAttr(path, ptr)
 }
@@ -132,17 +142,32 @@ func mergeTDoc(dst, src *TDoc) {
 }
 
 func (this *TDocIni) Sync() {
+	if err := this.SyncError(); err != nil {
+		Warn(err)
+	}
+}
+
+// SyncError is the error-reporting counterpart of the legacy IIni.Sync API.
+// Decode and I/O failures leave both the original file and sync time intact.
+func (this *TDocIni) SyncError() error {
 	now := time.Now()
 	if this.doc == nil {
 		this.load()
-	} else {
+	}
+	if this.loadErr != nil {
+		return this.loadErr
+	}
+	{
 		fi, err := os.Stat(this.fname)
-		if err == nil && fi.ModTime().After(this.stime) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && (fi.ModTime().After(this.stime) || this.stime.Before(this.mtime)) {
 			doc, err := LoadTDocFile(this.fname)
 			if err == nil {
 				this.merge(doc)
 			} else {
-				Warn(err)
+				return err
 			}
 		}
 	}
@@ -150,10 +175,11 @@ func (this *TDocIni) Sync() {
 		Trace(`save ini file: "` + this.fname + `"`)
 		err := this.doc.SaveFile(this.fname)
 		if err != nil {
-			Warn(err, ObjInfo(err))
+			return err
 		}
 	}
 	this.stime = now
+	return nil
 }
 
 func (this *TDocIni) SyncTime() time.Time {

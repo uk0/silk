@@ -256,3 +256,37 @@ func TestMainJoinsPreferencesAfterEventLoop(t *testing.T) {
 		t.Fatalf("main must join its actual preferences after dispatch: loop=%d join=%d prefs=%s arg=%s", loop, join, prefs, arg)
 	}
 }
+
+func TestPreferencesShutdownRetriesQueuedFinalSaveAfterFailure(t *testing.T) {
+	p := &preferences{store: settings.New(filepath.Join(t.TempDir(), "prefs"))}
+	w := p.saveWriter()
+	w.post = func(func()) {}
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	w.save = func() error {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return os.ErrPermission
+		}
+		return p.store.Sync()
+	}
+	p.SetRunArgs("old")
+	waitPreferenceTest(t, started)
+	p.SetRunArgs("final")
+	// Wait's shutdown request must be registered before releasing the first I/O.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := p.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	once.Do(func() { close(release) })
+	if err := p.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || settings.New(p.store.Path()).String("run/args", "") != "final" {
+		t.Fatal("queued shutdown snapshot lost")
+	}
+}

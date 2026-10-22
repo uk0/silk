@@ -107,6 +107,13 @@ func GetToolTip(w IWidget) string {
 
 // ShowToolTip displays a tooltip at global coordinates (xg, yg).
 func ShowToolTip(xg, yg float64, text string) {
+	ShowToolTipFor(nil, xg, yg, text)
+}
+
+// ShowToolTipFor gives asynchronous hints an explicit owner. A caret anchor at
+// the viewport edge must not accidentally assign the popup to another panel.
+// Nil owner preserves ShowToolTip's hit-tested behavior.
+func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
 	tooltipMu.Lock()
 	defer tooltipMu.Unlock()
 	hideToolTipLocked()
@@ -114,7 +121,9 @@ func ShowToolTip(xg, yg float64, text string) {
 	if text == "" {
 		return
 	}
-	owner := FindWidgetGlobal(xg, yg)
+	if owner == nil {
+		owner = FindWidgetGlobal(xg, yg)
+	}
 	if owner == nil || owner.OwnerWindow() == nil || !owner.IsAllAncentorsVisible() {
 		return
 	}

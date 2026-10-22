@@ -3,6 +3,7 @@ package settings
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -27,12 +28,14 @@ type Settings struct {
 	version       uint64
 	flight        *syncFlight
 	pending       bool
-	loadErr       error                          // sticky: never replace a file we failed to load
+	loadErr       error                          // blocks writes until safely recovered/reloaded
 	writeSnapshot func(string, *core.TDoc) error // private deterministic I/O seam
 
 	// path is the on-disk file location. Empty for in-memory-only
 	// instances (NewMemory).
-	path string
+	path           string
+	storagePath    string // resolved once; atomic replacement preserves a dotfile symlink
+	recoveryBackup string
 
 	// doc is the in-memory TDoc carrying the entire settings tree.
 	// Allocated lazily so Default(...) followed by Status() doesn't
@@ -114,23 +117,45 @@ func (s *Settings) loadOnce() {
 		s.doc = core.NewTDoc()
 		return
 	}
-	// Reject special files and symlinks before opening; preferences are regular
-	// files, not streams. In particular, do not wait on a FIFO during first use.
+	// Resolve managed dotfile links, but still reject special files before open.
+	// Pin the resolved target for this store rather than replacing the link.
+	s.storagePath = s.path
 	info, statErr := os.Lstat(s.path)
+	if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		s.storagePath, statErr = filepath.EvalSymlinks(s.path)
+		if statErr == nil {
+			info, statErr = os.Lstat(s.storagePath)
+		}
+		// A dangling link is not a missing preferences file we may replace.
+		if statErr != nil {
+			s.loadErr = diagnostic.New(diagnostic.SettingsRead, "cannot resolve settings link", statErr).At(diagnostic.Location{File: s.path})
+			s.lastErr, s.doc = s.loadErr, core.NewTDoc()
+			return
+		}
+	}
 	var d *core.TDoc
 	err := statErr
 	if err == nil {
 		if !info.Mode().IsRegular() {
 			err = errors.New("settings path is not a regular file")
 		} else {
-			d, err = readSettingsDoc(s.path)
+			d, err = readSettingsDoc(s.storagePath)
+		}
+	}
+	var corrupt *settingsDecodeError
+	if errors.As(err, &corrupt) {
+		backup, backupErr := backupCorruptSettings(s.storagePath, corrupt.data)
+		if backupErr == nil {
+			s.recoveryBackup = backup
+			d, err = core.NewTDoc(), nil
+		} else {
+			err = errors.Join(err, backupErr)
 		}
 	}
 	if err != nil {
 		// Runtime defaults remain usable, but never silently overwrite a file
-		// whose original contents we could not read. Recovery requires backing up
-		// and repairing the file, then constructing a fresh Settings instance.
-		if !os.IsNotExist(err) {
+		// whose original contents we could not read or safely back up.
+		if corrupt != nil || !errors.Is(err, os.ErrNotExist) {
 			s.loadErr = diagnostic.New(diagnostic.SettingsRead, "cannot load settings; original file protected", err).At(diagnostic.Location{File: s.path})
 			s.lastErr = s.loadErr
 		}
@@ -138,6 +163,47 @@ func (s *Settings) loadOnce() {
 		return
 	}
 	s.doc = d
+}
+
+// RecoveryBackup names the preserved original when corrupt settings were
+// recovered. An empty string means no recovery was needed. It does not load.
+func (s *Settings) RecoveryBackup() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.recoveryBackup
+}
+
+// Reload retries a repaired file without constructing a new store. After a
+// failed initial load, known in-memory values win over recovered disk defaults.
+// Otherwise unsaved edits and active writers reject reload. Clear is NOT an
+// override of failed-read protection: repair/back up the file first.
+func (s *Settings) Reload() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flight != nil || (s.dirty && s.loadErr == nil) {
+		return errors.New("settings: reload requires no pending edits or writer")
+	}
+	pending, dirty := s.doc, s.dirty
+	s.loaded, s.loadErr, s.lastErr = false, nil, nil
+	s.loadOnce()
+	if dirty {
+		if s.loadErr == nil {
+			mergeSettingsDefaults(pending, s.doc)
+		}
+		s.doc = pending // failed retries also retain all runtime edits
+	}
+	return s.loadErr
+}
+
+func mergeSettingsDefaults(dst, defaults *core.TDoc) {
+	for _, child := range defaults.Childdren() {
+		existing := dst.ChildByKey(child.Key(), false)
+		if child.Key() == "" || existing == nil {
+			dst.AddChild(child)
+		} else {
+			mergeSettingsDefaults(existing, child)
+		}
+	}
 }
 
 // keyPath joins the group stack with the user's key, separated by /.

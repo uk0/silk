@@ -86,7 +86,7 @@ func (s *Settings) requestSyncLocked() (*syncFlight, error) {
 func (s *Settings) runWriter(f *syncFlight) {
 	for {
 		s.mu.Lock()
-		snapshot, version, path := s.doc.Clone(), s.version, s.path
+		snapshot, version, path := s.doc.Clone(), s.version, s.storagePath
 		write := s.writeSnapshot
 		s.pending = false
 		s.mu.Unlock()
@@ -102,7 +102,7 @@ func (s *Settings) runWriter(f *syncFlight) {
 		if err == nil && s.version == version {
 			s.dirty = false
 		}
-		if err == nil && s.pending && s.dirty {
+		if s.pending && s.dirty {
 			s.mu.Unlock()
 			continue
 		}

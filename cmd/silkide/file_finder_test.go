@@ -136,3 +136,14 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+func TestQuickOpenIncludesUserLocalDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"local/user.go", "pkg/storage/local/store.go"} {
+		mkfile(t, filepath.Join(root, name))
+	}
+	got := walkProjectFiles(root)
+	if len(got) != 2 {
+		t.Fatalf("legitimate local directories excluded: %+v", got)
+	}
+}

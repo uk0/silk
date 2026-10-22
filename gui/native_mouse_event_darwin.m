@@ -2,6 +2,15 @@
 
 #import <Cocoa/Cocoa.h>
 
+int silkInputIsMainThread(void) { return [NSThread isMainThread]; }
+
+int silkHasMarkedText(void *handle) {
+    if (!handle || ![NSThread isMainThread]) return 0;
+    id responder = [(NSWindow *)handle firstResponder];
+    return [responder respondsToSelector:@selector(hasMarkedText)] &&
+           [(id<NSTextInputClient>)responder hasMarkedText];
+}
+
 int silkMouseButtonEventPosition(void *handle, int button, int action, double *x, double *y) {
     if (!handle || !x || !y || ![NSThread isMainThread]) {
         return 0;

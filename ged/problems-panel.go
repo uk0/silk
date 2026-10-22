@@ -120,9 +120,9 @@ func (this *ProblemsPanel) Init(self gui.IWidget) {
 	this.hoverIdx = -1
 }
 
-// SetOutput parses raw compiler output and replaces the problem list.
+// SetOutput replaces only compiler diagnostics, preserving every other source.
 func (this *ProblemsPanel) SetOutput(output string) {
-	this.SetProblems(ParseProblems(output))
+	this.SetProblems(MergeProblems(this.problems, BuildSource, ParseProblems(output)))
 }
 
 // Problems returns the current problem rows in display order.
