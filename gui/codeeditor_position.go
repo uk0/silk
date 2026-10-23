@@ -53,6 +53,16 @@ func (this *CodeEditor) ScrollToUTF16Position(line, column int) {
 	this.ScrollToLineCol(line, RuneColumnFromUTF16(this.lines[line], column))
 }
 
+// NavigateToUTF16Position is the explicit-jump variant of ScrollToUTF16Position:
+// it reveals folds and clears stale selections/carets before focusing the target.
+func (this *CodeEditor) NavigateToUTF16Position(line, column int) {
+	if len(this.lines) == 0 {
+		return
+	}
+	line = max(0, min(len(this.lines)-1, line))
+	this.NavigateToLineCol(line, RuneColumnFromUTF16(this.lines[line], column))
+}
+
 // NavigateToLineCol activates a single insertion point for an explicit user jump
 // (for example an outline row). Coordinates are zero-based Unicode rune columns,
 // not LSP UTF-16 units. It reveals collapsed ancestors, clears old selections and

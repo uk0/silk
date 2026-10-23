@@ -3,6 +3,7 @@ package ged
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,8 +72,12 @@ type SelectionCallback func(items []graph.IItem)
 type GedView struct {
 	graph.GraphView
 	selCallbacks        []SelectionCallback
+	selectionListeners  []selectionListener
+	selectionSequence   int
 	showPropertiesPanel func()
 	showCodePanel       func()
+	showEventHandler    func(*FakeWidget, string) error
+	eventCodePanel      *CodePanel
 	showGrid            bool // paint the faint background dot overlay on top of the page
 
 	// Alignment guide state for drag operations
@@ -123,6 +128,43 @@ func (this *GedView) AddSelectionCallback(cb SelectionCallback) {
 	this.selCallbacks = append(this.selCallbacks, cb)
 }
 
+type selectionListener struct {
+	id       int
+	callback SelectionCallback
+}
+
+// AddSelectionListener returns a removable subscription for shared tool panels.
+// Unlike replacing SigSelectionChanged it does not disconnect other tools.
+func (this *GedView) AddSelectionListener(cb SelectionCallback) int {
+	if cb == nil {
+		return 0
+	}
+	this.selectionSequence++
+	this.selectionListeners = append(this.selectionListeners, selectionListener{this.selectionSequence, cb})
+	return this.selectionSequence
+}
+
+func (this *GedView) RemoveSelectionListener(id int) {
+	for i, l := range this.selectionListeners {
+		if l.id == id {
+			next := make([]selectionListener, 0, len(this.selectionListeners)-1)
+			this.selectionListeners = append(append(next, this.selectionListeners[:i]...), this.selectionListeners[i+1:]...)
+			return
+		}
+	}
+}
+
+func (this *GedView) notifySelectionListeners(items []graph.IItem) {
+	for _, cb := range this.selCallbacks {
+		if cb != nil {
+			cb(items)
+		}
+	}
+	for _, listener := range this.selectionListeners {
+		listener.callback(items)
+	}
+}
+
 func (this *GedView) Init(self gui.IWidget) {
 	this.GraphView.Init(self)
 	this.showGuides = true
@@ -144,9 +186,7 @@ func (this *GedView) Init(self gui.IWidget) {
 			this.clearManagedGeometryHint()
 		}
 		items := sel.ItemList()
-		for _, cb := range this.selCallbacks {
-			cb(items)
-		}
+		this.notifySelectionListeners(items)
 		frame := gui.FindOwnerFrame(this)
 		if frame == nil {
 			return
@@ -186,6 +226,12 @@ func (this *GedView) GedScene() *GedScene {
 // PushCommand raises never fires for an undo — every listener on it would
 // otherwise keep showing the state Ctrl+Z just left.
 func (this *GedView) Undo() {
+	if scene := this.GedScene(); scene != nil {
+		if err := scene.CommitPendingEdits(); err != nil {
+			core.Warn(err)
+			return
+		}
+	}
 	this.clearManagedGeometryHint()
 	stack := this.Scene().UndoStack()
 	if stack == nil {
@@ -201,6 +247,12 @@ func (this *GedView) Undo() {
 
 // Redo is Undo in the other direction.
 func (this *GedView) Redo() {
+	if scene := this.GedScene(); scene != nil {
+		if err := scene.CommitPendingEdits(); err != nil {
+			core.Warn(err)
+			return
+		}
+	}
 	this.clearManagedGeometryHint()
 	stack := this.Scene().UndoStack()
 	if stack == nil {
@@ -585,7 +637,7 @@ func (this *GedView) buildContextMenu(x, y float64) *gui.Menu {
 
 		// "Bind Event" submenu with per-widget-type events and current bindings
 		fake, isFake := item.(*FakeWidget)
-		eventMenu, _ := menu.AddSubMenu("绑定事件", nil, nil)
+		eventMenu, _ := menu.AddSubMenu("绑定事件", paint.LoadIcon("function"), nil)
 
 		if isFake {
 			events := eventsForItem(item)
@@ -598,7 +650,7 @@ func (this *GedView) buildContextMenu(x, y float64) *gui.Menu {
 					label := evtName + ": (未绑定)"
 					if handlers != nil {
 						if h, ok := handlers[evtName]; ok && h != "" {
-							label = evtName + ": " + h + " ✓"
+							label = evtName + ": " + h
 						}
 					}
 					btn := eventMenu.AddButton1(label, nil)
@@ -613,12 +665,18 @@ func (this *GedView) buildContextMenu(x, y float64) *gui.Menu {
 			// Add "Remove Binding" option if there are active bindings
 			if len(handlers) > 0 {
 				eventMenu.AddSeparator()
-				for evtKey, handlerVal := range handlers {
-					ek := evtKey
-					hv := handlerVal
-					removeBtn := eventMenu.AddButton1("移除: "+ek+" → "+hv, nil)
+				keys := make([]string, 0, len(handlers))
+				for key := range handlers {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				for _, ek := range keys {
+					hv := handlers[ek]
+					removeBtn := eventMenu.AddButton1("移除: "+ek+": "+hv, nil)
 					removeBtn.Action().BindFunc0(func() {
-						fake.RemoveEventHandler(ek)
+						if err := this.GedScene().SetEventBinding(fake, ek, ""); err != nil {
+							gui.ShowToast(this, err.Error(), 3500, gui.ToastError)
+						}
 					})
 				}
 			}
@@ -627,6 +685,10 @@ func (this *GedView) buildContextMenu(x, y float64) *gui.Menu {
 			// be bound. The old fallback listed four generic names here that
 			// codegen could never emit for anything.
 			eventMenu.AddButton1("(无可用事件)", nil).SetEnabled(false)
+		}
+
+		if isFake && len(AvailableEvents(fake.WidgetFactoryName())) > 0 {
+			menu.AddSubMenu("转到事件处理", paint.LoadIcon("function"), this.EventHandlerMenu(fake))
 		}
 
 		// "变形为" submenu — retype this widget in place. Single-selection
@@ -825,7 +887,9 @@ func (this *GedView) bindEvent(item graph.IItem, eventName string) {
 		"处理函数名称 ("+eventName+"):", "on"+eventName)
 	if ok && name != "" {
 		if fake, ok := item.(*FakeWidget); ok {
-			fake.SetEventHandlerChecked(eventName, name)
+			if err := this.GedScene().SetEventBinding(fake, eventName, name); err != nil {
+				gui.ShowToast(this, err.Error(), 3500, gui.ToastError)
+			}
 		}
 	}
 }
@@ -1703,11 +1767,14 @@ func (this *GedView) onDoubleClick(x, y float64) {
 	this.Selection().Add(fake)
 
 	// Notify any registered code-panel callbacks to focus and scroll.
-	for _, cb := range this.selCallbacks {
-		cb([]graph.IItem{fake})
-	}
+	this.notifySelectionListeners([]graph.IItem{fake})
 
-	// Bring the code panel to the front so the user can see the handler code.
+	// Double-click opens the default editable handler, not the generated listing.
+	if event := defaultEventForFactory(fake.WidgetFactoryName()); event != "" {
+		if this.RequestEventHandler(fake, event) {
+			return
+		}
+	}
 	this.requestCodePanel()
 }
 
@@ -2198,6 +2265,12 @@ func (this *GedView) selectAll() {
 // rides inside the container's subtree, and copying it as a second root would
 // paste it twice — once nested, once loose on the canvas.
 func (this *GedView) CopySelected() {
+	if scene := this.GedScene(); scene != nil {
+		if err := scene.CommitPendingEdits(); err != nil {
+			core.Warn(err)
+			return
+		}
+	}
 	clipboard = nil
 	items := this.Selection().ItemList()
 	selSet := make(map[graph.IItem]bool, len(items))
@@ -2370,6 +2443,12 @@ func (this *GedView) OpenFile(filename string) error {
 // one — outlives the design without this, and goes on describing a canvas the
 // user cannot open, let alone fix.
 func (this *GedView) Close() {
+	if scene := this.GedScene(); scene != nil {
+		scene.DiscardPendingEdits()
+	}
+	if this.eventCodePanel != nil {
+		this.eventCodePanel.BindGedView(nil)
+	}
 	if DocClosedCallback != nil {
 		DocClosedCallback(this)
 	}

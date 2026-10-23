@@ -533,9 +533,7 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 			// A handler the developer wrote as a method hangs off the struct
 			// THIS file declares, whatever type the design's copy names — same
 			// rule the split writer's stubs follow.
-			if d, err := parseHandlerDecl(code); err == nil && d.method {
-				code = methodize(code, handlerReceiver(opts.TypeName))
-			}
+			code = rebindHandlerMethods(code, handlerReceiver(opts.TypeName))
 			if code != "" && !emitted[code] {
 				emitted[code] = true
 				if !hasHandlerCode {
@@ -945,6 +943,14 @@ func handlerBindingsFor(factoryName, code string, events map[string]string) []ha
 	// Unreadable source declares nothing to bind here; handlerSourceProblem is
 	// what reports it.
 	decl, _ := parseHandlerDecl(code)
+	methods := map[string]bool{}
+	if _, file, err := parseHandlerFile(code); err == nil {
+		for _, d := range file.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok {
+				methods[fn.Name.Name] = fn.Recv != nil
+			}
+		}
+	}
 	if len(events) > 0 {
 		names := make([]string, 0, len(events))
 		for name := range events {
@@ -954,7 +960,7 @@ func handlerBindingsFor(factoryName, code string, events map[string]string) []ha
 		out := make([]handlerBinding, 0, len(names))
 		for _, evtName := range names {
 			b := resolveBinding(factoryName, evtName, events[evtName])
-			b.method = decl.method && decl.name == b.handler
+			b.method = methods[b.handler]
 			out = append(out, b)
 		}
 		return out
@@ -1037,51 +1043,13 @@ func AvailableEvents(factoryName string) []string {
 //
 // Co-located with emitEventBinding so both halves of the codegen's
 // event story live in one file. New factories that gain an auto-
-// default get one new line here plus the matching case in
-// emitEventBinding — both checked by the existing tests.
+// default use the first event in widgetEvents. Plugin overrides remain explicit.
 func defaultEventForFactory(factoryName string) string {
-	if e, ok := pluginDefaultEvents[factoryName]; ok {
-		return e
+	if event, ok := pluginDefaultEvents[factoryName]; ok {
+		return event
 	}
-	switch factoryName {
-	case "gui.Button", "gui.Link":
-		return "OnClick"
-	case "gui.Edit":
-		return "OnChanged"
-	case "gui.CheckBox":
-		return "OnToggled"
-	case "gui.Slider", "gui.SpinBox", "gui.NumberInput":
-		return "OnValueChanged"
-	case "gui.RadioButton":
-		return "OnChanged"
-	case "gui.ToggleSwitch":
-		return "OnToggle"
-	case "gui.SearchBox":
-		return "OnSearch"
-	case "gui.Rating":
-		return "OnRatingChanged"
-	case "gui.DatePicker":
-		return "OnDateChanged"
-	case "gui.ColorPicker":
-		return "OnColorChanged"
-	case "gui.DropdownButton":
-		return "OnSelect"
-	case "gui.SwitchGroup":
-		return "OnChange"
-	case "gui.ComboBox", "gui.ListWidget", "gui.Table":
-		return "OnSelectionChanged"
-	case "gui.Tag":
-		return "OnClose"
-	case "gui.Breadcrumb":
-		return "OnNavigate"
-	case "gui.Accordion":
-		return "OnSectionToggle"
-	case "gui.NotificationPanel":
-		return "OnItemClick"
-	case "gui.TabWidget":
-		return "OnTabChanged"
-	case "gui.CodeEditor":
-		return "OnTextChanged"
+	if events := widgetEvents[factoryName]; len(events) > 0 {
+		return events[0].name
 	}
 	return ""
 }

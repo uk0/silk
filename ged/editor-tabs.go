@@ -37,6 +37,7 @@ type EditorTabs struct {
 	hoverTab   int
 	hoverClose int // which tab's close button is hovered (-1 = none)
 	scrollX    float64
+	navigation gui.NavigationStack
 
 	// --- Split View ---
 	splitMode     bool
@@ -98,9 +99,10 @@ func (this *EditorTabs) OpenFile(path string) {
 	editor.SetFilePath(path)
 
 	// Wire up cross-file navigation: when Cmd/Ctrl+Click targets a different file
-	editor.SetNavigateCallback(func(targetFile string, targetLine int) {
-		this.OpenFileAtLine(targetFile, targetLine)
+	editor.SetNavigatePositionCallback(func(pos gui.NavPosition) bool {
+		return this.OpenFileAtPosition(pos.FilePath, pos.Line, pos.Column)
 	})
+	editor.SetNavigationHistoryActions(this.NavigateBack, this.NavigateForward)
 
 	tab := &editorTab{
 		filePath: path,
@@ -122,26 +124,59 @@ func (this *EditorTabs) OpenFile(path string) {
 // OpenFileAtLine opens a file and scrolls to the given line (0-based).
 // If the file is already open, it switches to that tab and scrolls.
 func (this *EditorTabs) OpenFileAtLine(path string, line int) {
-	abs, err := filepath.Abs(path)
-	if err == nil {
-		path = abs
-	}
-
-	// Check if already open
-	for i, tab := range this.tabs {
-		if tab.filePath == path {
-			this.switchToTab(i)
-			tab.editor.ScrollToLine(line)
-			return
-		}
-	}
-
-	// Open the file first, then scroll
-	this.OpenFile(path)
-	if this.activeIdx >= 0 && this.activeIdx < len(this.tabs) {
-		this.tabs[this.activeIdx].editor.ScrollToLine(line)
-	}
+	this.OpenFileAtPosition(path, line, 0)
 }
+
+// OpenFileAtPosition opens a zero-based rune location and records a shared
+// cross-tab jump. Failure leaves the current editor/caret/history untouched.
+func (this *EditorTabs) OpenFileAtPosition(path string, line, column int) bool {
+	var from gui.NavPosition
+	if ed := this.ActiveEditor(); ed != nil {
+		from = ed.NavigationPosition()
+	}
+	if !this.openNavigationFile(path) {
+		return false
+	}
+	ed := this.ActiveEditor()
+	ed.NavigateToLineCol(line, column)
+	if from.FilePath != "" {
+		this.navigation.RecordJump(from, ed.NavigationPosition())
+	}
+	return true
+}
+
+func (this *EditorTabs) openNavigationFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	this.OpenFile(abs)
+	ed := this.ActiveEditor()
+	return ed != nil && ed.FilePath() == abs
+}
+
+func (this *EditorTabs) navigateHistory(forward bool) {
+	var live gui.NavPosition
+	if ed := this.ActiveEditor(); ed != nil {
+		live = ed.NavigationPosition()
+	}
+	this.navigation.Navigate(live, forward, func(pos gui.NavPosition) bool {
+		if !this.openNavigationFile(pos.FilePath) {
+			return false
+		}
+		this.ActiveEditor().RestoreNavigationPosition(pos)
+		return true
+	})
+}
+
+// NavigateBack returns to the previous jump, reopening a closed file if needed.
+func (this *EditorTabs) NavigateBack() { this.navigateHistory(false) }
+
+// NavigateForward follows history without creating a new jump.
+func (this *EditorTabs) NavigateForward() { this.navigateHistory(true) }
 
 // switchToTab activates the given tab index.
 func (this *EditorTabs) switchToTab(idx int) {

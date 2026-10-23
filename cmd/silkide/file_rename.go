@@ -167,6 +167,9 @@ func prepareEditorRename(tabs *gui.TabWidget, canvas *ged.GedView, oldPath, newP
 
 func migrateRenamedMetadata(tx *editorRename, tabs *gui.TabWidget, canvas *ged.GedView) {
 	remap := func(p string) string { next, _ := fileops.RebasePath(p, tx.old, tx.next); return next }
+	if history := editorNavigation(tabs); history != nil {
+		history.MapPaths(remap)
+	}
 	if globalProblems != nil {
 		rows := globalProblems.Problems()
 		for i := range rows {

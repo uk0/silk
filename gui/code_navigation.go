@@ -49,11 +49,68 @@ type NavigationStack struct {
 
 // Push adds a new position to the stack, discarding any forward history.
 func (ns *NavigationStack) Push(pos NavPosition) {
+	if len(ns.stack) > 0 && sameNavLocation(ns.stack[ns.current], pos) {
+		ns.stack[ns.current] = pos
+		return
+	}
 	if ns.current < len(ns.stack)-1 {
 		ns.stack = ns.stack[:ns.current+1]
 	}
 	ns.stack = append(ns.stack, pos)
+	// A long IDE session must not retain unbounded paths/positions.
+	if len(ns.stack) > 256 {
+		copy(ns.stack, ns.stack[len(ns.stack)-256:])
+		ns.stack = ns.stack[:256]
+	}
 	ns.current = len(ns.stack) - 1
+}
+
+func sameNavLocation(a, b NavPosition) bool {
+	return a.FilePath == b.FilePath && a.Line == b.Line && a.Column == b.Column
+}
+
+// RecordJump records both ends of a successful jump. Zero-value ready and UI
+// thread owned. Failed file opens must not call this method.
+func (ns *NavigationStack) RecordJump(from, to NavPosition) {
+	if sameNavLocation(from, to) {
+		return
+	}
+	ns.Push(from)
+	ns.Push(to)
+}
+
+// Navigate traverses history using the live caret as the return position.
+// visit returns false for unavailable destinations; these are skipped without
+// corrupting the cursor in history. If none can be opened, history is unchanged.
+// visit must not mutate this stack. forward=false means Back.
+func (ns *NavigationStack) Navigate(live NavPosition, forward bool, visit func(NavPosition) bool) bool {
+	if len(ns.stack) == 0 || visit == nil {
+		return false
+	}
+	step := -1
+	if forward {
+		step = 1
+	}
+	for i := ns.current + step; i >= 0 && i < len(ns.stack); i += step {
+		if sameNavLocation(live, ns.stack[i]) || !visit(ns.stack[i]) {
+			continue
+		}
+		ns.stack[ns.current] = live
+		ns.current = i
+		return true
+	}
+	return false
+}
+
+// MapPaths keeps history attached to files after a successful file/directory
+// rename. Call only after the filesystem operation commits.
+func (ns *NavigationStack) MapPaths(mapPath func(string) string) {
+	if mapPath == nil {
+		return
+	}
+	for i := range ns.stack {
+		ns.stack[i].FilePath = mapPath(ns.stack[i].FilePath)
+	}
 }
 
 // CanGoBack returns true if there is a previous position in history.

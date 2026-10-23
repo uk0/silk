@@ -5,8 +5,13 @@ import "github.com/uk0/silk/gui"
 // Register the very same handlers used by the IDE's palette/F2/F12/Shift+F12.
 // CodeEditor alone retains its independent, local SDK behavior.
 func configureEditorSymbolActions(tabs *gui.TabWidget, editor *gui.CodeEditor) {
-	editor.SetSymbolActions(editorSymbolActions(tabs, editor,
-		renameSymbolAtActiveEditor, goToDefinitionViaLSP, findReferencesViaLSP))
+	actions := editorSymbolActions(tabs, editor, renameSymbolAtActiveEditor, goToDefinitionViaLSP, findReferencesViaLSP)
+	// Reuse the owner/closed-page guard for every semantic command.
+	extra := editorSymbolActions(tabs, editor, nil,
+		func(t *gui.TabWidget) { requestSymbolNavigation(t, "Go to Type Definition") },
+		func(t *gui.TabWidget) { requestSymbolNavigation(t, "Go to Implementation") })
+	actions.GoToTypeDefinition, actions.GoToImplementation = extra.GoToDefinition, extra.FindReferences
+	editor.SetSymbolActions(actions)
 }
 
 func editorSymbolActions(tabs *gui.TabWidget, editor *gui.CodeEditor, rename, definition, references func(*gui.TabWidget)) gui.CodeEditorSymbolActions {

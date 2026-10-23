@@ -90,7 +90,7 @@ func (this *BindingsPanel) contentTop() float64 {
 
 // SetScene binds the panel to a design and lists its bindings. It subscribes
 // through AddDesignChangedCallback rather than SigDesignChanged: that slot
-// holds one callback and the code panel owns it.
+// holds one callback and may already be owned by the host.
 //
 // The previous subscription is dropped first. One panel is shared by every open
 // document and design.go's bindBindingsPanelTo re-aims it on every tab change,

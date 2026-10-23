@@ -8,7 +8,11 @@ import (
 func configureOutlineNavigation(outline *ged.CodeOutlinePanel, tabs *gui.TabWidget) {
 	outline.SetNavigateCallback(func(line int) {
 		if editor := activeEditor(tabs); editor != nil {
-			editor.NavigateToLineCol(line, 0)
+			if path := editor.FilePath(); path != "" {
+				openFileInEditorAt(tabs, path, line+1, 0)
+			} else {
+				editor.NavigateToLineCol(line, 0)
+			}
 		}
 	})
 }

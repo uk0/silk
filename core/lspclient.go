@@ -168,9 +168,9 @@ const defaultClientCapabilitiesJSON = `{
     "hover": {"contentFormat": ["markdown", "plaintext"]},
     "signatureHelp": {"signatureInformation": {"documentationFormat": ["markdown", "plaintext"]}},
     "declaration": {"linkSupport": false},
-    "definition": {"linkSupport": false},
-    "typeDefinition": {"linkSupport": false},
-    "implementation": {"linkSupport": false},
+    "definition": {"linkSupport": true},
+    "typeDefinition": {"linkSupport": true},
+    "implementation": {"linkSupport": true},
     "references": {"dynamicRegistration": false},
     "documentHighlight": {"dynamicRegistration": false},
     "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
@@ -779,10 +779,14 @@ func unsupportedMethod(resp *LSPMessage) bool {
 //
 // provider 为空串时跳过 capabilities 预判, 直接发请求.
 func (c *LSPClient) requestOptional(method, provider string, params interface{}) (json.RawMessage, bool, error) {
+	return c.requestOptionalContext(context.Background(), method, provider, params)
+}
+
+func (c *LSPClient) requestOptionalContext(ctx context.Context, method, provider string, params interface{}) (json.RawMessage, bool, error) {
 	if provider != "" && !c.serverSupports(provider) {
 		return nil, false, nil
 	}
-	resp, err := c.SendRequest(method, params)
+	resp, err := c.SendRequestContext(ctx, method, params)
 	if err != nil {
 		if unsupportedMethod(resp) {
 			return nil, false, nil
@@ -1207,33 +1211,25 @@ func stringifyHoverContents(raw json.RawMessage) (string, error) {
 }
 
 // Definition 请求 textDocument/definition 并归一为 []LSPLocation
-// 规范允许 server 在两种形态间任选:
+// 规范允许 server 在下列形态间任选:
 //   - 单个 Location 对象
 //   - []Location (gopls 在跨实例 / 嵌入 / 接口实现处会用这个)
+//   - []LocationLink (使用 targetSelectionRange 精确定位符号)
 //
 // null 表示没找到定义, 返回 (nil, nil), 上层照空切片处理即可.
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) Definition(uri string, line, character int) ([]LSPLocation, error) {
-	resp, err := c.SendRequest("textDocument/definition", textDocumentPositionParams(uri, line, character))
+	return c.DefinitionContext(context.Background(), uri, line, character)
+}
+
+// DefinitionContext supports Location, Location[] and LocationLink[] responses
+// and cancels superseded navigation without blocking the UI thread.
+func (c *LSPClient) DefinitionContext(ctx context.Context, uri string, line, character int) ([]LSPLocation, error) {
+	resp, err := c.SendRequestContext(ctx, "textDocument/definition", textDocumentPositionParams(uri, line, character))
 	if err != nil {
 		return nil, err
 	}
-	if len(resp.Result) == 0 || string(resp.Result) == "null" {
-		return nil, nil
-	}
-	trimmed := bytes.TrimSpace(resp.Result)
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var locs []LSPLocation
-		if err := json.Unmarshal(resp.Result, &locs); err != nil {
-			return nil, fmt.Errorf("lspclient: decode definition result: %w", err)
-		}
-		return locs, nil
-	}
-	var loc LSPLocation
-	if err := json.Unmarshal(resp.Result, &loc); err != nil {
-		return nil, fmt.Errorf("lspclient: decode definition result: %w", err)
-	}
-	return []LSPLocation{loc}, nil
+	return decodeLocationsResult(resp.Result, "definition")
 }
 
 // References 请求 textDocument/references 并返回所有出现处
@@ -1241,9 +1237,14 @@ func (c *LSPClient) Definition(uri string, line, character int) ([]LSPLocation, 
 // includeDecl 控制是否把定义点也算一次引用, 通常上层是 true (跟 IDE 一致).
 // 受默认 10s SendRequest 超时约束.
 func (c *LSPClient) References(uri string, line, character int, includeDecl bool) ([]LSPLocation, error) {
+	return c.ReferencesContext(context.Background(), uri, line, character, includeDecl)
+}
+
+// ReferencesContext is the cancellable variant of References.
+func (c *LSPClient) ReferencesContext(ctx context.Context, uri string, line, character int, includeDecl bool) ([]LSPLocation, error) {
 	params := textDocumentPositionParams(uri, line, character)
 	params["context"] = map[string]bool{"includeDeclaration": includeDecl}
-	resp, err := c.SendRequest("textDocument/references", params)
+	resp, err := c.SendRequestContext(ctx, "textDocument/references", params)
 	if err != nil {
 		return nil, err
 	}
@@ -2061,7 +2062,12 @@ func (c *LSPClient) PrepareRename(uri string, line, character int) (*LSPPrepareR
 // (或接口方法) 跳到实现它的具体类型 (或方法). Go 项目里这是读代码的主力操作.
 // 响应跟 definition 同样多态 (Location | []Location | []LocationLink), 一并归一.
 func (c *LSPClient) Implementation(uri string, line, character int) ([]LSPLocation, error) {
-	raw, ok, err := c.requestOptional("textDocument/implementation", "implementationProvider",
+	return c.ImplementationContext(context.Background(), uri, line, character)
+}
+
+// ImplementationContext is the cancellable variant of Implementation.
+func (c *LSPClient) ImplementationContext(ctx context.Context, uri string, line, character int) ([]LSPLocation, error) {
+	raw, ok, err := c.requestOptionalContext(ctx, "textDocument/implementation", "implementationProvider",
 		textDocumentPositionParams(uri, line, character))
 	if err != nil {
 		return nil, err
@@ -2075,8 +2081,8 @@ func (c *LSPClient) Implementation(uri string, line, character int) ([]LSPLocati
 // decodeLocationsResult 把 Location | []Location | []LocationLink 归一成 []LSPLocation
 func decodeLocationsResult(raw json.RawMessage, what string) ([]LSPLocation, error) {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return []LSPLocation{}, nil
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
 	}
 	if trimmed[0] == '[' {
 		var items []json.RawMessage
@@ -2116,6 +2122,9 @@ func decodeLocationOrLink(raw json.RawMessage, what string) (LSPLocation, error)
 	}
 	if v.URI != "" {
 		return LSPLocation{URI: v.URI, Range: v.Range}, nil
+	}
+	if v.TargetURI == "" {
+		return LSPLocation{}, fmt.Errorf("lspclient: decode %s location: missing URI", what)
 	}
 	r := v.TargetRange
 	if v.TargetSelectionRange != nil {

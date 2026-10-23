@@ -129,6 +129,10 @@ func closeLSPDocument(path string) {
 	lspSigGen++
 }
 func retireLSPDocuments() {
+	symbolNavigation.stop()
+	if globalReferencesPanel != nil {
+		globalReferencesPanel.SetLoading(false)
+	}
 	for path, d := range lspDocuments {
 		d.close()
 		delete(lspDocuments, path)

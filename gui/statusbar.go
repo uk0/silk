@@ -18,16 +18,19 @@ type StatusBar struct {
 	permanent []IWidget // permanent widgets anchored to the right
 	spacing   float64
 	// permanentLeft is the left edge Layout gave the leftmost visible permanent
-	// widget, 0 when none was placed. Draw needs it to know where the message
-	// has to stop; recording it in Layout keeps Draw free of layout math.
+	// widget. hasPermanent distinguishes a cell at x=0 from an empty bar.
+	// Recording it in Layout keeps Draw free of layout math and prevents a
+	// transient message from painting underneath permanent widgets.
 	permanentLeft float64
+	hasPermanent  bool
 	msgTimer      Timer // auto-clears a timed transient message
 }
 
 func NewStatusBar() *StatusBar {
 	p := new(StatusBar)
 	p.Init(p)
-	p.spacing = Theme().Spacing
+	// Status cells need a readable gap even in compact themes (Spacing=0).
+	p.spacing = math.Max(8, Theme().Spacing)
 	return p
 }
 
@@ -112,28 +115,34 @@ func (this *StatusBar) Layout() {
 	t := Theme()
 	m := t.ButtonMargin
 
-	// lay out permanent widgets from the right
-	x := w - m.R
-	this.permanentLeft = 0 // nothing on the right: the message owns the whole bar
+	// Rightmost indicators have priority. Constrain every child to the bar,
+	// including an overfull/zero-sized bar, without changing user visibility.
+	w, h = math.Max(0, w), math.Max(0, h)
+	left := math.Min(w, math.Max(0, m.L))
+	x := math.Max(left, w-math.Max(0, m.R))
+	top := math.Min(1, h)
+	this.permanentLeft, this.hasPermanent = 0, false
 	for i := len(this.permanent) - 1; i >= 0; i-- {
 		pw := this.permanent[i]
 		if !pw.IsVisible() {
-			continue // hidden permanent widgets reserve no space
+			continue
 		}
 		hints := pw.SizeHints()
-		iw := hints.Width
-		ih := hints.Height
+		iw := math.Min(math.Max(0, hints.Width), math.Max(0, x-left))
+		if iw == 0 {
+			// Empty labels reserve neither a gap nor a stale hit-test area.
+			pw.SetBounds(x, top, 0, 0)
+			continue
+		}
+		ih := math.Min(math.Max(0, hints.Height), h-top)
 		if (hints.Policy & (GrowVertical | ExpandVertical)) != 0 {
-			ih = h - 2 // leave room for top border
+			ih = h - top
 		}
-		y := 1 + (h-1-ih)*0.5 // 1px top border offset
-		if y < 1 {
-			y = 1
-		}
+		y := top + (h-top-ih)*0.5
 		x -= iw
 		pw.SetBounds(x, y, iw, ih)
-		this.permanentLeft = x
-		x -= this.spacing
+		this.permanentLeft, this.hasPermanent = x, true
+		x = math.Max(left, x-this.spacing)
 	}
 }
 
@@ -159,7 +168,7 @@ func (this *StatusBar) Draw(g paint.Painter) {
 	if this.message != "" {
 		m := t.ButtonMargin
 		avail := w - m.L - m.R
-		if this.permanentLeft > 0 {
+		if this.hasPermanent {
 			avail = this.permanentLeft - m.L - this.spacing
 		}
 		msg := elideToWidth(t.Font, this.message, avail)
@@ -190,7 +199,12 @@ func (this *StatusBar) SizeHints() SizeHints {
 			continue // hidden permanent widgets are excluded from the width sum
 		}
 		hints := w.SizeHints()
-		pw += hints.Width + this.spacing
+		if hints.Width > 0 {
+			if pw > 0 {
+				pw += this.spacing
+			}
+			pw += hints.Width
+		}
 	}
 	w := math.Max(pw+m.L+m.R, 100)
 	return SizeHints{Width: w, Height: h, Policy: GrowHorizontal}
@@ -301,7 +315,10 @@ func (this *StatusIconLabel) SizeHints() SizeHints {
 // centered. Colors come from the theme so the cell tracks light/dark mode.
 func (this *StatusIconLabel) Draw(g paint.Painter) {
 	t := Theme()
-	_, h := this.Self().Size()
+	w, h := this.Self().Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
 
 	x := 0.0
 	if this.icon != "" {
@@ -315,11 +332,12 @@ func (this *StatusIconLabel) Draw(g paint.Painter) {
 	if this.text != "" {
 		g.SetFont(t.Font)
 		g.SetBrush1(t.TextColor)
-		ext := t.Font.TextExtents(this.text)
+		text := elideToWidth(t.Font, this.text, w-x)
+		ext := t.Font.TextExtents(text)
 		xt := x - ext.XBearing
 		yt := 0.5*(h+ext.YBearing) - ext.YBearing
 		g.Translate(xt, yt)
-		g.DrawText(this.text)
+		g.DrawText(text)
 		g.Translate(-xt, -yt)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -1540,11 +1541,11 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 		gw, _ := core.LoadGoWork(cwd)
 		work = gw
 	}
-	sb.AddPermanentWidget(gui.NewLabel(formatProjectStatus(project, modulePath, work)))
-	sb.AddPermanentWidget(gui.NewLabel("main"))
-	sb.AddPermanentWidget(gui.NewLabel(i18n.T("Ln 1, Col 1")))
-	sb.AddPermanentWidget(gui.NewLabel("UTF-8"))
-	sb.AddPermanentWidget(gui.NewLabel("Go 1.25"))
+	sb.AddIconLabel("", formatProjectStatus(project, modulePath, work))
+	// Caret/encoding already follow the live buffer in the editor's own bar.
+	// Do not show invented branch/caret values or a hard-coded Go version.
+	// This is the IDE runtime, not a claim about the workspace toolchain.
+	sb.AddIconLabel("", "Runtime "+runtime.Version())
 
 	// Canvas zoom percentage cell. Updated by setZoomLabel whenever
 	// Cmd+= / Cmd+- / Cmd+0 fires.
@@ -1583,6 +1584,7 @@ func setBuildStatus() {
 	default:
 		statusBarBuildLabel.SetText(fmt.Sprintf(i18n.T("build: %d errors"), n))
 	}
+	statusBarBuildLabel.InvalidateParentLayout()
 }
 
 // setZoomLabel formats `zoom` as a percentage and pushes it into the
@@ -1593,6 +1595,7 @@ func setZoomLabel(zoom float64) {
 		return
 	}
 	statusBarZoomLabel.SetText(fmt.Sprintf("%.0f%%", zoom*100))
+	statusBarZoomLabel.InvalidateParentLayout()
 }
 
 // itemDisplayName returns a human-friendly identifier for a scene
@@ -1932,7 +1935,9 @@ func regenerateGoForSilkui(silkuiPath string) {
 		core.Warn("silkgen: write ", outPath, ": ", err)
 		return
 	}
-	reportBuildOutput(fmt.Sprintf("silkgen: wrote %s", outPath))
+	// A successful background regeneration is not a build result. Do not steal
+	// focus from the handler editor or clear unrelated build diagnostics.
+	core.Debug("silkgen: wrote ", outPath)
 }
 
 // reportBuildOutput pushes one line into the BuildOutput pane if the
@@ -3336,17 +3341,7 @@ func confirmRecoverFromAutosave(parent gui.IWidget, path, recoveryPath string) b
 // false on Cancel and on a Save that the user aborted from the
 // SaveFileDialog. Sharing this helper keeps File→New, Open, and
 // future close/quit paths consistent.
-func confirmDiscardDirty(canvas *ged.GedView) bool {
-	if canvas == nil {
-		return true
-	}
-	scene := canvas.GedScene()
-	if scene == nil {
-		return true
-	}
-	if stack := scene.UndoStack(); stack == nil || stack.IsClean() {
-		return true
-	}
+var askDiscardDirtyDesign = func(canvas *ged.GedView) gui.DialogResult {
 	parent := gui.IWidget(canvas)
 	dlg := gui.NewDialog(i18n.T("Unsaved changes"), parent)
 	content := gui.NewVBox()
@@ -3358,16 +3353,31 @@ func confirmDiscardDirty(canvas *ged.GedView) bool {
 	dlg.AddButton(i18n.T("Save"), gui.DialogOK)
 	dlg.AddButton(i18n.T("Discard"), gui.DialogNo)
 	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
+	return dlg.ShowModal()
+}
+
+func confirmDiscardDirty(canvas *ged.GedView) bool {
+	if canvas == nil {
+		return true
+	}
+	scene := canvas.GedScene()
+	if scene == nil {
+		return true
+	}
+	if scene.IsClean() {
+		return true
+	}
 	// Through askDirty like the editor prompts: Cmd+Q reaches this one first,
 	// so without the shared guard a second Cmd+Q stacks a second scene prompt
 	// exactly the way it used to stack tab-close prompts.
-	switch askDirty(func() gui.DialogResult { return dlg.ShowModal() }) {
+	switch askDirty(func() gui.DialogResult { return askDiscardDirtyDesign(canvas) }) {
 	case gui.DialogOK:
 		// Save() returns false when the user cancelled the
 		// SaveFileDialog or the write failed; in both cases we
 		// must not proceed and lose the work.
 		return saveDesignDocument(canvas)
 	case gui.DialogNo:
+		scene.DiscardPendingEdits()
 		return true
 	default:
 		return false
@@ -3528,6 +3538,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
 	openEditors[path] = ed
 	configureEditorSymbolActions(tabs, ed)
+	configureEditorNavigation(tabs, ed)
 	// Coverage runs push into the tabs that are open at the time, so a file
 	// opened afterwards would show no stripes at all until the user ran the
 	// whole suite again. Same call, from the other side.
@@ -3623,20 +3634,9 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 // uses 0-based indexing internally. col is a zero-based rune column; LSP
 // callers must use openFileInEditorAtLSP instead.
 func openFileInEditorAt(tabs *gui.TabWidget, path string, line, col int) {
-	if !openFileInEditor(tabs, path) {
-		return
-	}
-	ed := openEditors[path]
-	if ed == nil {
-		return
-	}
-	target := line - 1
-	if target < 0 {
-		target = 0
-	}
-	// Honor col (0-based) when the caller has one — go-to-definition lands the
-	// caret on the symbol, not just its line. col <= 0 behaves like ScrollToLine.
-	ed.ScrollToLineCol(target, col)
+	navigateEditor(tabs, path, func(ed *gui.CodeEditor) {
+		ed.NavigateToLineCol(max(0, line-1), col)
+	})
 }
 
 // focusEditorTab walks the editor tabs to find the one whose stack
@@ -4307,130 +4307,29 @@ func documentHighlightViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 }
 
 // goToDefinitionViaLSP resolves the symbol under the caret via gopls and
-// opens the target file:line. Bound to F12. The AST-based context-menu
-// "跳转定义" stays as the offline fallback; this is the cross-package path.
+// opens the target file:line. F12, the context menu and mouse navigation share
+// this entry point; standalone SDK editors retain the AST fallback.
 func goToDefinitionViaLSP(tabs *gui.TabWidget) {
+	if activeEditor(tabs) != nil && documentMode(tabs, nil) != modeEdit {
+		return
+	}
 	if goToMacroDefinition(tabs) {
 		return
 	}
-	if globalLSP == nil {
-		reportLSPUnavailable()
-		return
-	}
-	ed := activeEditor(tabs)
-	path := activeEditorPath(tabs)
-	if ed == nil || path == "" || !isGoFile(path) {
-		return
-	}
-	line := ed.CursorLine()
-	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
-	uri := fileURIOf(path)
-	lsp := globalLSP
-	doc := lspDocuments[path]
-	go func() {
-		if !flushLSPDocument(doc) {
-			return
-		}
-		locs, err := lsp.Definition(uri, line, col)
-		if err != nil {
-			gui.Post(func() {
-				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-					return
-				}
-				reportLSPRequestError(i18n.T("Go to Definition"), path, err)
-			})
-			return
-		}
-		if len(locs) == 0 {
-			gui.Post(func() {
-				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-					return
-				}
-				silkideToast(i18n.T("No definition found"), gui.ToastInfo)
-			})
-			return
-		}
-		target := uriToPath(locs[0].URI)
-		if target == "" {
-			return
-		}
-		position := locs[0].Range.Start
-		gui.Post(func() {
-			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-				return
-			}
-
-			openFileInEditorAtLSP(tabs, target, position)
-		})
-	}()
+	requestSymbolNavigation(tabs, "Go to Definition")
 }
 
 // findReferencesViaLSP asks gopls for every usage of the symbol under the
 // caret and lists them in the ReferencesPanel. Bound to Shift+F12. The RPC
 // runs off the main thread; results post back via gui.Post.
 func findReferencesViaLSP(tabs *gui.TabWidget) {
+	if activeEditor(tabs) != nil && documentMode(tabs, nil) != modeEdit {
+		return
+	}
 	if findMacroReferences(tabs) {
 		return
 	}
-	if globalLSP == nil {
-		reportLSPUnavailable()
-		return
-	}
-	ed := activeEditor(tabs)
-	path := activeEditorPath(tabs)
-	if ed == nil || path == "" || !isGoFile(path) {
-		return
-	}
-	line := ed.CursorLine()
-	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
-	uri := fileURIOf(path)
-	lsp := globalLSP
-	doc := lspDocuments[path]
-	go func() {
-		if !flushLSPDocument(doc) {
-			return
-		}
-		locs, err := lsp.References(uri, line, col, true)
-		if err != nil {
-			gui.Post(func() {
-				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-					return
-				}
-				reportLSPRequestError(i18n.T("Find References"), path, err)
-			})
-			return
-		}
-		if len(locs) == 0 {
-			gui.Post(func() {
-				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-					return
-				}
-				silkideToast(i18n.T("No references found"), gui.ToastInfo)
-			})
-			return
-		}
-		// Build the rows on the MAIN thread: referencePreview reads openEditors
-		// and the live editor buffer (ed.Lines()), which are not safe to touch
-		// from this goroutine (concurrent map read + torn slice with the UI).
-		gui.Post(func() {
-			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-				return
-			}
-
-			refs := make([]ged.ReferenceLoc, 0, len(locs))
-			for _, l := range locs {
-				p := uriToPath(l.URI)
-				if p == "" {
-					continue
-				}
-				refs = append(refs, lspReferenceLocation(p, l.Range.Start, referenceSourceLine(p, l.Range.Start.Line)))
-			}
-			if globalReferencesPanel != nil {
-				globalReferencesPanel.SetLocations(refs)
-				dockSetActiveView(globalBottomDock, globalReferencesPanel)
-			}
-		})
-	}()
+	requestSymbolNavigation(tabs, "Find References")
 }
 
 // referencePreview returns the trimmed source line (0-based) for a

@@ -21,6 +21,51 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Semantic navigation and coordinated panels
+
+- **Edit** menu and the command palette expose Go to Definition (`F12`),
+  Go to Type Definition (`Cmd/Ctrl+F12`), Go to Implementation (`Alt+F12`),
+  and Find References (`Shift+F12`). Multiple destinations stay selectable
+  in the References panel rather than silently choosing the first result.
+- **Back/Forward** (`Alt+Left/Right`, or `Cmd/Ctrl+[/]` in the editor) share
+  a bounded cross-file location history. Diagnostics, outline, references and
+  macro jumps join that history; closed targets can reopen and successful
+  file renames migrate the stored paths. Navigation preserves unsaved buffers,
+  clears stale selections, reveals folds and handles UTF-16/rune conversion.
+- Navigation requests are single-flight/latest-wins, with cancellation and
+  document/caret/session guards. SDK hosts can reuse precise navigation hooks,
+  `NavigationStack`, and cancellable definition/type/implementation APIs.
+- The designer event-code panel retains drafts on repeated selection,
+  unsubscribes from old designs, and saves handler changes into design Undo/Redo.
+  Narrow panels wrap their actions instead of overlapping the editor tabs.
+- Status-bar cells stay inside narrow windows, elide long text and keep readable
+  gaps. Placeholder branch/caret/version values are removed; the displayed runtime
+  version comes from the running IDE, not an assumed workspace toolchain.
+
+Verification and remaining gaps: [navigation/SDK iteration report](NAVIGATION_SDK_QA_20261022.md).
+
+### Designer event handlers and draft safety
+
+- Double-click a supported control to create or locate its default event handler.
+  **Design → Event Handlers** and the control context menu expose its registered
+  events with their actual Go signatures. Reopening an existing handler does not
+  duplicate it; creation and binding share one design Undo/Redo operation.
+- The embedded handler editor's unsaved text now participates in the design's
+  dirty state, Save/Save All, recovery snapshots and Save/Discard/Cancel guard.
+  Saving the design no longer requires clicking the code panel's separate Save
+  button, and successful companion generation does not steal panel focus or erase
+  unrelated build diagnostics.
+- SDK strong-typed export supports multiple methods per control, preserves user
+  handler files on regeneration and rebinds method receivers to the exported UI
+  type. Hosts can use `SaveDesignWithPendingEdits()` for a checked draft-inclusive
+  snapshot; `SaveDesign()` remains a committed-model-only snapshot.
+- Scope: this navigation edits **embedded design handlers**, not external `.go`
+  files. The IDE's automatic `.silk.go` tree generator is not yet unified with the
+  strong-typed event exporter; default preview event execution is not claimed.
+
+Verification, usage and remaining gaps:
+[designer event workflow report](DESIGNER_EVENTS_QA_20261023.md).
+
 Open **Tools → Appearance & Editor** (or the command palette) to select English
 or 简体中文, dark/light theme, UI/editor font families and sizes, tab width,
 accent color, and editor background/text/keyword/comment/string colors. Empty

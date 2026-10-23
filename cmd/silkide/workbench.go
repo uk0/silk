@@ -32,6 +32,7 @@ type workbench struct {
 	designToolbar  *gui.ToolBar
 	designActions  []designActionButton
 	dockVisibility map[*gui.Dock]bool
+	navigation     gui.NavigationStack
 }
 
 var globalWorkbench *workbench
@@ -256,7 +257,7 @@ func saveAllDocuments(tabs *gui.TabWidget, canvas *ged.GedView) bool {
 		}
 	}
 	if canvas != nil && canvas.GedScene() != nil {
-		if stack := canvas.GedScene().UndoStack(); stack != nil && !stack.IsClean() {
+		if !canvas.GedScene().IsClean() {
 			return performSave(canvas)
 		}
 	}

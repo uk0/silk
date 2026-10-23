@@ -229,7 +229,7 @@ func goToMacroDefinition(tabs *gui.TabWidget) bool {
 	a, p, offset := macroAnalysisAtCursor(ed, path)
 	if sym, ok := a.DefinitionAt(offset); ok {
 		l, c := p.at(sym.Selection.Start)
-		ed.ScrollToLineCol(l, c)
+		openFileInEditorAt(tabs, path, l+1, c)
 	} else {
 		silkideToast("No macro definition at cursor", gui.ToastInfo)
 	}

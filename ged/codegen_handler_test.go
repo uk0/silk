@@ -351,7 +351,7 @@ func TestCodePanelTemplateIsAMethodThatExports(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("user file declares %s %d times, want 1:\n%s", decl.name, n, pair["user.go"])
 	}
-	if !strings.Contains(body, "btnOK clicked") {
+	if !strings.Contains(body, "TODO: implement OnClick") {
 		t.Errorf("the template body did not reach the user file: %s", body)
 	}
 	vetGeneratedFiles(t, pair)

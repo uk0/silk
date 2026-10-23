@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -21,6 +22,32 @@ func wireDesignerContextPanels(canvas *ged.GedView) {
 		return
 	}
 	var code *ged.CodePanel
+	ensureCode := func() *ged.CodePanel {
+		if globalBottomDock == nil {
+			return nil
+		}
+		if code == nil {
+			code = ged.NewCodePanel()
+			code.BindGedView(canvas)
+			globalBottomDock.AddView(code)
+		}
+		return code
+	}
+	canvas.SetEventHandlerCallback(func(widget *ged.FakeWidget, event string) error {
+		if w := globalWorkbench; w != nil && w.canvas == canvas && !designDocumentActive(w.tabs, canvas) {
+			return fmt.Errorf("请先切换到当前设计文档")
+		}
+		panel := ensureCode()
+		if panel == nil {
+			return fmt.Errorf("code panel unavailable")
+		}
+		if err := panel.OpenEventHandler(widget, event); err != nil {
+			return err
+		}
+		dockSetActiveView(globalBottomDock, panel)
+		panel.Focus()
+		return nil
+	})
 	canvas.SetContextPanelCallbacks(func() {
 		dockSetActiveView(globalRightDock, globalPropSheet)
 		if globalPropSheet != nil {
@@ -30,11 +57,7 @@ func wireDesignerContextPanels(canvas *ged.GedView) {
 		if globalBottomDock == nil {
 			return
 		}
-		if code == nil {
-			code = ged.NewCodePanel()
-			code.BindGedView(canvas)
-			globalBottomDock.AddView(code)
-		}
+		ensureCode()
 		code.ShowTab(1) // read-only generated Go; event source remains a separate tab
 		code.RegenerateNow()
 		dockSetActiveView(globalBottomDock, code)
@@ -205,7 +228,7 @@ func showRecentFilesMenu(tabs *gui.TabWidget, canvas *ged.GedView) {
 
 func editorCommand(name string) bool {
 	switch name {
-	case "Refresh Editor Git Markers", "Show Diff vs Saved", "Diff vs HEAD", "Go to Definition", "Format Document", "Find References", "Code Actions", "Trim Trailing Whitespace", "Toggle Blame", "Add Bookmark", "Rename Symbol":
+	case "Refresh Editor Git Markers", "Show Diff vs Saved", "Diff vs HEAD", "Go to Definition", "Go to Type Definition", "Go to Implementation", "Go Back", "Go Forward", "Format Document", "Find References", "Code Actions", "Trim Trailing Whitespace", "Toggle Blame", "Add Bookmark", "Rename Symbol":
 		return true
 	}
 	return false

@@ -14,6 +14,8 @@ type proceduralIconDrawer func(size int, cc *cairo.Context)
 var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"edit-undo":          drawUndoArrow,
 	"edit-redo":          drawRedoArrow,
+	"navigate-back":      drawNavigateBack,
+	"navigate-forward":   drawNavigateForward,
 	"close-btn":          drawCloseX,
 	"checkbox-checked":   drawCheckboxChecked,
 	"checkbox-unchecked": drawCheckboxUnchecked,
@@ -133,6 +135,25 @@ func setIconStroke(cc *cairo.Context, size int) {
 	cc.SetLineWidth(lw)
 	cc.SetLineCap(cairo.LINE_CAP_ROUND)
 	cc.SetLineJoin(cairo.LINE_JOIN_ROUND)
+}
+
+func drawNavigateBack(size int, cc *cairo.Context)    { drawNavigateArrow(size, cc, false) }
+func drawNavigateForward(size int, cc *cairo.Context) { drawNavigateArrow(size, cc, true) }
+func drawNavigateArrow(size int, cc *cairo.Context, forward bool) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	x := func(v float64) float64 {
+		if forward {
+			return w * (1 - v)
+		}
+		return w * v
+	}
+	cc.MoveTo(x(0.78), w*0.5)
+	cc.LineTo(x(0.22), w*0.5)
+	cc.MoveTo(x(0.45), w*0.27)
+	cc.LineTo(x(0.22), w*0.5)
+	cc.LineTo(x(0.45), w*0.73)
+	cc.Stroke()
 }
 
 func drawUndoArrow(size int, cc *cairo.Context) {

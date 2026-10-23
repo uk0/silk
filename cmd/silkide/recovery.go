@@ -63,7 +63,7 @@ func reloadCleanDesign(scene *ged.GedScene, changedPath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if current != changed || !scene.UndoStack().IsClean() {
+	if current != changed || !scene.IsClean() {
 		return false, nil
 	}
 	// Saving this very scene also emits a watcher event. Compare canonical

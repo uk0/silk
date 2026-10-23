@@ -70,6 +70,16 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("edit.redo", "Redo", "edit-redo", key+"+Shift+Z", redo, func() { undoCurrentDocument(tabs, canvas, true) })
 		menu.AddSeparator()
 		add("edit.palette", "Command Palette", "search", key+"+Shift+P", true, func() { showCommandPalette(canvas) })
+		menu.AddSeparator()
+		history := editorNavigation(tabs)
+		add("navigate.back", "Go Back", "navigate-back", "Alt+Left", history != nil && history.CanGoBack(), func() { navigateEditorHistory(tabs, false) })
+		add("navigate.forward", "Go Forward", "navigate-forward", "Alt+Right", history != nil && history.CanGoForward(), func() { navigateEditorHistory(tabs, true) })
+		editor := activeEditor(tabs)
+		semantic := !design && document && editor != nil && isGoFile(editor.FilePath())
+		add("navigate.definition", "Go to Definition", "function", "F12", !design && document, func() { goToDefinitionViaLSP(tabs) })
+		add("navigate.type", "Go to Type Definition", "function", key+"+F12", semantic, func() { requestSymbolNavigation(tabs, "Go to Type Definition") })
+		add("navigate.implementation", "Go to Implementation", "function", "Alt+F12", semantic, func() { requestSymbolNavigation(tabs, "Go to Implementation") })
+		add("navigate.references", "Find References", "search", "Shift+F12", !design && document, func() { findReferencesViaLSP(tabs) })
 	case "View":
 		for i, mode := range []workspaceMode{modeWelcome, modeEdit, modeDesign} {
 			label := []string{"Welcome", "Edit", "Design"}[i]
@@ -102,6 +112,12 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 			})
 		}
 	case "Design":
+		if design && canvas.Selection().Count() == 1 {
+			if widget, ok := canvas.Selection().ItemList()[0].(*ged.FakeWidget); ok && len(ged.AvailableEvents(widget.WidgetFactoryName())) > 0 {
+				menu.AddSubMenu(i18n.T("Event Handlers"), gui.LoadIcon("function"), canvas.EventHandlerMenu(widget))
+				menu.AddSeparator()
+			}
+		}
 		for i, spec := range designerActionSpecs(canvas) {
 			if i == 4 || i == 5 {
 				menu.AddSeparator()

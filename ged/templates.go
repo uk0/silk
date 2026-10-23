@@ -212,7 +212,10 @@ func SaveAsTemplate(scene *GedScene, name, description string) error {
 	}
 
 	// Save the scene's TDoc
-	doc := scene.SaveDesign()
+	doc, snapshotErr := scene.SaveDesignWithPendingEdits()
+	if snapshotErr != nil {
+		return snapshotErr
+	}
 	designPath := filepath.Join(dir, safeName+".silkui")
 	if err := doc.SaveFile(designPath); err != nil {
 		return fmt.Errorf("failed to save template: %w", err)

@@ -407,6 +407,12 @@ func registerSilkideTranslations() {
 		"No debug session":               "无调试会话",
 		"LSP not running":                "LSP 未运行",
 		"Go to Definition":               "跳转到定义",
+		"Go to Type Definition":          "跳转到类型定义",
+		"Go to Implementation":           "跳转到实现",
+		"Event Handlers":                 "事件处理函数",
+		"Go Back":                        "后退",
+		"Go Forward":                     "前进",
+		"No navigation targets found":    "未找到可跳转的目标",
 		"Format Document":                "格式化文档",
 		"Format failed: %v":              "格式化失败: %v",
 		"Rename: no changes":             "重命名: 无改动",
@@ -629,9 +635,13 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(0, gui.KeyF10, func() { debugStep("over") })
 	gui.RegisterShortcut(0, gui.KeyF11, func() { debugStep("into") })
 	gui.RegisterShortcut(gui.ModShift, gui.KeyF11, func() { debugStep("out") })
-	// Go to Definition via gopls (F12). Silently falls back when LSP is
-	// down; the AST context-menu "跳转定义" stays as the offline path.
+	// All IDE entry points share semantic navigation and explicit service
+	// feedback. Standalone SDK editors retain their local AST resolver.
 	gui.RegisterShortcut(0, gui.KeyF12, func() { goToDefinitionViaLSP(editorTabs) })
+	gui.RegisterShortcut(gui.ModAction, gui.KeyF12, func() { requestSymbolNavigation(editorTabs, "Go to Type Definition") })
+	gui.RegisterShortcut(gui.ModAlt, gui.KeyF12, func() { requestSymbolNavigation(editorTabs, "Go to Implementation") })
+	gui.RegisterShortcut(gui.ModAlt, gui.KeyLeft, func() { navigateEditorHistory(editorTabs, false) })
+	gui.RegisterShortcut(gui.ModAlt, gui.KeyRight, func() { navigateEditorHistory(editorTabs, true) })
 	// Format Document via gopls (Cmd+Shift+I). Complements gofmt-on-save
 	// with an on-demand reformat; gopls also applies goimports.
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'I', func() { formatDocumentViaLSP(editorTabs) })

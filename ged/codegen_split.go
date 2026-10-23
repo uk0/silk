@@ -48,6 +48,9 @@ type handlerStub struct {
 // files are derived from the stem, so exporting over an earlier export lands on
 // the same pair.
 func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (SplitResult, error) {
+	if err := scene.CommitPendingEdits(); err != nil {
+		return SplitResult{}, err
+	}
 	opts = defaultCodeGenOptions(scene, opts)
 	machine, user := splitCodePaths(filename)
 	res := SplitResult{MachineFile: machine, UserFile: user}
@@ -141,8 +144,8 @@ func (scene *GedScene) collectHandlerStubs() []handlerStub {
 	}
 	walkFakeWidgets(scene.Children(), func(fake *FakeWidget) {
 		code := strings.TrimSpace(fake.GetCode())
-		if name := extractHandlerName(code); name != "" {
-			merge(handlerStub{name: name, body: code})
+		for _, block := range handlerBlocks(code, fake.EventHandlers()) {
+			merge(block)
 		}
 		for _, b := range handlerBindingsFor(fake.WidgetFactoryName(), code, fake.EventHandlers()) {
 			if !b.known || b.handler == "" {

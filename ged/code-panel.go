@@ -6,7 +6,7 @@ import (
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
-	"strings"
+	"go/token"
 	"unicode"
 )
 
@@ -49,8 +49,14 @@ type CodePanel struct {
 	saveBtn  *gui.Button
 	fmtBtn   *gui.Button
 
-	currentWidget *FakeWidget
-	gedView       *GedView
+	currentWidget         *FakeWidget
+	gedView               *GedView
+	selectionSubscription int
+	designSubscription    int
+	draftSubscription     int
+	loadedRevision        uint64
+	loadedText            string
+	loadedCode            string
 
 	genTimer   gui.Timer
 	genLines   map[*FakeWidget]int
@@ -89,6 +95,7 @@ func (this *CodePanel) Init(self gui.IWidget) {
 	this.editor.SetParent(self)
 	this.editor.SetFont(paint.NewFont(gui.Theme().Font.Family(), 13, false, false))
 	this.editor.SetText("// 在此编写事件处理代码\n")
+	this.editor.SigChanged(func(string) { this.refreshTitle() })
 
 	// Generated-file view, hidden until its tab is picked
 	this.genView = newGeneratedView()
@@ -118,24 +125,33 @@ func (this *CodePanel) Title() string {
 
 func (this *CodePanel) Layout() {
 	w, h := this.Size()
-	titleH := 24.0
-	btnH := 26.0
-	btnW := 80.0
-	fmtW := 64.0
-	tabsW := 150.0
-
-	// The tab strip took 150px off the top bar, so a narrow dock now reaches a
-	// negative title width where it used to have room.
-	titleW := w - tabsW - btnW - fmtW - 26
-	if titleW < 0 {
-		titleW = 0
+	w, h = max(0, w), max(0, h)
+	header := this.headerHeight()
+	tabsW := min(150.0, max(0, w-8))
+	buttonY := 2.0
+	if header > 28 {
+		buttonY = 30
 	}
-	this.tabs.SetBounds(4, 2, tabsW, titleH)
-	this.titleBar.SetBounds(tabsW+10, 2, titleW, titleH)
-	this.fmtBtn.SetBounds(w-btnW-fmtW-8, 2, fmtW, titleH)
-	this.saveBtn.SetBounds(w-btnW-4, 2, btnW, titleH)
-	this.editor.SetBounds(0, titleH+4, w, h-titleH-btnH-8)
-	this.genView.SetBounds(0, titleH+4, w, h-titleH-btnH-8)
+	btnW := min(80.0, max(0, (w-12)/2))
+	fmtW := min(64.0, max(0, w-btnW-12))
+	left := max(4, w-btnW-fmtW-8)
+	titleW := max(0, left-tabsW-14)
+	if header > 28 {
+		titleW = max(0, w-tabsW-14)
+	}
+	this.tabs.SetBounds(min(4, w), min(2, h), tabsW, min(24, max(0, h-2)))
+	this.titleBar.SetBounds(min(w, tabsW+10), min(2, h), titleW, min(24, max(0, h-2)))
+	this.fmtBtn.SetBounds(min(w, left), min(buttonY, h), fmtW, min(24, max(0, h-buttonY)))
+	this.saveBtn.SetBounds(min(w, max(0, w-btnW-4)), min(buttonY, h), btnW, min(24, max(0, h-buttonY)))
+	this.editor.SetBounds(0, min(header, h), w, max(0, h-header))
+	this.genView.SetBounds(0, min(header, h), w, max(0, h-header))
+}
+
+func (this *CodePanel) headerHeight() float64 {
+	if this.Width() < 326 {
+		return 56
+	}
+	return 28
 }
 
 // ShowTab brings one of the two views forward. 保存代码/Format belong to the
@@ -148,11 +164,18 @@ func (this *CodePanel) ShowTab(idx int) {
 	this.saveBtn.SetVisible(!gen)
 	this.fmtBtn.SetVisible(!gen)
 	this.refreshTitle()
+	if gen {
+		if err := this.CommitPendingChanges(); err != nil {
+			this.genView.SetText("// " + err.Error() + "\n")
+			return
+		}
+	}
 	if gen && this.genPending {
 		// Regeneration is skipped while this tab is behind the other one, so
 		// coming forward is where it catches up with everything it missed.
 		this.RegenerateNow()
 	}
+	this.Layout()
 	this.Self().Update()
 }
 
@@ -165,14 +188,15 @@ func (this *CodePanel) Draw(g paint.Painter) {
 	g.Fill()
 
 	// Top bar background
-	g.SetBrush1(paint.Color{235, 238, 245, 255})
-	g.Rectangle(0, 0, w, 28)
+	g.SetBrush1(gui.Theme().FormColor)
+	header := min(h, this.headerHeight())
+	g.Rectangle(0, 0, w, header)
 	g.Fill()
 
 	// Separator
-	g.SetPen1(paint.Color{200, 200, 210, 255}, 0)
-	g.MoveTo(0, 28)
-	g.LineTo(w, 28)
+	g.SetPen1(gui.Theme().BorderColor, 0)
+	g.MoveTo(0, header)
+	g.LineTo(w, header)
 	g.Stroke()
 }
 
@@ -180,8 +204,34 @@ func (this *CodePanel) Draw(g paint.Painter) {
 // on the canvas automatically loads its event handler code into the editor,
 // and so that the 生成代码 view follows that design.
 func (this *CodePanel) BindGedView(gv *GedView) {
+	if this.gedView == gv {
+		return
+	}
+	if err := this.CommitPendingChanges(); err != nil {
+		core.Warn(err)
+		return
+	}
+	if old := this.gedView; old != nil {
+		old.RemoveSelectionListener(this.selectionSubscription)
+		if old.eventCodePanel == this {
+			old.eventCodePanel = nil
+		}
+		if scene := old.GedScene(); scene != nil {
+			scene.RemoveDesignChangedCallback(this.designSubscription)
+			scene.RemovePendingEditor(this.draftSubscription)
+		}
+	}
+	this.genTimer.Stop()
+	this.currentWidget = nil
 	this.gedView = gv
+	if gv != nil {
+		gv.eventCodePanel = this
+	}
+	this.SetWidget(nil)
+	this.genLines = nil
+	this.genPending = true
 	if gv == nil {
+		this.RegenerateNow()
 		return
 	}
 
@@ -191,10 +241,11 @@ func (this *CodePanel) BindGedView(gv *GedView) {
 	// and the status bar owns them (design.go bindStatusBarTo), which chains
 	// this panel's refresh onto them instead.
 	if scene := gv.GedScene(); scene != nil {
-		scene.SigDesignChanged(this.ScheduleRegenerate)
+		this.draftSubscription = scene.AddPendingEditor(this)
+		this.designSubscription = scene.AddDesignChangedCallback(func() { this.syncWidgetCode(); this.ScheduleRegenerate() })
 	}
 
-	gv.AddSelectionCallback(func(items []graph.IItem) {
+	this.selectionSubscription = gv.AddSelectionListener(func(items []graph.IItem) {
 		if len(items) == 1 {
 			if fake, ok := items[0].(*FakeWidget); ok {
 				this.SetWidget(fake)
@@ -295,20 +346,33 @@ func (this *CodePanel) refreshTitle() {
 	if name == "" {
 		name = this.currentWidget.WidgetFactoryName()
 	}
+	if this.HasPendingChanges() {
+		name += " *"
+	}
 	this.titleBar.SetText("代码: " + name)
 }
 
 // SetWidget shows the code for a specific widget.
 func (this *CodePanel) SetWidget(fake *FakeWidget) {
+	// Repeated selection notifications must not overwrite unsaved handler text.
+	if fake != nil && this.currentWidget == fake {
+		this.syncWidgetCode()
+		return
+	}
 	// Auto-save previous widget's code before switching
 	if this.currentWidget != nil && this.currentWidget != fake {
-		this.SaveCode()
+		if err := this.CommitPendingChanges(); err != nil {
+			core.Warn(err)
+			return
+		}
 	}
 
 	this.currentWidget = fake
 	if fake == nil {
 		this.refreshTitle()
 		this.editor.SetText("// 选择画布上的控件以编辑事件代码\n")
+		this.loadedText = this.editor.Text()
+		this.loadedRevision = this.editor.TextRevision()
 		this.Self().Update()
 		return
 	}
@@ -321,15 +385,94 @@ func (this *CodePanel) SetWidget(fake *FakeWidget) {
 		code = this.generateTemplate(fake)
 	}
 	this.editor.SetText(code)
+	this.loadedText = code
+	this.loadedRevision = this.editor.TextRevision()
+	this.loadedCode = fake.GetCode()
+	this.refreshTitle()
 	this.Self().Update()
 }
 
 // SaveCode persists the editor content back to the FakeWidget.
 func (this *CodePanel) SaveCode() {
-	if this.currentWidget != nil {
-		text := this.editor.Text()
-		this.currentWidget.SetCode(text)
+	if err := this.commitCode(); err != nil {
+		core.Warn(err)
 	}
+}
+
+// HasPendingChanges excludes an untouched suggested template.
+func (this *CodePanel) HasPendingChanges() bool {
+	if this.currentWidget == nil || this.editor.TextRevision() == this.loadedRevision {
+		return false
+	}
+	if this.editor.Text() == this.loadedText {
+		this.loadedRevision = this.editor.TextRevision()
+		return false
+	}
+	return true
+}
+
+func (this *CodePanel) CommitPendingChanges() error {
+	if !this.HasPendingChanges() {
+		return nil
+	}
+	return this.commitCode()
+}
+
+func (this *CodePanel) commitCode() error {
+	if this.currentWidget == nil {
+		return nil
+	}
+	text := this.editor.Text()
+	if this.HasPendingChanges() && this.currentWidget.GetCode() != this.loadedCode && text != this.currentWidget.GetCode() {
+		return fmt.Errorf("事件代码已在其他位置更改；未覆盖代码面板中的草稿")
+	}
+	scene := this.scene()
+	if scene != nil && !scene.containsWidget(this.currentWidget) {
+		return fmt.Errorf("事件代码所属控件已离开当前设计；草稿仍保留在代码面板")
+	}
+	if text != this.currentWidget.GetCode() {
+		// Advance the baseline before notifying listeners. Otherwise our own
+		// command re-enters the pending-edit flush or overwrites local undo state.
+		this.loadedText, this.loadedCode = text, text
+		this.loadedRevision = this.editor.TextRevision()
+		if scene != nil {
+			scene.SceneItem.PushCommand(&handlerCodeCommand{widget: this.currentWidget, before: this.currentWidget.GetCode(), after: text})
+			scene.NotifyDesignChanged()
+		} else {
+			this.currentWidget.SetCode(text)
+		}
+	}
+	this.loadedText, this.loadedCode = text, text
+	this.loadedRevision = this.editor.TextRevision()
+	this.refreshTitle()
+	return nil
+}
+
+type handlerCodeCommand struct {
+	widget        *FakeWidget
+	before, after string
+}
+
+func (c *handlerCodeCommand) Redo()        { c.widget.SetCode(c.after) }
+func (c *handlerCodeCommand) Undo()        { c.widget.SetCode(c.before) }
+func (c *handlerCodeCommand) Text() string { return "编辑事件代码" }
+
+// Undo/redo can change the model while this panel remains selected. Refresh a
+// clean editor, but never overwrite locally edited text with a model update.
+func (this *CodePanel) syncWidgetCode() {
+	fake := this.currentWidget
+	if fake == nil || this.editor.Text() != this.loadedText || fake.GetCode() == this.loadedCode {
+		return
+	}
+	code := fake.GetCode()
+	if code == "" {
+		code = this.generateTemplate(fake)
+	}
+	pos := this.editor.NavigationPosition()
+	this.editor.SetText(code)
+	this.editor.ScrollToLineCol(pos.Line, pos.Column)
+	this.loadedText, this.loadedCode = code, fake.GetCode()
+	this.loadedRevision = this.editor.TextRevision()
 }
 
 // Focus activates the code editor and brings it into focus.
@@ -360,116 +503,23 @@ func (this *CodePanel) ScrollToHandler(name string) {
 
 // generateTemplate creates a Go event handler code template based on widget type.
 func (this *CodePanel) generateTemplate(fake *FakeWidget) string {
-	name := fake.WidgetName()
+	event := defaultEventForFactory(fake.WidgetFactoryName())
+	def, ok := eventDefinition(fake.WidgetFactoryName(), event)
+	if !ok {
+		return "// 此控件没有可生成的事件处理函数。\n"
+	}
+	name := fake.EventHandlers()[event]
 	if name == "" {
-		name = "widget"
+		name = defaultHandlerName(fake, event)
 	}
-	capName := capitalize(name)
-	factory := fake.WidgetFactoryName()
-
-	shortFactory := factory
-	if idx := strings.LastIndex(factory, "."); idx >= 0 {
-		shortFactory = factory[idx+1:]
+	if !token.IsIdentifier(name) || name == "_" {
+		return "// 无效的事件处理函数名称。\n"
 	}
-
-	// Template signatures MUST match codegen.go callback wrappers exactly.
-	// codegen wraps: Signal(func(args...) { handlerName(args...) })
-	// So the template handler must accept the same args.
-	var code string
-	switch shortFactory {
-	case "Button":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick() {\n\tfmt.Println(\"%s clicked\")\n}\n", name, capName, name)
-	case "Edit":
-		code = fmt.Sprintf("// %s text changed handler\nfunc on%sChanged(text string) {\n\tfmt.Println(\"text:\", text)\n}\n", name, capName)
-	case "CheckBox":
-		code = fmt.Sprintf("// %s check handler\nfunc on%sToggled(checked bool) {\n\t// checked: true/false\n}\n", name, capName)
-	case "RadioButton":
-		code = fmt.Sprintf("// %s changed handler\nfunc on%sChanged(selected bool) {\n\t// selected state\n}\n", name, capName)
-	case "Slider":
-		code = fmt.Sprintf("// %s value changed handler\nfunc on%sValueChanged(v float64) {\n\tfmt.Println(\"value:\", v)\n}\n", name, capName)
-	case "SpinBox":
-		code = fmt.Sprintf("// %s value changed handler\nfunc on%sValueChanged(v int) {\n\tfmt.Println(\"value:\", v)\n}\n", name, capName)
-	case "ComboBox":
-		code = fmt.Sprintf("// %s selection handler\nfunc on%sSelected(idx int) {\n\tfmt.Println(\"selected:\", idx)\n}\n", name, capName)
-	case "ListWidget":
-		code = fmt.Sprintf("// %s selection handler\nfunc on%sSelected(indices []int) {\n\tfmt.Println(\"selected:\", indices)\n}\n", name, capName)
-	case "Table":
-		code = fmt.Sprintf("// %s row selected handler\nfunc on%sRowSelected(row int) {\n\tfmt.Println(\"row:\", row)\n}\n", name, capName)
-	case "TabWidget":
-		code = fmt.Sprintf("// %s tab changed handler\nfunc on%sTabChanged(index int) {\n\t// handle tab change\n}\n", name, capName)
-	case "ToggleSwitch":
-		code = fmt.Sprintf("// %s toggle handler\nfunc on%sToggle(on bool) {\n\tfmt.Println(\"switch:\", on)\n}\n", name, capName)
-	case "SearchBox":
-		code = fmt.Sprintf("// %s search handler\nfunc on%sSearch(query string) {\n\tfmt.Println(\"search:\", query)\n}\n", name, capName)
-	case "NumberInput":
-		code = fmt.Sprintf("// %s value handler\nfunc on%sValueChanged(v float64) {\n\tfmt.Println(\"number:\", v)\n}\n", name, capName)
-	case "Rating":
-		code = fmt.Sprintf("// %s rating handler\nfunc on%sRatingChanged(v int) {\n\tfmt.Println(\"rating:\", v)\n}\n", name, capName)
-	case "DatePicker":
-		code = fmt.Sprintf("// %s date handler\nfunc on%sDateChanged(y, m, d int) {\n\tfmt.Println(\"date:\", y, m, d)\n}\n", name, capName)
-	case "ColorPicker":
-		code = fmt.Sprintf("// %s color handler\nfunc on%sColorChanged(c paint.Color) {\n\t// color changed\n}\n", name, capName)
-	case "DropdownButton":
-		code = fmt.Sprintf("// %s select handler\nfunc on%sSelect(idx int, text string) {\n\tfmt.Println(\"selected:\", idx, text)\n}\n", name, capName)
-	case "SwitchGroup":
-		code = fmt.Sprintf("// %s change handler\nfunc on%sChange(idx int, text string) {\n\tfmt.Println(\"tab:\", idx, text)\n}\n", name, capName)
-	case "Link":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick(url string) {\n\tfmt.Println(\"link:\", url)\n}\n", name, capName)
-	case "Label":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick() {\n\t// label clicked\n}\n", name, capName)
-	case "ProgressBar":
-		code = fmt.Sprintf("// %s handler\nfunc on%sComplete() {\n\t// progress reached 100%%\n}\n", name, capName)
-	case "GroupBox":
-		code = fmt.Sprintf("// %s handler\nfunc on%sEvent() {\n\t// group event\n}\n", name, capName)
-	case "ImageView":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick() {\n\t// image clicked\n}\n", name, capName)
-	case "Tag":
-		code = fmt.Sprintf("// %s close handler\nfunc on%sClose() {\n\t// tag close button clicked\n}\n", name, capName)
-	case "Badge":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick() {\n\t// badge clicked\n}\n", name, capName)
-	case "Avatar":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick() {\n\t// avatar clicked\n}\n", name, capName)
-	case "Breadcrumb":
-		code = fmt.Sprintf("// %s navigate handler\nfunc on%sNavigate(idx int, text string) {\n\tfmt.Println(\"navigate:\", idx, text)\n}\n", name, capName)
-	case "LabelSeparator":
-		code = fmt.Sprintf("// %s handler\nfunc on%sEvent() {\n\t// separator event\n}\n", name, capName)
-	case "Placeholder":
-		code = fmt.Sprintf("// %s action handler\nfunc on%sAction() {\n\t// placeholder action\n}\n", name, capName)
-	case "Timeline":
-		code = fmt.Sprintf("// %s step click handler\nfunc on%sStepClick(idx int) {\n\tfmt.Println(\"step:\", idx)\n}\n", name, capName)
-	case "NotificationPanel":
-		code = fmt.Sprintf("// %s item click handler\nfunc on%sItemClick(idx int) {\n\tfmt.Println(\"notification:\", idx)\n}\n", name, capName)
-	case "Card":
-		code = fmt.Sprintf("// %s handler\nfunc on%sEvent() {\n\t// card event\n}\n", name, capName)
-	case "Accordion":
-		code = fmt.Sprintf("// %s section toggle handler\nfunc on%sSectionToggle(idx int, expanded bool) {\n\tfmt.Println(\"section:\", idx, expanded)\n}\n", name, capName)
-	case "TreeView":
-		code = fmt.Sprintf("// %s item selected handler\nfunc on%sItemSelected() {\n\t// tree item selected\n}\n", name, capName)
-	case "LineChart", "BarChart", "PieChart", "Gauge", "ScatterPlot":
-		code = fmt.Sprintf("// %s click handler\nfunc on%sClick() {\n\t// chart clicked\n}\n", name, capName)
-	case "VBox", "HBox", "GridLayout", "FormLayout":
-		code = fmt.Sprintf("// %s layout handler\nfunc on%sEvent() {\n\t// layout event\n}\n", name, capName)
-	case "Splitter":
-		code = fmt.Sprintf("// %s resize handler\nfunc on%sResize() {\n\t// splitter resized\n}\n", name, capName)
-	case "StackedWidget":
-		code = fmt.Sprintf("// %s page changed handler\nfunc on%sPageChanged(idx int) {\n\tfmt.Println(\"page:\", idx)\n}\n", name, capName)
-	case "Form":
-		code = fmt.Sprintf("// %s handler\nfunc on%sEvent() {\n\t// form event\n}\n", name, capName)
-	case "Dialog":
-		code = fmt.Sprintf("// %s result handler\nfunc on%sResult(result string) {\n\tfmt.Println(\"dialog:\", result)\n}\n", name, capName)
-	case "ScrollArea":
-		code = fmt.Sprintf("// %s scroll handler\nfunc on%sScroll() {\n\t// scroll event\n}\n", name, capName)
-	default:
-		code = fmt.Sprintf("// %s event handler\nfunc on%sEvent() {\n\t// implement event logic\n}\n", name, capName)
-	}
-	// Handlers live in the export's user file as methods on the UI struct, so
-	// the template a developer starts from is one too — methodize is the same
-	// rewrite the split writer applies to a body it takes over. Without a bound
-	// design there is no struct to hang it off, and the free function stands.
+	recv := "func "
 	if scene := this.scene(); scene != nil {
-		code = methodize(code, handlerReceiver(defaultCodeGenOptions(scene, CodeGenOptions{}).TypeName))
+		recv = handlerReceiver(defaultCodeGenOptions(scene, CodeGenOptions{}).TypeName)
 	}
-	return code
+	return fmt.Sprintf("%s%s(%s) {\n\t// TODO: implement %s.\n}\n", recv, name, def.params, event)
 }
 
 // capitalize returns s with its first letter upper-cased.
@@ -480,4 +530,17 @@ func capitalize(s string) string {
 	runes := []rune(s)
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes)
+}
+
+// HandlerEditor exposes the editable embedded-handler buffer to SDK hosts.
+func (this *CodePanel) HandlerEditor() *gui.CodeEditor { return this.editor }
+
+func (this *CodePanel) DiscardPendingChanges() {
+	if this.currentWidget == nil {
+		return
+	}
+	this.editor.SetText(this.loadedText)
+	this.loadedRevision = this.editor.TextRevision()
+	this.syncWidgetCode()
+	this.refreshTitle()
 }

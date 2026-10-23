@@ -34,7 +34,7 @@ func (this *FakeWidget) SetEventHandlerChecked(event, handler string) {
 		this.RemoveEventHandler(event)
 		return
 	}
-	if !token.IsIdentifier(handler) {
+	if !token.IsIdentifier(handler) || handler == "_" {
 		core.Warn(`event handler "` + handler + `" for ` + event + ` is not a Go identifier; binding unchanged`)
 		return
 	}

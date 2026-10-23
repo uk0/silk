@@ -277,7 +277,11 @@ func onFileSaveAs() {
 	if filename == "" {
 		return
 	}
-	doc := scene.SaveDesign()
+	doc, snapshotErr := scene.SaveDesignWithPendingEdits()
+	if snapshotErr != nil {
+		reportLostWork("另存为失败", snapshotErr.Error())
+		return
+	}
 	if err := doc.SaveFile(filename); err != nil {
 		reportLostWork("另存为失败", filename+"\n\n"+err.Error())
 		return

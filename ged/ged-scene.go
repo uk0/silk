@@ -30,6 +30,9 @@ func (this *Design) Widget(name string) gui.IWidget {
 }
 
 type GedScene struct {
+	pendingEditors  []pendingDesignEdit
+	pendingEditSeq  int
+	committingEdits bool
 	graph.SceneItem
 	filename string
 	title    string
@@ -113,10 +116,8 @@ type designChangedListener struct {
 
 // AddDesignChangedCallback appends a listener for the same news
 // SigDesignChanged reports and returns the id RemoveDesignChangedCallback
-// takes. The slot above holds exactly one callback and the code panel owns it
-// (CodePanel.BindGedView), so a panel that also wants to follow the design
-// registers here instead of assigning the slot and silently unplugging the
-// 生成代码 view.
+// takes. Shared code/bindings panels use independent subscriptions, leaving
+// the single legacy slot available for the host.
 func (this *GedScene) AddDesignChangedCallback(fn func()) int {
 	if fn == nil {
 		return 0
@@ -138,7 +139,7 @@ func (this *GedScene) AddDesignChangedCallback(fn func()) int {
 func (this *GedScene) RemoveDesignChangedCallback(id int) {
 	for i, l := range this.designChangedList {
 		if l.id == id {
-			this.designChangedList = append(this.designChangedList[:i], this.designChangedList[i+1:]...)
+			this.designChangedList = append(append([]designChangedListener(nil), this.designChangedList[:i]...), this.designChangedList[i+1:]...)
 			return
 		}
 	}
@@ -146,6 +147,10 @@ func (this *GedScene) RemoveDesignChangedCallback(id int) {
 
 // PushCommand runs cmd through the undo stack, then reports the design changed.
 func (this *GedScene) PushCommand(cmd gui.ICommand) {
+	if err := this.CommitPendingEdits(); err != nil {
+		core.Warn(err)
+		return
+	}
 	this.SceneItem.PushCommand(cmd)
 	this.NotifyDesignChanged()
 }
@@ -311,8 +316,12 @@ func (this *GedScene) Save() bool {
 		this.filename += DefaultDesignExt
 	}
 
-	doc := this.SaveDesign()
-	err := doc.SaveFile(this.filename)
+	doc, err := this.SaveDesignWithPendingEdits()
+	if err != nil {
+		core.Warn(err)
+		return false
+	}
+	err = doc.SaveFile(this.filename)
 	if err == nil {
 		this.UndoStack().SetClean()
 		this.SetTitle(filepath.Base(this.filename))

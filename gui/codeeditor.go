@@ -367,14 +367,16 @@ type CodeEditor struct {
 	renameWord      string // original word being renamed
 
 	// --- Code Navigation (Cmd+Click / Ctrl+Click) ---
-	hoverLinkLine  int    // line of currently hovered link (-1 if none)
-	hoverLinkStart int    // start column of hovered link word
-	hoverLinkEnd   int    // end column of hovered link word
-	hoverLinkWord  string // the identifier being hovered
-	filePath       string // path of the file currently being edited
-	navStack       NavigationStack
-	cbNavigate     func(filePath string, line int) // callback for cross-file navigation
-	symbolActions  CodeEditorSymbolActions
+	hoverLinkLine           int    // line of currently hovered link (-1 if none)
+	hoverLinkStart          int    // start column of hovered link word
+	hoverLinkEnd            int    // end column of hovered link word
+	hoverLinkWord           string // the identifier being hovered
+	filePath                string // path of the file currently being edited
+	navStack                NavigationStack
+	cbNavigate              func(filePath string, line int) // callback for cross-file navigation
+	cbNavigatePosition      func(NavPosition) bool
+	cbNavBack, cbNavForward func()
+	symbolActions           CodeEditorSymbolActions
 
 	// --- LSP host hooks (hover + signature help) ---
 	// These are host-driven signals: the editor only reports WHERE the user is
@@ -995,50 +997,22 @@ func (this *CodeEditor) SigSignatureRequested(fn func(line, col int)) {
 	this.cbSignatureRequested = fn
 }
 
-// pushNavPosition records the current position onto the navigation stack.
-func (this *CodeEditor) pushNavPosition() {
-	this.navStack.Push(NavPosition{
-		FilePath: this.filePath,
-		Line:     this.cursorLine,
-		Column:   this.cursorCol,
-		ScrollY:  this.scrollY,
-	})
-}
-
 // NavGoBack navigates to the previous position in the navigation stack.
 func (this *CodeEditor) NavGoBack() {
-	pos, ok := this.navStack.GoBack()
-	if !ok {
+	if this.cbNavBack != nil {
+		this.cbNavBack()
 		return
 	}
-	if pos.FilePath != "" && pos.FilePath != this.filePath && this.cbNavigate != nil {
-		this.cbNavigate(pos.FilePath, pos.Line)
-		return
-	}
-	this.cursorLine = pos.Line
-	this.cursorCol = pos.Column
-	this.scrollY = pos.ScrollY
-	this.clampCursor()
-	this.ensureCursorVisible()
-	this.Self().Update()
+	this.navStack.Navigate(this.NavigationPosition(), false, this.restoreNavPosition)
 }
 
 // NavGoForward navigates to the next position in the navigation stack.
 func (this *CodeEditor) NavGoForward() {
-	pos, ok := this.navStack.GoForward()
-	if !ok {
+	if this.cbNavForward != nil {
+		this.cbNavForward()
 		return
 	}
-	if pos.FilePath != "" && pos.FilePath != this.filePath && this.cbNavigate != nil {
-		this.cbNavigate(pos.FilePath, pos.Line)
-		return
-	}
-	this.cursorLine = pos.Line
-	this.cursorCol = pos.Column
-	this.scrollY = pos.ScrollY
-	this.clampCursor()
-	this.ensureCursorVisible()
-	this.Self().Update()
+	this.navStack.Navigate(this.NavigationPosition(), true, this.restoreNavPosition)
 }
 
 // SetWordWrap toggles word wrap mode.
@@ -4530,19 +4504,16 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 		}
 
 		if word != "" {
-			// Push current position for back navigation
-			this.pushNavPosition()
+			if this.symbolActions.GoToDefinition != nil {
+				this.RequestGoToDefinition()
+				this.hoverLinkLine, this.hoverLinkWord = -1, ""
+				return
+			}
 
 			// Try cross-file navigation first (searches current file + siblings)
 			target := FindDefinition(word, this.filePath, this.Text())
 			if target != nil {
-				if target.FilePath == this.filePath || this.filePath == "" {
-					// Same file: jump directly
-					this.goToLine(target.Line)
-				} else if this.cbNavigate != nil {
-					// Different file: delegate to editor tabs
-					this.cbNavigate(target.FilePath, target.Line)
-				}
+				this.navigateDefinitionTarget(target)
 				// Clear hover link
 				this.hoverLinkLine = -1
 				this.hoverLinkWord = ""
@@ -4553,7 +4524,7 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 			symbols := this.ParseSymbols()
 			for _, s := range symbols {
 				if s.Name == word {
-					this.goToLine(s.Line)
+					this.navigateDefinitionTarget(&NavigationTarget{FilePath: this.filePath, Line: s.Line})
 					this.hoverLinkLine = -1
 					this.hoverLinkWord = ""
 					return
@@ -4781,9 +4752,11 @@ type editorContextMenuItem struct {
 // unavailable-service feedback; failure never silently falls back to a local
 // text operation. Callbacks receive the editor whose menu requested the action.
 type CodeEditorSymbolActions struct {
-	RenameSymbol   func(*CodeEditor)
-	GoToDefinition func(*CodeEditor)
-	FindReferences func(*CodeEditor)
+	RenameSymbol       func(*CodeEditor)
+	GoToDefinition     func(*CodeEditor)
+	FindReferences     func(*CodeEditor)
+	GoToTypeDefinition func(*CodeEditor)
+	GoToImplementation func(*CodeEditor)
 }
 
 // SetSymbolActions replaces the host hooks for this editor instance. Passing
@@ -4830,6 +4803,20 @@ func (this *CodeEditor) RequestFindReferences() {
 		return
 	}
 	this.HighlightReferencesAtCursor()
+}
+
+// RequestGoToTypeDefinition needs a semantic host; no textual guess is made.
+func (this *CodeEditor) RequestGoToTypeDefinition() {
+	if this.wordAtCursor() != "" && this.symbolActions.GoToTypeDefinition != nil {
+		this.symbolActions.GoToTypeDefinition(this)
+	}
+}
+
+// RequestGoToImplementation resolves implementations through the semantic host.
+func (this *CodeEditor) RequestGoToImplementation() {
+	if this.wordAtCursor() != "" && this.symbolActions.GoToImplementation != nil {
+		this.symbolActions.GoToImplementation(this)
+	}
 }
 
 // contextMenuItems builds the right-click menu for the editor at the
@@ -4879,6 +4866,8 @@ func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []ed
 			Enabled: hasWord,
 			Action:  this.RequestFindReferences,
 		},
+		{Label: "跳转类型定义", Enabled: hasWord && this.symbolActions.GoToTypeDefinition != nil, Action: this.RequestGoToTypeDefinition},
+		{Label: "跳转实现", Enabled: hasWord && this.symbolActions.GoToImplementation != nil, Action: this.RequestGoToImplementation},
 	}
 }
 
@@ -6124,13 +6113,16 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 
 	case KeyF12:
-		// F12 / Shift+F12: AST-driven navigation for the identifier at the cursor.
-		// F12 jumps to its definition; Shift+F12 highlights every reference in the
-		// current file by reusing the find-bar's findMatches overlay.
-		if shift {
-			this.HighlightReferencesAtCursor()
+		// Use the same host-aware commands as the context menu. Unhosted SDK
+		// editors retain AST definition and local-reference fallbacks.
+		if alt {
+			this.RequestGoToImplementation()
+		} else if ctrl || isActionModifier() {
+			this.RequestGoToTypeDefinition()
+		} else if shift {
+			this.RequestFindReferences()
 		} else {
-			this.GoToDefinitionAtCursor()
+			this.RequestGoToDefinition()
 		}
 
 	case '/':
@@ -7181,15 +7173,7 @@ func (this *CodeEditor) GoToDefinitionAtCursor() {
 	if target == nil {
 		return
 	}
-	this.pushNavPosition()
-	if target.FilePath == this.filePath || this.filePath == "" {
-		this.goToLine(target.Line)
-		this.ScrollToLine(target.Line)
-		return
-	}
-	if this.cbNavigate != nil {
-		this.cbNavigate(target.FilePath, target.Line)
-	}
+	this.navigateDefinitionTarget(target)
 }
 
 // HighlightReferencesAtCursor finds every occurrence of the identifier at the

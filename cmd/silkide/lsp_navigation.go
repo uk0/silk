@@ -11,12 +11,9 @@ import (
 // Keep wire coordinates intact until the actual target buffer is available.
 // Looking up disk text first is wrong when the destination has unsaved edits.
 func openFileInEditorAtLSP(tabs *gui.TabWidget, path string, position core.LSPPosition) {
-	if path == "" || !openFileInEditor(tabs, path) {
-		return
-	}
-	if ed := openEditors[path]; ed != nil {
-		ed.ScrollToUTF16Position(position.Line, position.Character)
-	}
+	navigateEditor(tabs, path, func(ed *gui.CodeEditor) {
+		ed.NavigateToUTF16Position(position.Line, position.Character)
+	})
 }
 
 func lspReferenceLocation(path string, position core.LSPPosition, sourceLine string) ged.ReferenceLoc {

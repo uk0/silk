@@ -95,8 +95,12 @@ func (this *AutoSaver) tick() {
 
 	autosavePath := filename + ".autosave"
 
-	doc := this.scene.SaveDesign()
-	err := doc.SaveFile(autosavePath)
+	doc, err := this.scene.SaveDesignWithPendingEdits()
+	if err != nil {
+		core.Error(err)
+		return
+	}
+	err = doc.SaveFile(autosavePath)
 	if err != nil {
 		core.Error(err)
 		return
