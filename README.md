@@ -66,6 +66,20 @@ Verification and remaining gaps: [navigation/SDK iteration report](NAVIGATION_SD
 Verification, usage and remaining gaps:
 [designer event workflow report](DESIGNER_EVENTS_QA_20261023.md).
 
+### Small-tool SDK: async work and HTTP controls
+
+- New dependency-free `async` and `httpx` packages provide bounded cancellable
+  jobs, synchronous/asynchronous HTTP requests, response size/time limits and
+  strict JSON Pointer extraction into string, JSON, int64, float64 or bool.
+- `gui.RunAsync` dispatches completion through the UI queue. The designer's
+  **Network & Tools → HTTPButton** offers explicit requests, cancellation,
+  typed signals, persisted configuration and strong-typed code generation;
+  constructors and property edits never send requests.
+- Start a local-only demo with `go run ./examples/http-tool`. See the
+  [SDK feature/API list and recipes](docs/SDK_FEATURES.md) and
+  [HTTP SDK validation report](SDK_HTTP_QA_20261023.md) for lifecycle contracts,
+  platform coverage and remaining font / IDE-generation gaps.
+
 Open **Tools → Appearance & Editor** (or the command palette) to select English
 or 简体中文, dark/light theme, UI/editor font families and sizes, tab width,
 accent color, and editor background/text/keyword/comment/string colors. Empty

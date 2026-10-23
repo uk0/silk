@@ -7,7 +7,7 @@ func TestWorkflowIconsHaveThemeColorsAndTransparentCorners(t *testing.T) {
 	t.Cleanup(func() { SetIconPalette(old) })
 	for _, palette := range []IconPalette{LightIconPalette(), DarkIconPalette()} {
 		SetIconPalette(palette)
-		for _, name := range []string{"printer", "gantt"} {
+		for _, name := range []string{"printer", "gantt", "http-request"} {
 			draw := proceduralFallbacks[name]
 			if draw == nil {
 				t.Fatalf("%s missing vector fallback", name)

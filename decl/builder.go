@@ -142,3 +142,8 @@ func TabWidget(attrs ...Attr) *Node { return New("gui.TabWidget", attrs...) }
 
 // Card is a styled container with elevated background.
 func Card(attrs ...Attr) *Node { return New("gui.Card", attrs...) }
+
+// HTTPButton constructs an explicit asynchronous HTTP action. Loading a tree
+// does not send requests. Set URL / HTTP Method / Result Type / JSON Pointer
+// using P, then attach callbacks to the built gui.HTTPButton at runtime.
+func HTTPButton(attrs ...Attr) *Node { return New("gui.HTTPButton", attrs...) }

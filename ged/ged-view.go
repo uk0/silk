@@ -498,7 +498,7 @@ func defaultSizeForWidget(factoryName string) (w, h float64) {
 		return 60, 30
 	case "ganttchart":
 		return 180, 95
-	case "printbutton":
+	case "printbutton", "httpbutton":
 		return 32, 9
 	case "button":
 		return 25, 7

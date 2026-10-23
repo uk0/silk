@@ -26,6 +26,7 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"menu":               drawMenuBars,
 	"toolbar-overflow":   drawToolbarOverflow,
 	"refresh":            drawRefreshArrow,
+	"http-request":       drawHTTPExchange,
 	"plus":               drawPlus,
 	"search":             drawSearchGlass,
 	"build":              drawBuildWrench,
@@ -998,5 +999,25 @@ func drawAdjustLayout(size int, cc *cairo.Context) {
 	cc.LineTo(w*.86, w*.86)
 	cc.LineTo(w*.86, w*.68)
 	cc.Rectangle(w*.39, w*.39, w*.22, w*.22)
+	cc.Stroke()
+}
+
+// Opposite request/response arrows, rasterized at physical DPI like other icons.
+func drawHTTPExchange(size int, cc *cairo.Context) {
+	setIconStroke(cc, size)
+	s := float64(size)
+	setIconColor(cc, currentIconPalette.Accent)
+	cc.MoveTo(.16*s, .32*s)
+	cc.LineTo(.84*s, .32*s)
+	cc.MoveTo(.65*s, .14*s)
+	cc.LineTo(.84*s, .32*s)
+	cc.LineTo(.65*s, .50*s)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Success)
+	cc.MoveTo(.84*s, .68*s)
+	cc.LineTo(.16*s, .68*s)
+	cc.MoveTo(.35*s, .50*s)
+	cc.LineTo(.16*s, .68*s)
+	cc.LineTo(.35*s, .86*s)
 	cc.Stroke()
 }
