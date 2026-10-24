@@ -40,6 +40,28 @@
 布局使用 `HBox`、`VBox`、`FormLayout`、`GridLayout`；设计文件使用 `ged`，声明式树使用 `decl`。
 图表／甘特图、打印、数据绑定等既有模块见 [README](../README.md)，不把本轮 HTTP 验收扩展为它们的重新验收。
 
+### 编辑器查找与替换
+
+`CodeEditor.ShowFind(replace)` 打开编辑器内部的真实子控件查找栏；
+`SetFindQuery(query)`、`SetFindOptions(EditorFindOptions{MatchCase, WholeWord})`
+配置单行 Unicode 字面量匹配。默认不区分大小写；整词边界识别 Unicode 字母、
+数字、组合标记和下划线。尚不支持正则或跨行查询。
+
+`FindSnapshot()` 返回 `Query`、`Options`、完整 `Count`、保留的 `Retained`、
+从 1 开始的 `Current`（无结果为 0）、`Pending`、`Err`；不要把后台计算中的 0
+当作已确认无匹配。以上 API 均在 UI 线程调用。
+
+- 文档与查询等输入超过 32 KiB 后转为后台计算，75 ms 合并抖动；每编辑器只留
+  当前任务和最新请求，全进程最多同时计算两个。结果必须通过文档版本、查询、
+  选项及请求代次校验；替换还校验替换文本。
+- 最多保留 100,000 个高亮／导航位置，但计数与全部替换不受此截断影响。
+  查询最多 1 MiB；替换结果最多 128 MiB，超过上限报错且不写入部分结果。
+- 关闭查找栏、隐藏编辑器会取消后台任务；宿主销毁编辑器或停止事件循环前应
+  在 UI 线程调用 `CancelFind()`，与 `CancelCompletion()` / `CancelSymbolIndex()`
+  一起释放任务和工具提示注册。重新打开查找可复用编辑器。
+- 后台只生成不可变结果；最终应用文本及一次 Undo／LSP 通知仍在 UI 线程。
+  这不是任意大小文件零延迟的承诺。
+
 ### 剪贴板任务与宿主生命周期
 
 `Clipboard.ReadTextAsync(ctx, done)` 在 UI 线程调用，`done(text, err)` 通过

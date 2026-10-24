@@ -21,6 +21,29 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Safe, responsive Find / Replace
+
+- Find and replacement fields are real editor-owned widgets: selection,
+  copy/paste, Delete, keyboard focus and platform CJK fonts work consistently.
+  Buttons and checkboxes use actual theme measurements and wrap in narrow panes.
+- Added **Match case** and **Whole word** Unicode literal matching. F3 / Shift+F3
+  navigate; Enter in replacement replaces the current match and Shift+Enter
+  replaces all. Clicking the document lets you edit while search remains open.
+- Document revisions invalidate old ranges. Large searches and replacement
+  proposals run off-thread with debounce, cancellation, latest-only requests and
+  a two-worker process-wide compute limit. Obsolete results cannot overwrite edits.
+- Counts remain complete; highlights/navigation retain at most 100,000 hits.
+  Replace All still processes every match and commits one Undo transaction.
+  Repainting visits only matches intersecting visible lines and columns.
+- Limits: single-line literal queries (no regex), 1 MiB query limit, 128 MiB
+  replacement-result limit. Applying the completed edit still uses the UI thread.
+
+Verification: [Find / Replace QA](EDITOR_FIND_QA_20261024.md).
+
+<img src="screenshots/silkide-find-macos-20261024.png" width="760" alt="Native macOS find and replacement fields with readable Chinese text, case and whole-word options">
+
+<img src="screenshots/silkide-find-windows-20261024.png" width="760" alt="Native Windows find and replacement fields with readable Chinese text and two exact whole-word matches">
+
 ### Clipboard responsiveness and honest empty states
 
 - macOS editor, single-line Edit, TextArea and SearchBox paste no longer call

@@ -331,25 +331,23 @@ func TestCodeEditorCloseFindBarResets(t *testing.T) {
 	}
 }
 
-func TestCodeEditorReplaceButtonHit(t *testing.T) {
+func TestCodeEditorReplaceButtonsUseRealControls(t *testing.T) {
 	e := NewCodeEditor()
-	e.findActive = true
-	e.toggleReplaceRow() // replace row visible at y in [rowH, 2*rowH)
-	rowH := float64(codeEditorFindRowHeight)
-	y := rowH + rowH/2 // middle of the replace row
-	btnX := findBarInputX + findBarInputW + 10
-
-	if hit := e.replaceButtonHit(btnX+2, y); hit != 1 {
-		t.Errorf("Replace button hit = %d, want 1", hit)
+	t.Cleanup(e.CancelFind)
+	e.SetSize(800, 500)
+	e.SetText("foo foo")
+	e.SetFindQuery("foo")
+	e.replaceText = "bar"
+	e.ShowFind(true)
+	if e.findBar.one.Parent() != e.findBar || e.findBar.Parent() != e {
+		t.Fatal("find controls detached from editor")
 	}
-	if hit := e.replaceButtonHit(btnX+findBarBtnW+6+2, y); hit != 2 {
-		t.Errorf("Replace All button hit = %d, want 2", hit)
+	e.findBar.one.Action().Trigger(nil)
+	if e.Text() != "bar foo" {
+		t.Fatal(e.Text())
 	}
-	if hit := e.replaceButtonHit(5, y); hit != 0 {
-		t.Errorf("label area hit = %d, want 0", hit)
-	}
-	// Nothing on the find row (y < rowH).
-	if hit := e.replaceButtonHit(btnX+2, rowH/2); hit != 0 {
-		t.Errorf("find-row hit = %d, want 0", hit)
+	e.findBar.all.Action().Trigger(nil)
+	if e.Text() != "bar bar" {
+		t.Fatal(e.Text())
 	}
 }

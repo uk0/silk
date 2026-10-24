@@ -1004,6 +1004,7 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 	if ed != nil {
 		ed.CancelCompletion()
 		ed.CancelSymbolIndex()
+		ed.CancelFind()
 	}
 	if path != "" {
 		ed.CancelGitStatus()
@@ -1209,6 +1210,7 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 				ed.CancelGitStatus()
 				ed.CancelCompletion()
 				ed.CancelSymbolIndex()
+				ed.CancelFind()
 			}
 		}
 		quitApp()

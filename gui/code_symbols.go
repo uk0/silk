@@ -690,7 +690,7 @@ func (this *CodeEditor) drawBreadcrumb(g paint.Painter, topY, w float64) {
 
 // drawGotoLine draws the go-to-line input bar at the top.
 func (this *CodeEditor) drawGotoLine(g paint.Painter, w float64) {
-	fbH := this.findBarHeight
+	fbH := float64(codeEditorFindRowHeight)
 	// Background
 	g.SetBrush1(paint.Color{R: 50, G: 50, B: 60, A: 255})
 	g.Rectangle(0, 0, w, fbH)
@@ -758,7 +758,7 @@ func (this *CodeEditor) topOffset() float64 {
 		off += this.findBarHeight
 	}
 	if this.gotoLineActive {
-		off += this.findBarHeight
+		off += codeEditorFindRowHeight
 	}
 	off += this.breadcrumbHeight
 	return off

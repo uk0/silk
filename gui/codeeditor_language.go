@@ -159,6 +159,9 @@ func (e *CodeEditor) ShowSignatureHint(x, y float64, text string) {
 }
 
 func (e *CodeEditor) OnFocusChanged(newFocusWidget, oldFocusWidget IWidget) {
+	if newFocusWidget == e.Self() {
+		e.findState.documentFocus = true
+	}
 	if newFocusWidget != e.Self() {
 		if e.completion != nil {
 			e.completion.Dismiss()

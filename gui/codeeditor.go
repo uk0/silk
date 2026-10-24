@@ -2,6 +2,7 @@ package gui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"github.com/uk0/silk/core"
@@ -211,18 +212,10 @@ type findMatch struct {
 }
 
 // codeEditorFindRowHeight is the height of a single row of the find/replace bar.
-// The bar is one row tall for find-only and two rows tall when the replace input
-// is shown; findBarHeight always holds the current total so topOffset() reserves
+// Rows wrap to fit the current theme and pane width. findBarHeight holds the
+// current total so topOffset() reserves
 // the right amount of vertical space above the text area.
 const codeEditorFindRowHeight = 30
-
-// Find/replace bar layout, shared by drawFindBar and replaceButtonHit so the
-// drawn geometry and the click hit-test never drift.
-const (
-	findBarInputX = 60.0  // left edge of both input boxes
-	findBarInputW = 250.0 // width of both input boxes
-	findBarBtnW   = 66.0  // width of the Replace / All buttons
-)
 
 // CodeEditor is a syntax-highlighted code editing widget with line numbers,
 // cursor, and basic editing support, designed for Go source code.
@@ -290,6 +283,8 @@ type CodeEditor struct {
 	redoStack []editAction
 
 	// --- Find/Replace ---
+	findState      editorFindState
+	findBar        *editorFindBar
 	findActive     bool
 	findText       string
 	findCursor     int // cursor position within findText
@@ -303,9 +298,8 @@ type CodeEditor struct {
 	// clobber it). Rendered as a subtle background wash, distinct from the
 	// find bar's yellow. Coordinates are 0-based line + rune columns.
 	occurrences []findMatch
-	// replaceVisible toggles the second (replace) input row. While it is true the
-	// bar is two rows tall (findBarHeight == codeEditorFindRowHeight*2) so the
-	// text area is pushed down accordingly. replaceFocused routes text input and
+	// replaceVisible toggles the replacement controls. Layout wraps rows to the
+	// pane width and reserves their complete height. replaceFocused routes text input and
 	// caret editing to the replace input instead of the find input.
 	replaceVisible bool
 	replaceFocused bool
@@ -718,6 +712,9 @@ func (this *CodeEditor) cacheText(text string) {
 	this.updateGutterWidth()
 	if changed {
 		this.notifySymbolsChanged()
+		if this.findActive {
+			this.findUpdateMatches()
+		}
 	}
 }
 
@@ -1833,24 +1830,9 @@ func runeWindowEqual(a, b []rune, caseSensitive bool) bool {
 // a query containing '\n' can never match, matching the editor's line-oriented
 // find. This is the pure core wired to the widget by findUpdateMatches.
 func findMatches(text, query string, caseSensitive bool) []findMatch {
-	if query == "" {
-		return nil
-	}
-	qr := []rune(query)
-	qlen := len(qr)
-	var out []findMatch
-	for li, line := range strings.Split(text, "\n") {
-		lr := []rune(line)
-		for c := 0; c+qlen <= len(lr); {
-			if runeWindowEqual(lr[c:c+qlen], qr, caseSensitive) {
-				out = append(out, findMatch{line: li, col: c, end: c + qlen})
-				c += qlen // non-overlapping: skip past the whole match
-			} else {
-				c++
-			}
-		}
-	}
-	return out
+	var matches []findMatch
+	_ = scanEditorFind(context.Background(), text, query, EditorFindOptions{MatchCase: caseSensitive}, func(m findMatch, _, _ int) error { matches = append(matches, m); return nil })
+	return matches
 }
 
 // replaceAllInText replaces every non-overlapping occurrence of query in text
@@ -1912,69 +1894,6 @@ func replaceAllInText(text, query, repl string, caseSensitive bool) (string, int
 	return b.String(), count
 }
 
-// findUpdateMatches recomputes the match overlay for the current findText. Find
-// is case-insensitive by default (see findMatches).
-func (this *CodeEditor) findUpdateMatches() {
-	this.findMatches = findMatches(this.Text(), this.findText, false)
-	if this.findCurrentIdx >= len(this.findMatches) {
-		this.findCurrentIdx = 0
-	}
-}
-
-func (this *CodeEditor) findNext() {
-	if len(this.findMatches) == 0 {
-		return
-	}
-	this.findCurrentIdx = (this.findCurrentIdx + 1) % len(this.findMatches)
-	m := this.findMatches[this.findCurrentIdx]
-	this.cursorLine = m.line
-	this.cursorCol = m.col
-	this.clearSelection()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
-
-func (this *CodeEditor) findPrev() {
-	if len(this.findMatches) == 0 {
-		return
-	}
-	this.findCurrentIdx--
-	if this.findCurrentIdx < 0 {
-		this.findCurrentIdx = len(this.findMatches) - 1
-	}
-	m := this.findMatches[this.findCurrentIdx]
-	this.cursorLine = m.line
-	this.cursorCol = m.col
-	this.clearSelection()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
-
-// closeFindBar hides the find/replace bar and clears its transient state,
-// restoring the single-row height so topOffset() reserves the right space.
-func (this *CodeEditor) closeFindBar() {
-	this.findActive = false
-	this.replaceVisible = false
-	this.replaceFocused = false
-	this.findMatches = nil
-	this.findBarHeight = codeEditorFindRowHeight
-	this.Self().Update()
-}
-
-// toggleReplaceRow shows/hides the replace input row and resizes the bar so the
-// text area's top offset tracks the taller bar. Focus follows the replace input
-// when it becomes visible.
-func (this *CodeEditor) toggleReplaceRow() {
-	this.replaceVisible = !this.replaceVisible
-	this.replaceFocused = this.replaceVisible
-	if this.replaceVisible {
-		this.findBarHeight = codeEditorFindRowHeight * 2
-	} else {
-		this.findBarHeight = codeEditorFindRowHeight
-	}
-	this.Self().Update()
-}
-
 // selectMatchAtOrAfter points findCurrentIdx at the first match at or after
 // (line,col), wrapping to the first match when none follow, and moves the caret
 // there. Used after a single Replace so the search continues past the text just
@@ -2005,6 +1924,13 @@ func (this *CodeEditor) selectMatchAtOrAfter(line, col int) {
 // match. The search resumes AFTER the inserted text so a replacement that itself
 // contains the query is not immediately re-matched.
 func (this *CodeEditor) replaceCurrent() {
+	if !this.findRangesCurrent() {
+		this.findUpdateMatches()
+		if !this.findRangesCurrent() {
+			return
+		}
+	}
+
 	if this.findText == "" || len(this.findMatches) == 0 {
 		return
 	}
@@ -2025,66 +1951,21 @@ func (this *CodeEditor) replaceCurrent() {
 	this.pushUndo(editAction{kind: 2, line: m.line, col: m.col, text: this.replaceText, oldText: line[start:end]})
 	p := this.replaceByteRange(m.line, start, end-start, this.replaceText)
 	this.cursorLine, this.cursorCol = p.line, p.col
+	this.findState.jump = &cursorPos{line: p.line, col: p.col}
 	this.rebuildText()
-	this.findUpdateMatches()
-	this.selectMatchAtOrAfter(p.line, p.col)
+	if !this.findActive {
+		this.findUpdateMatches()
+	}
 }
 
-// replaceAll replaces every match in one pass via replaceAllInText, records a
-// single undoable full-text edit (kind 3, mirroring rename refactoring), routes
-// the change through rebuildText, then re-runs the search over the new buffer.
-// It returns the number of replacements. One-pass replacement counts the
-// ORIGINAL matches and is immune to the offset drift a match-by-match splice
-// would cause.
+// replaceAll computes an atomic replacement proposal. Large buffers are processed
+// asynchronously; zero is returned while pending. Revision guards reject stale
+// proposals and ReplaceAllText records exactly one undo/change notification.
 func (this *CodeEditor) replaceAll() int {
 	if this.findText == "" {
 		return 0
 	}
-	oldFullText := this.Text()
-	newFullText, n := replaceAllInText(oldFullText, this.findText, this.replaceText, false)
-	if n == 0 || oldFullText == newFullText {
-		return n
-	}
-	this.pushUndo(editAction{
-		kind:    3,
-		line:    this.cursorLine,
-		col:     this.cursorCol,
-		text:    newFullText,
-		oldText: oldFullText,
-	})
-	this.lines = strings.Split(newFullText, "\n")
-	if len(this.lines) == 0 {
-		this.lines = []string{""}
-	}
-	this.rebuildText()
-	this.clampCursor()
-	this.findUpdateMatches()
-	this.findCurrentIdx = 0
-	this.ensureCursorVisible()
-	this.Self().Update()
-	return n
-}
-
-// replaceButtonHit returns which replace-row button (if any) contains (x,y):
-// 1 = Replace, 2 = Replace All, 0 = none. Geometry mirrors drawFindBar; keep the
-// two in sync.
-func (this *CodeEditor) replaceButtonHit(x, y float64) int {
-	if !this.findActive || !this.replaceVisible {
-		return 0
-	}
-	rowH := float64(codeEditorFindRowHeight)
-	if y < rowH || y >= rowH*2 {
-		return 0
-	}
-	btnX := findBarInputX + findBarInputW + 10
-	if x >= btnX && x < btnX+findBarBtnW {
-		return 1
-	}
-	allX := btnX + findBarBtnW + 6
-	if x >= allX && x < allX+findBarBtnW {
-		return 2
-	}
-	return 0
+	return this.requestFind(true)
 }
 
 // --- Bracket Matching ---
@@ -2928,20 +2809,20 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			}
 		}
 
-		// Draw find match highlights
+		// Visit only matches intersecting this line and the visible columns.
 		if this.findActive && len(this.findMatches) > 0 {
-			for idx, m := range this.findMatches {
-				if m.line == i {
-					start := this.measureText(this.linePrefix(i, m.col))
-					mx := textOffX + start
-					mw := this.measureText(this.linePrefix(i, m.end)) - start
-					if idx == this.findCurrentIdx {
-						g.SetBrush1(paint.Color{R: 255, G: 152, B: 0, A: 120})
-					} else {
-						g.SetBrush1(paint.Color{R: 255, G: 235, B: 59, A: 80})
-					}
-					textView.fillRect(g, mx, y, mw, lh)
+			a, b := this.visibleFindRange(i, textView.left-textOffX, textView.right-textOffX)
+			for idx := a; idx < b; idx++ {
+				m := this.findMatches[idx]
+				start := this.measureText(this.linePrefix(i, m.col))
+				mx := textOffX + start
+				mw := this.measureText(this.linePrefix(i, m.end)) - start
+				if idx == this.findCurrentIdx {
+					g.SetBrush1(paint.Color{R: 255, G: 152, A: 120})
+				} else {
+					g.SetBrush1(paint.Color{R: 255, G: 235, B: 59, A: 80})
 				}
+				textView.fillRect(g, mx, y, mw, lh)
 			}
 		}
 
@@ -3243,11 +3124,6 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		this.completion.drawPopup(g, this)
 	}
 
-	// Draw find bar at top
-	if this.findActive {
-		this.drawFindBar(g, w)
-	}
-
 	// Draw goto-line bar at top (below find bar if active)
 	if this.gotoLineActive {
 		g.Save()
@@ -3264,7 +3140,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		bcY += this.findBarHeight
 	}
 	if this.gotoLineActive {
-		bcY += this.findBarHeight
+		bcY += codeEditorFindRowHeight
 	}
 	this.drawBreadcrumb(g, bcY, w)
 
@@ -3277,96 +3153,6 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	if this.symbolPopup != nil && this.symbolPopup.visible {
 		this.symbolPopup.drawPopup(g, this)
 	}
-}
-
-// drawFindBar draws the find (and, when shown, replace) bar at the top of the
-// editor. The bar is one row tall for find-only and two rows when the replace
-// input is visible; findBarHeight holds the current total.
-func (this *CodeEditor) drawFindBar(g paint.Painter, w float64) {
-	rowH := float64(codeEditorFindRowHeight)
-	barH := this.findBarHeight
-	// Background
-	g.SetBrush1(paint.Color{R: 50, G: 50, B: 60, A: 255})
-	g.Rectangle(0, 0, w, barH)
-	g.Fill()
-	// Bottom border
-	g.SetPen1(paint.Color{R: 70, G: 70, B: 85, A: 255}, 1)
-	g.Line(0, barH, w, barH)
-	g.Stroke()
-
-	fe := this.font.FontExtents()
-	g.SetFont(this.font)
-
-	// Find row (row 0): focused unless the replace input holds focus.
-	findFocused := !(this.replaceVisible && this.replaceFocused)
-	this.drawFindInputRow(g, 0, rowH, fe, "Find:", this.findText, this.findCursor, findFocused)
-
-	// Match count, right of the find input.
-	countStr := fmt.Sprintf("%d of %d", 0, 0)
-	if len(this.findMatches) > 0 {
-		countStr = fmt.Sprintf("%d of %d", this.findCurrentIdx+1, len(this.findMatches))
-	}
-	g.SetBrush1(paint.Color{R: 140, G: 140, B: 155, A: 255})
-	g.DrawText1(findBarInputX+findBarInputW+10, rowH/2+fe.Ascent/2-1, countStr)
-
-	// Replace row (row 1): only when toggled on (Cmd+H).
-	if this.replaceVisible {
-		this.drawFindInputRow(g, rowH, rowH, fe, "Repl:", this.replaceText, this.replaceCursor, this.replaceFocused)
-		btnX := findBarInputX + findBarInputW + 10
-		this.drawFindButton(g, btnX, rowH, rowH, fe, "Replace")
-		this.drawFindButton(g, btnX+findBarBtnW+6, rowH, rowH, fe, "All")
-	}
-}
-
-// drawFindInputRow draws one labeled input row of the find/replace bar at
-// vertical offset rowY. The caret is drawn only when the row is focused, and a
-// focused row gets a brighter border.
-func (this *CodeEditor) drawFindInputRow(g paint.Painter, rowY, rowH float64, fe *paint.FontExtents, label, text string, cursor int, focused bool) {
-	baseline := rowY + rowH/2 + fe.Ascent/2 - 1
-	// Label
-	g.SetBrush1(paint.Color{R: 180, G: 180, B: 190, A: 255})
-	g.DrawText1(10, baseline, label)
-	// Input background
-	g.SetBrush1(paint.Color{R: 35, G: 35, B: 42, A: 255})
-	g.Rectangle(findBarInputX, rowY+4, findBarInputW, rowH-8)
-	g.Fill()
-	if focused {
-		g.SetPen1(paint.Color{R: 120, G: 140, B: 200, A: 255}, 1)
-	} else {
-		g.SetPen1(paint.Color{R: 80, G: 80, B: 100, A: 255}, 1)
-	}
-	g.Rectangle(findBarInputX, rowY+4, findBarInputW, rowH-8)
-	g.Stroke()
-	// Text
-	if text != "" {
-		g.SetBrush1(paint.Color{R: 210, G: 210, B: 220, A: 255})
-		g.DrawText1(findBarInputX+4, baseline, text)
-	}
-	// Caret (focused row only)
-	if focused {
-		tr := []rune(text)
-		prefix := ""
-		if cursor >= 0 && cursor <= len(tr) {
-			prefix = string(tr[:cursor])
-		}
-		cx := findBarInputX + 4 + this.measureText(prefix)
-		g.SetBrush1(paint.Color{R: 200, G: 200, B: 230, A: 255})
-		g.Rectangle(cx, rowY+6, 1, rowH-12)
-		g.Fill()
-	}
-}
-
-// drawFindButton draws a small clickable button (Replace / All) in the replace row.
-func (this *CodeEditor) drawFindButton(g paint.Painter, x, rowY, rowH float64, fe *paint.FontExtents, label string) {
-	g.SetBrush1(paint.Color{R: 70, G: 80, B: 110, A: 255})
-	g.Rectangle(x, rowY+5, findBarBtnW, rowH-10)
-	g.Fill()
-	g.SetPen1(paint.Color{R: 100, G: 115, B: 150, A: 255}, 1)
-	g.Rectangle(x, rowY+5, findBarBtnW, rowH-10)
-	g.Stroke()
-	g.SetBrush1(paint.Color{R: 215, G: 220, B: 235, A: 255})
-	tw := this.measureText(label)
-	g.DrawText1(x+(findBarBtnW-tw)/2, rowY+rowH/2+fe.Ascent/2-1, label)
 }
 
 // drawIndentGuides draws vertical indent guide lines for a given editor line.
@@ -3886,30 +3672,17 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 		return
 	}
 
-	// If clicking in find bar area, absorb the click. A hit on a replace button
-	// fires the action; otherwise a click just moves focus between the find and
-	// replace inputs. Either way the click never reaches the text area.
 	if this.findActive && y < this.findBarHeight {
-		switch this.replaceButtonHit(x, y) {
-		case 1:
-			this.replaceCurrent()
-		case 2:
-			this.replaceAll()
-		default:
-			if this.replaceVisible {
-				this.replaceFocused = y >= float64(codeEditorFindRowHeight)
-				this.Self().Update()
-			}
-		}
 		return
 	}
+	this.findState.documentFocus = true
 
 	// If clicking in goto-line bar area, ignore normal click
 	gotoBarTop := 0.0
 	if this.findActive {
 		gotoBarTop = this.findBarHeight
 	}
-	if this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.findBarHeight {
+	if this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+codeEditorFindRowHeight {
 		return
 	}
 
@@ -4396,7 +4169,7 @@ func (this *CodeEditor) repositionCaretForRightClick(x, y float64) {
 	if this.findActive {
 		gotoBarTop = this.findBarHeight
 	}
-	inGotoBar := this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.findBarHeight
+	inGotoBar := this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+codeEditorFindRowHeight
 	if inGutter || inMinimap || inStatus || inFindBar || inGotoBar {
 		return
 	}
@@ -4524,39 +4297,14 @@ func (this *CodeEditor) OnTextInput(s string) {
 		return
 	}
 
-	// Route to find bar if active. When the replace input has focus, typing
-	// edits replaceText and leaves the match set alone.
-	if this.findActive {
+	// Direct SDK dispatch follows the real field's editing semantics too.
+	if this.findActive && !this.findState.documentFocus {
+		this.ensureFindBar()
+		field := this.findBar.query
 		if this.replaceVisible && this.replaceFocused {
-			replRunes := []rune(this.replaceText)
-			insertRunes := []rune(s)
-			newRunes := make([]rune, 0, len(replRunes)+len(insertRunes))
-			newRunes = append(newRunes, replRunes[:this.replaceCursor]...)
-			newRunes = append(newRunes, insertRunes...)
-			newRunes = append(newRunes, replRunes[this.replaceCursor:]...)
-			this.replaceText = string(newRunes)
-			this.replaceCursor += len(insertRunes)
-			this.Self().Update()
-			return
+			field = this.findBar.replacement
 		}
-		findRunes := []rune(this.findText)
-		insertRunes := []rune(s)
-		newRunes := make([]rune, 0, len(findRunes)+len(insertRunes))
-		newRunes = append(newRunes, findRunes[:this.findCursor]...)
-		newRunes = append(newRunes, insertRunes...)
-		newRunes = append(newRunes, findRunes[this.findCursor:]...)
-		this.findText = string(newRunes)
-		this.findCursor += len(insertRunes)
-		this.findUpdateMatches()
-		this.findCurrentIdx = 0
-		// Jump to first match
-		if len(this.findMatches) > 0 {
-			m := this.findMatches[0]
-			this.cursorLine = m.line
-			this.cursorCol = m.col
-			this.ensureCursorVisible()
-		}
-		this.Self().Update()
+		field.OnTextInput(s)
 		return
 	}
 
@@ -4895,118 +4643,32 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 			return
 		}
 	}
-	// --- Find bar key routing ---
+	// Native child fields receive input directly. Retain direct SDK routing,
+	// but allow document editing while the bar remains visible.
 	if this.findActive {
-		// Close from either input row, before replace-focused routing consumes F.
-		if key == 'F' && (IsKeyDown(KeyCtrl) || isActionModifier()) && !shift {
+		if key == KeyEsc {
 			this.closeFindBar()
 			return
 		}
-		// Ctrl+H toggles the replace input row.
-		if key == 'H' && (IsKeyDown(KeyCtrl) || isActionModifier()) {
-			this.toggleReplaceRow()
-			return
-		}
-		// When the replace input has focus, edits target replaceText and Enter
-		// runs Replace (current match); Shift+Enter runs Replace All.
-		if this.replaceVisible && this.replaceFocused {
-			switch key {
-			case KeyEsc:
-				this.closeFindBar()
-				return
-			case KeyEnter, KeyF3:
-				if shift {
-					this.replaceAll()
-				} else {
-					this.replaceCurrent()
-				}
-				return
-			case KeyTab:
-				this.replaceFocused = false
-				this.Self().Update()
-				return
-			case KeyBackSpace:
-				if this.replaceCursor > 0 {
-					rr := []rune(this.replaceText)
-					rr = append(rr[:this.replaceCursor-1], rr[this.replaceCursor:]...)
-					this.replaceText = string(rr)
-					this.replaceCursor--
-					this.Self().Update()
-				}
-				return
-			case KeyLeft:
-				if this.replaceCursor > 0 {
-					this.replaceCursor--
-					this.Self().Update()
-				}
-				return
-			case KeyRight:
-				if this.replaceCursor < len([]rune(this.replaceText)) {
-					this.replaceCursor++
-					this.Self().Update()
-				}
-				return
-			case KeyHome:
-				this.replaceCursor = 0
-				this.Self().Update()
-				return
-			case KeyEnd:
-				this.replaceCursor = len([]rune(this.replaceText))
-				this.Self().Update()
-				return
-			}
-			return // consume all other keys while the replace input has focus
-		}
-		switch key {
-		case KeyEsc:
-			this.closeFindBar()
-			return
-		case KeyEnter, KeyF3:
+		if key == KeyF3 {
 			if shift {
 				this.findPrev()
 			} else {
 				this.findNext()
 			}
 			return
-		case KeyTab:
-			if this.replaceVisible {
-				this.replaceFocused = true
-				this.Self().Update()
-			}
-			return
-		case KeyBackSpace:
-			if this.findCursor > 0 {
-				fr := []rune(this.findText)
-				fr = append(fr[:this.findCursor-1], fr[this.findCursor:]...)
-				this.findText = string(fr)
-				this.findCursor--
-				this.findUpdateMatches()
-				this.Self().Update()
-			}
-			return
-		case KeyLeft:
-			if this.findCursor > 0 {
-				this.findCursor--
-				this.Self().Update()
-			}
-			return
-		case KeyRight:
-			if this.findCursor < len([]rune(this.findText)) {
-				this.findCursor++
-				this.Self().Update()
-			}
-			return
-		case KeyHome:
-			this.findCursor = 0
-			this.Self().Update()
-			return
-		case KeyEnd:
-			this.findCursor = len([]rune(this.findText))
-			this.Self().Update()
-			return
 		}
-		// Let Ctrl+F pass through to toggle find off below
-		if !(key == 'F' && (IsKeyDown(KeyCtrl) || isActionModifier())) {
+		if !this.findState.documentFocus {
+			this.ensureFindBar()
+			if key == KeyTab {
+				this.focusFindInput(this.replaceVisible && !this.replaceFocused, false)
+				return
+			}
+			field := this.findBar.query
+			if this.replaceVisible && this.replaceFocused {
+				field = this.findBar.replacement
+			}
+			field.key(key, repeat, shift)
 			return
 		}
 	}
@@ -5434,38 +5096,13 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 
 	case 'F':
 		if ctrl && shift {
-			// Ctrl+Shift+F: format code with gofmt
 			this.FormatCode()
 		} else if ctrl {
-			if this.findActive {
-				this.closeFindBar()
-			} else {
-				this.findActive = true
-				this.replaceVisible = false
-				this.replaceFocused = false
-				this.findBarHeight = codeEditorFindRowHeight
-				// If text is selected, use it as find text
-				if this.hasSelection {
-					this.findText = this.SelectedText()
-					this.findCursor = len([]rune(this.findText))
-					this.findUpdateMatches()
-				}
-				this.Self().Update()
-			}
+			this.ShowFind(false)
 		}
-
 	case 'H':
-		if ctrl && !this.findActive {
-			// Ctrl+H: open the find bar with the replace row shown and focused.
-			this.findActive = true
-			this.findBarHeight = codeEditorFindRowHeight
-			if this.hasSelection {
-				this.findText = this.SelectedText()
-				this.findCursor = len([]rune(this.findText))
-				this.findUpdateMatches()
-			}
-			this.replaceVisible = false // toggleReplaceRow flips it on + focuses it
-			this.toggleReplaceRow()
+		if ctrl {
+			this.ShowFind(true)
 		}
 
 	case 'D':
@@ -5766,6 +5403,7 @@ func (this *CodeEditor) SizeHints() SizeHints {
 }
 
 func (this *CodeEditor) Layout() {
+	this.layoutFindBar()
 	this.Self().Update()
 }
 
@@ -6642,6 +6280,7 @@ func (this *CodeEditor) HighlightReferencesAtCursor() {
 		return
 	}
 	refs := FindReferences(word, this.Text())
+	this.CancelFind()
 	this.findText = word
 	this.findCursor = len([]rune(word))
 	this.findMatches = nil
@@ -6655,6 +6294,12 @@ func (this *CodeEditor) HighlightReferencesAtCursor() {
 	}
 	this.findCurrentIdx = 0
 	this.findActive = true
+	this.findState.valid = true
+	this.findState.count = len(this.findMatches)
+	this.findState.request = editorFindRequest{revision: this.TextRevision(), query: word, options: this.findState.options}
+	this.ensureFindBar()
+	this.Layout()
+	this.focusFindInput(false, false)
 	this.Self().Update()
 }
 
