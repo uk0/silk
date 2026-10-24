@@ -43,12 +43,13 @@
 ### 编辑器查找与替换
 
 `CodeEditor.ShowFind(replace)` 打开编辑器内部的真实子控件查找栏；
-`SetFindQuery(query)`、`SetFindOptions(EditorFindOptions{MatchCase, WholeWord})`
-配置单行 Unicode 字面量匹配。默认不区分大小写；整词边界识别 Unicode 字母、
-数字、组合标记和下划线。尚不支持正则或跨行查询。
+`SetFindQuery(query)`、`SetFindOptions(EditorFindOptions{MatchCase, WholeWord, Regex})`
+配置匹配。字面量查询保持单行；默认不区分大小写，整词边界识别 Unicode 字母、
+数字、组合标记和下划线。`Regex: true` 支持 Go 正则、跨行及捕获组替换，始终后台计算；
+限制与语义见 [正则 QA](../EDITOR_REGEX_QA_20261024.md)。
 
 `FindSnapshot()` 返回 `Query`、`Options`、完整 `Count`、保留的 `Retained`、
-从 1 开始的 `Current`（无结果为 0）、`Pending`、`Err`；不要把后台计算中的 0
+从 1 开始的 `Current`（无结果为 0）、`Pending`、`Ready`、`Revision`、`Err`；不要把后台计算中的 0
 当作已确认无匹配。以上 API 均在 UI 线程调用。
 
 - 文档与查询等输入超过 32 KiB 后转为后台计算，75 ms 合并抖动；每编辑器只留
@@ -107,12 +108,33 @@ SilkGo 交给 gofmt。SilkGo 保留 Go 风格的词法功能以及宿主提供�
 
 `CodeEditor` 同时实现 `IWantsTab`：原生窗口在焦点遍历之前交给编辑器处理普通
 Tab／Shift+Tab，复用补全、查找／替换、片段和缩进路径，不重复插入 Tab。
-Ctrl／Alt／平台操作修饰键配合 Tab 时不接管，保留宿主的快捷键与焦点导航。
+Ctrl／Alt／平台操作修饰键配合 Tab 时不由编辑器插入制表符；窗口先保留显式宿主
+快捷键的优先级，再让 Ctrl+Tab 导航最近的 TabWidget，没有页签容器时沿用焦点遍历。
 自定义宿主应沿用原生窗口的接口分发，不要先在外层把 Tab 消费掉。
 新式与旧式片段展开共用原子文本替换：保留缩进、Unicode 字符与展开前后光标，
 Undo／Redo 不残留展开正文。Undo、Redo、SetText 或实际整段替换会终止旧片段会话；
 Redo 恢复正文与光标，不重建已取消的占位符会话。此路径保存完整文本历史快照，
 并非只存局部增量；大文件的撤销历史内存仍需后续优化。
+
+### 页签导航与事件契约
+
+`TabWidget.NavigateTab(previous bool) bool` 在 UI 线程按当前可见标签顺序循环切换，
+成功接纳切换返回 true；空／单页或隐藏／禁用容器返回 false。目标页第一个可聚焦、
+可用控件接收键盘；纯展示页退回标签栏。嵌套组只操作最近的一组，单页组不穿透外层。
+不重新读文件、创建 LSP 文档或后台任务，不保留额外的控件焦点历史。
+
+`SetCurrentChangedCallback` 在索引或页面身份改变时一次通知，初次添加为 0、
+删除最后一页为 -1。通知时标签、页面、元数据已同步；同页重复选择不通知。
+关闭当前页后新页恰好占据原索引，仍会通知；应用应允许 -1，不把事件当作每次
+SetCurrentIndex 都触发的刷新信号。回调内移除／改选页面或显式转移焦点受到尊重。
+回调的任意用户代码仍在 UI 线程，不保证它本身非阻塞。
+
+Ctrl+Tab／Ctrl+Shift+Tab、Ctrl+PageDown／Ctrl+PageUp 通过原生窗口路由至最近的
+TabWidget，保留显式宿主快捷键优先级，不穿越 popup 或其他原生窗口。
+在 macOS 上也是 Control，不是 Command；普通 Tab、Shift+Tab 行为不变。
+示例 `examples/tab-navigation` 展示事件计数、输入、重排和关闭；关闭只丢弃示例的
+临时页，真实应用应像 SilkIDE 一样用 `TabBar.SetCloseCallback` 接入保存／取消守卫。
+验收范围见 [页签 QA](../TAB_NAVIGATION_QA_20261024.md)。
 
 ### Go 跨行高亮与绘制成本
 

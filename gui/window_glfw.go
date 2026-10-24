@@ -2309,6 +2309,9 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	if action == glfw.Press && win.dispatchWindowShortcut(vk) {
 		return
 	}
+	if (action == glfw.Press || action == glfw.Repeat) && win.dispatchTabNavigation(vk) {
+		return
+	}
 
 	// Tab / Shift+Tab moves keyboard focus along the focus chain (see
 	// focus.go). Widgets such as CodeEditor and the designer can claim it

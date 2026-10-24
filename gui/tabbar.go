@@ -626,14 +626,27 @@ func (this *TabBar) OnDrop(x, y float64, dnd IDndContext) {
 			this.dropPos--
 		}
 		from, to := this.downTab, this.dropPos
-		data := this.RemoveTab(this.downTab)
-		this.InsertTab(this.dropPos, data, true)
-		// The reorder moved the strip and nothing else. A container that pairs
-		// each tab with something of its own — TabWidget's pages — still holds
-		// the old order, so every later activation shows the page of a
-		// different tab. Report the move so it can follow.
-		if this.cbMove != nil && from != to {
-			this.cbMove(this, from, to)
+		if from != to {
+			// Reorder in place, not Remove+Insert: those operations activate
+			// intermediate slots before the owning container has moved pages.
+			tab := this.tabs[from]
+			if from < to {
+				copy(this.tabs[from:to], this.tabs[from+1:to+1])
+			} else {
+				copy(this.tabs[to+1:from+1], this.tabs[to:from])
+			}
+			this.tabs[to] = tab
+			this.activeTab = to
+			this.hoverTab = -1
+			this.Layout()
+			if this.cbMove != nil {
+				this.cbMove(this, from, to)
+			}
+			// The move callback may remove/reselect the dragged tab. Do not
+			// activate a stale numeric slot after it returns.
+			if this.activeTab >= 0 && this.activeTab < len(this.tabs) && this.tabs[this.activeTab] == tab && this.cbActivate != nil {
+				this.cbActivate(this, this.activeTab)
+			}
 		}
 		dnd.SetAction(DndMove)
 		//}

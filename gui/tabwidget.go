@@ -4,6 +4,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
 	"math"
+	"slices"
 )
 
 func init() {
@@ -39,6 +40,9 @@ type TabWidget struct {
 	refs   []*tabPageRef
 
 	cbCurrentChanged func(interface{}, int)
+	changingTabs     int
+	notifiedIndex    int
+	notifiedPage     IWidget
 }
 
 func NewTabWidget() *TabWidget {
@@ -52,18 +56,20 @@ func (this *TabWidget) Init(self IWidget) {
 
 	this.tabBar = NewTabBar()
 	this.tabBar.SetParent(this.Self())
+	this.tabBar.activeTab = -1
+	this.notifiedIndex = -1
 
 	this.stack = NewStackedWidget()
 	this.stack.SetParent(this.Self())
 
 	// When a tab is clicked, switch the stacked widget page
 	this.tabBar.SetActivateCallback(func(tb *TabBar, idx int) {
+		if this.changingTabs != 0 {
+			return
+		}
 		if idx >= 0 && idx < this.stack.Count() {
-			oldIdx := this.stack.CurrentIndex()
 			this.stack.SetCurrentIndex(idx)
-			if oldIdx != idx && this.cbCurrentChanged != nil {
-				this.cbCurrentChanged(this.Self(), idx)
-			}
+			this.notifyCurrentChanged()
 		}
 	})
 
@@ -85,13 +91,12 @@ func (this *TabWidget) Init(self IWidget) {
 		this.refs[to] = ref
 		this.stack.MovePage(from, to)
 
-		// Last word: mid-reorder TabBar.RemoveTab re-activates a tab and that
-		// callback already pointed the stack somewhere with pre-move indices.
-		// Go straight to the stack — SetCurrentIndex would report a change for
-		// a tab the user never switched to.
+		// The strip has already committed its order. Synchronize the stack
+		// before notifying the application; never publish a transient page.
 		if idx := tb.ActiveTab(); idx >= 0 && idx < this.stack.Count() {
 			this.stack.SetCurrentIndex(idx)
 		}
+		this.notifyCurrentChanged()
 	})
 }
 
@@ -134,16 +139,17 @@ func (this *TabWidget) RemoveTab(idx int) {
 		return
 	}
 
-	// 先删页面, 再删标签.
-	// TabBar.RemoveTab re-activates a surviving tab from inside RemoveTab, and
-	// that callback indexes into the stack. Dropping the tab first made the
-	// callback address the stack with post-removal tab indices, leaving the bar
-	// pointing at one page and the stack showing another — after which clicking
-	// the tab the bar already considers active did nothing at all.
+	// Publish only after pages, labels and selection agree. A callback may
+	// inspect metadata or synchronously remove/select another page.
+	this.changingTabs++
+	defer func() {
+		this.changingTabs--
+		this.notifyCurrentChanged()
+	}()
 	this.stack.RemovePage(idx)
+	this.refs = slices.Delete(this.refs, idx, idx+1)
 	this.tabBar.RemoveTab(idx)
-
-	this.refs = append(this.refs[:idx], this.refs[idx+1:]...)
+	this.stack.SetCurrentIndex(this.tabBar.ActiveTab())
 
 	if i, ok := this.Self().(ILayout); ok {
 		i.Layout()
@@ -156,9 +162,22 @@ func (this *TabWidget) SetCurrentIndex(idx int) {
 		return
 	}
 	this.tabBar.SetActiveTab(idx)
-	this.stack.SetCurrentIndex(idx)
+}
+
+// Notify once per committed index OR page-identity change, including the
+// first page and last removal (-1). Same-index selection is a no-op. Update
+// the snapshot before calling user code so reentrant selection wins.
+func (this *TabWidget) notifyCurrentChanged() {
+	if this.changingTabs != 0 {
+		return
+	}
+	index, page := this.CurrentIndex(), this.stack.CurrentPage()
+	if index == this.notifiedIndex && page == this.notifiedPage {
+		return
+	}
+	this.notifiedIndex, this.notifiedPage = index, page
 	if this.cbCurrentChanged != nil {
-		this.cbCurrentChanged(this.Self(), idx)
+		this.cbCurrentChanged(this.Self(), index)
 	}
 }
 

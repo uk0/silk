@@ -93,6 +93,8 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		saveCurrentDocument(editorTabs, designCanvas)
 	})
 	add("Reopen Closed Editor", "Cmd+Shift+T", func() { reopenClosedEditor(editorTabs) })
+	add("Next Editor", "Ctrl+Tab", func() { navigateEditors(editorTabs, false) })
+	add("Previous Editor", "Ctrl+Shift+Tab", func() { navigateEditors(editorTabs, true) })
 	add("Quick Open File", "Cmd+P", func() {
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
 	})

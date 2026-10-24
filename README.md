@@ -21,6 +21,20 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Consistent tab switching
+
+- **View → Next Editor / Previous Editor** and the Command Palette switch
+  existing buffers without reopening files, including from Welcome/Design.
+- Within a tabbed page, **Ctrl+Tab / Ctrl+Shift+Tab** and **Ctrl+PageDown /
+  Ctrl+PageUp** navigate the nearest tab group and focus its first enabled input.
+  Ctrl is physical Control on macOS too, not Cmd. Ordinary Tab still edits or
+  traverses fields; explicit host shortcuts retain priority.
+- `TabWidget.NavigateTab(previous)` exposes the same SDK behavior. Current-page
+  notifications fire once after coherent selection, removal or drag reorder;
+  reselecting the same page is a no-op, and reentrant callbacks are respected.
+- Runnable SDK sample: `go run ./examples/tab-navigation` (temporary page values).
+  Validation scope: [tab navigation QA](TAB_NAVIGATION_QA_20261024.md).
+
 ### Reopen closed editors
 
 - **File → Reopen Closed Editor**, the Command Palette and **Ctrl/Cmd+Shift+T**
@@ -418,7 +432,8 @@ language when explicitly set.
   dialect invalidates old projections and pending local results, not the text.
   The editor claims ordinary Tab before native-window focus traversal, so
   indentation, completion, find/replace and snippet stops work from real keys;
-  Ctrl+Tab remains available for host focus navigation.
+  Ctrl+Tab navigates the nearest TabWidget, or retains host focus traversal
+  when the editor is not inside a tab group.
   Snippet expansion is one atomic undoable replacement, including indentation
   and Unicode-safe caret restoration; undo retires stale placeholder ranges.
   Ctrl+Space requests fresh candidates without inserting a space on Windows;

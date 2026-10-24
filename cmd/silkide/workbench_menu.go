@@ -91,6 +91,9 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("navigate.implementation", "Go to Implementation", "function", "Alt+F12", semantic, func() { requestSymbolNavigation(tabs, "Go to Implementation") })
 		add("navigate.references", "Find References", "search", "Shift+F12", !design && document, func() { findReferencesViaLSP(tabs) })
 	case "View":
+		add("editor.next", "Next Editor", "navigate-forward", "Ctrl+Tab", canNavigateEditors(tabs), func() { navigateEditors(tabs, false) })
+		add("editor.previous", "Previous Editor", "navigate-back", "Ctrl+Shift+Tab", canNavigateEditors(tabs), func() { navigateEditors(tabs, true) })
+		menu.AddSeparator()
 		for i, mode := range []workspaceMode{modeWelcome, modeEdit, modeDesign} {
 			label := []string{"Welcome", "Edit", "Design"}[i]
 			icon := []string{"silkide", "edit", "design"}[i]

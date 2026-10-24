@@ -80,26 +80,22 @@ func TestTabWidgetStepBackwardWraps(t *testing.T) {
 	}
 }
 
-// TestStepCurrentFiresCurrentChanged confirms the keyboard path routes through
-// SetCurrentIndex so the current-changed callback fires (with the new index)
-// exactly as a click would. SetCurrentIndex is pre-existing and notifies twice
-// per change -- once via the TabBar activate callback and once directly -- so
-// this asserts the callback fired and reported the right index rather than
-// pinning a count that would contradict the click path's own behaviour.
+// Keyboard selection notifies exactly once, like a click. No-op selections
+// are covered alongside structural mutations in tabwidget_activation_test.go.
 func TestTabWidgetStepFiresCurrentChanged(t *testing.T) {
 	tw := newTabWidget3()
 	tw.SetCurrentIndex(0)
 
 	var gotIdx int
-	var fired bool
+	var fired int
 	tw.SetCurrentChangedCallback(func(_ interface{}, idx int) {
 		gotIdx = idx
-		fired = true
+		fired++
 	})
 
 	tw.stepCurrent(true)
-	if !fired {
-		t.Fatalf("current-changed callback did not fire on keyboard step")
+	if fired != 1 {
+		t.Fatalf("current-changed callback fired %d times, want 1", fired)
 	}
 	if gotIdx != 1 {
 		t.Fatalf("current-changed reported index %d, want 1", gotIdx)

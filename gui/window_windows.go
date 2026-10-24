@@ -1286,6 +1286,9 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		if !repeat && win.dispatchWindowShortcut(int(wParam)) {
 			return 0
 		}
+		if win.dispatchTabNavigation(int(wParam)) {
+			return 0
+		}
 		if wParam == win32.VK_TAB && win.widget != nil {
 			// A focused widget may claim Tab for itself (see IWantsTab): the
 			// design canvas walks the widgets it is editing, which is the only
