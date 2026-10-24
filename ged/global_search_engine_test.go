@@ -56,7 +56,7 @@ func TestRunSearchMapsEngineMatches(t *testing.T) {
 	m := got[0]
 
 	wantCol := strings.Index(goLine, "world") // 0-based BYTE offset
-	runeCol := len([]rune(goLine[:wantCol]))   // where a rune index would land
+	runeCol := len([]rune(goLine[:wantCol]))  // where a rune index would land
 	if wantCol == runeCol {
 		t.Fatalf("test line lacks a multibyte prefix (byte %d == rune %d)", wantCol, runeCol)
 	}

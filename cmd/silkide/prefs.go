@@ -728,7 +728,7 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'F', func() {
 		if globalSearch != nil {
 			dockSetActiveView(globalLeftDock, globalSearch)
-			globalSearch.SetFocus()
+			globalSearch.FocusSearch()
 		}
 	})
 

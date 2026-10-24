@@ -21,6 +21,28 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Cancellable workspace search and previewed replacement
+
+- Find in files has real text inputs, case/Unicode-word/regex switches, type and
+  exclusion filters, cancellation, keyboard result navigation and UTF-8-safe snippets.
+- Background work is latest-only and bounded. Old roots/options cannot publish
+  stale results; incomplete scans clearly show **partial** and disable replacement.
+- **Preview** is read-only and opens the existing diff viewer. **Apply** checks
+  disk snapshots and unsaved buffers, writes off-thread, and synchronizes open
+  editors with one Undo step. External changes are not silently overwritten.
+- SDK: `filesearch.SearchContext`, `ReplaceTextContext`, `ContextOptions` and
+  `SearchLimits`. This is disk, line-local, positive-width search; legacy synchronous
+  APIs remain available. Transactions are optimistic, not multi-file crash-atomic.
+- Defaults: 10,000 matches/files, 8 MiB/file, 256 KiB/line, 128 MiB total read,
+  16 MiB result budget; native proposal snapshots/output share a 32 MiB budget.
+
+Tests, native UI evidence and limitations:
+[Workspace search QA](WORKSPACE_SEARCH_QA_20261024.md).
+
+<img src="screenshots/silkide-workspace-preview-macos-20261024.png" width="760" alt="Native macOS read-only workspace replacement diff with Unicode named captures">
+
+<img src="screenshots/silkide-workspace-preview-windows-20261024.png" width="760" alt="Native Windows read-only workspace replacement diff with Unicode named captures">
+
 ### Safe, responsive Find / Replace with regular expressions
 
 - Find and replacement fields are real editor-owned widgets: selection,

@@ -227,7 +227,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Find in Files", "Cmd+Shift+F", func() {
 		if globalSearch != nil {
 			dockSetActiveView(globalLeftDock, globalSearch)
-			globalSearch.SetFocus()
+			globalSearch.FocusSearch()
 		}
 	})
 	add("Show Outline", "Cmd+Shift+O", func() {

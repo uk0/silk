@@ -558,9 +558,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		if cwd, err := os.Getwd(); err == nil {
 			globalSearch.SetRootDir(cwd)
 		}
-		globalSearch.SigOpen(func(path string, line int) {
-			openFileInEditorAt(editorTabs, path, line, 0)
-		})
+		configureWorkspaceSearch(globalSearch, editorTabs, designCanvas)
 		leftDock.AddView(globalSearch)
 
 		// Packages panel — sibling tab in the same left dock. Mirrors
@@ -1204,6 +1202,9 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 	// documentMode can no longer distinguish design from a hidden editor.
 	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
 	frame.SetClosedCallback(func(*gui.Frame) {
+		if globalSearch != nil {
+			globalSearch.CloseSearch()
+		}
 		closeGitPaneRefreshers()
 		for _, ed := range openEditors {
 			if ed != nil {

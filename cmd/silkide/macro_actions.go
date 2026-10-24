@@ -15,7 +15,7 @@ import (
 
 var macroBusy bool // UI-thread-owned; serializes explicit expansion requests.
 func canExpandMacro(tabs *gui.TabWidget, canvas *ged.GedView) bool {
-	return !macroBusy && activeFileRename == nil && documentMode(tabs, canvas) == modeEdit && activeEditor(tabs) != nil && strings.EqualFold(filepath.Ext(activeEditorPath(tabs)), ".silkgo")
+	return !workspaceSearchBusy() && !macroBusy && activeFileRename == nil && documentMode(tabs, canvas) == modeEdit && activeEditor(tabs) != nil && strings.EqualFold(filepath.Ext(activeEditorPath(tabs)), ".silkgo")
 }
 func macroOutputPath(path string) string {
 	return strings.TrimSuffix(path, filepath.Ext(path)) + "_gen.go"

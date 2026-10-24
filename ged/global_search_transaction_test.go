@@ -265,10 +265,9 @@ func TestApplyReplacementsRollsBackOnWriteFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("ApplyReplacements returned nil writing to a directory")
 	}
-	// The message pins down that the failure came AFTER two successful writes,
-	// i.e. the rollback really had work to undo.
-	if !strings.Contains(err.Error(), "rolled back 2 file(s)") {
-		t.Errorf("error = %v, want it to report 2 rolled-back files", err)
+	// Preflight rejects every invalid destination before the first write.
+	if !strings.Contains(err.Error(), "preflight") {
+		t.Errorf("error = %v, want a preflight rejection before touching any destination", err)
 	}
 
 	assertFileEquals(t, a, "widget\n")

@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/filesearch"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/internal/filetxn"
 	"github.com/uk0/silk/paint"
 )
 
@@ -57,7 +59,7 @@ type GlobalSearchPanel struct {
 	optCaseSense bool
 	optWholeWord bool
 	include      []string // extensions to search, e.g. [".go", ".txt"]; empty = all
-	exclude      []string // globs filtered out after the walk, e.g. ["*_test.go"]
+	exclude      []string // basename/segment globs, e.g. ["*_test.go"]
 
 	hoverIdx   int
 	scrollY    float64
@@ -68,7 +70,20 @@ type GlobalSearchPanel struct {
 	cbReplaced func(path, content string)
 
 	// flattened visible rows for rendering
-	flatRows []searchRow
+	flatRows                                  []searchRow
+	controls                                  *globalSearchControls
+	worker                                    *globalSearchWorker
+	post                                      func(func())
+	searchGeneration                          uint64
+	searchReady, previewing, applying, closed bool
+	searchErr                                 error
+	report                                    filesearch.SearchResult
+	notice                                    string
+	preview                                   []FileReplacement
+	selectedIdx                               int
+	cbOpenMatch                               func(SearchMatch)
+	cbPreview                                 func(FileReplacement)
+	prepareReplace                            func([]FileReplacement) (func(error), error)
 }
 
 type searchRowKind int
@@ -94,16 +109,21 @@ func (this *GlobalSearchPanel) Init(self gui.IWidget) {
 	this.Widget.Init(self)
 	this.rowHeight = 20
 	this.hoverIdx = -1
+	this.selectedIdx = -1
 	this.collapsed = make(map[string]bool)
 }
 
 // SetRootDir sets the root directory for searching.
 func (this *GlobalSearchPanel) SetRootDir(dir string) {
 	abs, err := filepath.Abs(dir)
-	if err == nil {
+	if dir != "" && err == nil {
 		dir = abs
 	}
+	if this.applying || dir == this.rootDir {
+		return
+	}
 	this.rootDir = dir
+	this.invalidateSearch()
 }
 
 // SigOpen registers a callback invoked when a search result is clicked.
@@ -121,40 +141,58 @@ func (this *GlobalSearchPanel) SigFileReplaced(fn func(path, content string)) {
 
 // SetRegex interprets the query as an RE2 regular expression.
 func (this *GlobalSearchPanel) SetRegex(on bool) {
+	if this.applying {
+		return
+	}
 	this.optRegex = on
-	this.Self().Update()
+	this.invalidateSearch()
 }
 
 // SetCaseSensitive matches the query case-sensitively (the default is to fold
 // case, as the panel always did).
 func (this *GlobalSearchPanel) SetCaseSensitive(on bool) {
+	if this.applying {
+		return
+	}
 	this.optCaseSense = on
-	this.Self().Update()
+	this.invalidateSearch()
 }
 
-// SetWholeWord requires the match to sit on word boundaries. The engine has no
-// flag for it, so it is compiled into the pattern as \b...\b — which forces
-// regex mode on for that search even for a literal query.
+// SetWholeWord enables Unicode word boundaries for native asynchronous search.
 func (this *GlobalSearchPanel) SetWholeWord(on bool) {
+	if this.applying {
+		return
+	}
 	this.optWholeWord = on
-	this.Self().Update()
+	this.invalidateSearch()
 }
 
 // SetInclude restricts the search to files with these extensions (a leading dot
 // is optional, matching is case-insensitive — filesearch's own Include rules).
 // An empty list searches every text file.
 func (this *GlobalSearchPanel) SetInclude(exts []string) {
+	if this.applying {
+		return
+	}
 	this.include = append([]string(nil), exts...)
-	this.Self().Update()
+	if this.controls != nil {
+		this.controls.include.SetText(strings.Join(exts, ", "))
+	}
+	this.invalidateSearch()
 }
 
 // SetExclude drops results whose path matches one of these globs. Each pattern
 // is tested against the file's base name and against every path segment, so
-// both "*_test.go" and "testdata" work. The engine has no exclude filter, so
-// this is applied to its output (see excludedPath).
+// both "*_test.go" and "testdata" work. The native worker prunes before reading.
 func (this *GlobalSearchPanel) SetExclude(patterns []string) {
+	if this.applying {
+		return
+	}
 	this.exclude = append([]string(nil), patterns...)
-	this.Self().Update()
+	if this.controls != nil {
+		this.controls.exclude.SetText(strings.Join(patterns, ", "))
+	}
+	this.invalidateSearch()
 }
 
 // searchOptions maps the panel's option state onto the engine's Options.
@@ -216,41 +254,13 @@ func searchOptionLabel(opt filesearch.Options, wholeWord bool, exclude []string)
 // panel state is mutated, so a search triggered from the input never blocks the
 // UI on disk I/O.
 func (this *GlobalSearchPanel) Search(query string) {
+	if this.applying || this.closed {
+		return
+	}
 	this.query = query
 	this.queryRunes = []rune(query)
 	this.queryCursor = len(this.queryRunes)
-	this.results = nil
-	this.grouped = make(map[string][]SearchMatch)
-	this.fileOrder = nil
-	this.scrollY = 0
-	this.hoverIdx = -1
-
-	if query == "" || this.rootDir == "" {
-		this.rebuildFlatRows()
-		this.Self().Update()
-		return
-	}
-
-	this.searching = true
-	this.Self().Update()
-
-	root := this.rootDir
-	pattern := enginePattern(query, this.optRegex, this.optWholeWord)
-	opt := this.searchOptions()
-	exclude := this.exclude
-	go func() {
-		matches := runSearchOpt(root, pattern, opt, exclude)
-		gui.Post(func() {
-			// A newer search may have superseded this one while it ran.
-			if this.query != query {
-				return
-			}
-			this.searching = false
-			this.applyResults(matches)
-			this.rebuildFlatRows()
-			this.Self().Update()
-		})
-	}()
+	this.startSearch(false)
 }
 
 // runSearch runs the engine with the panel's original defaults: a
@@ -431,43 +441,37 @@ func (this *GlobalSearchPanel) ComputeReplacements() []FileReplacement {
 	return out
 }
 
-// ApplyReplacements commits a previewed set of rewrites as one transaction:
-// either every file lands or none does. If a write fails, the files already
-// written are restored from their Before text and the error is returned, so a
-// failed Replace All never leaves the tree half-rewritten. Only on success does
-// the SigFileReplaced callback fire — once per rewritten file — so a host that
-// reloads open buffers from it never sees a state that was rolled back.
+// ApplyReplacements synchronously commits an already computed SDK proposal.
+// Before must still match disk. Ordinary failures roll back where safe; this
+// is not crash-atomic and cannot lock out an unrelated writer. Failed rollback
+// retains recovery copies. Native UI uses guarded asynchronous ApplyPreview.
 func (this *GlobalSearchPanel) ApplyReplacements(reps []FileReplacement) error {
-	written := make([]FileReplacement, 0, len(reps))
-	for _, r := range reps {
-		if r.After == r.Before {
-			continue // nothing to do; don't touch the file's mtime
-		}
-		if err := os.WriteFile(r.Path, []byte(r.After), 0644); err != nil {
-			rollbackReplacements(written)
-			return fmt.Errorf("global search: write %s: %w (rolled back %d file(s))",
-				r.Path, err, len(written))
-		}
-		written = append(written, r)
+	if err := commitSearchReplacements(reps); err != nil {
+		return err
 	}
 	if this.cbReplaced != nil {
-		for _, r := range written {
-			this.cbReplaced(r.Path, r.After)
+		for _, r := range reps {
+			if r.Before != r.After {
+				this.cbReplaced(r.Path, r.After)
+			}
 		}
 	}
 	return nil
 }
 
-// rollbackReplacements restores each already-written file to its Before text,
-// newest first. A rollback write that itself fails is logged, not swallowed:
-// that file is the one a human has to look at.
-func rollbackReplacements(written []FileReplacement) {
-	for i := len(written) - 1; i >= 0; i-- {
-		r := written[i]
-		if err := os.WriteFile(r.Path, []byte(r.Before), 0644); err != nil {
-			core.Error(fmt.Sprintf("global search: rollback %s: %v", r.Path, err))
+func commitSearchReplacements(reps []FileReplacement) error {
+	changes := make([]filetxn.Change, 0, len(reps))
+	for _, r := range reps {
+		snap, err := filetxn.ReadLimit(r.Path, int64(len(r.Before))+1)
+		if err != nil {
+			return fmt.Errorf("global search preflight: %w", err)
 		}
+		if !snap.Exists() || string(snap.Bytes()) != r.Before {
+			return fmt.Errorf("global search preflight: %w: %s", filetxn.ErrConflict, r.Path)
+		}
+		changes = append(changes, filetxn.Change{Before: snap, Data: []byte(r.After)})
 	}
+	return filetxn.Commit(changes...)
 }
 
 // replaceInText rewrites every occurrence of pattern in text line by line,
@@ -497,11 +501,9 @@ func replaceInText(text, pattern, replacement string, opt filesearch.Options, re
 	return b.String(), count
 }
 
-// ReplaceAll previews the rewrite and commits it in one transaction: nothing is
-// written unless every file can be written (see ComputeReplacements /
-// ApplyReplacements). A failed transaction is logged and leaves the tree exactly
-// as it was. Afterwards the search is re-run synchronously so the results list
-// reflects the state on disk either way.
+// ReplaceAll is the synchronous legacy SDK convenience method. Native UI uses
+// cancellable PreviewReplacements followed by guarded asynchronous ApplyPreview.
+// See ApplyReplacements for conflict and recovery limitations.
 func (this *GlobalSearchPanel) ReplaceAll() {
 	reps := this.ComputeReplacements()
 	if len(reps) == 0 {
@@ -565,119 +567,23 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
 
-	// Header
-	headerH := 22.0
-	g.SetBrush1(paint.Color{R: 235, G: 238, B: 245, A: 255})
-	g.Rectangle(0, 0, w, headerH)
-	g.Fill()
-	g.SetPen1(paint.Color{R: 200, G: 200, B: 210, A: 255}, 1)
-	g.MoveTo(0, headerH)
-	g.LineTo(w, headerH)
-	g.Stroke()
-
-	headerFont := paint.NewFont(t.Font.Family(), 12, true, false)
-	g.SetFont(headerFont)
-	g.SetBrush1(t.TextColor)
-	g.DrawText1(8, headerH-5, "搜索")
-
 	normalFont := paint.NewFont(t.Font.Family(), 11, false, false)
 	boldFont := paint.NewFont(t.Font.Family(), 11, true, false)
 	smallFont := paint.NewFont(t.Font.Family(), 10, false, false)
-
-	// Search input area
-	inputY := headerH + 4
-	inputH := 24.0
-	inputX := 8.0
-	inputW := w - 16
-
-	g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
-	g.Rectangle(inputX, inputY, inputW, inputH)
-	g.Fill()
-	// Highlight the border of the focused input.
-	if this.focusReplace {
-		g.SetPen1(paint.Color{R: 180, G: 185, B: 200, A: 255}, 1)
-	} else {
-		g.SetPen1(paint.Color{R: 100, G: 140, B: 200, A: 255}, 1)
-	}
-	g.Rectangle(inputX, inputY, inputW, inputH)
-	g.Stroke()
-
-	g.SetFont(normalFont)
-	if len(this.queryRunes) > 0 {
-		g.SetBrush1(t.TextColor)
-		g.DrawText1(inputX+4, inputY+inputH-7, string(this.queryRunes))
-	} else {
-		g.SetBrush1(paint.Color{R: 160, G: 160, B: 170, A: 180})
-		g.DrawText1(inputX+4, inputY+inputH-7, "Search... (Enter)")
-	}
-
-	// Replace input area (mirrors the search input, directly underneath).
-	replaceY := inputY + inputH + 4
-	replaceH := 24.0
-	btnW := 64.0
-	replaceW := inputW - btnW - 4
-
-	g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
-	g.Rectangle(inputX, replaceY, replaceW, replaceH)
-	g.Fill()
-	if this.focusReplace {
-		g.SetPen1(paint.Color{R: 100, G: 140, B: 200, A: 255}, 1)
-	} else {
-		g.SetPen1(paint.Color{R: 180, G: 185, B: 200, A: 255}, 1)
-	}
-	g.Rectangle(inputX, replaceY, replaceW, replaceH)
-	g.Stroke()
-
-	g.SetFont(normalFont)
-	if len(this.replaceRunes) > 0 {
-		g.SetBrush1(t.TextColor)
-		g.DrawText1(inputX+4, replaceY+replaceH-7, string(this.replaceRunes))
-	} else {
-		g.SetBrush1(paint.Color{R: 160, G: 160, B: 170, A: 180})
-		g.DrawText1(inputX+4, replaceY+replaceH-7, "Replace...")
-	}
-
-	// Replace All button.
-	btnX := inputX + replaceW + 4
-	g.SetBrush1(paint.Color{R: 100, G: 140, B: 200, A: 255})
-	g.Rectangle(btnX, replaceY, btnW, replaceH)
-	g.Fill()
-	g.SetFont(smallFont)
-	g.SetBrush1(paint.Color{R: 255, G: 255, B: 255, A: 255})
-	btnLabel := "Replace All"
-	btnExt := smallFont.TextExtents(btnLabel)
-	g.DrawText1(btnX+(btnW-btnExt.XAdvance)/2, replaceY+replaceH-8, btnLabel)
-
-	// Summary line
-	summaryY := replaceY + replaceH + 4
-	summaryH := 16.0
-
-	if len(this.results) > 0 {
-		g.SetFont(smallFont)
-		g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 255})
-		summary := fmt.Sprintf("%d matches in %d files%s", this.totalMatchCount(), this.totalFileCount(),
-			searchOptionLabel(this.searchOptions(), this.optWholeWord, this.exclude))
-		g.DrawText1(8, summaryY+summaryH-3, summary)
-	} else if this.query != "" && !this.searching {
-		g.SetFont(smallFont)
-		g.SetBrush1(paint.Color{R: 160, G: 120, B: 120, A: 200})
-		g.DrawText1(8, summaryY+summaryH-3, "No results found")
-	}
-
-	// Results list
-	listY := summaryY + summaryH + 2
+	listY := this.listTop()
 	rh := this.rowHeight
-	startY := listY - this.scrollY
-
-	for i, row := range this.flatRows {
-		rowY := startY + float64(i)*rh
-		if rowY+rh < listY || rowY > h {
-			continue
-		}
-
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, listY, w, max(0, h-listY))
+	g.Clip()
+	lo := max(0, int(this.scrollY/rh))
+	hi := min(len(this.flatRows), int(math.Ceil((this.scrollY+h-listY)/rh))+1)
+	for i := lo; i < hi; i++ {
+		row := this.flatRows[i]
+		rowY := listY - this.scrollY + float64(i)*rh
 		// Hover highlight
-		if i == this.hoverIdx {
-			g.SetBrush1(paint.Color{R: 230, G: 235, B: 245, A: 255})
+		if i == this.hoverIdx || i == this.selectedIdx {
+			g.SetBrush1(paint.Color{R: 100, G: 140, B: 200, A: 65})
 			g.Rectangle(0, rowY, w, rh)
 			g.Fill()
 		}
@@ -736,11 +642,7 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 				continue
 			}
 			m := row.match
-			lineText := strings.TrimSpace(m.LineText)
-			// Truncate long lines
-			if len(lineText) > 120 {
-				lineText = lineText[:120] + "..."
-			}
+			lineText, matchCol, matchEnd := searchSnippet(m.LineText, m.Column, m.MatchLen)
 
 			// Line number
 			g.SetFont(smallFont)
@@ -752,20 +654,9 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 			lineNumExt := smallFont.TextExtents(lineStr)
 			textX := 24 + lineNumExt.XAdvance + 4
 
-			// m.Column and m.MatchLen are BYTE offsets into m.LineText (the
-			// filesearch engine reports byte columns). Leading indent is ASCII,
-			// so the byte trim offset maps straight onto the trimmed line. Slice
-			// lineText by bytes so multibyte text before the match does not
-			// shift the highlight (search and highlight agree on byte offsets).
-			trimOffset := len(m.LineText) - len(strings.TrimLeft(m.LineText, " \t"))
-			matchCol := m.Column - trimOffset
-			if matchCol < 0 {
-				matchCol = 0
-			}
-
 			g.SetFont(normalFont)
 
-			if matchCol >= 0 && matchCol < len(lineText) && matchCol+m.MatchLen <= len(lineText) {
+			if matchCol >= 0 && matchCol < len(lineText) && matchEnd <= len(lineText) {
 				// Pre-match text
 				if matchCol > 0 {
 					pre := lineText[:matchCol]
@@ -776,7 +667,7 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 				}
 
 				// Match highlight background
-				matchText := lineText[matchCol : matchCol+m.MatchLen]
+				matchText := lineText[matchCol:matchEnd]
 				matchExt := normalFont.TextExtents(matchText)
 				g.SetBrush1(paint.Color{R: 255, G: 200, B: 60, A: 120})
 				g.Rectangle(textX, rowY+2, matchExt.XAdvance, rh-4)
@@ -788,7 +679,7 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 				textX += matchExt.XAdvance
 
 				// Post-match text
-				postStart := matchCol + m.MatchLen
+				postStart := matchEnd
 				if postStart < len(lineText) {
 					post := lineText[postStart:]
 					g.SetBrush1(t.TextColor)
@@ -806,11 +697,10 @@ func (this *GlobalSearchPanel) Draw(g paint.Painter) {
 // listTop returns the y coordinate where the results list begins. It accounts
 // for the header, the search input, the replace input, and the summary line.
 func (this *GlobalSearchPanel) listTop() float64 {
-	headerH := 22.0
-	inputH := 24.0
-	replaceH := 24.0
-	summaryH := 16.0
-	return headerH + 4 + inputH + 4 + replaceH + 4 + summaryH + 2
+	if this.controls != nil && this.controls.bottom > 0 {
+		return this.controls.bottom
+	}
+	return 198
 }
 
 // hitTest returns the row index for a given y coordinate, or -1.
@@ -827,73 +717,10 @@ func (this *GlobalSearchPanel) hitTest(y float64) int {
 	return idx
 }
 
-// isInSearchInput checks if a click is in the search input area.
-func (this *GlobalSearchPanel) isInSearchInput(y float64) bool {
-	headerH := 22.0
-	inputY := headerH + 4
-	inputH := 24.0
-	return y >= inputY && y <= inputY+inputH
-}
-
-// isInReplaceInput checks if a click is in the replace input area (excluding
-// the Replace All button to its right).
-func (this *GlobalSearchPanel) isInReplaceInput(x, y float64) bool {
-	headerH := 22.0
-	inputH := 24.0
-	replaceY := headerH + 4 + inputH + 4
-	replaceH := 24.0
-	w := this.Width()
-	replaceW := (w - 16) - 64 - 4 // inputW - btnW - gap
-	return y >= replaceY && y <= replaceY+replaceH && x >= 8 && x <= 8+replaceW
-}
-
-// isInReplaceButton checks if a click hits the Replace All button.
-func (this *GlobalSearchPanel) isInReplaceButton(x, y float64) bool {
-	headerH := 22.0
-	inputH := 24.0
-	replaceY := headerH + 4 + inputH + 4
-	replaceH := 24.0
-	w := this.Width()
-	btnX := 8 + (w - 16) - 64 - 4 + 4 // inputX + replaceW + gap
-	return y >= replaceY && y <= replaceY+replaceH && x >= btnX && x <= btnX+64
-}
-
 // OnLeftDown handles clicks.
 func (this *GlobalSearchPanel) OnLeftDown(x, y float64) {
-	this.SetFocus()
-
-	if this.isInSearchInput(y) {
-		this.focusReplace = false
-		this.Self().Update()
-		return
-	}
-	if this.isInReplaceInput(x, y) {
-		this.focusReplace = true
-		this.Self().Update()
-		return
-	}
-	if this.isInReplaceButton(x, y) {
-		this.ReplaceAll()
-		return
-	}
-
-	idx := this.hitTest(y)
-	if idx < 0 || idx >= len(this.flatRows) {
-		return
-	}
-
-	row := this.flatRows[idx]
-	switch row.kind {
-	case searchRowFile:
-		// Toggle collapse
-		this.collapsed[row.filePath] = !this.collapsed[row.filePath]
-		this.rebuildFlatRows()
-	case searchRowMatch:
-		if row.match != nil && this.cbOpen != nil {
-			this.cbOpen(row.match.FilePath, row.match.Line)
-		}
-	}
-	this.Self().Update()
+	this.Widget.SetFocus()
+	this.activateRow(this.hitTest(y))
 }
 
 // OnMouseMove updates hover.
@@ -933,50 +760,54 @@ func (this *GlobalSearchPanel) OnMouseWheel(x, y, z float64) {
 
 // OnTextInput handles typing into the focused (search or replace) input.
 func (this *GlobalSearchPanel) OnTextInput(s string) {
-	if this.focusReplace {
-		this.replaceRunes = append(this.replaceRunes, []rune(s)...)
-		this.replaceCursor = len(this.replaceRunes)
-	} else {
-		this.queryRunes = append(this.queryRunes, []rune(s)...)
-		this.queryCursor = len(this.queryRunes)
+	if this.selectedIdx >= 0 {
+		return
 	}
-	this.Self().Update()
+	this.ensureControls()
+	this.controls.query.OnTextInput(s)
 }
-
-// OnKeyDown handles keyboard input.
 func (this *GlobalSearchPanel) OnKeyDown(key int, repeat bool) {
 	switch key {
-	case gui.KeyTab:
-		// Toggle focus between the search and replace inputs.
-		this.focusReplace = !this.focusReplace
-		this.Self().Update()
-	case gui.KeyBackSpace:
-		if this.focusReplace {
-			if len(this.replaceRunes) > 0 {
-				this.replaceRunes = this.replaceRunes[:len(this.replaceRunes)-1]
-				this.replaceCursor = len(this.replaceRunes)
-				this.Self().Update()
-			}
-		} else if len(this.queryRunes) > 0 {
-			this.queryRunes = this.queryRunes[:len(this.queryRunes)-1]
-			this.queryCursor = len(this.queryRunes)
-			this.Self().Update()
-		}
+	case gui.KeyUp:
+		this.moveRow(-1)
+	case gui.KeyDown:
+		this.moveRow(1)
 	case gui.KeyEnter:
-		// Enter in the replace field runs Replace All; otherwise it searches.
-		if this.focusReplace {
-			this.ReplaceAll()
+		if this.selectedIdx >= 0 {
+			this.activateRow(this.selectedIdx)
 		} else {
-			this.Search(string(this.queryRunes))
+			this.Search(this.query)
 		}
 	case gui.KeyEsc:
-		this.queryRunes = nil
-		this.queryCursor = 0
-		this.results = nil
-		this.grouped = nil
-		this.fileOrder = nil
-		this.flatRows = nil
-		this.focusReplace = false
-		this.Self().Update()
+		this.CancelSearch()
+	case gui.KeyTab:
+		this.FocusSearch()
 	}
+}
+
+// Build a bounded UTF-8-safe preview around the actual hit, not always column 0.
+func searchSnippet(text string, column, length int) (string, int, int) {
+	column = max(0, min(column, len(text)))
+	endMatch := column + min(len(text)-column, max(0, length))
+	start := column
+	for n := 0; n < 30 && start > 0; n++ {
+		_, w := utf8.DecodeLastRuneInString(text[:start])
+		start -= w
+	}
+	end := start
+	for n := 0; n < 120 && end < len(text); n++ {
+		_, w := utf8.DecodeRuneInString(text[end:])
+		end += w
+	}
+	prefix := ""
+	if start > 0 {
+		prefix = "…"
+	}
+	before := strings.ReplaceAll(text[start:column], "\t", "    ")
+	hit := strings.ReplaceAll(text[column:min(end, endMatch)], "\t", "    ")
+	after := strings.ReplaceAll(text[min(end, endMatch):end], "\t", "    ")
+	if end < len(text) {
+		after += "…"
+	}
+	return prefix + before + hit + after, len(prefix) + len(before), len(prefix) + len(before) + len(hit)
 }

@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -24,7 +26,11 @@ type Snapshot struct {
 	exists bool
 }
 
-func Read(path string) (Snapshot, error) {
+func Read(path string) (Snapshot, error) { return ReadLimit(path, 0) }
+
+// ReadLimit rejects oversized regular files before allocating their contents.
+// A positive limit also bounds a file growing after stat; zero retains Read.
+func ReadLimit(path string, maxBytes int64) (Snapshot, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return Snapshot{}, err
@@ -40,7 +46,26 @@ func Read(path string) (Snapshot, error) {
 	if !info.Mode().IsRegular() {
 		return s, fmt.Errorf("filetxn: not a regular file: %s", path)
 	}
-	s.data, err = os.ReadFile(path)
+	if maxBytes > 0 && info.Size() > maxBytes {
+		return s, fmt.Errorf("%w: file exceeds snapshot limit: %s", ErrConflict, path)
+	}
+	if maxBytes > 0 {
+		f, e := os.Open(path)
+		if e != nil {
+			return s, e
+		}
+		readLimit := maxBytes
+		if readLimit < math.MaxInt64 {
+			readLimit++
+		}
+		s.data, err = io.ReadAll(io.LimitReader(f, readLimit))
+		_ = f.Close()
+		if int64(len(s.data)) > maxBytes {
+			return s, fmt.Errorf("%w: file grew past snapshot limit: %s", ErrConflict, path)
+		}
+	} else {
+		s.data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return s, err
 	}
@@ -74,7 +99,7 @@ func matches(a, b Snapshot) bool {
 	return a.exists == b.exists && (!a.exists || (a.mode == b.mode && bytes.Equal(a.data, b.data)))
 }
 func unchanged(s Snapshot) error {
-	actual, err := Read(s.path)
+	actual, err := ReadLimit(s.path, int64(len(s.data))+1)
 	if err != nil {
 		return err
 	}
@@ -183,7 +208,7 @@ func commit(changes []Change, rename func(string, string) error) (err error) {
 	for i := applied - 1; i >= 0; i-- {
 		part := staged[i]
 		before := part.change.Before
-		actual, readErr := Read(before.path)
+		actual, readErr := ReadLimit(before.path, int64(len(part.change.Data))+1)
 		if readErr != nil || !actual.exists || actual.mode != part.stagedMode || !bytes.Equal(actual.data, part.change.Data) {
 			part.preserveBackup = true
 			failure = errors.Join(failure, fmt.Errorf("filetxn: rollback conflict at %s; recovery copy %s", before.path, part.backup))
