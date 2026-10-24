@@ -147,6 +147,12 @@ func TestFactoryMenuFirstDownHighlightsFirstItem(t *testing.T) {
 	first := m.AddButton1("Item0", nil)
 	m.AddButton1("Item1", nil)
 
+	// Hidden popups must reject stale keyboard input, even when factory-built.
+	m.OnKeyDown(KeyDown, false)
+	if m.highlightedButton() != nil {
+		t.Fatal("hidden factory menu accepted navigation")
+	}
+	m.setVisible(true) // Logical show, without creating a native window.
 	m.OnKeyDown(KeyDown, false)
 	if got := m.highlightedButton(); got != first {
 		name := "nothing"

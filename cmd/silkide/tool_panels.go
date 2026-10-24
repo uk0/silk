@@ -39,7 +39,7 @@ func workbenchPanelsMenu() *gui.Menu {
 	for i, panel := range entries {
 		button := appendFileMenuCommand(menu, fileMenuCommand{
 			"view.panel." + strconv.Itoa(i), panel.title, "window", "", func() {
-				if revealToolView(w.tabs, w.canvas, panel.dock, panel.view, modeEdit) {
+				if revealToolView(w.tabs, w.canvas, panel.dock, panel.view, preferredToolMode(panel.view)) {
 					panel.view.SetFocus()
 				}
 			}, true,
@@ -61,4 +61,16 @@ func revealWorkbenchTool(dock *gui.Dock, view gui.IWidget) {
 func addWorkbenchPanelsMenu(menu *gui.Menu) {
 	menu.AddSeparator()
 	menu.AddSubMenu(i18n.T("All Panels"), gui.LoadIcon("window"), workbenchPanelsMenu())
+}
+
+// Dedicated View actions and the complete chooser must agree when leaving
+// Welcome. Do not force a mode change while already editing/designing.
+func preferredToolMode(view gui.IWidget) workspaceMode {
+	if !nilWidget(view) && (view == globalPropSheet || view == globalInspector) {
+		return modeDesign
+	}
+	if w := globalWorkbench; w != nil && !nilWidget(view) && view == w.paletteView {
+		return modeDesign
+	}
+	return modeEdit
 }

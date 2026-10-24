@@ -513,11 +513,18 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 		// labels and shortcuts (notably with Microsoft YaHei on Windows).
 		fe := t.Font.FontExtents()
 		baseline := 0.5*(h-fe.Ascent-fe.Descent) + fe.Ascent
-		// Checked popup actions (including the current tab) need a persistent
-		// visible state, not just an invisible flag on the bound Action.
-		highlight := btn.IsEnabled() && (btn.IsHover() || btn.IsSubPopupVisible() || btn.IsChecked())
+		// Checked means a persistent state, not the current keyboard/mouse
+		// target. Multiple open panels must not all look like the selected row.
+		highlight := btn.IsEnabled() && (btn.IsHover() || btn.IsSubPopupVisible())
 		if highlight {
 			g.SetBrush1(t.MenuActiveBGColor)
+			g.Rectangle(0, 0, w, h)
+			g.Fill()
+		} else if btn.IsChecked() && btn.IsEnabled() {
+			// A quiet theme-derived tint plus a separate tick preserves both states.
+			bg, accent := t.MenuBGColor, t.MenuActiveBGColor
+			mix := func(a, b uint8) uint8 { return uint8((uint16(a)*7 + uint16(b)) / 8) }
+			g.SetBrush1(paint.Color{mix(bg.R, accent.R), mix(bg.G, accent.G), mix(bg.B, accent.B), 255})
 			g.Rectangle(0, 0, w, h)
 			g.Fill()
 		}
@@ -531,13 +538,13 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.Translate(-xi, -yi)
 		}
 
+		foreground := t.MenuTextColor
 		if highlight {
-			g.SetBrush1(t.MenuActiveTextColor)
-		} else if btn.IsEnabled() {
-			g.SetBrush1(t.MenuTextColor)
-		} else {
-			g.SetBrush1(t.MenuGrayTextColor)
+			foreground = t.MenuActiveTextColor
+		} else if !btn.IsEnabled() {
+			foreground = t.MenuGrayTextColor
 		}
+		g.SetBrush1(foreground)
 
 		if btn.IsTextVisible() {
 			g.SetFont(t.Font)
@@ -557,8 +564,20 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 			g.LineTo(w-m.R-b, h*0.5-a)
 			g.LineTo(w-m.R-b, h*0.5+a)
 			g.LineTo(w-m.R, h*0.5)
-			g.SetBrush1(t.TextColor)
+			g.SetBrush1(foreground)
 			g.Fill()
+		} else if btn.IsChecked() {
+			// Use the already reserved submenu column, keeping the original icon
+			// and shortcut column intact. Paths scale with the native drawing DPI.
+			size := math.Min(6, math.Max(0, t.MenuSubMarkWidth-2))
+			if size > 0 {
+				x, y := w-m.R/2-size, h*0.5
+				g.MoveTo(x, y)
+				g.LineTo(x+size/3, y+size/3)
+				g.LineTo(x+size, y-size/3)
+				g.SetPen1(foreground, 1.5)
+				g.Stroke()
+			}
 		}
 		if hint := btn.ShortcutText(); hint != "" {
 			g.SetFont(t.Font)

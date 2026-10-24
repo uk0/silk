@@ -144,7 +144,9 @@ func (this *_Tab) Icon() paint.Icon {
 
 func (this *_Tab) realIcon() paint.Icon {
 	if i, ok := this.data.(IIcon); ok {
-		return i.Icon()
+		if icon := i.Icon(); icon != nil {
+			return icon
+		}
 	}
 	// Same fallback as realText: tool-view widgets registered an Icon
 	// name in RegisterToolView, so resolve it through the registry

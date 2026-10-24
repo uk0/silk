@@ -5,6 +5,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
 	"math"
+	"time"
 )
 
 func init() {
@@ -25,8 +26,10 @@ type Menu struct {
 	// 键盘导航高亮项的下标, -1 表示没有键盘高亮.
 	// 鼠标悬停仍走全局 mouseHoverWidget; 键盘高亮通过把高亮项设为
 	// 悬停项来复用既有的菜单项高亮绘制(见 setHighlight).
-	highlight int
-	compact   bool
+	highlight  int
+	compact    bool
+	typePrefix string
+	typeAt     time.Time
 }
 
 // SetCompact opts a horizontal menu bar into dense desktop chrome. Popup menu
@@ -326,6 +329,7 @@ func (this *Menu) AddWidget(iw IWidget) {
 }
 
 func (this *Menu) RemoveWidget(iw IWidget) {
+	this.resetTypeahead()
 	this.setHighlight(-1)
 	iw.SetParent(nil)
 	for i, v := range this.items {
@@ -342,6 +346,7 @@ func (this *Menu) RemoveWidget(iw IWidget) {
 }
 
 func (this *Menu) Clear() {
+	this.resetTypeahead()
 	this.setHighlight(-1)
 	this.HideAllSubs()
 	for _, iw := range this.Items() {
@@ -391,6 +396,7 @@ func (this *Menu) OnShow() {
 }
 
 func (this *Menu) OnHide() {
+	this.resetTypeahead()
 	this.setHighlight(-1)
 	this.HideAllSubs()
 	if this.parent != nil {
@@ -658,7 +664,18 @@ func (this *Menu) setHighlight(idx int) {
 //
 // 仅弹出菜单处理按键; 菜单栏(非 popup)不参与键盘导航.
 func (this *Menu) OnKeyDown(key int, repeat bool) {
-	if !this.IsPopup() || !this.IsAllAncentorsVisible() || !this.IsEnabled() {
+	if !this.IsPopup() || !this.IsVisible() || !this.IsAllAncentorsVisible() || !this.IsEnabled() {
+		return
+	}
+	// Navigation/confirmation ends a prefix; modifier/letter key-down events
+	// must not reset it before the corresponding text-input event arrives.
+	switch key {
+	case KeyDown, KeyUp, KeyHome, KeyEnd, KeyEnter, KeySpace, KeyEsc, KeyRight, KeyLeft:
+		this.resetTypeahead()
+	case KeyBackSpace:
+		this.backspaceTypeahead(time.Now())
+		return
+	default:
 		return
 	}
 	kinds := this.itemKinds()

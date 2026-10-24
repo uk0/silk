@@ -21,6 +21,28 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Keyboard-searchable menus and consistent tool-panel actions
+
+- In popup menus, type the start of a label to select it, then press Enter or
+  Space to confirm. Repeating one letter cycles matching commands; Backspace
+  corrects the prefix. Hidden/disabled entries are skipped. Unicode committed
+  text is supported without introducing polling or idle repaint timers.
+- Prefixes expire after one second of inactivity (checked on the next input),
+  with bounded input length. Arrow navigation and closing the menu reset them.
+- Checked menu entries now use a quiet tint and a separate checkmark, so the
+  active keyboard/mouse target remains distinct even when many panels are open.
+- Properties tabs and the panel chooser now fall back to their registered icon
+  when the widget has no custom icon. Explicit host icons remain authoritative.
+- Opening Properties, Objects or Widgets from **Welcome → View → All Panels**
+  enters Design, consistently with the dedicated panel actions; opening tools
+  from an existing Edit/Design workspace preserves the selected mode.
+
+Verification and limits: [Menu navigation QA](MENU_NAVIGATION_QA_20261024.md).
+
+![Keyboard target distinct from open panels on macOS](screenshots/silkide-menu-navigation-macos-20261024.png)
+
+![Windows keyboard menu navigation with distinct checkmarks](screenshots/silkide-menu-navigation-windows-20261024.png)
+
 ### Recoverable tool panels and non-overlapping dock layouts
 
 - Closing a tool tab now **hides its configured instance** instead of losing its

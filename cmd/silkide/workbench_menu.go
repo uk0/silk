@@ -115,11 +115,7 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 			{"log", "Show Log", "log", globalBottomDock, globalLog},
 		} {
 			add("view."+panel.id, panel.label, panel.icon, "", panel.dock != nil && !nilWidget(panel.view), func() {
-				mode := modeEdit
-				if panel.id == "properties" || panel.id == "objects" {
-					mode = modeDesign
-				}
-				revealToolView(tabs, canvas, panel.dock, panel.view, mode)
+				revealToolView(tabs, canvas, panel.dock, panel.view, preferredToolMode(panel.view))
 			})
 		}
 		addWorkbenchPanelsMenu(menu)
