@@ -368,13 +368,19 @@ func (this *Dock) Layout() {
 	//core.Debug("(this *Dock) Layout()")
 	this.switchMenu()
 	hints := this.tabbar.SizeHints()
-	this.tabbar.SetBounds(0, 0, hints.Width, hints.Height)
-	this.tabH = hints.Height
-	this.headH = hints.Height
+	w, h := max(0, this.Width()), max(0, this.Height())
+	this.tabH = min(hints.Height, h)
+	this.headH = this.tabH
+	buttonW := min(this.tabH, w/3)
+	// The strip owns only the space left of the window controls. Its own
+	// overflow chooser keeps every view reachable without painting beneath them.
+	this.tabbar.SetBounds(0, 0, max(0, w-2*buttonW), this.tabH)
+	this.tabbar.Layout()
 	if this.menu != nil {
 		menuHints := this.menu.SizeHints()
-		this.headH += menuHints.Height
-		this.menu.SetBounds(0, this.tabH, this.Width(), menuHints.Height)
+		menuH := min(menuHints.Height, max(0, h-this.tabH))
+		this.headH += menuH
+		this.menu.SetBounds(0, this.tabH, w, menuH)
 	}
 	//	this.tile.SetBounds(0, hints.Height, this.Width(), this.Height()-hints.Height)
 	count := this.tabbar.Count()
@@ -382,11 +388,11 @@ func (this *Dock) Layout() {
 	for i := 0; i < count; i++ {
 		iw := this.tabbar.Data(i).(IWidget)
 		iw.SetVisible(active == i)
-		iw.SetBounds(0, this.headH, this.Width(), this.Height()-this.headH)
+		iw.SetBounds(0, this.headH, w, max(0, h-this.headH))
 	}
 
-	this.maxBtn.SetBounds(this.Width()-hints.Height, 0, hints.Height, hints.Height)
-	this.minBtn.SetBounds(this.Width()-hints.Height*2, 0, hints.Height, hints.Height)
+	this.maxBtn.SetBounds(w-buttonW, 0, buttonW, this.tabH)
+	this.minBtn.SetBounds(w-buttonW*2, 0, buttonW, this.tabH)
 
 	this.Self().Update()
 

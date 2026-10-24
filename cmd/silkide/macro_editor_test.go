@@ -76,6 +76,8 @@ func TestMacroEditorDefinitionReferencesAndCompletionWithoutGopls(t *testing.T) 
 		t.Fatal("open")
 	}
 	ed := activeEditor(w.tabs)
+	// Completion acceptance requires a drawable viewport, including before paint.
+	ed.SetSize(800, 500)
 	ed.ScrollToLineCol(4, 17)
 	goToDefinitionViaLSP(w.tabs)
 	if ed.CursorLine() != 1 || ed.CursorCol() != 13 {

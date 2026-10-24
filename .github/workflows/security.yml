@@ -46,3 +46,10 @@ jobs:
           diff -u \
             <(cd mod/map && go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all | sed '/^$/d') \
             <(cd "$audit" && go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all | sed '/^$/d')
+      - name: Audit the bundled language server
+        # gopls has an isolated module/toolchain, so scanning the SDK alone does
+        # not cover the executable distributed with the IDE.
+        run: |
+          go run ./cmd/silktools -out bin/tools
+          go run ./cmd/silktools -verify -out bin/tools
+          govulncheck -mode=binary bin/tools/gopls

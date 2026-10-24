@@ -1,8 +1,12 @@
 package gui
 
 import (
+	"context"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRuneColumnFromUTF16(t *testing.T) {
@@ -23,6 +27,28 @@ func TestRuneColumnFromUTF16(t *testing.T) {
 				t.Fatalf("column %d in %q = %d, want %d", tc.column, tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+// AllocsPerRun reads process-wide allocation counters. The full GUI suite has
+// asynchronous workers; measure this pure conversion in a fresh copy of the
+// SAME test executable so unrelated goroutines cannot taint the zero-allocation
+// contract. Race instrumentation remains enabled when the parent uses -race.
+func TestRuneColumnFromUTF16Allocations(t *testing.T) {
+	const child = "SILK_QA_UTF16_ALLOCATION_CHILD"
+	if os.Getenv(child) != "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, exe, "-test.run=^TestRuneColumnFromUTF16Allocations$", "-test.count=1")
+		cmd.Env = append(os.Environ(), child+"=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated allocation check: %v\n%s", err, out)
+		}
+		return
 	}
 	line := strings.Repeat("中文😀", 10000)
 	if allocations := testing.AllocsPerRun(10, func() { RuneColumnFromUTF16(line, 39999) }); allocations != 0 {

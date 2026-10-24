@@ -173,6 +173,10 @@ func TestDiffViewDrawGutterNoPanic(t *testing.T) {
 // local to this file so the gutter test stays self-contained.
 type gutterNopPainter struct{ paint.Painter }
 
+func (gutterNopPainter) Save() int    { return 0 }
+func (gutterNopPainter) Restore() int { return 0 }
+func (gutterNopPainter) Clip()        {}
+
 func (gutterNopPainter) Rectangle(x, y, w, h float64)         {}
 func (gutterNopPainter) MoveTo(x, y float64)                  {}
 func (gutterNopPainter) LineTo(x, y float64)                  {}

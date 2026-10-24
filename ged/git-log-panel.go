@@ -36,6 +36,7 @@ func init() {
 // they translate away from wire shapes (LSP locations, marker scans).
 type GitLogPanel struct {
 	gui.Widget
+	load panelLoadFeedback
 
 	commits   []core.GitCommit
 	scrollY   float64
@@ -65,6 +66,7 @@ func (this *GitLogPanel) Init(self gui.IWidget) {
 // slice it handed in — e.g. a later GitShortLog refresh — without
 // corrupting the panel's state mid-paint.
 func (this *GitLogPanel) SetCommits(commits []core.GitCommit) {
+	this.load.set(this, PanelLoadState{})
 	out := make([]core.GitCommit, len(commits))
 	copy(out, commits)
 	this.commits = out
@@ -85,6 +87,7 @@ func (this *GitLogPanel) Commits() []core.GitCommit {
 
 // Clear removes all history rows and resets the view.
 func (this *GitLogPanel) Clear() {
+	this.load.set(this, PanelLoadState{})
 	this.commits = nil
 	this.scrollY = 0
 	this.hoverIdx = -1
@@ -167,6 +170,10 @@ func (this *GitLogPanel) Draw(g paint.Painter) {
 	g.SetBrush1(paint.Color{R: 25, G: 25, B: 30, A: 255})
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
+
+	if this.load.active() {
+		return
+	}
 
 	font := paint.NewFont("Menlo", 12, false, false)
 	g.SetFont(font)
@@ -253,6 +260,9 @@ func (this *GitLogPanel) Draw(g paint.Painter) {
 // host shows the commit or its diff) and highlights it. Clicks in the
 // header band are inert.
 func (this *GitLogPanel) OnLeftDown(x, y float64) {
+	if this.load.active() {
+		return
+	}
 	this.SetFocus()
 	idx := this.rowAt(y)
 	if idx < 0 || idx >= len(this.commits) {
@@ -267,6 +277,9 @@ func (this *GitLogPanel) OnLeftDown(x, y float64) {
 
 // OnMouseMove tracks hover state for the row highlight.
 func (this *GitLogPanel) OnMouseMove(x, y float64) {
+	if this.load.active() {
+		return
+	}
 	idx := this.rowAt(y)
 	if idx < 0 || idx >= len(this.commits) {
 		idx = -1
@@ -287,6 +300,9 @@ func (this *GitLogPanel) OnMouseLeave() {
 
 // OnMouseWheel scrolls the row list vertically, clamped to the content.
 func (this *GitLogPanel) OnMouseWheel(x, y, z float64) {
+	if this.load.active() {
+		return
+	}
 	this.scrollY -= z * 3 * this.rowHeight
 	if this.scrollY < 0 {
 		this.scrollY = 0

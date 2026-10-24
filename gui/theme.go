@@ -88,6 +88,14 @@ type defaultTheme struct {
 	ButtonHoverBGColor     paint.Color
 	ButtonHoverBorderColor paint.Color
 
+	// Opaque diff surfaces: translucent light washes made dark-mode text
+	// unreadable. Keep body, gutter and action ink legible on every row type.
+	DiffAddedColor      paint.Color
+	DiffRemovedColor    paint.Color
+	DiffHeaderColor     paint.Color
+	DiffGutterTextColor paint.Color
+	DiffActionTextColor paint.Color
+
 	MenuBorderColor     paint.Color
 	MenuBGColor         paint.Color
 	SeperatorColor      paint.Color
@@ -159,6 +167,11 @@ func Theme() *defaultTheme {
 		t.BorderColor = paint.Color{209, 213, 219, 160}   // softer border (gray-300), hairline alpha
 		t.BorderPen = paint.NewPen(t.BorderColor, 1)
 		t.ViewBGColor = paint.Color{255, 255, 255, 255}
+		t.DiffAddedColor = paint.Color{220, 252, 231, 255}
+		t.DiffRemovedColor = paint.Color{254, 226, 226, 255}
+		t.DiffHeaderColor = paint.Color{219, 234, 254, 255}
+		t.DiffGutterTextColor = paint.Color{75, 85, 99, 255}
+		t.DiffActionTextColor = paint.Color{29, 78, 216, 255}
 		t.ScrollWidth = 10
 		t.ItemHeight = 24
 		t.SeparatorSize = 1
@@ -166,8 +179,8 @@ func Theme() *defaultTheme {
 		// Modern menu colors
 		t.MenuBorderColor = paint.Color{229, 231, 235, 255} // subtle border (gray-200)
 		t.MenuBGColor = paint.Color{255, 255, 255, 255}
-		t.MenuTextColor = paint.Color{55, 65, 81, 255}       // dark gray text (gray-700)
-		t.MenuActiveBGColor = paint.Color{59, 130, 246, 255} // blue highlight
+		t.MenuTextColor = paint.Color{55, 65, 81, 255}      // dark gray text (gray-700)
+		t.MenuActiveBGColor = paint.Color{37, 99, 235, 255} // blue-600; white label >= 4.5:1
 		t.MenuActiveTextColor = paint.Color{255, 255, 255, 255}
 		t.MenuGrayTextColor = paint.Color{156, 163, 175, 255} // gray-400
 		t.SeperatorColor = paint.Color{243, 244, 246, 160}    // very light separator (gray-100), hairline alpha
@@ -210,19 +223,24 @@ func Theme() *defaultTheme {
 
 		// Modern dark theme
 		if currentThemeMode == ThemeDark {
-			t.FormColor = paint.Color{24, 24, 27, 255}        // zinc-900
-			t.FormLightColor = paint.Color{39, 39, 42, 255}   // zinc-800
-			t.FormDarkColor = paint.Color{9, 9, 11, 255}      // zinc-950
-			t.TextColor = paint.Color{228, 228, 231, 255}     // zinc-200
-			t.ViewBGColor = paint.Color{24, 24, 27, 255}      // zinc-900
+			t.FormColor = paint.Color{24, 24, 27, 255}      // zinc-900
+			t.FormLightColor = paint.Color{39, 39, 42, 255} // zinc-800
+			t.FormDarkColor = paint.Color{9, 9, 11, 255}    // zinc-950
+			t.TextColor = paint.Color{228, 228, 231, 255}   // zinc-200
+			t.ViewBGColor = paint.Color{24, 24, 27, 255}    // zinc-900
+			t.DiffAddedColor = paint.Color{21, 58, 42, 255}
+			t.DiffRemovedColor = paint.Color{69, 32, 39, 255}
+			t.DiffHeaderColor = paint.Color{30, 45, 68, 255}
+			t.DiffGutterTextColor = paint.Color{161, 170, 183, 255}
+			t.DiffActionTextColor = paint.Color{147, 197, 253, 255}
 			t.HighLightColor = paint.Color{96, 165, 250, 255} // blue-400
 			t.Accent = t.HighLightColor                       // accent mirrors highlight (dark mode)
 			t.BorderColor = paint.Color{63, 63, 70, 160}      // zinc-700, hairline alpha
 			t.BorderPen = paint.NewPen(t.BorderColor, 1)
-			t.MenuBGColor = paint.Color{39, 39, 42, 255}         // zinc-800
-			t.MenuBorderColor = paint.Color{63, 63, 70, 255}     // zinc-700
-			t.MenuTextColor = paint.Color{228, 228, 231, 255}    // zinc-200
-			t.MenuActiveBGColor = paint.Color{59, 130, 246, 255} // blue-500
+			t.MenuBGColor = paint.Color{39, 39, 42, 255}        // zinc-800
+			t.MenuBorderColor = paint.Color{63, 63, 70, 255}    // zinc-700
+			t.MenuTextColor = paint.Color{228, 228, 231, 255}   // zinc-200
+			t.MenuActiveBGColor = paint.Color{37, 99, 235, 255} // blue-600; white label >= 4.5:1
 			t.MenuActiveTextColor = paint.Color{255, 255, 255, 255}
 			t.MenuGrayTextColor = paint.Color{113, 113, 122, 255} // zinc-500
 			t.SeperatorColor = paint.Color{63, 63, 70, 160}       // zinc-700, hairline alpha
@@ -495,7 +513,9 @@ func (t *defaultTheme) DrawButton(g paint.Painter, btn *Button) {
 		// labels and shortcuts (notably with Microsoft YaHei on Windows).
 		fe := t.Font.FontExtents()
 		baseline := 0.5*(h-fe.Ascent-fe.Descent) + fe.Ascent
-		highlight := btn.IsEnabled() && (btn.IsHover() || btn.IsSubPopupVisible())
+		// Checked popup actions (including the current tab) need a persistent
+		// visible state, not just an invisible flag on the bound Action.
+		highlight := btn.IsEnabled() && (btn.IsHover() || btn.IsSubPopupVisible() || btn.IsChecked())
 		if highlight {
 			g.SetBrush1(t.MenuActiveBGColor)
 			g.Rectangle(0, 0, w, h)

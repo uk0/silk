@@ -75,6 +75,7 @@ type LSPClient struct {
 	serverCaps  json.RawMessage // initialize 响应里的 capabilities 对象 (原始 JSON)
 
 	notifications chan *LSPMessage // 服务器主动发的 notification 缓存给上层
+	workProgress  lspProgressState // opt-in, bounded lane; never displaces diagnostics
 
 	done chan struct{} // 读循环退出时关闭
 }
@@ -124,8 +125,8 @@ type LSPWorkspaceFolder struct {
 //   - insertReplaceSupport 不宣称: 保持 completionItem.textEdit 是简单的
 //     TextEdit 形态 (LSPCompletionItem.TextEdit 也能吃 InsertReplaceEdit, 但
 //     没必要主动招惹).
-//   - window.workDoneProgress 不宣称: 那会让服务器持续推 $/progress 通知,
-//     把 Notifications() 通道 (buffered 64) 挤满, 挤掉真正有用的诊断.
+//   - window.workDoneProgress 默认不宣称: 宿主需先启用 WorkProgressUpdates,
+//     消费独立的合并快照通道, 再显式宣称进度 UI 支持; 避免挤掉诊断.
 //
 // didChangeWatchedFiles.dynamicRegistration 同样保持 false: 我们没有文件系统
 // 监听器, 宣称了就要负责发 workspace/didChangeWatchedFiles.
@@ -236,11 +237,12 @@ func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 	if serverCmd == "" {
 		return nil, errors.New("lspclient: empty server command")
 	}
-	if _, err := exec.LookPath(serverCmd); err != nil {
-		return nil, fmt.Errorf("lspclient: server %q not on PATH: %w", serverCmd, err)
+	resolved, err := exec.LookPath(serverCmd)
+	if err != nil {
+		return nil, fmt.Errorf("lspclient: resolve server %q: %w", serverCmd, err)
 	}
 
-	cmd := exec.Command(serverCmd, args...)
+	cmd := exec.Command(resolved, args...)
 	processutil.NoConsoleWindow(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -295,6 +297,7 @@ func LaunchLSPClient(serverCmd string, args ...string) (*LSPClient, error) {
 // 它唯一的发送方), 最后关闭 done, 让 Close 知道读端已停.
 func (c *LSPClient) readLoop() {
 	defer close(c.done)
+	defer c.closeWorkProgress()
 	for {
 		m, err := ReadLSPMessage(c.stdout)
 		if err != nil {
@@ -322,6 +325,9 @@ func (c *LSPClient) readLoop() {
 		// 一直攥在手里, 拖住并发的 SendRequest/SendNotification.
 		if isServerRequest(m) {
 			routeMessage(m, nil, nil, c)
+			continue
+		}
+		if c.routeWorkProgress(m) {
 			continue
 		}
 

@@ -78,45 +78,22 @@ func GitDiffHead(dir string) (string, error) {
 // GitDiffFile 返回单个文件相对 HEAD 的 unified diff(`git diff HEAD -- <file>`)
 // 文件无改动时返回 ("", nil).
 func GitDiffFile(dir, file string) (string, error) {
-	return runGit(dir, "diff", "HEAD", "--", file)
+	return GitDiffFileContext(context.Background(), dir, file)
 }
 
-// GitStatusPorcelain 解析 `git status --porcelain=v1` 的输出
-// 每行前两个字符是 X(staged)/Y(unstaged)两列状态, 第 4 个字符起是路径.
-// 重命名行形如 "R  old -> new", 此时 Path 取箭头右侧新路径, OrigPath 取左侧旧路径.
-// 路径含特殊字符时 git 会给整段加双引号并做 C 风格转义; 这里只做最小处理:
-// 若路径被双引号包裹, 仅剥掉首尾引号, 不做完整的 C 风格反转义(超出当前范围).
-// 单行畸形(长度不足)时跳过该行继续, 永远不 panic.
-func GitStatusPorcelain(dir string) ([]GitStatusEntry, error) {
-	out, err := runGit(dir, "status", "--porcelain=v1")
-	if err != nil {
-		return nil, err
+// GitDiffFileContext is the cancellable, bounded read-only counterpart. Diff
+// helpers/pagers configured in a repository must not start external programs.
+func GitDiffFileContext(ctx context.Context, dir, file string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("git diff: nil context")
 	}
+	return runGitReadContext(ctx, dir, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--", file)
+}
 
-	var entries []GitStatusEntry
-	sc := bufio.NewScanner(strings.NewReader(out))
-	for sc.Scan() {
-		line := sc.Text()
-		// porcelain v1: 前两列是状态, 第 3 列是空格分隔符, 第 4 列起是路径.
-		// 不足 4 个字符的行无法构成有效条目, 跳过.
-		if len(line) < 4 {
-			continue
-		}
-		entry := GitStatusEntry{
-			Staged:   line[0],
-			Unstaged: line[1],
-		}
-		rest := line[3:]
-		// 重命名/复制: "old -> new", Path 记新路径, OrigPath 记旧路径
-		if idx := strings.Index(rest, " -> "); idx >= 0 {
-			entry.OrigPath = stripGitQuotes(rest[:idx])
-			entry.Path = stripGitQuotes(rest[idx+len(" -> "):])
-		} else {
-			entry.Path = stripGitQuotes(rest)
-		}
-		entries = append(entries, entry)
-	}
-	return entries, nil
+// GitStatusPorcelain is the synchronous compatibility wrapper for the bounded,
+// lossless porcelain-v1 NUL parser. See GitStatusPorcelainContext for cancellation.
+func GitStatusPorcelain(dir string) ([]GitStatusEntry, error) {
+	return GitStatusPorcelainContext(context.Background(), dir)
 }
 
 // GitCurrentBranch 返回当前分支名(`git rev-parse --abbrev-ref HEAD`)
@@ -133,15 +110,7 @@ func GitCurrentBranch(dir string) (string, error) {
 // 用 0x1f(unit separator)分隔 hash/subject/author/date 四个字段, 避免 subject
 // 里出现普通分隔符导致误切. 单行字段数不足时跳过该行继续, 永远不 panic.
 func GitShortLog(dir string, n int) ([]GitCommit, error) {
-	// %x1f 是 0x1f 单元分隔符; --date=short 输出 YYYY-MM-DD
-	out, err := runGit(dir, "log",
-		fmt.Sprintf("-n%d", n),
-		"--pretty=format:%h%x1f%s%x1f%an%x1f%ad",
-		"--date=short")
-	if err != nil {
-		return nil, err
-	}
-	return parseShortLog(out), nil
+	return GitShortLogContext(context.Background(), dir, n)
 }
 
 // GitLogFile 返回单个文件最近 n 条提交摘要(`git log -n <n> -- <file>`)
@@ -165,9 +134,7 @@ func GitLogFile(dir, file string, n int) ([]GitCommit, error) {
 // 空行跳过, 单行字段数不足时跳过该行继续, 永远不 panic.
 func parseShortLog(out string) []GitCommit {
 	var commits []GitCommit
-	sc := bufio.NewScanner(strings.NewReader(out))
-	for sc.Scan() {
-		line := sc.Text()
+	for line := range strings.SplitSeq(out, "\n") {
 		if line == "" {
 			continue
 		}
@@ -266,10 +233,22 @@ func GitShow(dir, rev, file string) (string, error) {
 // GitDiffHead 同一套路). rev 去空白后为空时直接返回 error 快速失败; 未知 rev 时 git
 // 非零退出, runGit 原样返回带诊断的 error, 永远不 panic.
 func GitShowCommit(dir, rev string) (string, error) {
+	return GitShowCommitContext(context.Background(), dir, rev)
+}
+
+// GitShowCommitContext cancels subprocess work and bounds its output. Reject
+// option-like revisions rather than interpreting caller data as git options.
+func GitShowCommitContext(ctx context.Context, dir, rev string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("git show: nil context")
+	}
 	if strings.TrimSpace(rev) == "" {
 		return "", fmt.Errorf("git show: empty revision")
 	}
-	return runGit(dir, "show", "--no-color", rev)
+	if strings.HasPrefix(rev, "-") {
+		return "", fmt.Errorf("git show: revision must not be an option")
+	}
+	return runGitReadContext(ctx, dir, "show", "--no-ext-diff", "--no-textconv", "--no-color", rev, "--")
 }
 
 // GitCommitSubjectBody 返回某次提交的标题和正文(`git show -s --format=%s%n%n%b <rev>`)

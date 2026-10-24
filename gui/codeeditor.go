@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -192,13 +191,16 @@ type cursorPos struct {
 
 // editAction records a single undoable edit operation.
 type editAction struct {
-	kind       int // 0=insert, 1=delete, 2=replace
-	line       int
-	col        int
-	text       string // inserted text (kind 0,2) or deleted text (kind 1)
-	oldText    string // original text before replace (kind 2)
-	stamp      time.Time
-	redoCursor *cursorPos // optional post-edit caret for atomic provider edits
+	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=multi-caret transaction
+	line                        int
+	col                         int
+	text                        string // inserted text (kind 0,2) or deleted text (kind 1)
+	oldText                     string // original text before replace (kind 2)
+	stamp                       time.Time
+	byteCol                     int        // pre-edit byte anchor, independent of later UTF-8 decoding
+	redoCursor                  *cursorPos // optional post-edit caret for atomic provider edits
+	group                       []editorByteEdit
+	beforeCursors, afterCursors []cursorPos
 }
 
 // findMatch records a single search hit location.
@@ -240,21 +242,27 @@ type CodeEditor struct {
 	// Text and its derived metadata are refreshed at the edit boundary, never
 	// by idle title polling or painting. Low-level splice helpers mark dirty
 	// until rebuildText publishes the edit (or a direct Text read needs it).
-	textDirty        bool
-	textRevision     uint64
-	textRuneCount    int
-	modifiedRevision uint64
-	modified         bool
-	symbolCache      codeSymbolCache
-	text             string
-	lines            []string
-	scrollY          float64
-	scrollX          float64
-	cursorLine       int
-	cursorCol        int
-	font             paint.Font
-	lineHeight       float64
-	gutterW          float64
+	textDirty          bool
+	textRevision       uint64
+	textRuneCount      int
+	modifiedRevision   uint64
+	modified           bool
+	symbolCache        codeSymbolCache
+	symbolObservers    []*editorSymbolObserver
+	symbolWorker       *symbolIndexWorker
+	symbolPending      bool
+	symbolRequest      symbolIndexRequest
+	symbolPost         func(func()) // optional dispatcher for headless SDK tests
+	text               string
+	lines              []string
+	scrollY            float64
+	scrollX            float64
+	cursorLine         int
+	cursorCol          int
+	font               paint.Font
+	lineHeight         float64
+	gutterW            float64
+	gutterDigitAdvance float64
 
 	// inBlockComment tracks whether we are inside a multi-line /* */ comment
 	// at the start of each visible rendering pass.
@@ -329,7 +337,10 @@ type CodeEditor struct {
 	breadcrumbHeight float64
 
 	// --- Minimap ---
-	showMinimap bool
+	showMinimap       bool
+	minimapDragging   bool
+	minimapGrabOffset float64
+	minimapCache      editorMinimapCache
 
 	// --- Word Wrap ---
 	wordWrap bool
@@ -454,7 +465,8 @@ type CodeEditor struct {
 	// is installed by Init; the host may override via SetSnippets. The legacy
 	// goSnippets table (used by tryExpandSnippet, ${N:text} placeholders) is
 	// independent and still consulted afterwards.
-	snippets *SnippetSet
+	snippets          *SnippetSet
+	defaultGoSnippets bool
 
 	// snippetSess is the live multi-tab-stop session created when a trigger
 	// expands (via snippet.Expand). While Active, Tab advances the caret to the
@@ -462,36 +474,26 @@ type CodeEditor struct {
 	// is in flight, and the editor's default Tab handling runs instead.
 	snippetSess *snippetSession
 
-	// --- Tokenization cache (Draw hot path) ---
-	// tokenCache memoizes tokenizeLine output per line index, keyed by a
-	// fnv64a hash over the line bytes plus the incoming inBlock flag. A
-	// stable line short-circuits the per-rune lexer scan; lines that
-	// changed yield a hash mismatch and recompute transparently.
-	//
-	// Invalidation rule (kept deliberately coarse, see rebuildText):
-	//   - SetText / undo / redo / any line-count change clears the whole
-	//     map, because line-index assignments shift after insert/delete
-	//     and a stale entry at the new index would silently mis-color.
-	//   - In-line edits (typing a char, line replacement at constant
-	//     line count) rely on the hash mismatch to self-invalidate the
-	//     affected entry on its next read.
-	// Single-threaded by construction: Draw and every mutation handler
-	// run on the GLFW main thread, so the map needs no mutex.
+	// Immutable source equality avoids hashing unchanged lines on every frame.
+	// Source, incoming lexical state and semantic revision form the cache key.
+	// Inline edits self-invalidate; SetText/line-count changes clear the map.
+	// All accesses belong to the UI thread.
 	tokenCache       map[int]tokenCacheEntry
 	tokenCacheLineCt int // line count at the last cache fill, for shift detection
+	goLineStates     goLineStateCache
 
 	// --- Monospace measurement fast path (Draw hot path) ---
-	// For a monospace font every ASCII glyph advances by the same width, so a
-	// string's pixel width is runeCount*charWidth without a per-string Cairo
-	// shaping call (C.CString + heap alloc + shaping). charWidth and monoFont
-	// are derived from the font once (ensureFontMetrics) and reused until
-	// SetFont swaps the font, which clears fontMetricsValid. monoFont is set
-	// only when "0"/"W"/"i" all report the same non-zero advance — the
-	// definition of monospace — so a proportional font leaves it false and
-	// every measureText keeps shaping (byte-identical to the old behavior).
+	// Sample 0/W/i to identify a monospace candidate, then measure every ASCII
+	// glyph. Exceptions (e.g. Menlo #) adjust its advance and disqualify lines
+	// containing that glyph from fixed-cell clipping. Proportional/Unicode text
+	// keeps the shaping path. Ink overhang controls culling overscan. SetFont
+	// invalidates all these metrics; token source classification is font-neutral.
 	charWidth        float64
 	monoFont         bool
 	fontMetricsValid bool
+	monoOverscan     int // certified ASCII ink overhang, in cells
+	asciiAdjust      [128]float64
+	variableASCII    [2]uint64
 
 	// --- Fold-region cache (Draw hot path) ---
 	// computeFoldRegions (a full-buffer brace scan) and visibleLines are both
@@ -508,15 +510,17 @@ type CodeEditor struct {
 	visLineValid     bool
 }
 
-// tokenCacheEntry holds the tokens emitted for a (line index, line bytes,
-// inBlock) triple, plus the resulting inBlock state. nextBlock is cached
-// alongside tokens because tokenizeLine returns both and downstream code
-// (drawHighlightedLine, minimap) consumes both.
+// Incoming lexical state is part of the key: earlier delimiter edits recolor
+// unchanged lines too. fixedCells certifies ASCII plus tabs, not arbitrary Unicode.
 type tokenCacheEntry struct {
 	syntaxRevision uint64
-	hash           uint64
+	source         string
+	inState        goLexState
+	goSyntax       bool
+	fixedCells     bool
+	asciiMask      [2]uint64
 	tokens         []token
-	nextBlock      bool
+	nextState      goLexState
 }
 
 // NewCodeEditor creates a new code editor widget.
@@ -547,6 +551,7 @@ func (this *CodeEditor) Init(iw IWidget) {
 	this.breakpoints = make(map[int]bool)
 	this.foldedLines = make(map[int]bool)
 	this.snippets = NewGoSnippetSet()
+	this.defaultGoSnippets = true
 }
 
 // SetSnippets installs a SnippetSet used by Tab to expand triggers. Passing nil
@@ -554,6 +559,7 @@ func (this *CodeEditor) Init(iw IWidget) {
 // fires from tryExpandSnippet.
 func (this *CodeEditor) SetSnippets(s *SnippetSet) {
 	this.snippets = s
+	this.defaultGoSnippets = false
 }
 
 // Snippets returns the active SnippetSet (may be nil if cleared via SetSnippets).
@@ -572,7 +578,7 @@ func (this *CodeEditor) Snippets() *SnippetSet {
 // to the right). When the snippets field is nil or no trigger matches, returns
 // false so the caller can fall through to the legacy ${N:} path / Tab insert.
 func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
-	if this.snippets == nil {
+	if this.snippets == nil || (this.defaultGoSnippets && !this.usesGoSyntax()) {
 		return false
 	}
 	this.clampCursor()
@@ -621,37 +627,38 @@ func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
 		return false // malformed template: leave the buffer untouched
 	}
 
-	// Record undo before mutating: store the abbreviation we're replacing.
-	this.pushUndo(editAction{kind: 2, line: this.cursorLine, col: start, text: "", oldText: word})
-
-	// Splice: drop the trigger word, insert the expanded body.
+	// Apply one atomic replacement, including both full texts and caret states.
+	// A kind-2 entry with an empty inserted text would only reinsert the trigger
+	// on Undo, leaving the expanded body behind.
 	oldText := this.Text()
 	newText := oldText[:insByte] + text + oldText[insByte+len(word):]
-	this.lines = strings.Split(newText, "\n")
-	if len(this.lines) == 0 {
-		this.lines = []string{""}
-	}
-	this.rebuildText()
-
-	// Start a tab-stop session and select its first stop ($1, or $0 when that
-	// is all the body carries). With no stops, land the caret after the body.
-	this.snippetSess = sess
+	var first []snippetRange
+	endByte := insByte + len(text)
 	if sess != nil {
-		if rs, ok := sess.Next(); ok {
-			this.selectSnippetRanges(rs)
-			return true
+		first, _ = sess.Next()
+		if len(first) > 0 {
+			endByte = first[0].End
 		}
 	}
-	this.clearSelection()
-	this.cursorLine, this.cursorCol = cursorForByteOffset(this.lines, insByte+len(text))
-	this.ensureCursorVisible()
-	this.Self().Update()
+	line, col := cursorForByteOffset(strings.Split(text, "\n"), endByte-insByte)
+	if line == 0 {
+		col += start
+	}
+	this.ReplaceAllTextAt(newText, this.cursorLine+line, col)
+
+	// The replacement retires old ranges; install only this fresh session.
+	this.snippetSess = sess
+	if len(first) > 0 {
+		this.selectSnippetRanges(first)
+	}
 	return true
 }
 
 // SetText replaces the entire editor content.
 func (this *CodeEditor) SetText(s string) {
 	this.DismissLanguageHints()
+	this.snippetSess = nil
+	this.minimapDragging = false
 	this.lines = strings.Split(s, "\n")
 	if len(this.lines) == 0 {
 		this.lines = []string{""}
@@ -692,15 +699,26 @@ func (this *CodeEditor) TextRevision() uint64 {
 // cacheText publishes a complete buffer without emitting edit notifications.
 // Keep the old string on equality so no-op edits preserve the cached storage.
 func (this *CodeEditor) cacheText(text string) {
-	if text != this.text {
+	changed := text != this.text
+	if changed {
 		this.text = text
 		this.textRevision++
+		if this.completion != nil {
+			this.completion.Dismiss()
+			this.completion.cancelLocal(true)
+		}
 		this.symbolsRevision++
+		this.cancelSymbolRequest()
 		this.invalidateHoverHint()
 		this.ClearExternalCompletions()
 		this.textRuneCount = utf8.RuneCountInString(text)
 	}
 	this.textDirty = false
+	this.updateGoLineStates()
+	this.updateGutterWidth()
+	if changed {
+		this.notifySymbolsChanged()
+	}
 }
 
 // ReplaceAllText swaps the whole buffer for s while PRESERVING undo history,
@@ -724,6 +742,7 @@ func (this *CodeEditor) replaceAllText(s string, after *cursorPos) {
 	if s == oldFull {
 		return
 	}
+	this.snippetSess = nil
 	saveLine, saveCol := this.cursorLine, this.cursorCol
 	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: s, oldText: oldFull, redoCursor: after})
 	this.lines = strings.Split(s, "\n")
@@ -749,6 +768,8 @@ func (this *CodeEditor) SetFont(f paint.Font) {
 		return
 	}
 	this.font = f.Dup()
+	this.gutterDigitAdvance = 0
+	this.updateGutterWidth()
 	this.fontMetricsValid = false // recompute charWidth/monoFont for the new font
 	this.Self().Update()
 }
@@ -801,22 +822,11 @@ func (this *CodeEditor) CursorUTF16Col() int {
 
 // utf16ColumnOf counts the UTF-16 code units in the first runeCol runes of
 // line. runeCol is clamped to the line's rune length, so a caret past the end
-// maps to the full line width. utf16.RuneLen reports 2 for a non-BMP rune and
-// 1 for a BMP one; an invalid rune (RuneLen == -1) is counted as 1.
+// maps to the full line width; negative columns clamp to zero. Non-BMP runes
+// count as two units, all other runes (including invalid UTF-8) count as one.
+// Only the requested prefix is scanned, without allocating a whole rune slice.
 func utf16ColumnOf(line string, runeCol int) int {
-	runes := []rune(line)
-	if runeCol > len(runes) {
-		runeCol = len(runes)
-	}
-	col := 0
-	for _, r := range runes[:runeCol] {
-		if n := utf16.RuneLen(r); n > 0 {
-			col += n
-		} else {
-			col++
-		}
-	}
-	return col
+	return textPositionInLine(line, runeCol).UTF16Column
 }
 
 // runeColFromUTF16 is kept internal for occurrence-range conversion.
@@ -889,18 +899,7 @@ func (this *CodeEditor) caretLocalXY() (float64, float64) {
 	if line >= len(this.lines) {
 		line = len(this.lines) - 1
 	}
-	prefix := ""
-	if line >= 0 && line < len(this.lines) {
-		runes := []rune(this.lines[line])
-		col := this.cursorCol
-		if col < 0 {
-			col = 0
-		}
-		if col > len(runes) {
-			col = len(runes)
-		}
-		prefix = string(runes[:col])
-	}
+	prefix := this.linePrefix(line, this.cursorCol)
 	x := this.gutterW + 10 - this.scrollX + this.measureText(prefix)
 	y := float64(this.lineToVisualRow(line))*lh - this.scrollY + topOff + lh // line bottom
 
@@ -945,12 +944,16 @@ func (this *CodeEditor) SigWidgetClicked(fn func(string)) {
 
 // SetFilePath stores the file path this editor is editing and refreshes git status.
 func (this *CodeEditor) SetFilePath(path string) {
+	oldLanguage := this.Language()
 	if this.filePath != path {
 		this.CancelGitStatus()
 		this.gitStatus = nil
 		this.gitErr = nil
 	}
 	this.filePath = path
+	if oldLanguage != this.Language() {
+		this.resetDocumentLanguage()
+	}
 	this.RefreshGitStatus()
 	this.Update()
 }
@@ -1029,13 +1032,15 @@ func (this *CodeEditor) IsWordWrap() bool {
 // SetShowMinimap toggles the minimap display.
 func (this *CodeEditor) SetShowMinimap(on bool) {
 	this.showMinimap = on
+	this.minimapDragging = false
 	this.Self().Update()
 }
 
 // minimapWidth returns the minimap column width (0 if hidden).
 func (this *CodeEditor) minimapWidth() float64 {
 	if this.showMinimap {
-		return 60
+		w, _ := this.Size()
+		return math.Min(60, math.Max(0, w-this.gutterW-30))
 	}
 	return 0
 }
@@ -1060,7 +1065,7 @@ func (this *CodeEditor) ScrollToLine(line int) {
 	if targetScroll < 0 {
 		targetScroll = 0
 	}
-	maxScroll := float64(len(this.visibleLineIndices()))*lh - h
+	maxScroll := float64(len(this.visibleLineIndices()))*lh - h + this.topOffset() + this.statusBarHeight
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -1144,8 +1149,16 @@ func (this *CodeEditor) measurePlainText(s string) float64 {
 		return 0
 	}
 	this.ensureFontMetrics()
-	if this.monoFont && isASCIIPrintable(s) {
-		return float64(len(s)) * this.charWidth
+	if this.monoFont {
+		advance := float64(len(s)) * this.charWidth
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c < 32 || c > 126 {
+				return this.font.TextExtents(s).XAdvance
+			}
+			advance += this.asciiAdjust[c]
+		}
+		return advance
 	}
 	return this.font.TextExtents(s).XAdvance
 }
@@ -1175,11 +1188,22 @@ func (this *CodeEditor) ensureFontMetrics() {
 	if this.fontMetricsValid {
 		return
 	}
-	w0 := this.font.TextExtents("0").XAdvance
-	wW := this.font.TextExtents("W").XAdvance
-	wi := this.font.TextExtents("i").XAdvance
-	this.charWidth = w0
-	this.monoFont = w0 > 0 && w0 == wW && w0 == wi
+	this.charWidth = this.font.TextExtents("0").XAdvance
+	this.monoFont = this.charWidth > 0 && this.font.TextExtents("W").XAdvance == this.charWidth && this.font.TextExtents("i").XAdvance == this.charWidth
+	this.monoOverscan = 2
+	this.asciiAdjust = [128]float64{}
+	this.variableASCII = [2]uint64{}
+	if this.monoFont {
+		for c := byte(32); c <= 126; c++ {
+			ext := this.font.TextExtents(string([]byte{c}))
+			this.asciiAdjust[c] = ext.XAdvance - this.charWidth
+			if this.asciiAdjust[c] != 0 {
+				this.variableASCII[c/64] |= uint64(1) << (c % 64)
+			}
+			over := math.Max(-ext.XBearing, ext.XBearing+ext.Width-this.charWidth)
+			this.monoOverscan = max(this.monoOverscan, int(math.Ceil(over/this.charWidth))+1)
+		}
+	}
 	this.fontMetricsValid = true
 }
 
@@ -1199,22 +1223,7 @@ func isASCIIPrintable(s string) bool {
 
 // clampCursor ensures cursor is within valid bounds.
 func (this *CodeEditor) clampCursor() {
-	if len(this.lines) == 0 {
-		this.lines = []string{""}
-	}
-	if this.cursorLine < 0 {
-		this.cursorLine = 0
-	}
-	if this.cursorLine >= len(this.lines) {
-		this.cursorLine = len(this.lines) - 1
-	}
-	lineLen := len([]rune(this.lines[this.cursorLine]))
-	if this.cursorCol < 0 {
-		this.cursorCol = 0
-	}
-	if this.cursorCol > lineLen {
-		this.cursorCol = lineLen
-	}
+	this.clampCursorTextPosition()
 }
 
 // --- Multi-Cursor Helpers ---
@@ -1225,13 +1234,8 @@ func (this *CodeEditor) AddCursorAtLine(line, col int) {
 	if line < 0 || line >= len(this.lines) {
 		return
 	}
-	lr := len([]rune(this.lines[line]))
-	if col < 0 {
-		col = 0
-	}
-	if col > lr {
-		col = lr
-	}
+	col = textPositionInLine(this.lines[line], col).RuneColumn
+
 	// Skip if it coincides with the primary cursor.
 	if line == this.cursorLine && col == this.cursorCol {
 		return
@@ -1271,19 +1275,11 @@ func (this *CodeEditor) allCursors() []cursorPos {
 // clampCursorPos clamps a cursor position to valid bounds and returns the
 // adjusted position.
 func (this *CodeEditor) clampCursorPos(p cursorPos) cursorPos {
-	if p.line < 0 {
-		p.line = 0
+	if len(this.lines) == 0 {
+		return cursorPos{}
 	}
-	if p.line >= len(this.lines) {
-		p.line = len(this.lines) - 1
-	}
-	lr := len([]rune(this.lines[p.line]))
-	if p.col < 0 {
-		p.col = 0
-	}
-	if p.col > lr {
-		p.col = lr
-	}
+	p.line = max(0, min(p.line, len(this.lines)-1))
+	p.col = textPositionInLine(this.lines[p.line], p.col).RuneColumn
 	return p
 }
 
@@ -1387,388 +1383,44 @@ func (this *CodeEditor) moveAllCursorsToLineBound(toEnd bool) {
 // applyInsertAtCursors inserts ins at the primary cursor and every extra
 // cursor, processing positions back-to-front so earlier insertions don't
 // shift later ones. Returns the new text plus the post-insert cursor
-// positions. Only single-line inserts are supported (callers panic on '\n'
-// in production via the OnTextInput multi-line fallback).
+// positions. Single- and multi-line inserts share the byte transaction planner.
 func applyInsertAtCursors(text string, primary cursorPos, extras []cursorPos, ins string) (string, cursorPos, []cursorPos) {
-	insRunes := []rune(ins)
-	if len(insRunes) == 0 {
-		return text, primary, append([]cursorPos(nil), extras...)
-	}
-	lines := strings.Split(text, "\n")
-	all := append([]cursorPos{primary}, extras...)
-	// Descending order: bigger (line, col) first.
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].line != all[j].line {
-			return all[i].line > all[j].line
-		}
-		return all[i].col > all[j].col
-	})
-	for _, c := range all {
-		if c.line < 0 || c.line >= len(lines) {
-			continue
-		}
-		runes := []rune(lines[c.line])
-		if c.col < 0 {
-			c.col = 0
-		}
-		if c.col > len(runes) {
-			c.col = len(runes)
-		}
-		newRunes := make([]rune, 0, len(runes)+len(insRunes))
-		newRunes = append(newRunes, runes[:c.col]...)
-		newRunes = append(newRunes, insRunes...)
-		newRunes = append(newRunes, runes[c.col:]...)
-		lines[c.line] = string(newRunes)
-	}
-	shift := func(p cursorPos) cursorPos {
-		extra := 0
-		for _, c := range all {
-			if c.line == p.line && c.col < p.col {
-				extra += len(insRunes)
-			}
-		}
-		p.col += extra + len(insRunes)
-		return p
-	}
-	newPrimary := shift(primary)
-	newExtras := make([]cursorPos, 0, len(extras))
-	for _, e := range extras {
-		newExtras = append(newExtras, shift(e))
-	}
-	newExtras = dedupCursorsList(append([]cursorPos{newPrimary}, newExtras...))
-	// Drop the primary from the head (first element) — the caller tracks it
-	// separately. dedupCursorsList preserves order of first occurrence.
-	if len(newExtras) > 0 && newExtras[0] == newPrimary {
-		newExtras = newExtras[1:]
-	}
-	return strings.Join(lines, "\n"), newPrimary, newExtras
+	e := &CodeEditor{lines: strings.Split(text, "\n"), cursorLine: primary.line, cursorCol: primary.col, additionalCursors: append([]cursorPos(nil), extras...)}
+	e.editAtAllCursors(byteCursorInsert, ins)
+	return strings.Join(e.lines, "\n"), cursorPos{e.cursorLine, e.cursorCol}, e.additionalCursors
 }
 
 // applyBackspaceAtCursors deletes one rune to the left at the primary and
 // every extra cursor, processed back-to-front. Line-joins (at col 0) collapse
 // the current line into the previous one. Cursors at (0,0) are no-ops.
 func applyBackspaceAtCursors(text string, primary cursorPos, extras []cursorPos) (string, cursorPos, []cursorPos) {
-	lines := strings.Split(text, "\n")
-	all := append([]cursorPos{primary}, extras...)
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].line != all[j].line {
-			return all[i].line > all[j].line
-		}
-		return all[i].col > all[j].col
-	})
-	type op struct {
-		line    int
-		col     int
-		joined  bool
-		prevLen int
-	}
-	var ops []op
-	for _, c := range all {
-		if c.line < 0 || c.line >= len(lines) {
-			continue
-		}
-		if c.col > 0 {
-			runes := []rune(lines[c.line])
-			if c.col > len(runes) {
-				c.col = len(runes)
-			}
-			newRunes := append(runes[:c.col-1], runes[c.col:]...)
-			lines[c.line] = string(newRunes)
-			ops = append(ops, op{line: c.line, col: c.col - 1})
-		} else if c.line > 0 {
-			prev := lines[c.line-1]
-			prevLen := len([]rune(prev))
-			lines[c.line-1] = prev + lines[c.line]
-			lines = append(lines[:c.line], lines[c.line+1:]...)
-			ops = append(ops, op{line: c.line, col: 0, joined: true, prevLen: prevLen})
-		}
-	}
-	shift := func(p cursorPos) cursorPos {
-		for _, o := range ops {
-			if o.joined {
-				if p.line == o.line {
-					p.line = o.line - 1
-					p.col += o.prevLen
-				} else if p.line > o.line {
-					p.line--
-				}
-			} else {
-				if p.line == o.line && p.col > o.col {
-					p.col--
-				}
-			}
-		}
-		return p
-	}
-	newPrimary := shift(primary)
-	newExtras := make([]cursorPos, 0, len(extras))
-	for _, e := range extras {
-		newExtras = append(newExtras, shift(e))
-	}
-	newExtras = dedupCursorsList(append([]cursorPos{newPrimary}, newExtras...))
-	if len(newExtras) > 0 && newExtras[0] == newPrimary {
-		newExtras = newExtras[1:]
-	}
-	return strings.Join(lines, "\n"), newPrimary, newExtras
+	e := &CodeEditor{lines: strings.Split(text, "\n"), cursorLine: primary.line, cursorCol: primary.col, additionalCursors: append([]cursorPos(nil), extras...)}
+	e.editAtAllCursors(byteCursorBackspace, "")
+	return strings.Join(e.lines, "\n"), cursorPos{e.cursorLine, e.cursorCol}, e.additionalCursors
 }
 
 // applyDeleteAtCursors forward-deletes one rune at the primary and every
 // extra cursor, processed back-to-front. Line-joins (at end-of-line) collapse
 // the next line into the current one.
 func applyDeleteAtCursors(text string, primary cursorPos, extras []cursorPos) (string, cursorPos, []cursorPos) {
-	lines := strings.Split(text, "\n")
-	all := append([]cursorPos{primary}, extras...)
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].line != all[j].line {
-			return all[i].line > all[j].line
-		}
-		return all[i].col > all[j].col
-	})
-	type op struct {
-		line    int
-		col     int
-		joined  bool
-		nextLen int
-	}
-	var ops []op
-	for _, c := range all {
-		if c.line < 0 || c.line >= len(lines) {
-			continue
-		}
-		runes := []rune(lines[c.line])
-		if c.col < 0 {
-			c.col = 0
-		}
-		if c.col < len(runes) {
-			newRunes := append(runes[:c.col], runes[c.col+1:]...)
-			lines[c.line] = string(newRunes)
-			ops = append(ops, op{line: c.line, col: c.col})
-		} else if c.line < len(lines)-1 {
-			curLen := len(runes)
-			lines[c.line] = lines[c.line] + lines[c.line+1]
-			lines = append(lines[:c.line+1], lines[c.line+2:]...)
-			ops = append(ops, op{line: c.line, col: curLen, joined: true, nextLen: curLen})
-		}
-	}
-	shift := func(p cursorPos) cursorPos {
-		for _, o := range ops {
-			if o.joined {
-				if p.line == o.line+1 {
-					p.line = o.line
-					p.col += o.nextLen
-				} else if p.line > o.line+1 {
-					p.line--
-				}
-			} else {
-				if p.line == o.line && p.col > o.col {
-					p.col--
-				}
-			}
-		}
-		return p
-	}
-	newPrimary := shift(primary)
-	newExtras := make([]cursorPos, 0, len(extras))
-	for _, e := range extras {
-		newExtras = append(newExtras, shift(e))
-	}
-	newExtras = dedupCursorsList(append([]cursorPos{newPrimary}, newExtras...))
-	if len(newExtras) > 0 && newExtras[0] == newPrimary {
-		newExtras = newExtras[1:]
-	}
-	return strings.Join(lines, "\n"), newPrimary, newExtras
+	e := &CodeEditor{lines: strings.Split(text, "\n"), cursorLine: primary.line, cursorCol: primary.col, additionalCursors: append([]cursorPos(nil), extras...)}
+	e.editAtAllCursors(byteCursorDelete, "")
+	return strings.Join(e.lines, "\n"), cursorPos{e.cursorLine, e.cursorCol}, e.additionalCursors
 }
 
-// insertAtAllCursors inserts the given (single-line) text at every cursor
-// position — primary and additional — processing them back-to-front so
-// earlier cursor indices remain valid. After the insertion, each cursor's
-// column is advanced by len(insertRunes). Other cursors on the same line to
-// the right of an insertion point have their column shifted accordingly.
-//
-// Only single-line inserts are supported here; multi-line pastes fall back
-// to the primary-cursor path.
+// insertAtAllCursors inserts single- or multi-line text at every cursor as
+// one undo transaction, remapping all cursor positions after byte splices.
 func (this *CodeEditor) insertAtAllCursors(text string) {
-	insertRunes := []rune(text)
-	if len(insertRunes) == 0 {
-		return
-	}
-	this.textDirty = true
-	// Gather all cursor positions (primary + additional) sorted descending so
-	// we can mutate lines without invalidating earlier positions.
-	all := this.allCursors()
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].line != all[j].line {
-			return all[i].line > all[j].line
-		}
-		return all[i].col > all[j].col
-	})
-	// Insert at each cursor in reverse order.
-	for _, c := range all {
-		c = this.clampCursorPos(c)
-		line := this.lines[c.line]
-		runes := []rune(line)
-		newRunes := make([]rune, 0, len(runes)+len(insertRunes))
-		newRunes = append(newRunes, runes[:c.col]...)
-		newRunes = append(newRunes, insertRunes...)
-		newRunes = append(newRunes, runes[c.col:]...)
-		this.lines[c.line] = string(newRunes)
-	}
-	// Advance every cursor past its insertion point. Because cursors on the
-	// same line to the RIGHT of an earlier-inserted cursor also shifted, we
-	// recompute each cursor's new column by counting how many insertions on
-	// its line were at columns <= its own column.
-	shiftCursor := func(p *cursorPos) {
-		extra := 0
-		for _, c := range all {
-			if c.line == p.line && c.col < p.col {
-				extra += len(insertRunes)
-			}
-		}
-		// This cursor itself shifts by one insertion (its own).
-		p.col += extra + len(insertRunes)
-	}
-	primary := cursorPos{line: this.cursorLine, col: this.cursorCol}
-	shiftCursor(&primary)
-	this.cursorLine = primary.line
-	this.cursorCol = primary.col
-	for i := range this.additionalCursors {
-		shiftCursor(&this.additionalCursors[i])
-	}
-	this.dedupCursors()
+	this.editAtAllCursors(byteCursorInsert, text)
 }
 
 // backspaceAtAllCursors deletes one rune to the left at every cursor. Cursors
 // at column 0 and line 0 do nothing. Otherwise the cursor moves back one
 // column (or joins the previous line if col == 0). Processed back-to-front.
-func (this *CodeEditor) backspaceAtAllCursors() {
-	this.textDirty = true
-	all := this.allCursors()
-	// Process descending so edits don't invalidate earlier positions.
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].line != all[j].line {
-			return all[i].line > all[j].line
-		}
-		return all[i].col > all[j].col
-	})
-	// For each deletion, remember (line, col) of the deletion point so we
-	// can shift the surviving cursors afterwards.
-	type delOp struct {
-		line    int
-		col     int // column of the deleted character
-		joined  bool
-		prevLen int // length of previous line BEFORE join (only if joined)
-	}
-	var ops []delOp
-	for _, c := range all {
-		c = this.clampCursorPos(c)
-		if c.col > 0 {
-			runes := []rune(this.lines[c.line])
-			newRunes := append(runes[:c.col-1], runes[c.col:]...)
-			this.lines[c.line] = string(newRunes)
-			ops = append(ops, delOp{line: c.line, col: c.col - 1})
-		} else if c.line > 0 {
-			prev := this.lines[c.line-1]
-			prevLen := len([]rune(prev))
-			this.lines[c.line-1] = prev + this.lines[c.line]
-			this.lines = append(this.lines[:c.line], this.lines[c.line+1:]...)
-			ops = append(ops, delOp{line: c.line, col: 0, joined: true, prevLen: prevLen})
-		}
-	}
-	// Shift every cursor according to all ops.
-	shift := func(p *cursorPos) {
-		for _, op := range ops {
-			if op.joined {
-				// Line op.line was removed and merged into op.line-1.
-				if p.line == op.line {
-					p.line = op.line - 1
-					p.col += op.prevLen
-				} else if p.line > op.line {
-					p.line--
-				}
-			} else {
-				// Single-char delete on op.line at column op.col.
-				if p.line == op.line && p.col > op.col {
-					p.col--
-				}
-			}
-		}
-	}
-	primary := cursorPos{line: this.cursorLine, col: this.cursorCol}
-	shift(&primary)
-	this.cursorLine = primary.line
-	this.cursorCol = primary.col
-	for i := range this.additionalCursors {
-		shift(&this.additionalCursors[i])
-	}
-	// Re-clamp everything (lines may have shrunk) and dedup.
-	this.clampCursor()
-	for i := range this.additionalCursors {
-		this.additionalCursors[i] = this.clampCursorPos(this.additionalCursors[i])
-	}
-	this.dedupCursors()
-}
+func (this *CodeEditor) backspaceAtAllCursors() { this.editAtAllCursors(byteCursorBackspace, "") }
 
 // deleteAtAllCursors applies forward-delete at every cursor position.
-func (this *CodeEditor) deleteAtAllCursors() {
-	this.textDirty = true
-	all := this.allCursors()
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].line != all[j].line {
-			return all[i].line > all[j].line
-		}
-		return all[i].col > all[j].col
-	})
-	type delOp struct {
-		line    int
-		col     int
-		joined  bool
-		nextLen int // length of this line BEFORE join (only if joined)
-	}
-	var ops []delOp
-	for _, c := range all {
-		c = this.clampCursorPos(c)
-		runes := []rune(this.lines[c.line])
-		if c.col < len(runes) {
-			newRunes := append(runes[:c.col], runes[c.col+1:]...)
-			this.lines[c.line] = string(newRunes)
-			ops = append(ops, delOp{line: c.line, col: c.col})
-		} else if c.line < len(this.lines)-1 {
-			curLen := len(runes)
-			this.lines[c.line] = this.lines[c.line] + this.lines[c.line+1]
-			this.lines = append(this.lines[:c.line+1], this.lines[c.line+2:]...)
-			ops = append(ops, delOp{line: c.line, col: curLen, joined: true, nextLen: curLen})
-		}
-	}
-	shift := func(p *cursorPos) {
-		for _, op := range ops {
-			if op.joined {
-				// Line op.line+1 was merged into op.line.
-				if p.line == op.line+1 {
-					p.line = op.line
-					p.col += op.nextLen
-				} else if p.line > op.line+1 {
-					p.line--
-				}
-			} else {
-				if p.line == op.line && p.col > op.col {
-					p.col--
-				}
-			}
-		}
-	}
-	primary := cursorPos{line: this.cursorLine, col: this.cursorCol}
-	shift(&primary)
-	this.cursorLine = primary.line
-	this.cursorCol = primary.col
-	for i := range this.additionalCursors {
-		shift(&this.additionalCursors[i])
-	}
-	this.clampCursor()
-	for i := range this.additionalCursors {
-		this.additionalCursors[i] = this.clampCursorPos(this.additionalCursors[i])
-	}
-	this.dedupCursors()
-}
+func (this *CodeEditor) deleteAtAllCursors() { this.editAtAllCursors(byteCursorDelete, "") }
 
 // selectNextOccurrence adds a cursor at the next occurrence of the current
 // word (or currently selected text) after the primary cursor. Wraps around
@@ -1912,36 +1564,20 @@ func (this *CodeEditor) SelectedText() string {
 		return ""
 	}
 	sl, sc, el, ec := this.selectionRange()
+	start := textPositionInLine(this.lines[sl], sc).ByteColumn
+	end := textPositionInLine(this.lines[el], ec).ByteColumn
 	if sl == el {
-		runes := []rune(this.lines[sl])
-		if sc > len(runes) {
-			sc = len(runes)
-		}
-		if ec > len(runes) {
-			ec = len(runes)
-		}
-		return string(runes[sc:ec])
+		return this.lines[sl][start:end]
 	}
-	var sb strings.Builder
-	// First line
-	runes := []rune(this.lines[sl])
-	if sc > len(runes) {
-		sc = len(runes)
-	}
-	sb.WriteString(string(runes[sc:]))
-	// Middle lines
+	var b strings.Builder
+	b.WriteString(this.lines[sl][start:])
 	for i := sl + 1; i < el; i++ {
-		sb.WriteByte('\n')
-		sb.WriteString(this.lines[i])
+		b.WriteByte('\n')
+		b.WriteString(this.lines[i])
 	}
-	// Last line
-	sb.WriteByte('\n')
-	runes = []rune(this.lines[el])
-	if ec > len(runes) {
-		ec = len(runes)
-	}
-	sb.WriteString(string(runes[:ec]))
-	return sb.String()
+	b.WriteByte('\n')
+	b.WriteString(this.lines[el][:end])
+	return b.String()
 }
 
 // DeleteSelection removes the selected text and places cursor at start.
@@ -1949,32 +1585,10 @@ func (this *CodeEditor) DeleteSelection() {
 	if !this.hasSelection {
 		return
 	}
-	sl, sc, el, ec := this.selectionRange()
-	if sl == el {
-		runes := []rune(this.lines[sl])
-		if sc > len(runes) {
-			sc = len(runes)
-		}
-		if ec > len(runes) {
-			ec = len(runes)
-		}
-		newRunes := append(runes[:sc], runes[ec:]...)
-		this.lines[sl] = string(newRunes)
-	} else {
-		firstRunes := []rune(this.lines[sl])
-		if sc > len(firstRunes) {
-			sc = len(firstRunes)
-		}
-		lastRunes := []rune(this.lines[el])
-		if ec > len(lastRunes) {
-			ec = len(lastRunes)
-		}
-		merged := string(firstRunes[:sc]) + string(lastRunes[ec:])
-		this.lines[sl] = merged
-		this.lines = append(this.lines[:sl+1], this.lines[el+1:]...)
-	}
-	this.cursorLine = sl
-	this.cursorCol = sc
+	sl, sc, _, _ := this.selectionRange()
+	column := textPositionInLine(this.lines[sl], sc).ByteColumn
+	p := this.replaceByteRange(sl, column, len(this.SelectedText()), "")
+	this.cursorLine, this.cursorCol = p.line, p.col
 	this.clearSelection()
 	this.rebuildText()
 }
@@ -1982,17 +1596,17 @@ func (this *CodeEditor) DeleteSelection() {
 // ReplaceSelection replaces selected text with new text.
 func (this *CodeEditor) ReplaceSelection(text string) {
 	if this.hasSelection {
-		this.DeleteSelection()
+		sl, sc, _, _ := this.selectionRange()
+		column := textPositionInLine(this.lines[sl], sc).ByteColumn
+		p := this.replaceByteRange(sl, column, len(this.SelectedText()), text)
+		this.cursorLine, this.cursorCol = p.line, p.col
+		this.clearSelection()
+	} else if text != "" {
+		this.insertRawText(text)
+	} else {
+		return
 	}
-	if text != "" {
-		pasteLines := strings.Split(text, "\n")
-		if len(pasteLines) == 1 {
-			this.insertTextAtCursor(text)
-		} else {
-			this.insertMultilineAtCursor(pasteLines)
-		}
-		this.rebuildText()
-	}
+	this.rebuildText()
 }
 
 // clearSelection removes the selection.
@@ -2021,12 +1635,23 @@ func (this *CodeEditor) updateSelectionEnd() {
 
 func (this *CodeEditor) pushUndo(a editAction) {
 	a.stamp = time.Now()
+	if a.kind < 3 && a.line >= 0 && a.line < len(this.lines) {
+		a.byteCol = textPositionInLine(this.lines[a.line], a.col).ByteColumn
+	}
+	// Small deleted substrings must not retain an entire large source allocation.
+	if a.kind == 1 {
+		a.text = strings.Clone(a.text)
+	}
+	if a.kind == 2 {
+		a.oldText = strings.Clone(a.oldText)
+	}
 	// Group rapid single-char inserts
-	if a.kind == 0 && len(this.undoStack) > 0 {
+	if a.kind == 0 && len(this.undoStack) > 0 && len(this.redoStack) == 0 {
 		last := &this.undoStack[len(this.undoStack)-1]
 		if last.kind == 0 && a.stamp.Sub(last.stamp) < 500*time.Millisecond &&
-			a.line == last.line && a.col == last.col+len([]rune(last.text)) &&
-			len([]rune(a.text)) == 1 && a.text != "\n" {
+			a.line == last.line && a.byteCol == last.byteCol+len(last.text) &&
+			a.col == last.col+utf8.RuneCountInString(last.text) &&
+			utf8.RuneCountInString(a.text) == 1 && a.text != "\n" {
 			last.text += a.text
 			last.stamp = a.stamp
 			this.redoStack = nil
@@ -2044,6 +1669,7 @@ func (this *CodeEditor) undo() {
 	if len(this.undoStack) == 0 {
 		return
 	}
+	this.snippetSess = nil // stored byte ranges belong to the pre-undo buffer
 	a := this.undoStack[len(this.undoStack)-1]
 	this.undoStack = this.undoStack[:len(this.undoStack)-1]
 
@@ -2051,23 +1677,19 @@ func (this *CodeEditor) undo() {
 	case 0: // undo insert => delete the inserted text
 		this.cursorLine = a.line
 		this.cursorCol = a.col
-		textRunes := []rune(a.text)
-		// Delete len(textRunes) chars starting from (a.line, a.col)
-		this.deleteRange(a.line, a.col, len(textRunes))
+		this.replaceByteRange(a.line, a.byteCol, len(a.text), "")
 		this.redoStack = append(this.redoStack, a)
 	case 1: // undo delete => re-insert the deleted text
 		this.cursorLine = a.line
 		this.cursorCol = a.col
-		this.insertRawText(a.text)
+		this.insertRawTextAtByte(a.line, a.byteCol, a.text)
 		this.cursorLine = a.line
 		this.cursorCol = a.col
 		this.redoStack = append(this.redoStack, a)
 	case 2: // undo replace => put oldText back
 		this.cursorLine = a.line
 		this.cursorCol = a.col
-		newRunes := []rune(a.text)
-		this.deleteRange(a.line, a.col, len(newRunes))
-		this.insertRawText(a.oldText)
+		this.replaceByteRange(a.line, a.byteCol, len(a.text), a.oldText)
 		this.cursorLine = a.line
 		this.cursorCol = a.col
 		this.redoStack = append(this.redoStack, a)
@@ -2078,6 +1700,13 @@ func (this *CodeEditor) undo() {
 		}
 		this.cursorLine = a.line
 		this.cursorCol = a.col
+		this.redoStack = append(this.redoStack, a)
+	case 4:
+		for i := len(a.group) - 1; i >= 0; i-- {
+			g := a.group[i]
+			this.replaceByteRange(g.line, g.column, len(g.after), g.before)
+		}
+		this.restoreEditCursors(a.beforeCursors)
 		this.redoStack = append(this.redoStack, a)
 	}
 	this.clearSelection()
@@ -2090,6 +1719,7 @@ func (this *CodeEditor) redo() {
 	if len(this.redoStack) == 0 {
 		return
 	}
+	this.snippetSess = nil
 	a := this.redoStack[len(this.redoStack)-1]
 	this.redoStack = this.redoStack[:len(this.redoStack)-1]
 
@@ -2097,19 +1727,18 @@ func (this *CodeEditor) redo() {
 	case 0: // redo insert => re-insert
 		this.cursorLine = a.line
 		this.cursorCol = a.col
-		this.insertRawText(a.text)
+		this.insertRawTextAtByte(a.line, a.byteCol, a.text)
 		this.undoStack = append(this.undoStack, a)
 	case 1: // redo delete => delete again
 		this.cursorLine = a.line
 		this.cursorCol = a.col
-		this.deleteRange(a.line, a.col, len([]rune(a.text)))
+		this.replaceByteRange(a.line, a.byteCol, len(a.text), "")
 		this.undoStack = append(this.undoStack, a)
 	case 2: // redo replace => apply new text again
 		this.cursorLine = a.line
 		this.cursorCol = a.col
-		oldRunes := []rune(a.oldText)
-		this.deleteRange(a.line, a.col, len(oldRunes))
-		this.insertRawText(a.text)
+		p := this.replaceByteRange(a.line, a.byteCol, len(a.oldText), a.text)
+		this.cursorLine, this.cursorCol = p.line, p.col
 		this.undoStack = append(this.undoStack, a)
 	case 3: // redo full text replace (rename refactoring)
 		this.lines = strings.Split(a.text, "\n")
@@ -2122,6 +1751,12 @@ func (this *CodeEditor) redo() {
 			this.cursorLine, this.cursorCol = a.redoCursor.line, a.redoCursor.col
 		}
 		this.undoStack = append(this.undoStack, a)
+	case 4:
+		for _, g := range a.group {
+			this.replaceByteRange(g.line, g.column, len(g.before), g.after)
+		}
+		this.restoreEditCursors(a.afterCursors)
+		this.undoStack = append(this.undoStack, a)
 	}
 	this.clearSelection()
 	this.rebuildText()
@@ -2131,81 +1766,45 @@ func (this *CodeEditor) redo() {
 
 // insertRawText inserts text at current cursor without recording undo.
 func (this *CodeEditor) insertRawText(text string) {
-	this.textDirty = true
-	insertLines := strings.Split(text, "\n")
-	if len(insertLines) == 1 {
-		line := this.lines[this.cursorLine]
-		runes := []rune(line)
-		insertRunes := []rune(text)
-		newRunes := make([]rune, 0, len(runes)+len(insertRunes))
-		newRunes = append(newRunes, runes[:this.cursorCol]...)
-		newRunes = append(newRunes, insertRunes...)
-		newRunes = append(newRunes, runes[this.cursorCol:]...)
-		this.lines[this.cursorLine] = string(newRunes)
-		this.cursorCol += len(insertRunes)
-	} else {
-		this.insertMultilineAtCursor(insertLines)
-	}
+	this.clampCursor()
+	column := textPositionInLine(this.lines[this.cursorLine], this.cursorCol).ByteColumn
+	this.insertRawTextAtByte(this.cursorLine, column, text)
 }
 
 // deleteRange deletes count runes starting at (line, col), possibly across lines.
 func (this *CodeEditor) deleteRange(line, col, count int) {
-	this.textDirty = true
-	for count > 0 && line < len(this.lines) {
-		runes := []rune(this.lines[line])
-		avail := len(runes) - col
-		if avail >= count {
-			newRunes := append(runes[:col], runes[col+count:]...)
-			this.lines[line] = string(newRunes)
-			count = 0
-		} else {
-			// Delete rest of this line + newline, merge with next
-			this.lines[line] = string(runes[:col])
-			count -= avail + 1 // +1 for the newline
-			if line+1 < len(this.lines) {
-				this.lines[line] += this.lines[line+1]
-				this.lines = append(this.lines[:line+1], this.lines[line+2:]...)
-			} else {
-				count = 0
-			}
-		}
+	if line < 0 || line >= len(this.lines) || count <= 0 {
+		return
 	}
+	start := textPositionInLine(this.lines[line], col).ByteColumn
+	bytes, endLine, end := 0, line, start
+	for count > 0 {
+		p := textPositionInLine(this.lines[endLine][end:], count)
+		bytes += p.ByteColumn
+		count -= p.RuneColumn
+		if count == 0 || endLine == len(this.lines)-1 {
+			break
+		}
+		count--
+		bytes++
+		endLine++
+		end = 0
+	}
+	this.replaceByteRange(line, start, bytes, "")
 }
 
 // insertTextAtCursor inserts single-line text at cursor, no undo recording.
 func (this *CodeEditor) insertTextAtCursor(text string) {
-	this.textDirty = true
-	line := this.lines[this.cursorLine]
-	runes := []rune(line)
-	insertRunes := []rune(text)
-	newRunes := make([]rune, 0, len(runes)+len(insertRunes))
-	newRunes = append(newRunes, runes[:this.cursorCol]...)
-	newRunes = append(newRunes, insertRunes...)
-	newRunes = append(newRunes, runes[this.cursorCol:]...)
-	this.lines[this.cursorLine] = string(newRunes)
-	this.cursorCol += len(insertRunes)
+	column := textPositionInLine(this.lines[this.cursorLine], this.cursorCol).ByteColumn
+	this.insertRawTextAtByte(this.cursorLine, column, text)
 }
 
 // insertMultilineAtCursor inserts multiple lines at cursor.
 func (this *CodeEditor) insertMultilineAtCursor(pasteLines []string) {
-	this.textDirty = true
-	line := this.lines[this.cursorLine]
-	runes := []rune(line)
-	before := string(runes[:this.cursorCol])
-	after := string(runes[this.cursorCol:])
-
-	this.lines[this.cursorLine] = before + pasteLines[0]
-	newLines := make([]string, 0, len(this.lines)+len(pasteLines))
-	newLines = append(newLines, this.lines[:this.cursorLine+1]...)
-	for _, pl := range pasteLines[1:] {
-		newLines = append(newLines, pl)
+	if len(pasteLines) == 0 {
+		return
 	}
-	lastIdx := len(newLines) - 1
-	newLines[lastIdx] = newLines[lastIdx] + after
-	newLines = append(newLines, this.lines[this.cursorLine+1:]...)
-	this.lines = newLines
-	this.cursorLine += len(pasteLines) - 1
-	this.cursorCol = len([]rune(pasteLines[len(pasteLines)-1]))
+	this.insertTextAtCursor(strings.Join(pasteLines, "\n"))
 }
 
 // --- Find Methods ---
@@ -2277,21 +1876,39 @@ func replaceAllInText(text, query, repl string, caseSensitive bool) (string, int
 		}
 		return strings.ReplaceAll(text, query, repl), n
 	}
-	tr := []rune(text)
-	qr := []rune(query)
-	qlen := len(qr)
+	queryRunes := []rune(query)
 	var b strings.Builder
-	count := 0
-	for i := 0; i < len(tr); {
-		if i+qlen <= len(tr) && runeWindowEqual(tr[i:i+qlen], qr, false) {
+	count, copied := 0, 0
+	for i := 0; i < len(text); {
+		end := i
+		matches := true
+		for _, q := range queryRunes {
+			if end == len(text) {
+				matches = false
+				break
+			}
+			r, width := utf8.DecodeRuneInString(text[end:])
+			if unicode.ToLower(r) != unicode.ToLower(q) {
+				matches = false
+				break
+			}
+			end += width
+		}
+		if matches {
+			b.WriteString(text[copied:i])
 			b.WriteString(repl)
+			copied = end
 			count++
-			i += qlen
+			i = end
 		} else {
-			b.WriteRune(tr[i])
-			i++
+			_, width := utf8.DecodeRuneInString(text[i:])
+			i += width
 		}
 	}
+	if count == 0 {
+		return text, 0
+	}
+	b.WriteString(text[copied:])
 	return b.String(), count
 }
 
@@ -2398,23 +2015,19 @@ func (this *CodeEditor) replaceCurrent() {
 	if m.line < 0 || m.line >= len(this.lines) {
 		return
 	}
-	runes := []rune(this.lines[m.line])
-	col, end := m.col, m.end
-	if col > len(runes) {
-		col = len(runes)
+	line := this.lines[m.line]
+	end := textPositionInLine(line, m.end).ByteColumn
+	start := min(textPositionInLine(line, m.col).ByteColumn, end)
+	if line[start:end] == this.replaceText {
+		this.selectMatchAtOrAfter(m.line, m.end)
+		return
 	}
-	if end > len(runes) {
-		end = len(runes)
-	}
-	if col > end {
-		col = end
-	}
-	this.lines[m.line] = string(runes[:col]) + this.replaceText + string(runes[end:])
+	this.pushUndo(editAction{kind: 2, line: m.line, col: m.col, text: this.replaceText, oldText: line[start:end]})
+	p := this.replaceByteRange(m.line, start, end-start, this.replaceText)
+	this.cursorLine, this.cursorCol = p.line, p.col
 	this.rebuildText()
-	afterLine := m.line
-	afterCol := col + len([]rune(this.replaceText))
 	this.findUpdateMatches()
-	this.selectMatchAtOrAfter(afterLine, afterCol)
+	this.selectMatchAtOrAfter(p.line, p.col)
 }
 
 // replaceAll replaces every match in one pass via replaceAllInText, records a
@@ -2477,68 +2090,7 @@ func (this *CodeEditor) replaceButtonHit(x, y float64) int {
 // --- Bracket Matching ---
 
 func (this *CodeEditor) findMatchingBracket() (int, int, bool) {
-	if this.cursorLine >= len(this.lines) {
-		return 0, 0, false
-	}
-	runes := []rune(this.lines[this.cursorLine])
-	if this.cursorCol >= len(runes) {
-		return 0, 0, false
-	}
-	ch := runes[this.cursorCol]
-
-	openers := map[rune]rune{'{': '}', '(': ')', '[': ']'}
-	closers := map[rune]rune{'}': '{', ')': '(', ']': '['}
-
-	if match, ok := openers[ch]; ok {
-		// Search forward
-		depth := 1
-		line := this.cursorLine
-		col := this.cursorCol + 1
-		for line < len(this.lines) {
-			lr := []rune(this.lines[line])
-			for col < len(lr) {
-				if lr[col] == ch {
-					depth++
-				} else if lr[col] == match {
-					depth--
-					if depth == 0 {
-						return line, col, true
-					}
-				}
-				col++
-			}
-			line++
-			col = 0
-		}
-	} else if match, ok := closers[ch]; ok {
-		// Search backward
-		depth := 1
-		line := this.cursorLine
-		col := this.cursorCol - 1
-		for {
-			if col < 0 {
-				line--
-				if line < 0 {
-					break
-				}
-				col = len([]rune(this.lines[line])) - 1
-				continue
-			}
-			lr := []rune(this.lines[line])
-			if col < len(lr) {
-				if lr[col] == ch {
-					depth++
-				} else if lr[col] == match {
-					depth--
-					if depth == 0 {
-						return line, col, true
-					}
-				}
-			}
-			col--
-		}
-	}
-	return 0, 0, false
+	return this.matchBracketStreaming()
 }
 
 // --- Line Operations ---
@@ -2546,13 +2098,13 @@ func (this *CodeEditor) findMatchingBracket() (int, int, bool) {
 func (this *CodeEditor) duplicateLine() {
 	this.clampCursor()
 	dup := this.lines[this.cursorLine]
+	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: utf8.RuneCountInString(dup), text: "\n" + dup})
 	newLines := make([]string, 0, len(this.lines)+1)
 	newLines = append(newLines, this.lines[:this.cursorLine+1]...)
 	newLines = append(newLines, dup)
 	newLines = append(newLines, this.lines[this.cursorLine+1:]...)
 	this.lines = newLines
 	this.cursorLine++
-	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: 0, text: dup + "\n"})
 	this.rebuildText()
 	this.ensureCursorVisible()
 	this.Self().Update()
@@ -2562,7 +2114,11 @@ func (this *CodeEditor) deleteCurrentLine() {
 	this.clampCursor()
 	deleted := this.lines[this.cursorLine]
 	if len(this.lines) > 1 {
-		this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: 0, text: deleted + "\n"})
+		if this.cursorLine == len(this.lines)-1 {
+			this.pushUndo(editAction{kind: 1, line: this.cursorLine - 1, col: utf8.RuneCountInString(this.lines[this.cursorLine-1]), text: "\n" + deleted})
+		} else {
+			this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: 0, text: deleted + "\n"})
+		}
 		this.lines = append(this.lines[:this.cursorLine], this.lines[this.cursorLine+1:]...)
 		if this.cursorLine >= len(this.lines) {
 			this.cursorLine = len(this.lines) - 1
@@ -2655,11 +2211,7 @@ func (this *CodeEditor) wrapSelectionWith(open, closer rune) {
 	sl, sc, _, _ := this.selectionRange()
 	selText := this.SelectedText()
 	newText := string(open) + selText + string(closer)
-	this.DeleteSelection()
-	this.pushUndo(editAction{kind: 2, line: sl, col: sc, text: newText, oldText: selText})
-	this.cursorLine = sl
-	this.cursorCol = sc
-	this.insertRawText(newText)
+	this.replaceSelectionRecorded(newText)
 	// Restore the selection over the inner text (between the delimiters).
 	this.hasSelection = true
 	this.selStartLine = sl
@@ -3004,24 +2556,18 @@ func (this *CodeEditor) RenameSymbolAtCursor(newName string) (string, int, error
 // "\n"-separated text formed by lines. col is in rune units, matching the
 // rest of the editor.
 func byteOffsetForCursor(lines []string, line, col int) int {
-	if line < 0 {
+	if line < 0 || len(lines) == 0 {
 		return 0
 	}
+	last := min(line, len(lines)-1)
 	off := 0
-	for i := 0; i < line && i < len(lines); i++ {
-		off += len(lines[i]) + 1 // +1 for the newline separator
+	for i := 0; i < last; i++ {
+		off += len(lines[i]) + 1
 	}
-	if line < len(lines) {
-		runes := []rune(lines[line])
-		if col > len(runes) {
-			col = len(runes)
-		}
-		if col < 0 {
-			col = 0
-		}
-		off += len(string(runes[:col]))
+	if line >= len(lines) {
+		return off + len(lines[last])
 	}
-	return off
+	return off + textPositionInLine(lines[last], col).ByteColumn
 }
 
 // cursorForByteOffset is the inverse of byteOffsetForCursor: given a byte
@@ -3188,6 +2734,11 @@ func (this *CodeEditor) wordBoundsAt(line, col int) (int, int) {
 
 // ensureCursorVisible scrolls so the cursor line is within the viewport.
 func (this *CodeEditor) ensureCursorVisible() {
+	this.ensureTextPositionVisible(this.clampCursorTextPosition())
+}
+
+// p is a clamped snapshot in the current buffer, owned by the UI thread.
+func (this *CodeEditor) ensureTextPositionVisible(p EditorTextPosition) {
 	fe := this.font.FontExtents()
 	lh := fe.Height + 2
 	_, h := this.Size()
@@ -3199,7 +2750,7 @@ func (this *CodeEditor) ensureCursorVisible() {
 
 	// Vertical scroll is measured in visual rows so folded bodies don't count;
 	// with no active fold cursorRow == cursorLine and this is unchanged.
-	cursorRow := this.lineToVisualRow(this.cursorLine)
+	cursorRow := this.lineToVisualRow(p.Line)
 	startRow := int(this.scrollY / lh)
 	if cursorRow < startRow {
 		this.scrollY = float64(cursorRow) * lh
@@ -3216,14 +2767,7 @@ func (this *CodeEditor) ensureCursorVisible() {
 	if textAreaW < 20 {
 		textAreaW = 20
 	}
-	this.clampCursor()
-	cursorPrefix := ""
-	if this.cursorLine < len(this.lines) {
-		runes := []rune(this.lines[this.cursorLine])
-		if this.cursorCol <= len(runes) {
-			cursorPrefix = string(runes[:this.cursorCol])
-		}
-	}
+	cursorPrefix := this.lines[p.Line][:p.ByteColumn]
 	cursorPxX := this.measureText(cursorPrefix)
 	hMargin := 20.0
 	if cursorPxX-this.scrollX < 0 {
@@ -3259,6 +2803,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	topOff := this.topOffset()
 	editorRight := w - mmW // right edge of the main text area
 	editorBottom := h - sbH
+	textView := editorInkViewport{this.gutterW, topOff, editorRight, editorBottom}
 
 	// Gutter background
 	g.SetBrush1(pal.gutter)
@@ -3294,19 +2839,9 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 	if startRow < 0 {
 		startRow = 0
 	}
-	startLine := 0
-	if startRow < len(vis) {
-		startLine = vis[startRow]
-	}
 	visibleLines := int((editorBottom-topOff)/lh) + 2
 
 	g.SetFont(this.font)
-
-	// Determine block-comment state up to startLine.
-	inBlock := false
-	for i := 0; i < startLine && i < len(this.lines); i++ {
-		inBlock = lineEndsInBlockComment(this.lines[i], inBlock)
-	}
 
 	// Bracket matching
 	matchBLine, matchBCol, hasMatchB := this.findMatchingBracket()
@@ -3334,7 +2869,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 	// Clip the main editor area to avoid drawing into minimap/status bar
 	g.Save()
-	g.Rectangle(0, topOff, editorRight, editorBottom-topOff)
+	g.Rectangle(this.gutterW, topOff, math.Max(0, editorRight-this.gutterW), math.Max(0, editorBottom-topOff))
 	g.Clip()
 
 	for row := startRow; row < startRow+visibleLines && row < len(vis); row++ {
@@ -3357,30 +2892,20 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 
 		// Draw selection highlight
 		if this.hasSelection && i >= sSelL && i <= eSelL {
-			lineRunes := []rune(this.lines[i])
 			var selStartX, selEndX float64
 			if i == sSelL {
-				sc := sSelC
-				if sc > len(lineRunes) {
-					sc = len(lineRunes)
-				}
-				selStartX = textOffX + this.measureText(string(lineRunes[:sc]))
+				selStartX = textOffX + this.measureText(this.linePrefix(i, sSelC))
 			} else {
 				selStartX = textOffX
 			}
 			if i == eSelL {
-				ec := eSelC
-				if ec > len(lineRunes) {
-					ec = len(lineRunes)
-				}
-				selEndX = textOffX + this.measureText(string(lineRunes[:ec]))
+				selEndX = textOffX + this.measureText(this.linePrefix(i, eSelC))
 			} else {
-				selEndX = textOffX + this.measureText(string(lineRunes)) + 8
+				selEndX = textOffX + this.measureText(this.lines[i]) + 8
 			}
 			if selEndX > selStartX {
 				g.SetBrush1(pal.selection)
-				g.Rectangle(selStartX, y, selEndX-selStartX, lh)
-				g.Fill()
+				textView.fillRect(g, selStartX, y, selEndX-selStartX, lh)
 			}
 		}
 
@@ -3392,22 +2917,14 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 				if m.line != i {
 					continue
 				}
-				lineRunes := []rune(this.lines[i])
-				mc, me := m.col, m.end
-				if mc > len(lineRunes) {
-					mc = len(lineRunes)
-				}
-				if me > len(lineRunes) {
-					me = len(lineRunes)
-				}
-				if me <= mc {
+				if m.end <= m.col {
 					continue
 				}
-				ox := textOffX + this.measureText(string(lineRunes[:mc]))
-				ow := this.measureText(string(lineRunes[:me])) - this.measureText(string(lineRunes[:mc]))
+				start := this.measureText(this.linePrefix(i, m.col))
+				ox := textOffX + start
+				ow := this.measureText(this.linePrefix(i, m.end)) - start
 				g.SetBrush1(paint.Color{R: 120, G: 130, B: 150, A: 60})
-				g.Rectangle(ox, y, ow, lh)
-				g.Fill()
+				textView.fillRect(g, ox, y, ow, lh)
 			}
 		}
 
@@ -3415,24 +2932,15 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		if this.findActive && len(this.findMatches) > 0 {
 			for idx, m := range this.findMatches {
 				if m.line == i {
-					lineRunes := []rune(this.lines[i])
-					mc := m.col
-					me := m.end
-					if mc > len(lineRunes) {
-						mc = len(lineRunes)
-					}
-					if me > len(lineRunes) {
-						me = len(lineRunes)
-					}
-					mx := textOffX + this.measureText(string(lineRunes[:mc]))
-					mw := this.measureText(string(lineRunes[:me])) - this.measureText(string(lineRunes[:mc]))
+					start := this.measureText(this.linePrefix(i, m.col))
+					mx := textOffX + start
+					mw := this.measureText(this.linePrefix(i, m.end)) - start
 					if idx == this.findCurrentIdx {
 						g.SetBrush1(paint.Color{R: 255, G: 152, B: 0, A: 120})
 					} else {
 						g.SetBrush1(paint.Color{R: 255, G: 235, B: 59, A: 80})
 					}
-					g.Rectangle(mx, y, mw, lh)
-					g.Fill()
+					textView.fillRect(g, mx, y, mw, lh)
 				}
 			}
 		}
@@ -3442,6 +2950,139 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			this.drawIndentGuides(g, i, y, lh)
 		}
 
+		// Syntax-highlighted line
+		lineText := this.lines[i]
+		// Word wrap indicator: if line exceeds visible area, show marker
+		if this.wordWrap {
+			textAreaW := editorRight - this.gutterW - 10
+			if textAreaW < 20 {
+				textAreaW = 20
+			}
+			lineW := this.measureText(lineText)
+			if lineW > textAreaW {
+				// Draw wrap indicator at right edge
+				g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 180})
+				g.DrawText1(editorRight-14, y+fe.Ascent, "\u00BB")
+			}
+		}
+		this.drawHighlightedLine(g, i, textOffX, y+fe.Ascent)
+
+		// Blame annotation: dim + right-aligned in the reserved column at the text
+		// area's right edge. Drawn only for visible lines carrying an annotation.
+		// blameW is 0 when the view is off, so this whole block is skipped and no
+		// pixels move — layout is identical to a build without blame.
+		if blameW > 0 && blameMaxChars > 0 {
+			if ann, ok := this.blame[i]; ok && ann != "" {
+				shown := truncateBlame(ann, blameMaxChars)
+				bx := editorRight - 6 - this.measureText(shown)
+				g.SetFont(this.font)
+				g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 150})
+				g.DrawText1(bx, y+fe.Ascent, shown)
+			}
+		}
+
+		// Folded-region hint: on a collapsed start line, draw a subtle "⋯}" after
+		// the text so the user sees the block is collapsed and where it ends.
+		if end, foldable := foldStartEnd[i]; foldable && this.foldedLines[i] {
+			hintX := textOffX + this.measureText(lineText) + 8
+			hint := "⋯" // ⋯ (midline horizontal ellipsis)
+			if end >= 0 && end < len(this.lines) {
+				if last, ok := lastNonSpaceRune(this.lines[end]); ok && last == '}' {
+					hint = "⋯ }"
+				}
+			}
+			g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 200})
+			g.SetFont(this.font)
+			g.DrawText1(hintX, y+fe.Ascent, hint)
+		}
+
+		// Hover link: blue underline + blue text overlay for Cmd/Ctrl+hover word
+		if i == this.hoverLinkLine && this.hoverLinkStart < this.hoverLinkEnd {
+			end, _ := this.TextPositionAt(i, this.hoverLinkEnd)
+			if this.hoverLinkStart >= 0 && end.RuneColumn == this.hoverLinkEnd {
+				start, _ := this.TextPositionAt(i, this.hoverLinkStart)
+				linkX := textOffX + this.measureText(this.lines[i][:start.ByteColumn])
+				linkWord := this.lines[i][start.ByteColumn:end.ByteColumn]
+				linkW := this.measureText(linkWord)
+				// Draw the word in blue (override the syntax color)
+				g.SetBrush1(paint.Color{R: 80, G: 160, B: 255, A: 255})
+				g.SetFont(this.font)
+				this.drawViewportText(g, linkWord, linkX, y+fe.Ascent, this.fixedCellLine(i))
+				// Draw underline
+				underY := y + fe.Ascent + 2
+				g.SetPen1(paint.Color{R: 80, G: 160, B: 255, A: 255}, 1.0)
+				textView.horizontalLine(g, linkX, linkX+linkW, underY)
+			}
+		}
+
+		// Error underline: red squiggly line under the text
+		if _, hasErr := this.errorLines[i]; hasErr {
+			lineW := this.measureText(strings.TrimRight(lineText, " \t"))
+			if lineW < 20 {
+				lineW = 20
+			}
+			underY := y + fe.Ascent + 2
+			g.SetPen1(paint.Color{R: 220, G: 50, B: 50, A: 200}, 1.2)
+			// Draw squiggly underline using small wave segments
+			drawClippedErrorWaves(g, textOffX, lineW, underY, this.gutterW, editorRight)
+
+		}
+
+		// Bracket matching highlight, with byte-sliced rune endpoints.
+		for _, bc := range []struct{ line, col int }{{matchBLine, matchBCol}, {this.cursorLine, this.cursorCol}} {
+			if hasMatchB && i == bc.line && bc.col >= 0 {
+				start, _ := this.TextPositionAt(i, bc.col)
+				end, _ := this.TextPositionAt(i, bc.col+1)
+				if end.RuneColumn == bc.col+1 {
+					bx := textOffX + this.measureText(this.lines[i][:start.ByteColumn])
+					bw := this.measureText(this.lines[i][start.ByteColumn:end.ByteColumn])
+					if !textView.intersects(bx, y, bw, lh, 2) {
+						continue
+					}
+					g.SetPen1(paint.Color{R: 80, G: 140, B: 220, A: 200}, 1.5)
+					g.Rectangle(bx, y, bw, lh)
+					g.Stroke()
+				}
+			}
+		}
+
+	}
+
+	// Draw cursor(s). Primary cursor is rendered at full brightness; any
+	// additional multi-cursors are drawn slightly dimmer so the user can
+	// tell them apart at a glance.
+	if this.HasFocus() {
+		this.clampCursor()
+		// Primary cursor
+		{
+			prefix := this.linePrefix(this.cursorLine, this.cursorCol)
+			cx := textOffX + this.measureText(prefix)
+			cy := float64(this.lineToVisualRow(this.cursorLine))*lh - this.scrollY + topOff
+			g.SetBrush1(pal.caret)
+			textView.fillRect(g, cx, cy, 1.5, lh)
+		}
+		// Additional cursors
+		for _, c := range this.additionalCursors {
+			cc := this.clampCursorPos(c)
+			prefix := this.linePrefix(cc.line, cc.col)
+			cx := textOffX + this.measureText(prefix)
+			cy := float64(this.lineToVisualRow(cc.line))*lh - this.scrollY + topOff
+			// Dim color: same hue, half alpha.
+			g.SetBrush1(paint.Color{R: pal.caret.R, G: pal.caret.G, B: pal.caret.B, A: 160})
+			textView.fillRect(g, cx, cy, 1.5, lh)
+		}
+	}
+
+	g.Restore() // pop editor clip
+
+	// Fixed gutter is a separate layer: scrolled text/highlights/carets never
+	// paint into its number and action slots.
+	g.Save()
+	g.Rectangle(0, topOff, math.Max(0, math.Min(this.gutterW, editorRight)), math.Max(0, editorBottom-topOff))
+	g.Clip()
+	for row := startRow; row < startRow+visibleLines && row < len(vis); row++ {
+		i := vis[row]
+		y := float64(row)*lh - this.scrollY + topOff
 		// Gutter indicators: error circle and bookmark diamond
 		gutterCenterY := y + lh/2
 
@@ -3583,162 +3224,15 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		g.SetBrush1(pal.lineNumber)
 		numStr := fmt.Sprintf("%d", i+1)
 		numExt := this.font.TextExtents(numStr)
-		numX := this.gutterW - numExt.XAdvance - 8
+		numX := this.gutterW - numExt.XAdvance - editorGutterNumberInset
 		g.DrawText1(numX, y+fe.Ascent, numStr)
 
-		// Syntax-highlighted line
-		lineText := this.lines[i]
-		// Word wrap indicator: if line exceeds visible area, show marker
-		if this.wordWrap {
-			textAreaW := editorRight - this.gutterW - 10
-			if textAreaW < 20 {
-				textAreaW = 20
-			}
-			lineW := this.measureText(lineText)
-			if lineW > textAreaW {
-				// Draw wrap indicator at right edge
-				g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 180})
-				g.DrawText1(editorRight-14, y+fe.Ascent, "\u00BB")
-			}
-		}
-		inBlock = this.drawHighlightedLine(g, i, lineText, textOffX, y+fe.Ascent, inBlock)
-
-		// Blame annotation: dim + right-aligned in the reserved column at the text
-		// area's right edge. Drawn only for visible lines carrying an annotation.
-		// blameW is 0 when the view is off, so this whole block is skipped and no
-		// pixels move — layout is identical to a build without blame.
-		if blameW > 0 && blameMaxChars > 0 {
-			if ann, ok := this.blame[i]; ok && ann != "" {
-				shown := truncateBlame(ann, blameMaxChars)
-				bx := editorRight - 6 - this.measureText(shown)
-				g.SetFont(this.font)
-				g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 150})
-				g.DrawText1(bx, y+fe.Ascent, shown)
-			}
-		}
-
-		// Folded-region hint: on a collapsed start line, draw a subtle "⋯}" after
-		// the text so the user sees the block is collapsed and where it ends.
-		if end, foldable := foldStartEnd[i]; foldable && this.foldedLines[i] {
-			hintX := textOffX + this.measureText(lineText) + 8
-			hint := "⋯" // ⋯ (midline horizontal ellipsis)
-			if end >= 0 && end < len(this.lines) {
-				if last, ok := lastNonSpaceRune(this.lines[end]); ok && last == '}' {
-					hint = "⋯ }"
-				}
-			}
-			g.SetBrush1(paint.Color{R: 120, G: 120, B: 140, A: 200})
-			g.SetFont(this.font)
-			g.DrawText1(hintX, y+fe.Ascent, hint)
-		}
-
-		// Hover link: blue underline + blue text overlay for Cmd/Ctrl+hover word
-		if i == this.hoverLinkLine && this.hoverLinkStart < this.hoverLinkEnd {
-			lineRunes := []rune(this.lines[i])
-			if this.hoverLinkEnd <= len(lineRunes) {
-				linkX := textOffX + this.measureText(string(lineRunes[:this.hoverLinkStart]))
-				linkW := this.measureText(string(lineRunes[this.hoverLinkStart:this.hoverLinkEnd]))
-				linkWord := string(lineRunes[this.hoverLinkStart:this.hoverLinkEnd])
-				// Draw the word in blue (override the syntax color)
-				g.SetBrush1(paint.Color{R: 80, G: 160, B: 255, A: 255})
-				g.SetFont(this.font)
-				g.DrawText1(linkX, y+fe.Ascent, linkWord)
-				// Draw underline
-				underY := y + fe.Ascent + 2
-				g.SetPen1(paint.Color{R: 80, G: 160, B: 255, A: 255}, 1.0)
-				g.MoveTo(linkX, underY)
-				g.LineTo(linkX+linkW, underY)
-				g.Stroke()
-			}
-		}
-
-		// Error underline: red squiggly line under the text
-		if _, hasErr := this.errorLines[i]; hasErr {
-			lineW := this.measureText(strings.TrimRight(lineText, " \t"))
-			if lineW < 20 {
-				lineW = 20
-			}
-			underY := y + fe.Ascent + 2
-			g.SetPen1(paint.Color{R: 220, G: 50, B: 50, A: 200}, 1.2)
-			// Draw squiggly underline using small wave segments
-			sx := textOffX
-			wave := 2.0
-			for sx < textOffX+lineW {
-				g.MoveTo(sx, underY)
-				g.LineTo(sx+wave, underY-wave)
-				g.LineTo(sx+wave*2, underY)
-				g.Stroke()
-				sx += wave * 2
-			}
-		}
-
-		// Bracket matching highlight
-		if hasMatchB && i == matchBLine {
-			lineRunes := []rune(this.lines[i])
-			if matchBCol < len(lineRunes) {
-				bx := textOffX + this.measureText(string(lineRunes[:matchBCol]))
-				bw := this.measureText(string(lineRunes[matchBCol : matchBCol+1]))
-				g.SetPen1(paint.Color{R: 80, G: 140, B: 220, A: 200}, 1.5)
-				g.Rectangle(bx, y, bw, lh)
-				g.Stroke()
-			}
-		}
-		// Also highlight the bracket under cursor
-		if hasMatchB && i == this.cursorLine {
-			lineRunes := []rune(this.lines[i])
-			if this.cursorCol < len(lineRunes) {
-				bx := textOffX + this.measureText(string(lineRunes[:this.cursorCol]))
-				bw := this.measureText(string(lineRunes[this.cursorCol : this.cursorCol+1]))
-				g.SetPen1(paint.Color{R: 80, G: 140, B: 220, A: 200}, 1.5)
-				g.Rectangle(bx, y, bw, lh)
-				g.Stroke()
-			}
-		}
 	}
-
-	// Draw cursor(s). Primary cursor is rendered at full brightness; any
-	// additional multi-cursors are drawn slightly dimmer so the user can
-	// tell them apart at a glance.
-	if this.HasFocus() {
-		this.clampCursor()
-		// Primary cursor
-		{
-			line := this.lines[this.cursorLine]
-			runes := []rune(line)
-			col := this.cursorCol
-			if col > len(runes) {
-				col = len(runes)
-			}
-			prefix := string(runes[:col])
-			cx := textOffX + this.measureText(prefix)
-			cy := float64(this.lineToVisualRow(this.cursorLine))*lh - this.scrollY + topOff
-			g.SetBrush1(pal.caret)
-			g.Rectangle(cx, cy, 1.5, lh)
-			g.Fill()
-		}
-		// Additional cursors
-		for _, c := range this.additionalCursors {
-			cc := this.clampCursorPos(c)
-			runes := []rune(this.lines[cc.line])
-			col := cc.col
-			if col > len(runes) {
-				col = len(runes)
-			}
-			prefix := string(runes[:col])
-			cx := textOffX + this.measureText(prefix)
-			cy := float64(this.lineToVisualRow(cc.line))*lh - this.scrollY + topOff
-			// Dim color: same hue, half alpha.
-			g.SetBrush1(paint.Color{R: pal.caret.R, G: pal.caret.G, B: pal.caret.B, A: 160})
-			g.Rectangle(cx, cy, 1.5, lh)
-			g.Fill()
-		}
-	}
-
-	g.Restore() // pop editor clip
+	g.Restore()
 
 	// --- Draw minimap ---
 	if this.showMinimap && mmW > 0 {
-		this.drawMinimap(g, editorRight, topOff, mmW, editorBottom-topOff, lh, startLine, visibleLines)
+		this.drawMinimap(g, editorRight, topOff, mmW, editorBottom-topOff, lh)
 	}
 
 	// --- Draw status bar ---
@@ -3889,8 +3383,12 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 	level := int((this.measureText(indent) + 0.000001) / tabWidth)
 
 	guideColor := this.editorColors().indentGuide
-	for i := 1; i <= level; i++ {
-		gx := this.gutterW + 10 - this.scrollX + float64(i)*tabWidth
+	w, _ := this.Size()
+	origin := this.gutterW + 10 - this.scrollX
+	first := max(1, int(math.Ceil((this.gutterW-origin-1)/tabWidth)))
+	last := min(level, int(math.Floor((w-this.minimapWidth()-origin)/tabWidth)))
+	for i := first; i <= last; i++ {
+		gx := origin + float64(i)*tabWidth
 		// Draw dotted vertical line (small segments every 3px)
 		for dy := 0.0; dy < lh; dy += 3.0 {
 			g.SetBrush1(guideColor)
@@ -3900,14 +3398,20 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 	}
 }
 
-// drawHighlightedLine renders a single line with syntax coloring.
-// It returns the updated inBlockComment state after this line.
-// idx is the line's index in this.lines and feeds the tokenization cache.
-func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line string, x, y float64, inBlock bool) bool {
-	tokens, newInBlock := this.tokenizeLineCached(idx, line, inBlock)
+// drawHighlightedLine renders one source line using its cached incoming state.
+func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, x, y float64) {
+	tokens := this.tokensForLine(idx)
+	this.ensureFontMetrics()
+	fixed := this.fixedCellLine(idx)
+	hasTabs := !fixed || this.tokenCache[idx].asciiMask[0]&(1<<9) != 0
 	pal := this.editorColors()
 	origin := x
+	w, _ := this.Size()
+	right := w - this.minimapWidth()
 	for _, tok := range tokens {
+		if fixed && x > right+float64(this.monoOverscan)*this.charWidth {
+			break
+		}
 		c, ok := pal.tokens[tok.typ]
 		if !ok {
 			c = pal.tokens[tokNormal]
@@ -3915,116 +3419,75 @@ func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, line strin
 		g.SetBrush1(c)
 		text := tok.text
 		for len(text) > 0 {
-			i := strings.IndexByte(text, '\t')
-			if i < 0 {
-				g.DrawText1(x, y, text)
-				x += this.measurePlainText(text)
+			if fixed && x > right+float64(this.monoOverscan)*this.charWidth {
 				break
 			}
-			if i > 0 {
-				g.DrawText1(x, y, text[:i])
-				x += this.measurePlainText(text[:i])
+			i := -1
+			if hasTabs {
+				i = strings.IndexByte(text, '\t')
+			}
+			part := text
+			if i >= 0 {
+				part = text[:i]
+			}
+			if len(part) > 0 {
+				if fixed {
+					this.drawViewportText(g, part, x, y, true)
+					x += float64(len(part)) * this.charWidth
+				} else {
+					g.DrawText1(x, y, part)
+					x += this.measurePlainText(part)
+				}
+			}
+			if i < 0 {
+				break
 			}
 			x = origin + this.nextTabStop(x-origin)
 			text = text[i+1:]
 		}
 	}
-
-	return newInBlock
 }
 
 // drawMinimap renders a scaled-down code overview on the right edge of the editor.
-func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64, startLine, visibleLines int) {
+func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64) {
+	if mmW <= 0 || mmH <= 0 {
+		return
+	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(x, y, mmW, mmH)
+	g.Clip()
 	pal := this.editorColors()
-	// Background
 	g.SetBrush1(pal.minimapBG)
 	g.Rectangle(x, y, mmW, mmH)
 	g.Fill()
-
-	// Left border
 	g.SetPen1(pal.minimapBorder, 1)
 	g.Line(x, y, x, y+mmH)
 	g.Stroke()
-
-	totalLines := len(this.lines)
-	if totalLines == 0 {
+	vis := this.visibleLineIndices()
+	m := makeEditorMinimapLayout(len(vis), y, mmH, lh, this.scrollY)
+	if m.samples == 0 {
 		return
 	}
-
-	// Calculate line height in minimap: scale to fit or use minimum 1px
-	minimapLineH := mmH / float64(totalLines)
-	if minimapLineH > 3 {
-		minimapLineH = 3
-	}
-	if minimapLineH < 1 {
-		minimapLineH = 1
-	}
-
-	// Determine block-comment state for minimap rendering
-	inBlock := false
-	maxVisibleMinimap := int(mmH / minimapLineH)
-	if maxVisibleMinimap > totalLines {
-		maxVisibleMinimap = totalLines
-	}
-
-	// Map token type to minimap color: the active palette's token hue at reduced
-	// alpha, or the dim colour for normal/whitespace tokens.
-	mmTokenColor := func(typ tokenType) paint.Color {
-		if c, ok := pal.tokens[typ]; ok && typ != tokNormal {
-			return paint.Color{R: c.R, G: c.G, B: c.B, A: 200}
+	rowHeight := m.contentHeight / float64(m.samples)
+	mmScale := math.Max(0, mmW-6)
+	for _, segment := range this.minimapSegments(m, vis) {
+		color := pal.minimapDim
+		if c, ok := pal.tokens[segment.typ]; ok && segment.typ != tokNormal {
+			color = paint.Color{R: c.R, G: c.G, B: c.B, A: 200}
 		}
-		return pal.minimapDim
-	}
-
-	mmScale := mmW - 6 // horizontal scale for line content
-	for i := 0; i < maxVisibleMinimap; i++ {
-		lineY := y + float64(i)*minimapLineH
-		line := this.lines[i]
-
-		tokens, newBlock := this.tokenizeLineCached(i, line, inBlock)
-		inBlock = newBlock
-
-		// Draw each token as a colored horizontal bar
-		barX := x + 3
-		for _, tok := range tokens {
-			text := tok.text
-			// Estimate proportional width based on character count
-			charW := mmScale * float64(len([]rune(text))) / 80.0
-			if charW < 1 {
-				charW = 1
-			}
-			if charW > mmScale-barX+x+3 {
-				charW = mmScale - barX + x + 3
-			}
-			if tok.typ != tokNormal || strings.TrimSpace(text) != "" {
-				c := mmTokenColor(tok.typ)
-				g.SetBrush1(c)
-				g.Rectangle(barX, lineY, charW, minimapLineH)
-				g.Fill()
-			}
-			barX += charW
-			if barX > x+mmW-3 {
-				break
-			}
-		}
-	}
-
-	// Draw viewport indicator (semi-transparent blue overlay showing visible range)
-	vpStartY := y + float64(startLine)*minimapLineH
-	vpH := float64(visibleLines) * minimapLineH
-	if vpStartY+vpH > y+mmH {
-		vpH = y + mmH - vpStartY
+		g.SetBrush1(color)
+		g.Rectangle(x+3+mmScale*float64(segment.col)/80, y+float64(segment.sample)*rowHeight, mmScale*float64(segment.columns)/80, rowHeight)
+		g.Fill()
 	}
 	g.SetBrush1(paint.Color{R: 60, G: 100, B: 180, A: 50})
-	g.Rectangle(x, vpStartY, mmW, vpH)
+	g.Rectangle(x, m.viewportTop, mmW, m.viewportHeight)
 	g.Fill()
-	// Viewport border
 	g.SetPen1(paint.Color{R: 80, G: 130, B: 210, A: 100}, 1)
-	g.Rectangle(x, vpStartY, mmW, vpH)
+	g.Rectangle(x, m.viewportTop, mmW, m.viewportHeight)
 	g.Stroke()
 }
 
-// drawStatusBar renders the editor status bar at the bottom.
 func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	y := h - sbH
 	pal := this.editorColors()
@@ -4050,9 +3513,9 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 		wrapStr = "Wrap: On"
 	}
 	labels := [5]string{
-		fmt.Sprintf("Ln %d, Col %d", this.cursorLine+1, this.cursorCol+1),
+		this.cursorStatusLabel(false),
 		fmt.Sprintf("%d chars, %d lines", this.textRuneCount, len(this.lines)),
-		"UTF-8", "Go", wrapStr,
+		"UTF-8", this.languageLabel(), wrapStr,
 	}
 	var widths [5]float64
 	for i, label := range labels {
@@ -4060,7 +3523,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 		widths[i] = math.Max(ext.Width, ext.XAdvance)
 	}
 	if widths[0] > w-20 {
-		labels[0] = fmt.Sprintf("%d:%d", this.cursorLine+1, this.cursorCol+1)
+		labels[0] = this.cursorStatusLabel(true)
 		ext := smallFont.TextExtents(labels[0])
 		widths[0] = math.Max(ext.Width, ext.XAdvance)
 	}
@@ -4079,22 +3542,25 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 
 // ----- Tokenizer -----
 
-// tokenizeLine performs simple lexical analysis of a single Go source line.
-// inBlock indicates whether we are inside a block comment from a prior line.
-// Returns the token list and the updated inBlock state.
-//
-// Pathological-input guard: when len(line) >= maxHighlightLineLength the
-// tokenizer allocates a single fallback token spanning the whole line. If the
-// line started inside a block comment it stays a comment token (and inBlock
-// stays true), otherwise it renders as plain text. This trades coloring on
-// truly long lines for predictable cost — the rune-decode + per-rune scan is
-// the expensive part of the tokenizer.
+// tokenizeLine is the legacy block-only test adapter. Document rendering uses
+// tokenizeGoLine and the full cross-line state, including raw strings.
 func tokenizeLine(line string, inBlock bool) ([]token, bool) {
+	tokens, next := tokenizeGoLine(line, goStateFromBlock(inBlock))
+	return tokens, next == goLexBlock
+}
+
+// tokenizeGoLine colors one line. Very long lines keep a single fallback token,
+// but still scan delimiters without token allocations to preserve following
+// lines' state. Only the long line itself sacrifices precise coloring.
+func tokenizeGoLine(line string, state goLexState) ([]token, goLexState) {
 	if len(line) >= maxHighlightLineLength {
-		if inBlock {
-			return []token{{text: line, typ: tokComment}}, true
+		typ := tokNormal
+		if state == goLexBlock {
+			typ = tokComment
+		} else if state == goLexRaw {
+			typ = tokString
 		}
-		return []token{{text: line, typ: tokNormal}}, false
+		return []token{{text: line, typ: typ}}, scanGoLineState(line, state)
 	}
 	var tokens []token
 	runes := []rune(line)
@@ -4107,22 +3573,34 @@ func tokenizeLine(line string, inBlock bool) ([]token, bool) {
 		}
 	}
 
-	if inBlock {
+	if state == goLexBlock {
 		// Continue scanning for end of block comment.
 		start := i
 		for i < n {
 			if i+1 < n && runes[i] == '*' && runes[i+1] == '/' {
 				i += 2
 				addTok(string(runes[start:i]), tokComment)
-				inBlock = false
+				state = goLexNormal
 				goto normalScan
 			}
 			i++
 		}
 		addTok(string(runes[start:]), tokComment)
-		return tokens, true
+		return tokens, goLexBlock
 	}
 
+	if state == goLexRaw {
+		for i < n && runes[i] != '`' {
+			i++
+		}
+		if i == n {
+			addTok(string(runes), tokString)
+			return tokens, goLexRaw
+		}
+		i++
+		addTok(string(runes[:i]), tokString)
+		state = goLexNormal
+	}
 normalScan:
 	for i < n {
 		ch := runes[i]
@@ -4130,7 +3608,7 @@ normalScan:
 		// Line comment
 		if ch == '/' && i+1 < n && runes[i+1] == '/' {
 			addTok(string(runes[i:]), tokComment)
-			return tokens, inBlock
+			return tokens, state
 		}
 
 		// Block comment start
@@ -4146,7 +3624,7 @@ normalScan:
 				i++
 			}
 			addTok(string(runes[start:]), tokComment)
-			return tokens, true
+			return tokens, goLexBlock
 		}
 
 		// Double-quoted string
@@ -4166,16 +3644,18 @@ normalScan:
 			continue
 		}
 
-		// Raw string (backtick)
+		// Raw strings may span any number of source lines.
 		if ch == '`' {
 			start := i
 			i++
 			for i < n && runes[i] != '`' {
 				i++
 			}
-			if i < n {
-				i++
+			if i == n {
+				addTok(string(runes[start:]), tokString)
+				return tokens, goLexRaw
 			}
+			i++
 			addTok(string(runes[start:i]), tokString)
 			continue
 		}
@@ -4270,58 +3750,49 @@ normalScan:
 		i++
 	}
 
-	return tokens, inBlock
+	return tokens, state
 }
 
-// lineEndsInBlockComment determines whether we are inside a block comment
-// after processing this line, starting from the given state.
-func lineEndsInBlockComment(line string, inBlock bool) bool {
-	_, newState := tokenizeLine(line, inBlock)
-	return newState
-}
-
-// tokenLineHash returns a fnv64a hash that mixes the line bytes with the
-// incoming inBlock flag. The flag goes in as a trailing sentinel byte so a
-// line that flips between in-block and out-of-block context produces a
-// distinct key, even though its bytes are identical.
+// tokenLineHash retains the block-only test adapter.
 func tokenLineHash(line string, inBlock bool) uint64 {
+	return goTokenLineHash(line, goStateFromBlock(inBlock))
+}
+
+func goTokenLineHash(line string, state goLexState) uint64 {
 	h := fnv.New64a()
-	// Writing to fnv64a is documented never to fail; the error is unused.
 	_, _ = h.Write([]byte(line))
-	if inBlock {
-		_, _ = h.Write([]byte{1})
-	} else {
-		_, _ = h.Write([]byte{0})
-	}
+	_, _ = h.Write([]byte{byte(state)})
 	return h.Sum64()
 }
 
-// tokenizeLineCached is the Draw-path wrapper around tokenizeLine. It
-// memoizes the (tokens, nextBlock) pair under (lineIdx, fnv64a(line, inBlock));
-// a hit returns the cached slice directly, a miss runs the underlying
-// tokenizer and stores the result.
-//
-// The cache is single-threaded — Draw and every mutation handler run on the
-// GLFW main thread — so no locking is needed.
-//
-// Long lines past maxHighlightLineLength fall through to tokenizeLine's
-// single-token fallback and are cached just like any other line: the entry
-// is small (one token), and a hash hit still skips the per-rune scan.
 func (this *CodeEditor) tokenizeLineCached(idx int, line string, inBlock bool) ([]token, bool) {
-	h := tokenLineHash(line, inBlock)
+	tokens, next := this.tokenizeGoLineCached(idx, line, goStateFromBlock(inBlock))
+	return tokens, next == goLexBlock
+}
+
+// UI-thread-only cache; state changes invalidate an otherwise unchanged line.
+func (this *CodeEditor) tokenizeGoLineCached(idx int, line string, state goLexState) ([]token, goLexState) {
+	goSyntax := this.usesGoSyntax()
 	var overlayRevision uint64
 	if this.syntaxRevision == this.TextRevision() && len(this.syntaxHighlights[idx]) > 0 {
 		overlayRevision = this.syntaxRevision
 	}
-	if e, ok := this.tokenCache[idx]; ok && e.hash == h && e.syntaxRevision == overlayRevision {
-		return e.tokens, e.nextBlock
+	if e, ok := this.tokenCache[idx]; ok && e.source == line && e.inState == state && e.goSyntax == goSyntax && e.syntaxRevision == overlayRevision {
+		// Rebind the key to the currently supplied immutable source.
+		e.source = line
+		this.tokenCache[idx] = e
+		return e.tokens, e.nextState
 	}
-	tokens, next := tokenizeLine(line, inBlock)
+	tokens, next := []token{{text: line, typ: tokNormal}}, goLexNormal
+	if goSyntax {
+		tokens, next = tokenizeGoLine(line, state)
+	}
 	tokens = this.overlayTokens(idx, tokens)
 	if this.tokenCache == nil {
 		this.tokenCache = make(map[int]tokenCacheEntry)
 	}
-	this.tokenCache[idx] = tokenCacheEntry{hash: h, tokens: tokens, nextBlock: next, syntaxRevision: overlayRevision}
+	fixed, mask := classifyFixedCellSource(line)
+	this.tokenCache[idx] = tokenCacheEntry{asciiMask: mask, source: line, inState: state, goSyntax: goSyntax, fixedCells: fixed, tokens: tokens, nextState: next, syntaxRevision: overlayRevision}
 	return tokens, next
 }
 
@@ -4329,6 +3800,7 @@ func (this *CodeEditor) tokenizeLineCached(idx int, line string, inBlock bool) (
 // rebuildText when the line count changes, since line-index keys are no
 // longer trustworthy after an insert/delete shift.
 func (this *CodeEditor) clearTokenCache() {
+	this.minimapCache.valid = false
 	this.tokenCache = nil
 	this.tokenCacheLineCt = 0
 }
@@ -4352,6 +3824,9 @@ func isIdentPart(r rune) bool {
 // ----- Input Handling -----
 
 func (this *CodeEditor) posFromXY(x, y float64) (int, int) {
+	if len(this.lines) == 0 {
+		return 0, 0
+	}
 	fe := this.font.FontExtents()
 	lh := fe.Height + 2
 	topOff := this.topOffset()
@@ -4376,61 +3851,38 @@ func (this *CodeEditor) posFromXY(x, y float64) (int, int) {
 	}
 
 	xOff := x - this.gutterW - 10 + this.scrollX
-	col := 0
-	if xOff >= 0 {
-		runes := []rune(this.lines[line])
-		col = len(runes)
-		// Binary search avoids O(n²) prefix shaping on long source lines.
-		c := sort.Search(len(runes)+1, func(c int) bool {
-			return this.measureText(string(runes[:c])) > xOff
-		})
-		if c <= len(runes) {
-			col = c
-			if c > 0 {
-				prev := this.measureText(string(runes[:c-1]))
-				next := this.measureText(string(runes[:c]))
-				if xOff-prev < next-xOff {
-					col = c - 1
-				}
-			}
-		}
+	return line, this.textColumnAtX(this.lines[line], xOff)
 
-	}
-	return line, col
 }
 
 func (this *CodeEditor) OnLeftDown(x, y float64) {
+	this.minimapDragging = false
 	this.DismissLanguageHints()
 	this.SetFocus()
+	this.expireExternalCompletions()
+	if this.completion != nil && (this.completion.visible || this.completion.open) {
+		if row, inside := this.completion.layout(this).hit(x, y, this.completion.scrollY); inside {
+			this.mouseDown = false
+			if row >= 0 {
+				this.completion.selectedIdx = row
+				this.completion.Accept(this)
+			}
+			this.Self().Update()
+			return
+		}
+		this.completion.Dismiss()
+		this.Self().Update()
+	}
 
 	// If clicking in status bar area, ignore
 	_, h := this.Size()
-	if y > h-this.statusBarHeight {
+	if y >= h-this.statusBarHeight {
 		return
 	}
 
-	// If clicking in minimap area, scroll to that position
-	w, _ := this.Size()
-	mmW := this.minimapWidth()
-	if this.showMinimap && mmW > 0 && x > w-mmW {
-		topOff := this.topOffset()
-		editorBottom := h - this.statusBarHeight
-		mmH := editorBottom - topOff
-		totalLines := len(this.lines)
-		if totalLines > 0 && mmH > 0 {
-			relY := y - topOff
-			if relY < 0 {
-				relY = 0
-			}
-			clickedLine := int(relY / mmH * float64(totalLines))
-			if clickedLine >= totalLines {
-				clickedLine = totalLines - 1
-			}
-			if clickedLine < 0 {
-				clickedLine = 0
-			}
-			this.ScrollToLine(clickedLine)
-		}
+	// Scroll without moving the caret or selection; dragging uses this same
+	// overview geometry, including folds and the actual top/bottom bars.
+	if this.beginMinimapDrag(x, y) {
 		return
 	}
 
@@ -4458,6 +3910,11 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 		gotoBarTop = this.findBarHeight
 	}
 	if this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.findBarHeight {
+		return
+	}
+
+	// Breadcrumb and auxiliary bars are not document hit targets.
+	if y < this.topOffset() {
 		return
 	}
 
@@ -4599,6 +4056,20 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 }
 
 func (this *CodeEditor) OnMouseMove(x, y float64) {
+	if this.minimapDragging {
+		this.dragMinimap(y)
+		return
+	}
+	if !this.mouseDown && this.completion != nil && this.completion.visible {
+		if row, inside := this.completion.layout(this).hit(x, y, this.completion.scrollY); inside {
+			this.DismissLanguageHints()
+			if row >= 0 && row != this.completion.selectedIdx {
+				this.completion.selectedIdx = row
+				this.Self().Update()
+			}
+			return
+		}
+	}
 	if this.mouseDown {
 		line, col := this.posFromXY(x, y)
 		this.cursorLine = line
@@ -4732,6 +4203,7 @@ func (this *CodeEditor) hoverIdentAt(x, y float64) (line, col int, ok bool) {
 
 func (this *CodeEditor) OnLeftUp(x, y float64) {
 	this.mouseDown = false
+	this.minimapDragging = false
 }
 
 // editorContextMenuItem is one row of the right-click menu produced by
@@ -4741,6 +4213,7 @@ func (this *CodeEditor) OnLeftUp(x, y float64) {
 // up a Popup, a Window, or a GLFW context.
 type editorContextMenuItem struct {
 	Label     string
+	Icon      string
 	Enabled   bool
 	Separator bool   // true when this entry is just a visual separator
 	Action    func() // nil when Separator or Enabled is false
@@ -4851,6 +4324,10 @@ func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []ed
 			Action:  func() { this.editorSelectAll() },
 		},
 		{Separator: true},
+		{Label: "向上添加光标", Icon: "cursor-add-above", Enabled: this.CanAddCursorAbove(), Action: func() { this.AddCursorAbove() }},
+		{Label: "向下添加光标", Icon: "cursor-add-below", Enabled: this.CanAddCursorBelow(), Action: func() { this.AddCursorBelow() }},
+		{Label: "仅保留主光标", Icon: "cursor-primary", Enabled: this.CursorCount() > 1, Action: func() { this.KeepPrimaryCursor() }},
+		{Separator: true},
 		{
 			Label:   "重命名符号",
 			Enabled: hasWord,
@@ -4876,6 +4353,10 @@ func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []ed
 // the Paste entry; tests drive contextMenuItems directly with a bool
 // so this never runs without a real GLFW window.
 func (this *CodeEditor) clipboardHasText() bool {
+	// Do not materialize potentially promised pasteboard data just to open a menu.
+	if asyncClipboardControls {
+		return true
+	}
 	d, err := Clipboard.Data("text/plain")
 	if err != nil {
 		return false
@@ -4922,6 +4403,12 @@ func (this *CodeEditor) repositionCaretForRightClick(x, y float64) {
 	line, col := this.posFromXY(x, y)
 	if !this.hasSelection || !this.posInSelection(line, col) {
 		this.clearSelection()
+		for i, c := range this.additionalCursors {
+			if c.line == line && c.col == col {
+				this.additionalCursors[i] = cursorPos{this.cursorLine, this.cursorCol}
+				break
+			}
+		}
 		this.cursorLine = line
 		this.cursorCol = col
 		this.clampCursor()
@@ -4946,7 +4433,7 @@ func (this *CodeEditor) OnRightDown(x, y float64) {
 				m.AddSeparator()
 				continue
 			}
-			btn := m.AddButton1(it.Label, nil)
+			btn := m.AddButton1(it.Label, paint.LoadIcon(it.Icon))
 			if !it.Enabled {
 				btn.SetEnabled(false)
 				continue
@@ -5075,15 +4562,10 @@ func (this *CodeEditor) OnTextInput(s string) {
 
 	this.clampCursor()
 
-	// Multi-cursor: if additional cursors are active and the input is
-	// single-line, insert at every caret. Undo is recorded as a single
-	// insert at the primary cursor — a pragmatic simplification that keeps
-	// the undo stack simple; users can always Escape to exit multi-cursor.
-	if len(this.additionalCursors) > 0 && !strings.Contains(s, "\n") {
-		if this.hasSelection {
-			this.clearSelection()
-		}
-		this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: s})
+	// Each multi-caret input (including multiline paste/IME text) is one byte-
+	// exact transaction, with primary and secondary carets restored on undo.
+	if len(this.additionalCursors) > 0 {
+		this.clearSelection()
 		this.insertAtAllCursors(s)
 		this.rebuildText()
 		this.ensureCursorVisible()
@@ -5101,11 +4583,7 @@ func (this *CodeEditor) OnTextInput(s string) {
 			this.Self().Update()
 			return
 		}
-		selText := this.SelectedText()
-		sl, sc, _, _ := this.selectionRange()
-		this.DeleteSelection()
-		this.pushUndo(editAction{kind: 2, line: sl, col: sc, text: s, oldText: selText})
-		this.insertTextAtCursor(s)
+		this.replaceSelectionRecorded(s)
 		this.rebuildText()
 		this.ensureCursorVisible()
 		this.Self().Update()
@@ -5115,8 +4593,9 @@ func (this *CodeEditor) OnTextInput(s string) {
 	// Auto-close: type over an existing closing bracket/quote already under the
 	// caret rather than inserting a duplicate. No buffer mutation, so no undo.
 	if isAutoCloseCloser(s) {
-		curRunes := []rune(this.lines[this.cursorLine])
-		if this.cursorCol < len(curRunes) && string(curRunes[this.cursorCol]) == s {
+		line := this.lines[this.cursorLine]
+		column := textPositionInLine(line, this.cursorCol).ByteColumn
+		if strings.HasPrefix(line[column:], s) {
 			this.cursorCol++
 			this.ensureCursorVisible()
 			this.Self().Update()
@@ -5131,13 +4610,8 @@ func (this *CodeEditor) OnTextInput(s string) {
 	// caret between the pair. Routed through rebuildText like every edit.
 	if open, closer, ok := autoCloseOpenerFor(s); ok {
 		this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: string(open) + string(closer)})
-		pairLine := []rune(this.lines[this.cursorLine])
-		newPair := make([]rune, 0, len(pairLine)+2)
-		newPair = append(newPair, pairLine[:this.cursorCol]...)
-		newPair = append(newPair, open, closer)
-		newPair = append(newPair, pairLine[this.cursorCol:]...)
-		this.lines[this.cursorLine] = string(newPair)
-		this.cursorCol++ // caret between the pair
+		this.insertTextAtCursor(string(open) + string(closer))
+		this.cursorCol-- // caret between the pair
 		this.rebuildText()
 		this.ensureCursorVisible()
 		this.Self().Update()
@@ -5150,16 +4624,7 @@ func (this *CodeEditor) OnTextInput(s string) {
 
 	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: s})
 
-	line := this.lines[this.cursorLine]
-	runes := []rune(line)
-	insertRunes := []rune(s)
-
-	newRunes := make([]rune, 0, len(runes)+len(insertRunes))
-	newRunes = append(newRunes, runes[:this.cursorCol]...)
-	newRunes = append(newRunes, insertRunes...)
-	newRunes = append(newRunes, runes[this.cursorCol:]...)
-	this.lines[this.cursorLine] = string(newRunes)
-	this.cursorCol += len(insertRunes)
+	this.insertRawText(s)
 
 	this.rebuildText()
 	this.ensureCursorVisible()
@@ -5197,7 +4662,7 @@ func (this *CodeEditor) tryTriggerCompletion(typed string) {
 	if len(typed) == 0 {
 		return
 	}
-	lastRune := []rune(typed)[len([]rune(typed))-1]
+	lastRune, _ := utf8.DecodeLastRuneInString(typed)
 	if lastRune == '.' {
 		// Trigger after dot
 		this.showCompletion("")
@@ -5250,26 +4715,53 @@ func (this *CodeEditor) mergeExternalIntoPopup() {
 
 // currentWordPrefix returns the word being typed at the cursor position.
 func (this *CodeEditor) currentWordPrefix() string {
-	if this.cursorLine >= len(this.lines) {
+	if this.cursorLine < 0 || this.cursorLine >= len(this.lines) {
 		return ""
 	}
-	runes := []rune(this.lines[this.cursorLine])
-	end := this.cursorCol
-	if end > len(runes) {
-		end = len(runes)
-	}
+	line := this.lines[this.cursorLine]
+	end := textPositionInLine(line, this.cursorCol).ByteColumn
 	start := end
-	for start > 0 && (unicode.IsLetter(runes[start-1]) || unicode.IsDigit(runes[start-1]) || runes[start-1] == '_') {
-		start--
+	for start > 0 {
+		r, width := utf8.DecodeLastRuneInString(line[:start])
+		if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			break
+		}
+		start -= width
 	}
-	if start == end {
-		return ""
+	return line[start:end]
+}
+
+// WantsTab handles the key before native-window focus traversal consumes it.
+// Ctrl/Alt/action-modified Tab remains available to the host's focus shortcuts.
+// Ordinary Tab must use the same completion/find/snippet route as other keys.
+func (this *CodeEditor) WantsTab(shift bool) bool {
+	if IsKeyDown(KeyCtrl) || IsKeyDown(KeyMenu) || isActionModifier() {
+		return false
 	}
-	return string(runes[start:end])
+	this.onKeyDownWithShift(KeyTab, false, shift)
+	return true
 }
 
 func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
+	this.onKeyDownWithShift(key, repeat, IsKeyDown(KeyShift))
+}
+
+func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
+	if editorSystemKey(key, IsKeyDown(KeyCtrl) || isActionModifier(), IsKeyDown(KeyMenu)) {
+		if key == KeyUp {
+			this.AddCursorAbove()
+		} else {
+			this.AddCursorBelow()
+		}
+		return
+	}
 	this.expireExternalCompletions()
+	if p := this.completion; p != nil && !p.visible && p.open {
+		switch key {
+		case KeyEsc, KeyLeft, KeyRight, KeyUp, KeyDown, KeyHome, KeyEnd, KeyPageUp, KeyPageDown, KeyEnter, KeyTab:
+			p.Dismiss()
+		}
+	}
 	switch key {
 	case KeyEsc, KeyLeft, KeyRight, KeyUp, KeyDown, KeyHome, KeyEnd, KeyPageUp, KeyPageDown, KeyEnter:
 		this.DismissLanguageHints()
@@ -5381,10 +4873,22 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.completion.SelectNext()
 			this.Self().Update()
 			return
-		case KeyEnter, KeyTab:
-			this.completion.Accept(this)
+		case KeyPageUp, KeyPageDown:
+			this.completion.layout(this)
+			delta := this.completion.pageSize()
+			if key == KeyPageUp {
+				delta = -delta
+			}
+			this.completion.selectIndex(this.completion.selectedIdx + delta)
 			this.Self().Update()
 			return
+		case KeyEnter, KeyTab:
+			this.completion.layout(this) // resize may precede the next paint
+			if this.completion.visible {
+				this.completion.Accept(this)
+				this.Self().Update()
+				return
+			}
 		case KeyEsc:
 			this.completion.Dismiss()
 			this.Self().Update()
@@ -5394,7 +4898,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 	// --- Find bar key routing ---
 	if this.findActive {
 		// Close from either input row, before replace-focused routing consumes F.
-		if key == 'F' && (IsKeyDown(KeyCtrl) || isActionModifier()) && !IsKeyDown(KeyShift) {
+		if key == 'F' && (IsKeyDown(KeyCtrl) || isActionModifier()) && !shift {
 			this.closeFindBar()
 			return
 		}
@@ -5411,7 +4915,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 				this.closeFindBar()
 				return
 			case KeyEnter, KeyF3:
-				if IsKeyDown(KeyShift) {
+				if shift {
 					this.replaceAll()
 				} else {
 					this.replaceCurrent()
@@ -5458,7 +4962,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 			this.closeFindBar()
 			return
 		case KeyEnter, KeyF3:
-			if IsKeyDown(KeyShift) {
+			if shift {
 				this.findPrev()
 			} else {
 				this.findNext()
@@ -5507,7 +5011,6 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 	}
 
-	shift := IsKeyDown(KeyShift)
 	ctrl := IsKeyDown(KeyCtrl) || isActionModifier()
 	alt := IsKeyDown(KeyMenu)
 
@@ -5548,6 +5051,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 
 	switch key {
 	case KeyBackSpace:
+		completionWasOpen := this.completion != nil && (this.completion.visible || this.completion.open)
 		// Multi-cursor: delete at every caret in reverse order.
 		if len(this.additionalCursors) > 0 && !this.hasSelection {
 			this.backspaceAtAllCursors()
@@ -5568,11 +5072,12 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.clampCursor()
 		if this.cursorCol > 0 {
 			line := this.lines[this.cursorLine]
-			runes := []rune(line)
-			deleted := string(runes[this.cursorCol-1 : this.cursorCol])
+			end := textPositionInLine(line, this.cursorCol).ByteColumn
+			_, width := utf8.DecodeLastRuneInString(line[:end])
+			start := end - width
+			deleted := line[start:end]
 			this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: this.cursorCol - 1, text: deleted})
-			newRunes := append(runes[:this.cursorCol-1], runes[this.cursorCol:]...)
-			this.lines[this.cursorLine] = string(newRunes)
+			this.replaceByteRange(this.cursorLine, start, width, "")
 			this.cursorCol--
 			this.rebuildText()
 		} else if this.cursorLine > 0 {
@@ -5589,7 +5094,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.ensureCursorVisible()
 		this.Self().Update()
 		// Update completion after backspace
-		if this.completion != nil && this.completion.visible {
+		if this.completion != nil && completionWasOpen {
 			prefix := this.currentWordPrefix()
 			if prefix == "" {
 				this.completion.Dismiss()
@@ -5617,12 +5122,12 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		}
 		this.clampCursor()
 		line := this.lines[this.cursorLine]
-		runes := []rune(line)
-		if this.cursorCol < len(runes) {
-			deleted := string(runes[this.cursorCol : this.cursorCol+1])
+		start := textPositionInLine(line, this.cursorCol).ByteColumn
+		if start < len(line) {
+			_, width := utf8.DecodeRuneInString(line[start:])
+			deleted := line[start : start+width]
 			this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: this.cursorCol, text: deleted})
-			newRunes := append(runes[:this.cursorCol], runes[this.cursorCol+1:]...)
-			this.lines[this.cursorLine] = string(newRunes)
+			this.replaceByteRange(this.cursorLine, start, width, "")
 			this.rebuildText()
 		} else if this.cursorLine < len(this.lines)-1 {
 			this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: this.cursorCol, text: "\n"})
@@ -5634,59 +5139,21 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.Self().Update()
 
 	case KeyEnter:
-		this.clampCursor()
-		line := this.lines[this.cursorLine]
-		runes := []rune(line)
-		before := string(runes[:this.cursorCol])
-		after := string(runes[this.cursorCol:])
-
-		// Go-aware indent: copy current-line leading whitespace and add one
-		// indent step when the cursor sits at the end of a line ending in '{'.
-		// The editor's indent unit is a literal tab (KeyTab inserts "\t").
-		indent := nextLineIndent(line, this.cursorCol, "\t")
-
-		// Smart indent: reduce indent after '}'. Only fires when the cursor
-		// sits immediately before a '}' (e.g. "if true {|}" pressing Enter
-		// drops the closing brace back to the outer level).
-		trimmedAfter := strings.TrimLeft(after, " \t")
-		if len(trimmedAfter) > 0 && trimmedAfter[0] == '}' && len(indent) > 0 {
-			// Remove one level
-			if indent[len(indent)-1] == '\t' {
-				indent = indent[:len(indent)-1]
-			} else {
-				// Remove up to 4 spaces
-				spaces := 0
-				for spaces < 4 && len(indent) > 0 && indent[len(indent)-1] == ' ' {
-					indent = indent[:len(indent)-1]
-					spaces++
-				}
-			}
+		if len(this.additionalCursors) > 0 && !this.hasSelection {
+			this.editAtAllCursors(byteCursorEnter, "")
+			this.rebuildText()
+			this.ensureCursorVisible()
+			this.Self().Update()
+			return
 		}
-
-		insertedText := "\n" + indent
+		this.clampCursor()
+		insertedText := editorNewlineText(this.lines[this.cursorLine], this.cursorCol)
 		if this.hasSelection {
-			selText := this.SelectedText()
-			sl, sc, _, _ := this.selectionRange()
-			this.DeleteSelection()
-			this.pushUndo(editAction{kind: 2, line: sl, col: sc, text: insertedText, oldText: selText})
-			// Recompute after deletion
-			this.clampCursor()
-			line = this.lines[this.cursorLine]
-			runes = []rune(line)
-			before = string(runes[:this.cursorCol])
-			after = string(runes[this.cursorCol:])
+			this.replaceSelectionRecorded(insertedText)
 		} else {
 			this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: insertedText})
+			this.insertRawText(insertedText)
 		}
-
-		this.lines[this.cursorLine] = before
-		newLines := make([]string, 0, len(this.lines)+1)
-		newLines = append(newLines, this.lines[:this.cursorLine+1]...)
-		newLines = append(newLines, indent+after)
-		newLines = append(newLines, this.lines[this.cursorLine+1:]...)
-		this.lines = newLines
-		this.cursorLine++
-		this.cursorCol = len([]rune(indent))
 		this.clearSelection()
 		this.rebuildText()
 		this.ensureCursorVisible()
@@ -5794,21 +5261,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 
 	case KeyUp:
 		// Multi-cursor: Cmd/Ctrl+Alt+Up adds a cursor on the line above.
-		if alt && (ctrl || isActionModifier()) {
-			// Use the topmost existing cursor as the anchor.
-			top := cursorPos{line: this.cursorLine, col: this.cursorCol}
-			for _, c := range this.additionalCursors {
-				if c.line < top.line {
-					top = c
-				}
-			}
-			if top.line > 0 {
-				this.AddCursorAtLine(top.line-1, top.col)
-				this.ensureCursorVisible()
-				this.Self().Update()
-			}
-			return
-		}
+
 		if alt {
 			this.moveLineUp()
 			return
@@ -5832,20 +5285,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 
 	case KeyDown:
 		// Multi-cursor: Cmd/Ctrl+Alt+Down adds a cursor on the line below.
-		if alt && (ctrl || isActionModifier()) {
-			bot := cursorPos{line: this.cursorLine, col: this.cursorCol}
-			for _, c := range this.additionalCursors {
-				if c.line > bot.line {
-					bot = c
-				}
-			}
-			if bot.line < len(this.lines)-1 {
-				this.AddCursorAtLine(bot.line+1, bot.col)
-				this.ensureCursorVisible()
-				this.Self().Update()
-			}
-			return
-		}
+
 		if alt {
 			this.moveLineDown()
 			return
@@ -5952,7 +5392,7 @@ func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
 		this.snippetSess = nil
 		// Multi-cursor: Escape first collapses extra cursors, then the selection.
 		if len(this.additionalCursors) > 0 {
-			this.ClearAdditionalCursors()
+			this.KeepPrimaryCursor()
 			return
 		}
 		this.clearSelection()
@@ -6216,23 +5656,30 @@ func (this *CodeEditor) editorCut() {
 		Clipboard.Clear()
 		Clipboard.SetData(text)
 	}
-	if len(this.lines) > 1 {
-		this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: 0, text: text + "\n"})
-		this.lines = append(this.lines[:this.cursorLine], this.lines[this.cursorLine+1:]...)
-		if this.cursorLine >= len(this.lines) {
-			this.cursorLine = len(this.lines) - 1
-		}
-	} else {
-		this.pushUndo(editAction{kind: 1, line: 0, col: 0, text: text})
-		this.lines[0] = ""
-	}
-	this.cursorCol = 0
-	this.rebuildText()
-	this.Self().Update()
+	this.deleteCurrentLine()
 }
 
 // pasteClipboard inserts clipboard text at cursor, replacing selection.
 func (this *CodeEditor) pasteClipboard() {
+	revision := this.TextRevision()
+	line, col := this.cursorLine, this.cursorCol
+	selected := this.hasSelection
+	sl, sc, el, ec := this.selStartLine, this.selStartCol, this.selEndLine, this.selEndCol
+	cursors := append([]cursorPos(nil), this.additionalCursors...)
+	valid := func() bool {
+		if this.TextRevision() != revision || this.cursorLine != line || this.cursorCol != col || this.hasSelection != selected || this.selStartLine != sl || this.selStartCol != sc || this.selEndLine != el || this.selEndCol != ec || len(cursors) != len(this.additionalCursors) {
+			return false
+		}
+		for i, c := range cursors {
+			if this.additionalCursors[i] != c {
+				return false
+			}
+		}
+		return true
+	}
+	if this.tryAsyncPaste(valid, this.pasteText) {
+		return
+	}
 	data, err := Clipboard.Data("text/plain")
 	if err != nil {
 		return
@@ -6241,28 +5688,24 @@ func (this *CodeEditor) pasteClipboard() {
 	if !ok || text == "" {
 		return
 	}
+	this.pasteText(text)
+}
 
-	// Delete selection first
-	if this.hasSelection {
-		selText := this.SelectedText()
-		sl, sc, _, _ := this.selectionRange()
-		this.DeleteSelection()
-		this.pushUndo(editAction{kind: 2, line: sl, col: sc, text: text, oldText: selText})
-	} else {
-		this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: text})
-	}
-
-	// Handle multi-line paste
-	pasteLines := strings.Split(text, "\n")
-	if len(pasteLines) == 1 {
-		this.insertTextAtCursor(text)
+func (this *CodeEditor) pasteText(text string) {
+	this.clampCursor()
+	if len(this.additionalCursors) > 0 && !this.hasSelection {
+		this.insertAtAllCursors(text)
 		this.rebuildText()
 		this.ensureCursorVisible()
 		this.Self().Update()
 		return
 	}
-	this.clampCursor()
-	this.insertMultilineAtCursor(pasteLines)
+	if this.hasSelection {
+		this.replaceSelectionRecorded(text)
+	} else {
+		this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: text})
+		this.insertRawText(text)
+	}
 	this.rebuildText()
 	this.ensureCursorVisible()
 	this.Self().Update()
@@ -6270,6 +5713,15 @@ func (this *CodeEditor) pasteClipboard() {
 
 func (this *CodeEditor) OnMouseWheel(x, y, z float64) {
 	this.DismissLanguageHints()
+	if this.completion != nil && this.completion.visible {
+		if _, inside := this.completion.layout(this).hit(x, y, this.completion.scrollY); inside {
+			if this.completion.scroll(z) {
+				this.Self().Update()
+			}
+			return // never scroll the document underneath the list
+		}
+		this.completion.Dismiss()
+	}
 	fe := this.font.FontExtents()
 	lh := fe.Height + 2
 
@@ -6289,7 +5741,7 @@ func (this *CodeEditor) OnMouseWheel(x, y, z float64) {
 		this.scrollY = 0
 	}
 	_, h := this.Size()
-	maxScroll := float64(len(this.lines))*lh - h + this.topOffset() + this.statusBarHeight
+	maxScroll := float64(len(this.visibleLineIndices()))*lh - h + this.topOffset() + this.statusBarHeight
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -6325,6 +5777,9 @@ func (this *CodeEditor) EnumProperties(list core.IPropertyList) {
 // UI freezes. If formatting succeeds, the text is replaced with the formatted
 // output. If it fails or times out, the text remains unchanged.
 func (this *CodeEditor) FormatCode() {
+	if this.Language() != "go" {
+		return // never hand prose or unexpanded SilkGo directives to gofmt
+	}
 	text := this.Text()
 	if text == "" {
 		return
@@ -6548,7 +6003,9 @@ func (this *CodeEditor) testFuncLines() map[int]string {
 	if !strings.HasSuffix(this.FilePath(), "_test.go") {
 		return nil
 	}
-	this.cachedSymbols()
+	if !this.ensureSymbols() {
+		return nil
+	}
 	return this.symbolCache.testLines
 }
 
@@ -6938,20 +6395,12 @@ func nextLineIndent(currentLine string, cursorCol int, indentUnit string) string
 		}
 	}
 
-	runes := []rune(currentLine)
-	if cursorCol < 0 {
-		cursorCol = 0
-	}
-	if cursorCol > len(runes) {
-		cursorCol = len(runes)
-	}
-	// "End of line" means: nothing but whitespace remains after the cursor.
-	atEnd := strings.TrimSpace(string(runes[cursorCol:])) == ""
-	if !atEnd {
+	column := textPositionInLine(currentLine, cursorCol).ByteColumn
+	// "End of line" means only whitespace remains after the caret.
+	if strings.TrimSpace(currentLine[column:]) != "" {
 		return indent
 	}
-
-	before := strings.TrimRight(string(runes[:cursorCol]), " \t")
+	before := strings.TrimRight(currentLine[:column], " \t")
 	if before == "" {
 		return indent
 	}
@@ -6968,8 +6417,8 @@ func lastNonSpaceRune(s string) (rune, bool) {
 	if trimmed == "" {
 		return 0, false
 	}
-	r := []rune(trimmed)
-	return r[len(r)-1], true
+	r, _ := utf8.DecodeLastRuneInString(trimmed)
+	return r, true
 }
 
 // computeFoldRegions scans lines and returns every foldable brace block using a
@@ -7089,6 +6538,7 @@ func (this *CodeEditor) foldRegionEnclosing(line int) (foldRegion, bool) {
 // called on any text change (rebuildText, SetText) because a brace edit can add
 // or remove a foldable region without changing the line count.
 func (this *CodeEditor) invalidateFoldCache() {
+	this.minimapCache.valid = false
 	this.foldRegionsValid = false
 	this.visLineValid = false
 }
@@ -7097,6 +6547,7 @@ func (this *CodeEditor) invalidateFoldCache() {
 // state (foldedLines) changes but the regions do not — a fold toggle hides or
 // shows lines without re-running the brace scan.
 func (this *CodeEditor) invalidateVisLineCache() {
+	this.minimapCache.valid = false
 	this.visLineValid = false
 }
 
@@ -7105,6 +6556,9 @@ func (this *CodeEditor) invalidateVisLineCache() {
 // and reused until a text change invalidates it, since it is called several
 // times per Draw and depends only on line content.
 func (this *CodeEditor) FoldRegions() []foldRegion {
+	if !this.usesGoSyntax() {
+		return nil
+	}
 	if this.foldRegionsValid {
 		return this.foldRegionsCache
 	}
@@ -7223,17 +6677,13 @@ func (this *CodeEditor) visibleLineIndices() []int {
 // preceding visible line is returned so cursor math lands on the fold header.
 func (this *CodeEditor) lineToVisualRow(line int) int {
 	vis := this.visibleLineIndices()
-	row := 0
-	for r, ln := range vis {
-		if ln == line {
-			return r
-		}
-		if ln > line {
-			break
-		}
-		row = r
+	// The cached visible lines are ordered. Pointer hit testing and caret
+	// painting must not walk the whole file on every input event.
+	i := sort.SearchInts(vis, line)
+	if i < len(vis) && vis[i] == line {
+		return i
 	}
-	return row
+	return max(0, i-1)
 }
 
 // clampCursorVisible nudges the cursor onto a visible line when the line it sat
@@ -7290,6 +6740,7 @@ type ExternalCompletion struct {
 	Label  string            // shown in the list
 	Detail string            // right-aligned hint (type/signature)
 	Insert string            // text inserted on accept (defaults to Label if empty)
+	Source string            // optional provider name (e.g. gopls), shown in the footer
 }
 
 // SetExternalCompletions replaces the injected candidate set. Pass the items a
@@ -7319,6 +6770,9 @@ func (this *CodeEditor) ClearExternalCompletions() {
 		this.completion.Dismiss()
 	}
 	this.externalCompletions = nil
+	if this.completion != nil {
+		this.completion.status = ""
+	}
 }
 
 // TriggerCompletion programmatically opens the completion popup at the current
@@ -7345,7 +6799,7 @@ func externalToItem(e ExternalCompletion) CompletionItem {
 		text = e.Label
 		action = &completionApply{run: e.Apply}
 	}
-	return CompletionItem{Text: text, Kind: CikFunction, Detail: e.Detail, apply: action}
+	return CompletionItem{Text: text, Kind: CikFunction, Detail: e.Detail, Source: e.Source, apply: action}
 }
 
 // mergeCompletions appends external candidates to the built-in ones, deduping

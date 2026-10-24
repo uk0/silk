@@ -95,24 +95,24 @@ func (r *Response) Header() http.Header { return r.header.Clone() }
 func (r *Response) Bytes() []byte       { return bytes.Clone(r.body) }
 func (r *Response) Text() string        { return string(r.body) }
 
-// Do is synchronous: do not call it from a GUI callback. Timeout includes body
-// reads; response bodies are always closed, including failures and oversize data.
-func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
+// open shares timeout, URL validation and transport error redaction across
+// buffered and streaming APIs. The caller owns body.Close and cancel.
+func (c *Client) open(ctx context.Context, r Request) (*http.Response, context.Context, context.CancelFunc, error) {
 	if ctx == nil {
-		return nil, errors.New("httpx: nil context")
+		return nil, nil, nil, errors.New("httpx: nil context")
 	}
 	if c == nil || c.timeout <= 0 || c.maxBytes <= 0 {
-		return nil, errors.New("httpx: client must be created with NewClient")
+		return nil, nil, nil, errors.New("httpx: client must be created with NewClient")
 	}
 	u, err := url.Parse(r.URL)
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, errors.New("httpx: absolute HTTP(S) URL required")
+		return nil, nil, nil, errors.New("httpx: absolute HTTP(S) URL required")
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, r.Method, r.URL, bytes.NewReader(r.Body))
 	if err != nil {
-		return nil, errors.New("httpx: invalid method or URL")
+		cancel()
+		return nil, nil, nil, errors.New("httpx: invalid method or URL")
 	}
 	req.Header = r.Header.Clone()
 	res, err := c.client.Do(req)
@@ -122,8 +122,20 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return nil, fmt.Errorf("httpx: request failed: %w", err)
+		cancel()
+		return nil, nil, nil, fmt.Errorf("httpx: request failed: %w", err)
 	}
+	return res, ctx, cancel, nil
+}
+
+// Do is synchronous: do not call it from a GUI callback. Timeout includes body
+// reads; response bodies are always closed, including failures and oversize data.
+func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
+	res, _, cancel, err := c.open(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	defer res.Body.Close()
 	if res.ContentLength > c.maxBytes {
 		return nil, ErrResponseTooLarge

@@ -132,17 +132,23 @@ func SetLogOutput(of io.Writer, forkToStd bool) (err error) {
 	closeLogOut()
 	logOut = of
 
-	p := new(stWriter)
-	p.o = of
-	p.depth = 10
-	p.regexST = regexp.MustCompile(`(?i)unimpl|unsupport|warn|fail|fatal|panic|error|\(ww\)|trace`)
-	if !isDebugOn {
-		p.regexHide = regexp.MustCompile(`(?i)debug|dbg:|trace`)
-	}
+	p := newSTWriter(of, isDebugOn)
 
 	log.SetOutput(p)
 	if isDebugOn {
 		log.SetFlags(log.Ltime)
 	}
 	return
+}
+
+func newSTWriter(of io.Writer, debug bool) *stWriter {
+	p := new(stWriter)
+	p.o = of
+	p.depth = 10
+	p.regexST = regexp.MustCompile(`(?i)unimpl|unsupport|warn|fail|fatal|panic|error|\(ww\)|trace`)
+	if !debug {
+		p.regexHide = regexp.MustCompile(`(?i)^(?:[0-9]{4}/[0-9]{2}/[0-9]{2} )?(?:[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)? )?(?:debug:|dbg:|trace:)`)
+	}
+
+	return p
 }

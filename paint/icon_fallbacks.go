@@ -12,6 +12,9 @@ type proceduralIconDrawer func(size int, cc *cairo.Context)
 // glyphs instead of the red-X placeholder. Names match the strings
 // LoadIcon is called with elsewhere in the tree.
 var proceduralFallbacks = map[string]proceduralIconDrawer{
+	"cursor-add-above":   drawCaretCommand(-1),
+	"cursor-add-below":   drawCaretCommand(1),
+	"cursor-primary":     drawCaretCommand(0),
 	"edit-undo":          drawUndoArrow,
 	"edit-redo":          drawRedoArrow,
 	"navigate-back":      drawNavigateBack,
@@ -27,6 +30,8 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"toolbar-overflow":   drawToolbarOverflow,
 	"refresh":            drawRefreshArrow,
 	"http-request":       drawHTTPExchange,
+	"json-view":          drawFunctionBraces,
+	"transfer-progress":  drawTransferProgress,
 	"plus":               drawPlus,
 	"search":             drawSearchGlass,
 	"build":              drawBuildWrench,
@@ -1019,5 +1024,25 @@ func drawHTTPExchange(size int, cc *cairo.Context) {
 	cc.MoveTo(.35*s, .50*s)
 	cc.LineTo(.16*s, .68*s)
 	cc.LineTo(.35*s, .86*s)
+	cc.Stroke()
+}
+
+// drawTransferProgress keeps the downward arrow and destination tray distinct
+// at toolbar sizes and uses the existing exact light/dark palette colors.
+func drawTransferProgress(size int, cc *cairo.Context) {
+	setIconStroke(cc, size)
+	s := float64(size)
+	setIconColor(cc, currentIconPalette.Accent)
+	cc.MoveTo(.5*s, .12*s)
+	cc.LineTo(.5*s, .62*s)
+	cc.MoveTo(.29*s, .42*s)
+	cc.LineTo(.5*s, .63*s)
+	cc.LineTo(.71*s, .42*s)
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Success)
+	cc.MoveTo(.16*s, .64*s)
+	cc.LineTo(.16*s, .85*s)
+	cc.LineTo(.84*s, .85*s)
+	cc.LineTo(.84*s, .64*s)
 	cc.Stroke()
 }

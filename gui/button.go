@@ -434,7 +434,13 @@ func (this *Button) Action() IAction {
 }
 
 func (this *Button) SetText(text string) {
+	if this.Text() == text {
+		return
+	}
 	this.Action().SetText(text)
+	// Async completions can arrive after the last input/idle traversal. Mark
+	// this button dirty now instead of waiting for a hover or another frame.
+	this.Self().Update()
 }
 
 func (this *Button) SetIcon(icon paint.Icon) {
@@ -443,6 +449,7 @@ func (this *Button) SetIcon(icon paint.Icon) {
 	// no longer matches the icon actually on the button.
 	this.iconName = ""
 	this.Action().SetIcon(icon)
+	this.Self().Update()
 }
 
 func (this *Button) IconName() string {
@@ -536,6 +543,7 @@ func (this *Button) SetTextVisible(b bool) {
 	}
 	this.textVisible = b
 	this.invalidateHints()
+	this.Self().Update()
 }
 
 // ShortcutText is a right-aligned hint in popup menus, not a key binding.

@@ -344,8 +344,16 @@ func TestDefaultPathPlatformSpecific(t *testing.T) {
 			t.Errorf("macOS path = %q, want Library/Application Support segment", got)
 		}
 	case "windows":
-		if !strings.Contains(got, "AppData") {
-			t.Errorf("Windows path = %q, want AppData segment", got)
+		base := os.Getenv("APPDATA")
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			base = filepath.Join(home, "AppData", "Roaming")
+		}
+		if want := filepath.Join(base, "MyOrg", "MyApp", "MyApp.ini"); got != want {
+			t.Errorf("Windows path = %q, want %q", got, want)
 		}
 	}
 }
@@ -354,5 +362,17 @@ func TestDefaultPathEmptyArgsHasFallbacks(t *testing.T) {
 	got := DefaultPath("", "")
 	if !strings.Contains(got, "Silk") || !strings.Contains(got, "App") {
 		t.Errorf("DefaultPath(\"\",\"\") = %q, want Silk/App fallback", got)
+	}
+}
+
+func TestDefaultPathWindowsRespectsRedirectedAppData(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows APPDATA semantics")
+	}
+	base := filepath.Join(t.TempDir(), "redirected-profile")
+	t.Setenv("APPDATA", base)
+	want := filepath.Join(base, "MyOrg", "MyApp", "MyApp.ini")
+	if got := DefaultPath("MyOrg", "MyApp"); got != want {
+		t.Fatalf("redirected APPDATA = %q, want %q", got, want)
 	}
 }

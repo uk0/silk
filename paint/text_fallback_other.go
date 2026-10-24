@@ -1,4 +1,4 @@
-//go:build !windows || silk_pure_go
+//go:build (!windows && !darwin) || silk_pure_go
 
 package paint
 

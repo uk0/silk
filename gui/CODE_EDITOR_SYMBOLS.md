@@ -1,64 +1,43 @@
-# Editor and SDK declaration model
+# Editor symbol snapshots
 
-`CodeEditor.ParseSymbols()` and `gui.OutlineSymbols(source)` use the same tolerant
-Go declaration model. It distinguishes code from comments/raw strings, handles
-inline comments, grouped declarations, multiple var/const names, generic receiver
-methods and package-less snippets. Valid declarations recovered by `go/parser`
-remain available while a function is incomplete. This is not a promise to recover
-all declarations after every possible syntax error.
+`CodeEditor` shares its tolerant Go/SilkGo declaration parser between navigation,
+breadcrumbs, test gutter markers and the outline. Plain-text files only expose
+explicitly supplied provider symbols. All editor APIs below are UI-thread-only.
 
-Locations address the actual unsaved buffer: lines are zero-based; SDK columns
-are UTF-8 **byte** offsets, not UTF-16 LSP positions. Compiler `//line` directives
-must not redirect editor jumps. Definition/reference fallback uses the recovered
-AST and never invents declarations through a regexp search in comments or strings.
-These local helpers are name-based fallbacks, not a replacement for gopls scope,
-type or workspace resolution.
+- `ParseSymbols() []CodeSymbol`: synchronous, exact current-revision snapshot.
+  Intended for explicit commands, not a paint/poll loop. The returned slice is owned
+  by the caller. Existing SDK callers retain their synchronous semantics.
+- `SymbolsSnapshot() ([]CodeSymbol, bool)`: nonblocking UI snapshot for large files.
+  `ready == false` means indexing is pending; it does **not** mean no declarations.
+  Do not retain or execute stale line-numbered actions while waiting.
+- `SymbolsRevision() uint64`: changes on text/provider updates and acceptance of a
+  background parse, including a synchronous command completing a pending request.
+  Cache UI projections by this revision rather than repeatedly copying snapshots.
+- `SubscribeSymbolsChanged(func()) func()`: subscribe on the UI thread and keep
+  the returned unsubscribe. Invalidate the consumer's own paint region in the
+  callback; a revision change or editor repaint alone does not redraw an
+  independently cached sibling panel. Events cover text/provider/dialect changes
+  and accepted background results (or synchronous takeover). Multiple observers
+  are supported; detach on editor switch/disposal. Callbacks must be brief and
+  must not synchronously edit the source. `CodeOutlinePanel.SetEditor` manages
+  this subscription automatically; call `SetEditor(nil)` when disposing it.
+- `CancelSymbolIndex()`: call before permanently removing an editor or stopping its
+  event loop, alongside `CancelCompletion()` and `CancelGitStatus()`. It releases
+  pending worker snapshots/delivery references and suppresses queued results. It
+  does not unsubscribe symbol observers; detach those separately as above. It
+  does not wait on the UI thread; a later query can start fresh.
 
-Only top-level declarations belong in the outline. Function body interiors are
-lexically blanked before outline parsing, preserving original byte lengths and
-newlines; this avoids statement AST allocation without treating braces in strings
-as syntax. Source/details and returned snapshots have separate ownership. Display
-signatures are bounded; actual symbol names and source locations are not clipped.
-The editor keeps its one-parse-per-text-revision cache. Unchanged revisions perform
-no parsing. Parsing changed Go source is more expensive than the former incorrect
-line scanner; very large buffers still need background analysis, not a claim of
-constant-time edits.
+Files below 32 KiB keep the synchronous fast path. Larger files use a 90 ms
+cancelable debounce, one worker and one latest request per editor, at most two
+concurrent parsers process-wide, and a coalesced UI delivery slot. Idle workers
+exit; no repaint timer polls for completion. Background work receives immutable
+text/provider snapshots, never an editor or its mutable line array. Results are
+accepted only for the matching worker, text revision, dialect and provider
+generation. Old results cannot restore a removed test button or overwrite new
+provider symbols after an edit, undo, language switch or tab close.
 
-## `ged.CodeOutlinePanel`
-
-All panel operations are UI-thread operations.
-
-- Switching editors, editing/undoing, or explicit host revision invalidation
-  retires semantic symbols belonging to the previous buffer state.
-- `SetSymbols` is the synchronous compatibility API. It deep-copies the tree;
-  nil/empty preserves the documented local-parser fallback behavior.
-- Async hosts should capture the editor pointer and `editor.TextRevision()` before
-  requesting symbols, marshal back to the UI thread, then call
-  `SetSymbolsForEditor(editor, revision, symbols)`. `false` means stale/unbound:
-  no view mutation occurred. Hosts still own their request/server lifecycle.
-- Go generic receiver methods group under their base type. Semantic `macro` kinds
-  use the `M` label. Position/alphabetic sort does not change caret source order.
-- Up/Down, Home/End and PageUp/PageDown select; Left/Right collapse/expand or select
-  a parent/child; Enter navigates once (key-repeat is ignored). Arrows retain panel
-  focus. The existing navigation callback remains line-based for compatibility;
-  exact-column outline activation is not yet provided. SilkIDE activates the target
-  through `CodeEditor.NavigateToLineCol`: this explicit-jump SDK API reveals folds,
-  clears old selections/secondary carets/completion and returns input focus without
-  modifying text or undo history. Existing scroll-only APIs retain their semantics.
-- The header/body are clipped separately. Labels use UTF-8-safe ellipsis, font
-  metrics and theme colors. Font changes also change hit geometry and row height.
-  Only visible rows are drawn. Fonts, visible labels and unchanged caret lookup
-  are cached; resize/filter/content changes clamp scrolling before interaction.
-
-## Regression evidence
-
-```sh
-go test -race -count=1 ./gui ./ged -run 'TestGoDeclarations|TestNavigation|TestOutline|TestEditLayoutClamps'
-go test -run '^$' -bench BenchmarkOutlineIdleDraw -benchmem ./ged
-```
-
-The presentation tests render real Cairo surfaces in light/dark themes with
-14/24-point fonts and 5,000 symbols. They assert clipping, widths, theme usage,
-painter-state balance and bounded visible draw calls. These are offscreen tests,
-not native Win10/macOS input acceptance. Native UI results must be tied to their
-own source manifest and executable hash.
+The standard Go parser cannot be interrupted mid-parse. An obsolete running parse
+keeps its concurrency permit until it returns, then discards the result. This is
+not a general hard CPU/memory limit or an asynchronous replacement for explicit
+navigation. Large-file text rebuilding, formatting/saving and host LSP work have
+separate costs. See `EDITOR_INPUT_QA_20261024.md` for measured scope and native QA.

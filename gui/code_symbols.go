@@ -89,7 +89,11 @@ func (this *CodeEditor) ParseSymbols() []CodeSymbol {
 }
 
 func parseGoCodeSymbols(lines []string) []CodeSymbol {
-	declarations := goDeclarations(strings.Join(lines, "\n"))
+	return parseGoCodeSymbolsText(strings.Join(lines, "\n"))
+}
+
+func parseGoCodeSymbolsText(text string) []CodeSymbol {
+	declarations := goDeclarations(text)
 	var symbols []CodeSymbol
 	for _, declaration := range declarations {
 		symbols = append(symbols, declaration.symbol)
@@ -356,7 +360,9 @@ func (this *CodeEditor) goToLine(line int) {
 // before the caret. Its function-only index avoids scanning every declaration
 // on each draw, and caret movement does not invalidate the parsed document.
 func (this *CodeEditor) currentFunction() *CodeSymbol {
-	this.cachedSymbols()
+	if !this.ensureSymbols() {
+		return nil
+	}
 	return this.symbolCache.functionAt(this.cursorLine)
 }
 

@@ -2317,8 +2317,8 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	}
 
 	// Tab / Shift+Tab moves keyboard focus along the focus chain (see
-	// focus.go). Intercepted at the window layer because none of silk's
-	// widgets use a literal Tab for their own input, so the window owns it.
+	// focus.go). Widgets such as CodeEditor and the designer can claim it
+	// for their own input before the window traverses focus.
 	// Only fires on press/repeat; Shift+Tab goes backward.
 	if vk == KeyTab && (action == glfw.Press || action == glfw.Repeat) {
 		// A focused widget may claim Tab for itself (see IWantsTab): the design

@@ -71,3 +71,20 @@ func TestIDEProcessToolPathFindsGoWithoutChangingPriority(t *testing.T) {
 		t.Fatalf("explicit Go lost priority: %q %v", got, err)
 	}
 }
+
+func TestDesktopGoFallbackUsesStableLocations(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		dirs := standardUnixGoBinDirs(goos)
+		if len(dirs) == 0 || dirs[0] != "/usr/local/go/bin" {
+			t.Fatal(goos, dirs)
+		}
+		for _, dir := range dirs {
+			if !strings.HasPrefix(dir, "/") || strings.Contains(dir, "Cellar") {
+				t.Fatal(dir)
+			}
+		}
+	}
+	if len(standardUnixGoBinDirs("windows")) != 0 {
+		t.Fatal("Unix paths on Windows")
+	}
+}

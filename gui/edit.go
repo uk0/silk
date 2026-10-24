@@ -820,6 +820,10 @@ func nextWordBoundary(runes []rune, caret int) int {
 }
 
 func (this *Edit) paste() {
+	text, a, b := this.Text(), this.sel0, this.sel1
+	if this.tryAsyncPaste(func() bool { return !this.readonly && this.Text() == text && this.sel0 == a && this.sel1 == b }, this.pasteString) {
+		return
+	}
 	i, err := Clipboard.Data("text/plain")
 	if err == nil {
 		this.pasteString(i.(string))

@@ -2,10 +2,8 @@ package gui
 
 import "sort"
 
-// CodeEditor currently has one symbol dialect: the Go heuristic parser. Keep
-// the dialect in the key so a future language selector cannot reuse Go results
-// for unchanged text in a different language. File extensions do not currently
-// change ParseSymbols' behavior; only the test-gutter projection is filename gated.
+// Go and SilkGo share the Go base parser; named non-source files do not invent
+// Go declarations. The dialect participates in cache identity independently of text.
 const codeSymbolLanguageGo = "go"
 
 type codeSymbolCacheKey struct {
@@ -28,7 +26,10 @@ func (c *codeSymbolCache) load(key codeSymbolCacheKey, lines []string, parse fun
 	if c.valid && c.key == key {
 		return c.symbols
 	}
-	symbols := parse(lines)
+	return c.store(key, parse(lines))
+}
+
+func (c *codeSymbolCache) store(key codeSymbolCacheKey, symbols []CodeSymbol) []CodeSymbol {
 	var functions []int
 	var tests map[int]string
 	for i, symbol := range symbols {
@@ -66,16 +67,38 @@ func (c *codeSymbolCache) functionAt(line int) *CodeSymbol {
 	return &c.symbols[c.functions[lo-1]]
 }
 
-// cachedSymbols is the allocation-free read-only path used during drawing.
-// The public ParseSymbols method returns a copy instead of exposing this slice.
-func (this *CodeEditor) cachedSymbols() []CodeSymbol {
-	key := codeSymbolCacheKey{revision: this.TextRevision(), language: codeSymbolLanguageGo}
-	return this.symbolCache.load(key, this.lines, func(lines []string) []CodeSymbol {
-		symbols := parseGoCodeSymbols(lines)
-		if this.additionalSymbolsRevision == this.TextRevision() {
-			symbols = append(symbols, this.additionalSymbols...)
-			sort.SliceStable(symbols, func(i, j int) bool { return symbols[i].Line < symbols[j].Line })
-		}
-		return symbols
-	})
+// cachedSymbols is the synchronous compatibility path for explicit navigation.
+// Drawing and outline refreshes use ensureSymbols instead.
+func (e *CodeEditor) cachedSymbols() []CodeSymbol {
+	key := codeSymbolCacheKey{revision: e.TextRevision(), language: e.Language()}
+	if e.symbolCache.valid && e.symbolCache.key == key {
+		return e.symbolCache.symbols
+	}
+	pending := e.symbolPending
+	e.cancelSymbolRequest()
+	symbols := e.symbolCache.store(key, mergeCodeSymbols(e.Text(), e.usesGoSyntax(), e.currentAdditionalSymbols()))
+	if pending {
+		e.symbolsRevision++
+		e.notifySymbolsChanged()
+	} // wake a nonblocking outline waiting on the canceled request
+	return symbols
+}
+
+func (e *CodeEditor) currentAdditionalSymbols() []CodeSymbol {
+	if e.additionalSymbolsRevision == e.TextRevision() {
+		return e.additionalSymbols
+	}
+	return nil
+}
+
+func mergeCodeSymbols(text string, goSyntax bool, additional []CodeSymbol) []CodeSymbol {
+	var symbols []CodeSymbol
+	if goSyntax {
+		symbols = parseGoCodeSymbolsText(text)
+	}
+	if len(additional) > 0 {
+		symbols = append(symbols, additional...)
+		sort.SliceStable(symbols, func(i, j int) bool { return symbols[i].Line < symbols[j].Line })
+	}
+	return symbols
 }

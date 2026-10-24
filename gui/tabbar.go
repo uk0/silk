@@ -5,6 +5,7 @@ import (
 	//	"github.com/uk0/silk/factory"
 	"github.com/uk0/silk/paint"
 	"math"
+	"sort"
 )
 
 func init() {
@@ -44,6 +45,12 @@ type TabBar struct {
 	cbDragMove    func(tb *TabBar, dnd IDndContext)
 	cbDrop        func(tb *TabBar, idx int, dnd IDndContext)
 	cbMove        func(tb *TabBar, from, to int)
+	viewportW     float64
+	contentW      float64
+	scrollX       float64
+	overflowBtn   *Button
+	chooserMenu   *Menu
+	firstVisible  int
 }
 
 type _Tab struct {
@@ -52,6 +59,7 @@ type _Tab struct {
 
 	// 宽度
 	width float64
+	x     float64
 
 	// 当前标签页激活的序号, 用来在关闭标签页后激活前一个标签页
 	activeId int
@@ -63,7 +71,15 @@ type _Tab struct {
 	text string
 
 	// 当前实际显示的文本, 可能完整也可能是缩略
-	label string
+	label                       string
+	paintLabel                  string
+	hint                        SizeHints
+	hintValid                   bool
+	hintFont                    paint.Font
+	hintFontKey                 string
+	hintRev                     uint64
+	hintMargin                  Margin
+	hintIconSize, hintCloseSize float64
 }
 
 // 同步数据, 有变化返回true, 否则返回false
@@ -79,6 +95,9 @@ func (this *_Tab) sync() (changed bool) {
 	if i != this.icon {
 		this.icon = i
 		changed = true
+	}
+	if changed {
+		this.hintValid = false
 	}
 	return
 }
@@ -150,6 +169,10 @@ func (this *_Tab) Data() interface{} {
 // closes the tab.
 func (this *_Tab) SizeHints() SizeHints {
 	t := Theme()
+	fontKey := t.Font.String()
+	if this.hintValid && this.hintFont == t.Font && this.hintFontKey == fontKey && this.hintRev == themeRev && this.hintMargin == t.TabMargin && this.hintIconSize == t.IconSize && this.hintCloseSize == t.TabCloseSize {
+		return this.hint
+	}
 	fe := t.Font.FontExtents()
 	icon := this.icon
 	text := this.label
@@ -160,7 +183,7 @@ func (this *_Tab) SizeHints() SizeHints {
 		w := ext.Width + h
 		w += m.L*2 + m.R + t.TabCloseSize
 		h += m.T + m.B
-		return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
+		this.hint = SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
 	} else {
 		m := t.TabMargin
 		h := fe.Height
@@ -170,8 +193,11 @@ func (this *_Tab) SizeHints() SizeHints {
 		if w < h {
 			w = h * 2
 		}
-		return SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
+		this.hint = SizeHints{Width: w, Height: h, Policy: GrowHorizontal | GrowVertical}
 	}
+	this.hintValid, this.hintFont, this.hintFontKey, this.hintRev = true, t.Font, fontKey, themeRev
+	this.hintMargin, this.hintIconSize, this.hintCloseSize = t.TabMargin, t.IconSize, t.TabCloseSize
+	return this.hint
 }
 
 func (this *TabBar) Init(self IWidget) {
@@ -185,11 +211,12 @@ func (this *TabBar) Init(self IWidget) {
 	this.downTab = -1
 	this.downMidTab = -1
 	this.dropPos = -1
+	this.SetFocusPolicy(TabFocus)
 }
 
 func (this *TabBar) drawTab(tb *_Tab, g paint.Painter, w, h float64, active, hover bool) {
 	t := Theme()
-	t.DrawTab(g, tb.icon, tb.label, w, h,
+	t.DrawTab(g, tb.icon, tb.paintLabel, w, h,
 		active, hover, active && this.closeBtn && (hover || this.downCloseBtn),
 		active && this.hoverCloseBtn, this.downCloseBtn)
 }
@@ -208,18 +235,34 @@ func (this *TabBar) Draw(g paint.Painter) {
 	g.SetPen1(t.BorderColor, 1)
 	//g.SetLineWidth(1)
 	g.Stroke()
+	g.Rectangle(0, 0, this.viewportW, this.h)
+	g.Clip()
 
-	x, y := 0.0, 0.0
+	x, y := -this.scrollX, 0.0
+	if this.firstVisible < len(this.tabs) {
+		x += this.tabs[this.firstVisible].x
+	}
 	h := this.h
 	g.Translate(x, y)
-	for i, tab := range this.tabs {
-		this.drawTab(tab, g, tab.width, h, this.activeTab == i, this.hoverTab == i)
+	for i := this.firstVisible; i < len(this.tabs); i++ {
+		tab := this.tabs[i]
+		if x >= this.viewportW {
+			break
+		}
+		if x+tab.width > 0 {
+			g.Save()
+			g.Rectangle(0, 0, tab.width, h)
+			g.Clip()
+			this.drawTab(tab, g, tab.width, h, this.activeTab == i, this.hoverTab == i)
+			g.Restore()
+		}
 		if this.dropPos == i {
 			g.Rectangle(-2, t.TabMargin.T, 4, h-t.TabMargin.B-t.TabMargin.T)
 			g.SetBrush1(t.HighLightColor)
 			g.Fill()
 		}
 		g.Translate(tab.width, 0)
+		x += tab.width
 	}
 	if this.dropPos == len(this.tabs) {
 		g.Rectangle(-2, t.TabMargin.T, 4, h-t.TabMargin.B-t.TabMargin.T)
@@ -258,6 +301,7 @@ func (this *TabBar) OnMouseLeave() {
 }
 
 func (this *TabBar) OnLeftDown(x, y float64) {
+	this.SetFocus()
 	this.downX = x
 	this.downY = y
 	this.downTab, this.downCloseBtn = this.HitTest(x, y)
@@ -333,18 +377,22 @@ func (this *TabBar) OnMouseMove(x, y float64) {
 }
 
 func (this *TabBar) HitTest(x, y float64) (index int, hoverCloseBtn bool) {
-	if x < 0 || y < 0 || x >= this.w || y >= this.h {
+	if x < 0 || y < 0 || x >= this.viewportW || y >= this.h {
 		index = -1
 		return
 	}
 	t := Theme()
 	m := t.TabMargin
-	x0 := 0.0
+	x0 := -this.scrollX
+	if this.firstVisible < len(this.tabs) {
+		x0 += this.tabs[this.firstVisible].x
+	}
 	//h := this.h - t.TabBarMargin.T - t.TabBarMargin.B
-	for i, tab := range this.tabs {
+	for i := this.firstVisible; i < len(this.tabs); i++ {
+		tab := this.tabs[i]
 		if x >= x0 && x < x0+tab.width {
 			index = i
-			if index == this.activeTab {
+			if index == this.activeTab && this.closeBtn {
 				xc := x0 + tab.width - t.TabCloseSize - m.R
 				yc := m.T + (this.h-m.T-m.B-t.TabCloseSize)*0.5
 				hoverCloseBtn = x >= xc && x < xc+t.TabCloseSize &&
@@ -358,20 +406,8 @@ func (this *TabBar) HitTest(x, y float64) (index int, hoverCloseBtn bool) {
 }
 
 func (this *TabBar) DropIndex(x, y float64) (index int) {
-	//t := Theme()
-	//m := t.TabMargin
-	x0 := 0.0
-	x1 := 0.0
-	//h := this.h - t.TabBarMargin.T - t.TabBarMargin.B
-	for i, tab := range this.tabs {
-		if x >= x1 && x < x0+tab.width*0.5 {
-			index = i
-			return
-		}
-		x1 = x0 + tab.width*0.5
-		x0 += tab.width
-	}
-	return len(this.tabs)
+	x += this.scrollX
+	return sort.Search(len(this.tabs), func(i int) bool { return x < this.tabs[i].x+this.tabs[i].width*.5 })
 }
 
 func (this *TabBar) SetActivateCallback(callback func(tb *TabBar, idx int)) {
@@ -387,11 +423,16 @@ func (this *TabBar) SetCloseCallback(callback func(tb *TabBar, idx int) bool) {
 }
 
 func (this *TabBar) SetActiveTab(idx int) {
+	if idx < -1 || idx >= len(this.tabs) {
+		return
+	}
 	old := this.activeTab
 	if old == idx {
+		this.ensureActiveVisible()
 		return
 	}
 	this.activeTab = idx
+	this.ensureActiveVisible()
 	if old != -1 && this.cbDeactivate != nil {
 		this.cbDeactivate(this, old)
 	}
@@ -480,6 +521,7 @@ func (this *TabBar) RemoveTab(idx int) interface{} {
 	}
 	this.tabs[len(this.tabs)-1] = nil
 	this.tabs = this.tabs[:len(this.tabs)-1]
+	this.Layout()
 	this.activateLasTab()
 	this.Self().Update()
 	return ret
@@ -538,6 +580,11 @@ func (this *TabBar) OnDragLeave() {
 }
 
 func (this *TabBar) OnDragMove(x, y float64, dnd IDndContext) {
+	if x < 0 || x >= this.viewportW || y < 0 || y >= this.h {
+		this.OnDragLeave()
+		dnd.SetAction(DndIgnore)
+		return
+	}
 	//if dnd.HasFormat("text/plain") {
 	//	dnd.SetAction(DndMove)
 	//}
@@ -561,6 +608,11 @@ func (this *TabBar) OnDragMove(x, y float64, dnd IDndContext) {
 }
 
 func (this *TabBar) OnDrop(x, y float64, dnd IDndContext) {
+	if x < 0 || x >= this.viewportW || y < 0 || y >= this.h || (dnd.From() == this && (this.downTab < 0 || this.downTab >= len(this.tabs))) {
+		this.OnDragLeave()
+		dnd.SetAction(DndIgnore)
+		return
+	}
 	if dnd.From() == this {
 		this.dropPos = this.DropIndex(x, y)
 		//if this.dropPos == this.downTab || this.dropPos == this.downTab+1 {
@@ -613,83 +665,11 @@ func (this *TabBar) SizeHints() SizeHints {
 }
 
 func (this *TabBar) Layout() {
-	count := this.Count()
-	if count == 0 {
-		return
-	}
-	iw := this.Self()
-	//	t := Theme()
-	//	margin := float64(0)
-	spacing := float64(0)
-	w, h := iw.Size()
-	//var margin *Margin
 	for _, v := range this.tabs {
 		v.sync()
 	}
-	//margin = &t.TabMargin
-
-	//x, _, w, h := margin.Apply(0, 0, w, h)
-	x := 0.0
-	n := count
-	hints := make([]SizeHints, n, n)
-	var total float64
-	var expandBase, shrinkBase float64
-	//core.Debug(w, h)
-	for i, c := range this.tabs {
-		hi := c.SizeHints()
-		hints[i] = hi
-		total += hi.Width
-
-		if (hi.Policy & ExpandHorizontal) != 0 {
-			expandBase += hi.Width
-		}
-		if (hi.Policy & ShrinkHorizontal) != 0 {
-			shrinkBase += hi.Width
-		}
-
-		if (hi.Policy & (ExpandVertical | GrowVertical)) != 0 {
-			hints[i].Height = h
-		}
-	}
-	extra := w - total - float64(sepCount(n))*spacing
-	if extra > 0 && expandBase > 0 {
-		dw := extra / expandBase
-		x1 := x
-		for i, c := range this.tabs {
-			hi := hints[i]
-			var w1 float64
-			if (hi.Policy & ExpandHorizontal) != 0 {
-				w1 = hi.Width + hi.Width*dw
-			} else {
-				w1 = hi.Width
-			}
-			c.width = w1
-			x1 += w1 + spacing
-		}
-	} else if extra < 0 && shrinkBase > 0 {
-		dw := extra / shrinkBase
-		x1 := x
-		for i, c := range this.tabs {
-			hi := hints[i]
-			var w1 float64
-			if (hi.Policy & ShrinkHorizontal) != 0 {
-				w1 = hi.Width + hi.Width*dw
-			} else {
-				w1 = hi.Width
-			}
-			c.width = w1
-			x1 += w1 + spacing
-		}
-	} else {
-		x1 := x
-		for i, c := range this.tabs {
-			hi := hints[i]
-			var w1 float64 = hi.Width
-			c.width = w1
-			x1 += w1 + spacing
-		}
-	}
-	iw.Update()
+	this.updateViewport()
+	this.Update()
 }
 
 func (this *TabBar) OnIdle() {

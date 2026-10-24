@@ -137,7 +137,9 @@ type Widget struct {
 
 	// Transient notifications are painted and hit-tested as overlays, never
 	// inserted into the document/layout child list.
-	toastManager *ToastManager
+	toastManager    *ToastManager
+	pendingPaste    *clipboardPaste
+	clipboardReader clipboardTextReader // per-widget test seam
 
 	extraData interface{}
 
@@ -199,6 +201,7 @@ func (this *Widget) SetParent(parent IWidget) {
 	if op == np {
 		return
 	}
+	cancelClipboardPastes(this.Self())
 
 	if op != nil {
 		bop := op.NakedWidget()
@@ -637,6 +640,9 @@ func (this *Widget) SetFocus() {
 	}
 	//core.Debug("SetFocus()")
 	oldFocusWidget := focusWidget
+	if oldFocusWidget != nil {
+		oldFocusWidget.NakedWidget().CancelPendingPaste()
+	}
 	focusWidget = iw
 	textInputFocusChanged()
 	if ie, ok := oldFocusWidget.(IEventFocusChanged); ok {
@@ -704,6 +710,9 @@ func (this *Widget) SetEnabled(b bool) {
 		return
 	}
 	this.disabled = !b
+	if !b {
+		cancelClipboardPastes(this.Self())
+	}
 	this.Update()
 }
 
@@ -724,6 +733,7 @@ func (this *Widget) setVisible(b bool) {
 	this.hidden = !b
 
 	if this.hidden {
+		cancelClipboardPastes(this.Self())
 		dismissOwnedToasts(this.Self())
 		if i, ok := this.Self().(IEventHide); ok {
 			i.OnHide()

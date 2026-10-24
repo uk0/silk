@@ -1,40 +1,51 @@
-# Code editor position coordinates
+# Editor line and position access
 
-`CodeEditor` stores **zero-based lines and Unicode code-point (rune) columns**.
-A rune column is not a UTF-8 byte offset, UTF-16 code-unit offset or visual cell
-column. Tabs and combining marks do not change the logical coordinate contract.
-
-| Interface | Line | Column |
-| --- | --- | --- |
-| `CursorLine()` / `CursorCol()` | zero-based | rune |
-| `ScrollToLineCol(line, column)` | zero-based | rune |
-| `CursorUTF16Col()` | current line | UTF-16 units |
-| `ScrollToUTF16Position(line, column)` | zero-based | UTF-16 units |
-| `RuneColumnFromUTF16(lineText, column)` | one supplied line | UTF-16 input, rune output |
+All editor methods are UI-thread-only. Background workers must receive immutable
+snapshots; never call these accessors directly from a worker.
 
 ```go
-// LSP locations use zero-based lines and UTF-16 columns by default.
-// Invoke from the UI thread, after opening the destination document.
-editor.ScrollToUTF16Position(location.Range.Start.Line,
-    location.Range.Start.Character)
+line, ok := editor.LineText(12) // zero-based; empty valid lines return "", true
+position, ok := editor.CursorTextPosition()
+if ok {
+    // One prefix traversal, no document split or whole-line rune allocation.
+    lspLine, lspColumn := position.Line, position.UTF16Column
+    _, _ = lspLine, lspColumn
+    if position.HasPreviousRune {
+        precedingCodePoint := position.PreviousRune
+        _ = precedingCodePoint
+    }
+}
+position, ok = editor.TextPositionAt(12, 7) // input column is in Unicode runes
 ```
 
-The conversion uses the **live editor buffer**, including unsaved changes.
-Do not convert using disk text and then apply the column to an unsaved buffer.
-Do not trim indentation before converting a column; trim only display previews.
-A server negotiated to another position encoding needs its own adapter.
+`EditorTextPosition` explicitly distinguishes `RuneColumn`, `ByteColumn` and
+`UTF16Column`. Columns are zero-based. Rune columns count Unicode code points,
+not visual cells or grapheme clusters: combining marks remain separate, and an
+astral code point such as an emoji uses two UTF-16 units. Tabs and NUL each count
+as one rune/unit. Invalid UTF-8 bytes are read as U+FFFD, matching Go's range.
+`HasPreviousRune` distinguishes the beginning of a line from a preceding NUL.
 
-Negative coordinates clamp to the beginning, large coordinates to the last
-line/end of line. UTF-16 offsets inside a surrogate pair round down to its rune.
-`RuneColumnFromUTF16` has no allocations and accepts invalid UTF-8 using Go's
-replacement-rune behavior. It is a pure function safe off-thread; editor methods
-remain UI-thread-only. Navigation is not a buffer edit and does not mark a saved
-document dirty or discard unsaved content.
+Invalid line indices return `ok=false`; negative columns clamp to zero, oversized
+columns to the actual line end. Reads do not move the caret, emit changes, build
+full text or publish revisions, even when a low-level edit is pending. `LineText`
+returns the current immutable line without copying the line slice; old strings
+remain valid after later edits. Such a string can retain the original source
+storage; use `strings.Clone` if a small line must outlive a large document.
 
-For example, in `a😀Target`, the `T` is at UTF-16 column **3**, rune column **2**,
-and UTF-8 byte offset **5**. Compiler/`go/token` positions generally use 1-based
-UTF-8 byte columns and require a different conversion.
+`CursorUTF16Col` and `UTF16ColumnAt` use the same allocation-free prefix traversal.
+The inverse remains `RuneColumnFromUTF16`, which rounds an interior surrogate
+unit down to the code point's beginning. Complexity is O(prefix bytes): asking
+for the end of a huge line still scans that prefix; this is not a line-position
+index or a promise of constant-time arbitrary lookups.
 
-Tests: `TestRuneColumnFromUTF16`, `TestCodeEditorScrollToUTF16Position`, and the
-IDE's `TestLSPNavigation*` / `TestLSPReferenceAndDiagnosticColumns`. These are
-model/native-painter regression tests, not substitutes for desktop UI replay.
+The IDE uses the combined snapshot for automatic LSP completion policy and uses
+byte offsets to inspect fallback completion prefixes backwards. Full-text
+notification contents, monotonic versions, coalescing and worker-side wire order
+are unchanged. If notification text differs from the editor snapshot, text is
+still synchronized but a completion is not requested using unrelated coordinates.
+Explicit server text edits and additional edits still apply atomically.
+
+Invalid-byte reading uses replacement code points without rewriting source bytes.
+The editor's standard input/history paths now also preserve original bytes; see
+[edit semantics and multi-caret transactions](CODE_EDITOR_EDITS.md). This does not
+certify arbitrary formatter/provider transformations or binary clipboard transport.

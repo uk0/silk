@@ -21,6 +21,76 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Clipboard responsiveness and honest empty states
+
+- macOS editor, single-line Edit, TextArea and SearchBox paste no longer call
+  GLFW's potentially blocking clipboard getter from the UI thread. A bounded
+  `/usr/bin/pbpaste` helper reads text off-thread, with cancellation, a 10-second
+  timeout and a 16 MiB limit; opening an editor context menu does not read data.
+- Pending paste results are fenced by the target's focus, visibility, ownership,
+  text and caret/selection state. Repeated keys at an unchanged anchor coalesce
+  into one insertion/Undo group (maximum 64); oversized/busy/failed requests
+  report an error instead of silently inserting truncated text.
+- SDK `Clipboard.ReadTextAsync`, `Widget.PastePending` and `CancelPendingPaste`
+  are UI-thread APIs. Windows/Linux retain their existing native clipboard
+  behavior: callback scheduling alone does **not** promise nonblocking reads.
+- macOS packaging builds a fresh `.app` before replacing the old bundle, rather
+  than overwriting executable inodes or retaining obsolete signatures/tools.
+  Copy failures leave the previous bundle intact; final-package gopls is tested.
+- Empty Git comparisons show **No text changes to compare**, not a load failure.
+  Quiet logging suppresses actual debug severity, not warnings whose message
+  happens to mention `SILK_DEBUG` or a debugger.
+
+Tests, native save/readback evidence and limits:
+[clipboard and integrated commit QA](EDITOR_PASTE_QA_20261024.md).
+
+<img src="screenshots/silkide-paste-windows-20261024.png" width="760" alt="Native Windows Unicode paste into a 100000-line file, saved and byte-verified with bundled gopls connected">
+
+### Dock overflow and readable diffs
+
+- Dock headers reserve space for their window controls. Overflowing document
+  and panel tabs share a clipped viewport, keep the active tab visible, and
+  expose every full title through **All tabs**. Keyboard navigation, hit-testing,
+  close targets and drag insertion use the same scrolling coordinates.
+- The chooser reuses an owned popup; checked menu actions now have a visible,
+  readable selection state instead of an invisible action flag.
+- Diff rows, gutters and actions use distinct light/dark semantic colors. Long
+  lines are clipped to their own column; cached line numbers and visible-only
+  tab painting avoid full-list work on each repaint. Full-file comparison is
+  now linear-space and cancellable in the IDE; see the asynchronous Diff section below.
+
+Verification and platform limits: [Dock/Diff QA](DOCK_DIFF_QA_20261024.md).
+
+<p>
+  <img src="screenshots/silkide-diff-dark-windows-20261024.png" width="48%" alt="Windows native dark Diff with clipped columns and readable line numbers">
+  <img src="screenshots/silkide-diff-light-windows-20261024.png" width="48%" alt="The same Git diff in the light theme">
+</p>
+
+### Cancellable large-file comparison
+
+- Exact, linear-space Myers comparison replaces the full quadratic LCS matrix.
+  Sparse edits and complete replacements avoid the old allocation explosion;
+  worst-case CPU time still depends on edit distance (it is not universally linear).
+- **Diff vs Saved**, **Diff vs HEAD**, and commit comparisons open a dialog before
+  disk/Git loading and compute off the UI thread. Status, changed-row counts,
+  Previous/Next change buttons and cancellation remain available. Closed or
+  superseded requests cannot overwrite a newer view.
+- SDK hosts can use `DiffView.SetTextsAsync(ctx, oldText, newText)`, `CancelDiff`,
+  `DiffPending`, `DiffError`, `DiffSummary` and `SetDiffStateChanged` on the UI
+  thread. Each view retains one active/one latest pending request, with at most
+  two background comparisons process-wide; no idle worker timer is added.
+  Hosts must cancel on disposal. The existing `SetTexts` stays synchronous.
+- Git comparison reads are context-cancellable, timeout/output-bounded, and
+  disable external diff/textconv helpers. Saved-file I/O is off the UI thread,
+  but a blocked kernel read itself cannot be forcibly cancelled.
+
+Evidence and remaining limits: [asynchronous Diff QA](DIFF_ASYNC_QA_20261024.md).
+
+<p>
+  <img src="screenshots/silkide-diff-async-windows-20261024.png" width="48%" alt="Native Windows comparison navigating to line 95001 of a 100000-line file">
+  <img src="screenshots/silkide-diff-pending-windows-20261024.png" width="48%" alt="Native Windows cancellable comparison while computing reversed 50000-line inputs">
+</p>
+
 ### Semantic navigation and coordinated panels
 
 - **Edit** menu and the command palette expose Go to Definition (`F12`),
@@ -60,8 +130,9 @@ Verification and remaining gaps: [navigation/SDK iteration report](NAVIGATION_SD
   type. Hosts can use `SaveDesignWithPendingEdits()` for a checked draft-inclusive
   snapshot; `SaveDesign()` remains a committed-model-only snapshot.
 - Scope: this navigation edits **embedded design handlers**, not external `.go`
-  files. The IDE's automatic `.silk.go` tree generator is not yet unified with the
-  strong-typed event exporter; default preview event execution is not claimed.
+  files. IDE Save now preserves an existing split SDK export and its user-owned
+  handlers. New designs still use the declarative tree builder; automatic migration
+  and default preview execution of embedded handlers are not yet implemented.
 
 Verification, usage and remaining gaps:
 [designer event workflow report](DESIGNER_EVENTS_QA_20261023.md).
@@ -78,7 +149,59 @@ Verification, usage and remaining gaps:
 - Start a local-only demo with `go run ./examples/http-tool`. See the
   [SDK feature/API list and recipes](docs/SDK_FEATURES.md) and
   [HTTP SDK validation report](SDK_HTTP_QA_20261023.md) for lifecycle contracts,
-  platform coverage and remaining font / IDE-generation gaps.
+  platform coverage and remaining IDE-generation gaps.
+
+### Native text and safe designer regeneration
+
+- macOS native Cairo text now resolves missing CJK / emoji glyphs against installed
+  system fonts, using the same font runs for measurement and drawing. ASCII stays
+  on its existing path; icon-font private-use glyphs are not substituted.
+- Split SDK exports preflight both files, preserve existing user code, permissions
+  and unchanged-file mtimes, and use staged replacement with conflict checks and
+  best-effort rollback. Unrecognized or standalone outputs are not overwritten;
+  form-title edits preserve the existing generated UI type.
+- IDE Save recognizes an existing typed split export rather than overwriting it
+  with a `decl.Node` builder. New handler imports are reported, not silently added
+  to user source. LF / CRLF generated headers are accepted.
+- This is not full complex-script shaping, crash-atomic multi-file storage or a
+  completed preview/export unification. See [native text and regeneration QA](FONT_GENERATION_QA_20261023.md).
+
+### JSON inspector and reusable JSON SDK
+
+- New `jsonx` package parses bounded, immutable JSON documents with precise
+  `json.Number` values, typed lookup, RFC 6901 paths, child paging, bounded previews
+  and a bounded-executor `ParseAsync` helper.
+- `httpx.Response.Document()` bridges API responses to reusable documents without
+  changing existing extraction APIs. Parse in a worker, then reuse the document.
+- **Data → JSONView** displays key/type/value columns, lazily expands grouped large
+  arrays/objects, reveals a JSON Pointer, and copies a selected node or path.
+  Ctrl/Cmd+C copies JSON; adding Shift copies its pointer. Columns follow resizing.
+- Designer drag/drop, persisted sample properties, `OnSelected` / `OnError`, typed
+  export and `decl.JSONView` are connected. Runtime response data is not persisted
+  as the designer sample.
+- Try `go run ./examples/json-inspector` for a local-only API browser, including
+  grouped data, error preservation and cancellation. See [JSON SDK APIs](jsonx/README.md),
+  [SDK recipes](docs/SDK_FEATURES.md) and [validation / platform limits](JSON_INSPECTOR_QA_20261023.md).
+
+### Streaming downloads and coalesced progress
+
+- `httpx.Client.DownloadTo/DownloadToAsync` streams to a caller-owned `io.Writer`
+  with a fixed 32 KiB copy buffer, cancellation, a separate download-size limit,
+  SHA-256 calculation/verification and throttled progress. It never chooses a
+  filename or automatically overwrites/closes the destination.
+- `async.Latest[T]` coalesces replaceable snapshots into one queued/running
+  dispatch. Intermediate progress does not flood the UI queue; Close suppresses
+  not-yet-started deliveries. It is not a lossless event log.
+- **Network & Tools → TransferProgress** shows known/unknown totals and explicit
+  running/succeeded/failed/cancelled states, without a timer or busy animation.
+  Designer persistence, generated state-change handlers and `decl.TransferProgress`
+  are connected; runtime counts/state are not saved as design properties.
+- Try `go run ./examples/download-monitor`: local streamed data goes to
+  `io.Discard`, with known/unknown length, checksum failure, HTTP error and cancel
+  presets. Compact layouts reflow buttons and hide optional footer text.
+- Ordinary ProgressBar also rejects NaN instead of passing invalid geometry to
+  the renderer. See [SDK recipes](docs/SDK_FEATURES.md) and
+  [transfer QA and limitations](TRANSFER_SDK_QA_20261023.md).
 
 Open **Tools → Appearance & Editor** (or the command palette) to select English
 or 简体中文, dark/light theme, UI/editor font families and sizes, tab width,
@@ -99,11 +222,101 @@ language when explicitly set.
   change with correct redo caret restoration. Semantic candidates rank before
   local guesses; long signatures are clipped/elided without overlapping labels.
   The IDE requests plain-text completions, not LSP snippets.
+  The shared popup supports hover/click, wheel scrolling and PageUp/PageDown;
+  it fits whole rows around the caret without covering the editor chrome.
+  Its footer distinguishes local/provider candidates and reports gopls waiting
+  or timeout without a spinner. Escape dismissal is respected by late replies.
+  Local prefix completion is also one undo/redo step.
+  Documents above 32 KiB index and rank local identifiers off the UI thread,
+  retaining the complete document rather than truncating the search range.
+  Superseded jobs are cancelled/coalesced; closing a tab releases its index.
+  An undrawable popup cannot silently consume Enter/Tab after a resize.
+  Filename-aware modes distinguish Go, SilkGo and plain text. Unknown named
+  formats no longer receive Go syntax colors, symbols, folds, keyword seeds or
+  default Go snippets; lexical word completion remains available. Switching
+  dialect invalidates old projections and pending local results, not the text.
+  The editor claims ordinary Tab before native-window focus traversal, so
+  indentation, completion, find/replace and snippet stops work from real keys;
+  Ctrl+Tab remains available for host focus navigation.
+  Snippet expansion is one atomic undoable replacement, including indentation
+  and Unicode-safe caret restoration; undo retires stale placeholder ranges.
   Ctrl+Space requests fresh candidates without inserting a space on Windows;
-  informational diagnostics no longer paint red error markers. `gopls` remains an
-  external tool, not bundled by this source change.
+  informational diagnostics no longer paint red error markers. Complete IDE builds now include pinned `gopls` in `tools/`; see the bundled
+  language-server section below.
 
 See [verification and remaining limits](EDITOR_LSP_QA_20261020.md).
+The [2026-10-23 completion interaction follow-up](EDITOR_COMPLETION_QA_20261023.md)
+records the native Windows checks and [provider-status screenshot](screenshots/silkide-completion-windows-20261023.png).
+The [background local-index follow-up](EDITOR_INDEX_QA_20261023.md) separates
+UI-path benchmarks, full background work and native Windows readback tests.
+The [document-mode follow-up](EDITOR_DOCUMENT_MODE_QA_20261023.md) covers plain
+text isolation, explicit SDK providers and native Go/SilkGo regression checks.
+The [incremental lexical-state follow-up](EDITOR_LEXICAL_QA_20261023.md) removes
+repeated offscreen-prefix tokenization from Go redraws and fixes multiline raw
+strings, long-comment termination and coloring after folded lines. State is
+updated when text changes, without a new repaint timer or worker.
+The [LSP snapshot and outline follow-up](EDITOR_LSP_POSITION_QA_20261024.md)
+adds allocation-free [rune/byte/UTF-16 position reads](gui/CODE_EDITOR_POSITIONS.md)
+and [symbol-change subscriptions](gui/CODE_EDITOR_SYMBOLS.md) for independently
+cached panels. Native Windows checks cover Chinese/emoji completion, single-step
+undo/redo, disk readback and cross-file navigation in a 100k-line file; the report
+records the defects found at that checkpoint and the remaining long-line costs.
+The [byte-preserving edit follow-up](EDITOR_BYTE_EDITS_QA_20261024.md) repairs
+standard input/history paths and adds atomic multi-caret typing, multiline paste,
+Enter, Backspace and Delete with caret restoration. It also fixes Windows
+opt-in system-key routing and prevents malformed UTF-8/NUL from blanking or
+truncating native text rendering without rewriting the source bytes. See the
+[SDK edit contract](gui/CODE_EDITOR_EDITS.md) for exact scope and history semantics. Windows QA now also covers
+34 exact-byte save/undo/redo stages and bundled-gopls completion/navigation.
+The standard multi-caret arrow did not reach the app in this test environment; the verified
+Ctrl+Alt+Shift+Down fallback and remaining coverage limits are recorded explicitly.
+
+The [caret-command follow-up](EDITOR_CARET_COMMANDS_QA_20261024.md) exposes
+Add Cursor Above/Below and Keep Primary Cursor through Edit, the command palette
+and the SDK context menu, with theme-aware vector icons and caret-count status.
+Commands reveal folded/offscreen targets without editing the document or history.
+Caret visibility now scans only the requested prefix instead of allocating a rune
+copy of the full line; the report separates this microbenchmark from remaining
+long-line rendering costs and native UI coverage. See the
+[Windows caret-command screenshot](screenshots/silkide-caret-commands-windows-20261024.png).
+
+The [viewport rendering follow-up](EDITOR_VIEWPORT_QA_20261024.md) removes
+whole-line copies from caret/selection drawing and hit testing, replaces the
+quadratic backward bracket scan, and bounds certified fixed-cell ASCII text and
+decorations to the viewport. Pixel parity checks include fractional scrolling,
+100/125/200% scaling, tabs, Unicode fallback and antialiased edge ink; font-width
+exceptions such as Menlo `#` use their measured advances. The report distinguishes
+raster microbenchmarks from native Windows input/save and memory measurements,
+and records the remaining full-layout costs for non-fixed-cell long lines.
+Offscreen bracket boxes are rejected before reaching native fixed-point paths;
+selection/find/caret geometry is bounded without manufacturing new stroke edges.
+The pure-Go renderer also preserves device coordinates under non-origin clips
+instead of shifting its raster mask with the clip rectangle.
+
+[Native Windows 4 MB line and bracket rendering](screenshots/silkide-editor-viewport-windows-20261024.png)
+
+The [language-service activity follow-up](LSP_ACTIVITY_QA_20261024.md) adds a
+keyboard-accessible gopls status action and an owned, bounded
+[SDK progress snapshot API](core/LSP_PROGRESS.md). Work-done bursts coalesce
+outside the diagnostics queue; old-session updates cannot overwrite a restarted
+server. The status distinguishes starting/connected/reported work/offline and
+incomplete progress, without polling or equating silence with zero CPU usage.
+
+[Native Windows language-service status and recovery](screenshots/silkide-lsp-activity-windows-20261024.png)
+
+The [Git availability follow-up](GIT_AVAILABILITY_QA_20261024.md) adds recoverable
+loading/error/empty states to Changes and History, bounded latest-request refresh,
+and [cancelable SDK Git reads](core/GIT_READ.md). Git pane reads no longer retry
+on every save when Git is missing; explicit Retry can recover without a new IDE session when the
+existing process PATH becomes usable. Status paths use NUL-delimited porcelain
+and resolve against the actual repository root, preserving Unicode filenames.
+SDK labels now render explicit line breaks and wrapped text with cached layout,
+per-line alignment and visible-row clipping; the recovery panel also exercises
+this path on native Windows.
+
+[Native Windows Git recovery and bundled language service](screenshots/silkide-git-recovery-windows-20261024.png)
+
+![Windows multi-caret edits preserve original bytes and render malformed text](screenshots/silkide-byte-edits-windows-20261024.png)
 
 ![Native Windows editor: Chinese text, Unicode and consistent tab stops](screenshots/silkide-editor-lsp-windows.png)
 
@@ -214,8 +427,55 @@ make test-ide    # IDE, designer, widgets and tool-engine regression tests
 - Fit canvas: `Cmd/Ctrl+Shift+0` (plain `F` remains available for code input).
 
 For desktop verification, use a disposable project and an isolated settings
-home. `gopls` and `dlv` are optional external tools; installing or building the
-IDE alone does not establish language-server or debugger availability.
+home. Complete IDE builds (`make ide`, `make bundle-ide`, and release archives)
+include pinned `gopls`; `go build ./cmd/silkide` alone builds only the executable.
+Go SDK remains required for Go project analysis/builds. Git and `dlv` are separate
+optional external tools; bundling gopls does not claim debugger availability.
+
+### Bundled Go language server
+
+`make test-ide` now requires the bundled-language-server integration tests;
+`make test-ide-lsp` runs that gate independently. A missing server cannot pass
+this gate as a skipped test. Portable tool builds pin `GOAMD64=v1` /
+`GOARM64=v8.0`, and reject binaries requiring a newer CPU instruction baseline.
+`make bundle-ide` also verifies the tool directory inside the macOS `.app`.
+See [the bundle audit and native recovery QA](GOPLS_AUDIT_QA_20261024.md).
+
+
+- `make ide-tools` builds/repairs **gopls v0.24.0** into `bin/tools`, with a
+  SHA-256/platform/compiler manifest and linked-module licenses. Tool sources and
+  checksums are pinned in `tools/gopls-module/go.mod` / `go.sum`; no `@latest` install.
+  The source module is intentionally separate from the runtime `tools/gopls`
+  executable so a checkout-root developer build cannot mistake it for a broken bundle.
+  The security workflow scans this separate binary as well as the SDK.
+- The gopls build uses **Go 1.27.3** in an isolated tool module. Go may download
+  that compiler into its normal cache on first build; the SDK/IDE stays on the
+  root module's Go 1.26.10. End users do **not** need the gopls build compiler.
+  Current gopls supports Go 1.26/1.27 project toolchains; Go itself is not bundled.
+  Desktop startup also checks stable official/Homebrew Go installation locations,
+  without changing machine PATH or overriding an explicit user PATH.
+- Windows/Linux resolve `<executable-dir>/tools/gopls[.exe]`; macOS includes
+  `SilkIDE.app/Contents/MacOS/tools`. Moving the complete application works
+  without a terminal PATH setup. Never copy only the IDE executable.
+- `SILKIDE_GOPLS=/absolute/path/to/gopls[.exe]` explicitly overrides the bundle.
+  Otherwise a validated bundle wins over PATH; complete builds require it even
+  if the entire tools directory is missing. Source-only builds may fall back
+  to an absolute PATH installation. Broken bundles fail visibly instead of
+  silently choosing another server. No workspace-relative executable search,
+  automatic startup downloads, or machine PATH modifications are performed.
+- **Tools → Toolchain Status** reports selected paths, versions and live LSP
+  connection state, and distinguishes Go/gopls from optional Git/Delve.
+  **Tools → Restart LSP** restarts after configuration changes.
+- `bash scripts/test-bundled-gopls.sh bin` requires actual bundled-server
+  completion/formatting, unsaved Unicode navigation, and rename integration.
+  Release checks fail on a missing binary, bad manifest, wrong architecture,
+  missing license, or unavailable real server; they do not count skips as success.
+- For cross-target packaging use `go run ./cmd/silktools -goos windows -goarch
+  amd64 -out bin/windows/tools`. `-verify` never downloads or builds tools.
+
+Git and Delve are deliberately **not** auto-installed. Missing Go is an explicit
+error even when gopls is present; see the toolchain status dialog for recovery.
+
 
 ### Validation Status
 
@@ -262,6 +522,11 @@ shaping certification; see [Windows text QA](WINDOWS_TEXT_QA_20261020.md).
 | Windows 10 22H2 amd64 / Go 1.26.5 / Cairo 1.18.4 | Thirteen-package native and race regression (4,638 pass / 39 skip), pure-Go rendering, race/normal GUI input/save/resize and background-output checks; later native task-tree cancellation regressions; earlier bounded GDI plateau, paint pairing, accelerator dispatch, icon lifetime, layout persistence/resize and F6 build; real Pinyin commit/cancel, Unicode save/readback, visible CJK/emoji/Ext-B glyphs, caret geometry and scaled pixel comparisons | Startup/input-latency certification, complex shaping and raw-glyph rich text fallback, full IME, mixed-DPI/multi-monitor, all widget/menu combinations, real gopls/dlv, physical printing and unbounded resource stability |
 
 Run/Build currently use **saved files on disk**; save edits before running.
+2026-10-23 follow-up: packaged gopls delivery and native protocol coverage are
+tracked separately in [gopls bundle QA](GOPLS_BUNDLE_QA_20261023.md); the table
+above retains its original dated evidence rather than implying all LSP/debugger
+workflows were retested.
+
 IDE symbol actions require `gopls` and report when it is unavailable. Some panels
 still have incomplete localization/font fallback. Passing tests or installing
 external tools alone is not a full desktop compatibility claim.
@@ -386,8 +651,9 @@ build flow is identical, only the env-var syntax differs.
 **MSYS2 UCRT64** (recommended — `PATH` is already set):
 ```bash
 cd /c/path/to/silk
-go build -o silkide.exe ./cmd/silkide/
-./silkide.exe
+go run ./cmd/silktools -out bin/tools
+go build -ldflags="-X github.com/uk0/silk/internal/idetools.RequireBundle=1" -o bin/silkide.exe ./cmd/silkide/
+./bin/silkide.exe
 go test ./gui/ ./ged/ ./paint/ ./graph/ ./geom/
 ```
 
@@ -395,8 +661,9 @@ go test ./gui/ ./ged/ ./paint/ ./graph/ ./geom/
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 cd C:\path\to\silk
-go build -o silkide.exe .\cmd\silkide\
-.\silkide.exe
+go run ./cmd/silktools -out bin/tools
+go build -ldflags="-X github.com/uk0/silk/internal/idetools.RequireBundle=1" -o bin\silkide.exe .\cmd\silkide\
+.\bin\silkide.exe
 go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
 ```
 
@@ -404,8 +671,9 @@ go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
 ```cmd
 set PATH=C:\msys64\ucrt64\bin;%PATH%
 cd C:\path\to\silk
-go build -o silkide.exe .\cmd\silkide\
-silkide.exe
+go run ./cmd/silktools -out bin/tools
+go build -ldflags="-X github.com/uk0/silk/internal/idetools.RequireBundle=1" -o bin\silkide.exe .\cmd\silkide\
+bin\silkide.exe
 go test .\gui\ .\ged\ .\paint\ .\graph\ .\geom\
 ```
 

@@ -16,7 +16,7 @@ import (
 // double-click selects the entry.
 //
 // The Hint is purely informational — actually firing the keystroke
-// triggers the same Fn through gui.RegisterShortcut, so the palette
+// uses gui.RegisterShortcut or the focused editor SDK handler, so the palette
 // entry doubles as keyboard documentation when the user types
 // "build" and sees "Build (F6)".
 type paletteCommand struct {
@@ -69,6 +69,9 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Save All", actionKeyHint()+"+Shift+S", func() { performSaveAll(editorTabs, designCanvas) })
 	add("Undo", actionKeyHint()+"+Z", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
 	add("Redo", actionKeyHint()+"+Shift+Z", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
+	for _, spec := range editorCaretCommandSpecs() {
+		add(spec.label, spec.hint, func() { runEditorCaretCommand(editorTabs, designCanvas, spec, nil) })
+	}
 	add("Expand Silk Macros", "", func() { expandActiveMacro(editorTabs, designCanvas) })
 	add("Appearance & Editor", "", func() { showAppearanceDialog(globalFrame) })
 	// File actions.
@@ -138,6 +141,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Find References", "Shift+F12", func() { findReferencesViaLSP(editorTabs) })
 	add("Code Actions", "Cmd+.", func() { codeActionsViaLSP(editorTabs) })
 	add("Open Project", "", func() { openProjectFolder(designCanvas) })
+	add("Toolchain Status", "", func() { showToolchainStatus(globalFrame) })
 	add("Restart LSP", "", func() { restartLSP(designCanvas) })
 	add("Run go vet", "Shift+F6", func() { runProjectVet(designCanvas) })
 	add("Run Tests", "F7", func() { runProjectTests(designCanvas) })
@@ -270,10 +274,10 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		if globalGitChanges != nil {
 			dockSetActiveView(globalBottomDock, globalGitChanges)
 		}
-		refreshGitChanges(designCanvas)
+		refreshGitChangesWith(designCanvas, true)
 	})
 	add("Refresh Git Changes", "", func() {
-		refreshGitChanges(designCanvas)
+		refreshGitChangesWith(designCanvas, true)
 	})
 	// Workspace symbol search (gopls workspace/symbol).
 	add("Go to Symbol in Workspace", "Cmd+T", func() {
@@ -294,7 +298,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		if globalGitLog != nil {
 			dockSetActiveView(globalBottomDock, globalGitLog)
 		}
-		refreshGitLog(designCanvas)
+		refreshGitLogWith(designCanvas, true)
 	})
 	// Toggle git-blame annotations on the active editor.
 	add("Toggle Blame", "Cmd+Shift+B", func() {

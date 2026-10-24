@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -231,13 +230,7 @@ func TestEditorRenamePersistsNewSessionAndRecentPaths(t *testing.T) {
 }
 
 func TestEditorRenameRealGoplsKeepsUnsavedDefinition(t *testing.T) {
-	if testing.Short() {
-		t.Skip("real gopls integration")
-	}
-	bin, err := exec.LookPath("gopls")
-	if err != nil {
-		t.Skip("gopls not installed")
-	}
+	bin := requireRealGopls(t)
 	w := renameWorkbench(t)
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module renameqa\n\ngo 1.26\n")
@@ -251,6 +244,7 @@ func TestEditorRenameRealGoplsKeepsUnsavedDefinition(t *testing.T) {
 		for range client.Notifications() {
 		}
 	}()
+	client.WorkProgressUpdates()
 	if _, err := client.Initialize(core.LSPInitializeParams{ProcessID: os.Getpid(), RootURI: fileURIOf(root), Capabilities: ideLSPCapabilities()}); err != nil {
 		client.Close()
 		t.Fatal(err)

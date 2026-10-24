@@ -84,12 +84,19 @@ type IEventKeyDown interface {
 	OnKeyDown(key int, repeat bool)
 }
 
+// IEventSystemKeyDown opts a focused control into native Alt/system-key input.
+// Return true only for a handled chord. Unhandled keys (notably Alt+F4 and
+// Alt+Space) must retain the operating system's normal window behavior.
+type IEventSystemKeyDown interface {
+	OnSystemKeyDown(key int, repeat bool) bool
+}
+
 // IWantsTab lets a focused widget claim Tab before the window spends it on
 // focus traversal.
 //
-// The window layer owns Tab because no ordinary widget wants it. A design
-// canvas does: Tab there walks the widgets being designed, which is the only
-// way to reach one without a mouse. Without this seam the canvas never sees the
+// The window layer normally owns Tab for focus traversal. An editor needs it
+// for indentation/snippets; a design canvas walks the widgets being designed,
+// which is the only way to reach one without a mouse. Without this seam it loses
 // key — the window moves focus to the next panel and the canvas loses it, so
 // the next Tab walks further away.
 //

@@ -104,6 +104,7 @@ var designerShortcuts = []ShortcutDef{
 	{Command: "editor.prevBookmark", Context: "editor", Category: "代码", Label: "上一个书签", Mods: gui.ModShift, Key: gui.KeyF2},
 	{Command: "editor.addCursorAbove", Context: "editor", Category: "代码", Label: "向上添加光标", Mods: gui.ModAction | gui.ModAlt, Key: gui.KeyUp},
 	{Command: "editor.addCursorBelow", Context: "editor", Category: "代码", Label: "向下添加光标", Mods: gui.ModAction | gui.ModAlt, Key: gui.KeyDown},
+	{Command: "editor.clearCursors", Context: "editor", Category: "代码", Label: "仅保留主光标", Key: gui.KeyEsc},
 	{Command: "editor.navBack", Context: "editor", Category: "代码", Label: "后退", Mods: gui.ModAlt, Key: gui.KeyLeft},
 	{Command: "editor.navForward", Context: "editor", Category: "代码", Label: "前进", Mods: gui.ModAlt, Key: gui.KeyRight},
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Explorer often has a different PATH from a developer shell. Extend only
+// Explorer/Finder often have a different PATH from a developer shell. Extend only
 // this IDE process, after explicit PATH entries, with known absolute install
 // directories. No registry changes, recursive disk scan or subprocess probes.
 func configureIDEProcessToolPath() {
@@ -27,6 +27,7 @@ func configureIDEProcessToolPath() {
 			candidates = append(candidates, filepath.Join(drive+string(filepath.Separator), "Go", "bin"))
 		}
 	}
+	candidates = append(candidates, standardUnixGoBinDirs(runtime.GOOS)...)
 	gopath := os.Getenv("GOPATH")
 	if gopath == "" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -71,4 +72,16 @@ func appendExistingToolDirs(path string, dirs []string, caseInsensitive bool) st
 		seen[key(dir)] = true
 	}
 	return path
+}
+
+// Stable installer/symlink locations also work when a release was built with
+// a runner-specific GOROOT. Explicit user PATH and GOROOT still take precedence.
+func standardUnixGoBinDirs(goos string) []string {
+	switch goos {
+	case "darwin":
+		return []string{"/usr/local/go/bin", "/opt/homebrew/opt/go/bin", "/usr/local/opt/go/bin"}
+	case "linux":
+		return []string{"/usr/local/go/bin", "/usr/lib/go/bin"}
+	}
+	return nil
 }

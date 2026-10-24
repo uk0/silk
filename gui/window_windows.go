@@ -1259,6 +1259,9 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		if lParam&0x40000000 == 0 && win.dispatchWindowShortcut(int(wParam)) {
 			return 0
 		}
+		if target, ok := win.keyTarget().(IEventSystemKeyDown); ok && target.OnSystemKeyDown(int(wParam), lParam&0x40000000 != 0) {
+			return 0
+		}
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_SYSCHAR:
 		if win.allowsApplicationShortcuts() && ShortcutHandler(currentMods(), int(unicode.ToUpper(rune(wParam)))) != nil {

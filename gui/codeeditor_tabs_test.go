@@ -25,7 +25,8 @@ func TestEditorTabsUseStopsWithoutDrawingControlGlyphs(t *testing.T) {
 	e := NewCodeEditor()
 	for _, line := range []string{"\t\treturn 42", "a\tb\tc", " // 中文\tcomment", "s := `a\tb`"} {
 		r := &editorTextRecorder{}
-		e.drawHighlightedLine(r, 0, line, 60, 20, false)
+		e.SetText(line)
+		e.drawHighlightedLine(r, 0, 60, 20)
 		for _, run := range r.runs {
 			if strings.ContainsAny(run.text, "\t\r\n") {
 				t.Errorf("control glyph rendered: %q", run.text)

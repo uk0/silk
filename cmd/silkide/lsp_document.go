@@ -36,10 +36,10 @@ type lspDocument struct {
 	sent             int
 	wake, stop, done chan struct{}
 	previous         <-chan struct{}
-	deliver          func(lspSnapshot, []core.LSPCompletionItem)
+	deliver          func(lspSnapshot, []core.LSPCompletionItem, error)
 }
 
-func newLSPDocument(c lspDocumentTransport, uri, text string, previous <-chan struct{}, deliver func(lspSnapshot, []core.LSPCompletionItem)) *lspDocument {
+func newLSPDocument(c lspDocumentTransport, uri, text string, previous <-chan struct{}, deliver func(lspSnapshot, []core.LSPCompletionItem, error)) *lspDocument {
 	d := &lspDocument{client: c, uri: uri, latest: lspSnapshot{text: text, version: 1}, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), previous: previous, deliver: deliver}
 	go d.run()
 	return d
@@ -143,7 +143,11 @@ func (d *lspDocument) run() {
 			}
 		}
 		s, err := d.sync()
-		if err != nil || !s.complete {
+		if !s.complete {
+			continue
+		}
+		if err != nil {
+			d.finish(s, nil, err)
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -157,13 +161,19 @@ func (d *lspDocument) run() {
 		d.mu.Unlock()
 		items, err := d.client.CompletionContext(ctx, d.uri, s.line, s.col)
 		cancel()
-		d.mu.Lock()
-		current := !d.closed && d.latest.version == s.version
-		deliver := d.deliver
-		d.cancel = nil
-		d.mu.Unlock()
-		if err == nil && current && deliver != nil {
-			deliver(s, items)
-		}
+		d.finish(s, items, err)
+	}
+}
+
+// finish never reports a cancelled/superseded snapshot and never calls UI code
+// while holding mu. Hosts still recheck identity/version on their UI queue.
+func (d *lspDocument) finish(s lspSnapshot, items []core.LSPCompletionItem, err error) {
+	d.mu.Lock()
+	current := !d.closed && d.latest.version == s.version
+	deliver := d.deliver
+	d.cancel = nil
+	d.mu.Unlock()
+	if current && deliver != nil {
+		deliver(s, items, err)
 	}
 }

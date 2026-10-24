@@ -173,6 +173,7 @@ func (this *scaledFont) GlyphExtents(glyphs []Glyph) *TextExtents {
 }
 
 func (this *scaledFont) TextToGlyphs(x, y float64, text string) (ret []Glyph) {
+	text = displayText(text)
 	this.ScaledFont.TextToGlyphs_hack(x, y, text,
 		func(buf unsafe.Pointer, num int) {
 			ret = make([]Glyph, num)
@@ -196,6 +197,12 @@ func (this *scaledFont) TextToGlyphs(x, y float64, text string) (ret []Glyph) {
 // may retain — this is the internal hot-path variant for DrawText/DrawText1,
 // where the glyphs are consumed synchronously and never kept.
 func (this *scaledFont) textToGlyphsInto(x, y float64, text string, dst []Glyph) []Glyph {
+	return this.validTextToGlyphsInto(x, y, displayText(text), dst)
+}
+
+// validTextToGlyphsInto consumes text already checked at the public paint boundary.
+func (this *scaledFont) validTextToGlyphsInto(x, y float64, text string, dst []Glyph) []Glyph {
+	dst = dst[:0]
 	this.ScaledFont.TextToGlyphs_hack(x, y, text,
 		func(buf unsafe.Pointer, num int) {
 			if cap(dst) < num {
@@ -214,6 +221,7 @@ func (this *scaledFont) textToGlyphsInto(x, y float64, text string, dst []Glyph)
 }
 
 func (this *scaledFont) TextExtents(text string) *TextExtents {
+	text = displayText(text)
 	if needsTextFallback(text) {
 		return this.fallbackTextExtents(text)
 	}

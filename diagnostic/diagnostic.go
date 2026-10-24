@@ -92,7 +92,7 @@ var catalog = map[Code]Definition{
 	MacroOutputWrite:     {MacroOutputWrite, "Cannot install macro output", "Check output-directory permissions and disk space; previous output is preserved if installation fails."},
 	MacroUnsaved:         {MacroUnsaved, "Macro document is unsaved", "Save the .silkgo source and any modified generated output before expanding."},
 	MacroStale:           {MacroStale, "Macro source changed during generation", "Expand again using the current source."},
-	LSPUnavailable:       {LSPUnavailable, "Language server unavailable", "Install/configure gopls and restart the language service."},
+	LSPUnavailable:       {LSPUnavailable, "Language server unavailable", "Check Tools > Toolchain Status. Reinstall the complete IDE bundle or run make ide-tools; install Go, then restart the language service."},
 	LSPRequest:           {LSPRequest, "Language request failed", "Check the underlying server error and retry after the workspace finishes loading."},
 }
 

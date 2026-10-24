@@ -1163,11 +1163,17 @@ func (this *Context) fillPath() {
 	if this.surface == nil || this.surface.img == nil {
 		return
 	}
-	w, h := this.surface.width, this.surface.height
-	r := vector.NewRasterizer(w, h)
+	dr := this.drawRect()
+	if dr.Empty() {
+		return
+	}
+	// Rasterizer.Draw places mask (0,0) at dr.Min. Rasterize in clip-local
+	// device coordinates, avoiding both a shifted mask and full-surface scratch.
+	r := vector.NewRasterizer(dr.Dx(), dr.Dy())
 	first := true
 	for _, p := range this.path {
 		x, y := this.state.matrix.Transform(p.x1, p.y1)
+		x, y = x-float64(dr.Min.X), y-float64(dr.Min.Y)
 		switch p.op {
 		case 'M':
 			if !first {
@@ -1188,6 +1194,8 @@ func (this *Context) fillPath() {
 		case 'C':
 			x2, y2 := this.state.matrix.Transform(p.x2, p.y2)
 			x3, y3 := this.state.matrix.Transform(p.x3, p.y3)
+			x2, y2 = x2-float64(dr.Min.X), y2-float64(dr.Min.Y)
+			x3, y3 = x3-float64(dr.Min.X), y3-float64(dr.Min.Y)
 			if first {
 				r.MoveTo(float32(x), float32(y))
 				first = false
@@ -1197,7 +1205,7 @@ func (this *Context) fillPath() {
 			r.ClosePath()
 		}
 	}
-	this.rasterizeWithSource(r, this.drawRect())
+	this.rasterizeWithSource(r, dr)
 }
 
 // rasterizeWithSource draws the rasteriser's coverage into dst[r] using
@@ -1269,14 +1277,17 @@ func (this *Context) strokePath() {
 		copy.strokePath()
 		return
 	}
-	w, h := this.surface.width, this.surface.height
+	dr := this.drawRect()
+	if dr.Empty() {
+		return
+	}
 	wpx := this.state.lineWidth
 	if wpx < 1 {
 		wpx = 1
 	}
 	hw := wpx * 0.5
-	raster := vector.NewRasterizer(w, h)
-	r := &transformedStroke{Rasterizer: raster, matrix: this.state.matrix}
+	raster := vector.NewRasterizer(dr.Dx(), dr.Dy())
+	r := &transformedStroke{Rasterizer: raster, matrix: this.state.matrix, origin: dr.Min}
 
 	cap := this.state.lineCap
 	join := this.state.lineJoin
@@ -1359,7 +1370,7 @@ func (this *Context) strokePath() {
 	}
 	flushSubpath()
 
-	this.rasterizeWithSource(raster, this.drawRect())
+	this.rasterizeWithSource(raster, dr)
 }
 
 // strokeSegment rasterises a line as a thin oriented quad (offset by
@@ -1391,15 +1402,16 @@ type strokePathWriter interface {
 type transformedStroke struct {
 	*vector.Rasterizer
 	matrix geom.Mat3x2
+	origin image.Point
 }
 
 func (r *transformedStroke) MoveTo(x, y float32) {
 	a, b := r.matrix.Transform(float64(x), float64(y))
-	r.Rasterizer.MoveTo(float32(a), float32(b))
+	r.Rasterizer.MoveTo(float32(a-float64(r.origin.X)), float32(b-float64(r.origin.Y)))
 }
 func (r *transformedStroke) LineTo(x, y float32) {
 	a, b := r.matrix.Transform(float64(x), float64(y))
-	r.Rasterizer.LineTo(float32(a), float32(b))
+	r.Rasterizer.LineTo(float32(a-float64(r.origin.X)), float32(b-float64(r.origin.Y)))
 }
 
 // addStrokeDisc emits a 16-segment polygon approximation of a disc

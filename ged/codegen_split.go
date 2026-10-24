@@ -6,12 +6,12 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/uk0/silk/graph"
+	"github.com/uk0/silk/internal/filetxn"
 )
 
 // One design, two files, one owner each — the split that makes regeneration
@@ -21,7 +21,7 @@ import (
 // appending a stub for a handler the design has gained.
 
 // SplitResult reports what one generation did. Only the user side is worth
-// reporting — the machine file is rewritten unconditionally.
+// reporting — an unchanged file is left untouched (including its mtime).
 type SplitResult struct {
 	MachineFile string   // <base>.silk.go, rewritten wholesale
 	UserFile    string   // <base>.go, created once and thereafter only appended to
@@ -46,44 +46,87 @@ type handlerStub struct {
 // GenerateCodeFile writes the design as the machine/user pair described above.
 // filename names either half (or neither): its extension is dropped and both
 // files are derived from the stem, so exporting over an earlier export lands on
-// the same pair.
+// the same pair. Existing machine files must carry GeneratedCodeHeader.
+// Writes are staged with conflict checks and best-effort rollback on ordinary
+// I/O errors; the pair is not crash-atomic. Syntax errors leave both files intact.
 func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (SplitResult, error) {
 	if err := scene.CommitPendingEdits(); err != nil {
 		return SplitResult{}, err
 	}
+	explicitType := opts.TypeName != ""
 	opts = defaultCodeGenOptions(scene, opts)
 	machine, user := splitCodePaths(filename)
 	res := SplitResult{MachineFile: machine, UserFile: user}
-
+	if !token.IsIdentifier(opts.PackageName) || opts.PackageName == "_" || !token.IsIdentifier(opts.TypeName) || opts.TypeName == "_" {
+		return res, fmt.Errorf("invalid generated package or type name: %q, %q", opts.PackageName, opts.TypeName)
+	}
 	if err := scene.checkHandlerSource(); err != nil {
 		return res, err
 	}
+	machineBefore, err := filetxn.Read(machine)
+	if err != nil {
+		return res, err
+	}
+	if machineBefore.Exists() {
+		typeName, err := SplitCodeType(string(machineBefore.Bytes()))
+		if err != nil {
+			return res, fmt.Errorf("%s: %w", machine, err)
+		}
+		if explicitType && opts.TypeName != typeName {
+			return res, fmt.Errorf("%s: existing UI type is %s, not %s; preserve it or export to a new path", machine, typeName, opts.TypeName)
+		}
+		opts.TypeName = typeName
+	}
+	userBefore, err := filetxn.Read(user)
+	if err != nil {
+		return res, err
+	}
 
+	// Generate and validate BOTH halves before replacing either destination.
+	// GenerateCode alone discards errors such as an unmapped widget factory.
 	machineOpts := opts
 	machineOpts.SplitHandlers = true
-	if err := os.WriteFile(machine, []byte(scene.GenerateCode(machineOpts)), 0644); err != nil {
-		return res, err
+	generated := scene.GenerateCodeIndexed(machineOpts)
+	if generated.Err != nil {
+		return res, generated.Err
 	}
-
+	machineCode, err := format.Source([]byte(generated.Code))
+	if err != nil {
+		return res, fmt.Errorf("%s: generated source: %w", machine, err)
+	}
 	stubs := scene.collectHandlerStubs()
-	existing, err := os.ReadFile(user)
-	if os.IsNotExist(err) {
-		res.UserCreated = true
-		return res, os.WriteFile(user, []byte(renderUserCode(opts, scene.needsServices(), stubs)), 0644)
+	var userCode string
+	var added, missing []string
+	if !userBefore.Exists() {
+		userCode = renderUserCode(opts, scene.needsServices(), stubs)
+	} else {
+		userCode = string(userBefore.Bytes())
+		parsed, err := parser.ParseFile(token.NewFileSet(), user, userCode, parser.SkipObjectResolution)
+		if err != nil {
+			return res, fmt.Errorf("%s: %w", user, err)
+		}
+		if parsed.Name.Name != opts.PackageName {
+			return res, fmt.Errorf("%s: package %q does not match generated package %q", user, parsed.Name.Name, opts.PackageName)
+		}
+		userCode, added, missing, err = appendMissingStubs(userCode, opts.TypeName, stubs)
+		if err != nil {
+			return res, fmt.Errorf("%s: %w", user, err)
+		}
 	}
-	if err != nil {
+	// Parse only: never reformat user code or rewrite its import block. Missing
+	// signature imports retain the existing explicit MissingImports contract.
+	if _, err := parser.ParseFile(token.NewFileSet(), user, userCode, parser.SkipObjectResolution); err != nil {
+		return res, fmt.Errorf("%s: generated handlers: %w", user, err)
+	}
+	if err := filetxn.Commit(
+		filetxn.Change{Before: machineBefore, Data: machineCode},
+		filetxn.Change{Before: userBefore, Data: []byte(userCode)},
+	); err != nil {
 		return res, err
 	}
-
-	updated, added, missing, err := appendMissingStubs(string(existing), opts.TypeName, stubs)
-	if err != nil {
-		return res, fmt.Errorf("%s: %w", user, err)
-	}
+	res.UserCreated = !userBefore.Exists()
 	res.AddedStubs, res.MissingImports = added, missing
-	if len(added) == 0 {
-		return res, nil
-	}
-	return res, os.WriteFile(user, []byte(updated), 0644)
+	return res, nil
 }
 
 // GenerateUserCode renders the user-owned half from scratch, as it is written

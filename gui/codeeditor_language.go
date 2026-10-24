@@ -120,6 +120,7 @@ func (e *CodeEditor) SetAdditionalSymbols(revision uint64, symbols []CodeSymbol)
 	e.symbolsRevision++
 	e.symbolCache.valid = false
 	e.Update()
+	e.notifySymbolsChanged()
 	return true
 }
 
@@ -159,6 +160,9 @@ func (e *CodeEditor) ShowSignatureHint(x, y float64, text string) {
 
 func (e *CodeEditor) OnFocusChanged(newFocusWidget, oldFocusWidget IWidget) {
 	if newFocusWidget != e.Self() {
+		if e.completion != nil {
+			e.completion.Dismiss()
+		}
 		e.DismissLanguageHints()
 	}
 	e.Widget.OnFocusChanged(newFocusWidget, oldFocusWidget)

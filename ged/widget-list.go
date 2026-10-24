@@ -393,8 +393,14 @@ func drawWidgetIcon(g paint.Painter, factoryName string, x, y, size float64) {
 	}
 
 	switch shortName {
-	case "PrintButton", "GanttChart", "HTTPButton":
+	case "PrintButton", "GanttChart", "HTTPButton", "JSONView", "TransferProgress":
 		name := "printer"
+		if shortName == "TransferProgress" {
+			name = "transfer-progress"
+		}
+		if shortName == "JSONView" {
+			name = "json-view"
+		}
 		if shortName == "HTTPButton" {
 			name = "http-request"
 		}

@@ -58,7 +58,7 @@ func (this *ProgressBar) Value() float64 {
 }
 
 func (this *ProgressBar) SetValue(v float64) {
-	if v < 0 {
+	if math.IsNaN(v) || v < 0 {
 		v = 0
 	} else if v > 1 {
 		v = 1

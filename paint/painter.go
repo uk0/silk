@@ -446,8 +446,9 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 }
 
 func (this *cairoPainter) DrawText(text string) {
+	text = displayText(text)
 	sf := this.applyFont()
-	this.glyphBuf = sf.textToGlyphsInto(0, 0, text, this.glyphBuf[:0])
+	this.glyphBuf = sf.validTextToGlyphsInto(0, 0, text, this.glyphBuf[:0])
 	// Most native UI/icon fonts already cover their text. Inspect the glyphs
 	// we needed to shape anyway, rather than resolving/measuring extra runs
 	// on every Chinese menu repaint.

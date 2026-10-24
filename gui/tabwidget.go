@@ -198,15 +198,14 @@ func (this *TabWidget) stepCurrent(forward bool) {
 }
 
 // OnKeyDown implements IEventKeyDown, giving the TabWidget Qt QTabWidget style
-// keyboard tab switching while it (or its tab strip) holds focus:
+// keyboard tab switching while the TabWidget holds focus:
 //   - Ctrl+PageDown / Ctrl+Tab           -> next tab (wraps to first)
 //   - Ctrl+PageUp / Ctrl+Shift+Tab       -> previous tab (wraps to last)
 //   - Left/Up (previous), Right/Down (next) when focused, no Ctrl required
 //
-// All moves wrap and are no-ops with fewer than two tabs. Note: focus is only
-// reached when the TabWidget itself holds focus; the tab strip's click path
-// lives in TabBar (a sibling file) and does not call SetFocus, so clicking a
-// tab does not by itself arm these shortcuts.
+// All moves wrap and are no-ops with fewer than two tabs. The tab strip takes
+// its own focus on click and implements its own navigation in TabBar, including
+// Home/End and Down for the all-tabs chooser.
 func (this *TabWidget) OnKeyDown(key int, repeat bool) {
 	if this.Count() < 2 {
 		return

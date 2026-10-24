@@ -1,6 +1,7 @@
 package ged
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/uk0/silk/gui"
@@ -26,4 +27,27 @@ func TestOutlineRefreshesAsyncProviderWithoutTextEdit(t *testing.T) {
 		t.Fatal("clearing provider symbols left old outline rows")
 	}
 	wantOutlineRows(t, p, nil)
+}
+
+func TestOutlineLargeFilePendingAndSynchronousNavigation(t *testing.T) {
+	ed := gui.NewCodeEditor()
+	defer ed.CancelSymbolIndex()
+	ed.SetText("package p\n" + strings.Repeat("// padding\n", 4000) + "func TestLarge(){}\n")
+	p := NewCodeOutlinePanel()
+	p.SetEditor(ed)
+	if !p.symbolsLoading || len(p.flatList) != 0 {
+		t.Fatal("outline parsed on the UI thread or displayed stale rows")
+	}
+	if p.RefreshIfStale() {
+		t.Fatal("pending state repeatedly refreshes")
+	}
+	ed.ParseSymbols() // explicit navigation can supersede pending background work
+	if !p.RefreshIfStale() || p.symbolsLoading {
+		t.Fatal("synchronous parse left outline stuck loading")
+	}
+	wantOutlineRows(t, p, []string{"0:TestLarge"})
+	p.SetEditor(nil)
+	if p.symbolsLoading {
+		t.Fatal("detached editor is still loading")
+	}
 }

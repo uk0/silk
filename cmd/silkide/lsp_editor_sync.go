@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
@@ -18,6 +19,7 @@ var lspStartCancel context.CancelFunc
 func ideLSPCapabilities() json.RawMessage {
 	var c map[string]any
 	_ = json.Unmarshal(core.DefaultClientCapabilities(), &c)
+	c["window"] = map[string]any{"workDoneProgress": true}
 	td := c["textDocument"].(map[string]any)
 	td["completion"].(map[string]any)["completionItem"].(map[string]any)["snippetSupport"] = false
 	td["hover"].(map[string]any)["contentFormat"] = []string{"plaintext"}
@@ -45,15 +47,20 @@ func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
 	ed := openEditors[path]
 	epoch := lspSessionGeneration
 	var doc *lspDocument
-	doc = newLSPDocument(client, fileURIOf(path), text, previous, func(s lspSnapshot, items []core.LSPCompletionItem) {
+	doc = newLSPDocument(client, fileURIOf(path), text, previous, func(s lspSnapshot, items []core.LSPCompletionItem, err error) {
 		gui.Post(func() {
 			if globalLSP != client || lspSessionGeneration != epoch || lspDocuments[path] != doc || openEditors[path] != ed || ed == nil || lspVersions[path] != s.version || ed.CursorLine() != s.line || ed.CursorUTF16Col() != s.col {
 				return
 			}
+			if err != nil {
+				ed.SetCompletionStatus(lspCompletionStatus(err))
+				return
+			}
+			visible := ed.CompletionVisible()
 			out := make([]gui.ExternalCompletion, 0, min(len(items), 200))
 			for _, it := range items[:min(len(items), 200)] {
 				item := it
-				out = append(out, gui.ExternalCompletion{Label: item.Label, Detail: item.Detail, Insert: item.InsertText, Apply: func(target *gui.CodeEditor) {
+				out = append(out, gui.ExternalCompletion{Label: item.Label, Detail: item.Detail, Insert: item.InsertText, Source: "gopls", Apply: func(target *gui.CodeEditor) {
 					if target != ed || globalLSP != client || lspDocuments[path] != doc || target.Text() != s.text || target.CursorLine() != s.line || target.CursorUTF16Col() != s.col {
 						return
 					}
@@ -63,8 +70,12 @@ func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
 				}})
 			}
 			ed.SetExternalCompletions(out) // empty response MUST clear stale candidates
+			ed.SetCompletionStatus("")
+			if len(items) == 0 {
+				ed.SetCompletionStatus("gopls: no matches; local suggestions")
+			}
 			documentHighlightViaLSP(ed, path, s.line, s.col)
-			if ed.CompletionVisible() {
+			if visible {
 				ed.TriggerCompletion()
 			}
 		})
@@ -88,19 +99,21 @@ func updateLSPDocument(path string, ed *gui.CodeEditor, text string) {
 		lspHighlightGen[path]++
 		ed.SetOccurrenceHighlights(nil)
 		ed.ClearExternalCompletions()
-		s.line = ed.CursorLine()
-		s.col = ed.CursorUTF16Col()
-		// Newline/paste/undo still synchronize, but do not request completion for
-		// punctuation or whitespace. Automatic popup policy remains in the editor.
-		lines := strings.Split(text, "\n")
-		if s.line < len(lines) {
-			r := []rune(lines[s.line])
-			col := ed.CursorCol()
-			if col > 0 && col <= len(r) {
-				ch := r[col-1]
-				s.complete = ch == '.' || ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch)
+		// The notification text and caret must belong to the same buffer. A host
+		// sending another snapshot still synchronizes text, but cannot request a
+		// completion at coordinates from an unrelated editor revision.
+		if ed.Text() == text {
+			if p, ok := ed.CursorTextPosition(); ok {
+				s.line, s.col = p.Line, p.UTF16Column
+				// Newline/paste/undo still synchronize. Automatic popup policy stays in
+				// the editor; no document split or whole-line rune copy on this hot path.
+				ch := p.PreviousRune
+				s.complete = p.HasPreviousRune && (ch == '.' || ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch))
 			}
 		}
+	}
+	if ed != nil && s.complete {
+		ed.SetCompletionStatus("gopls: waiting for completion...")
 	}
 	d.update(s)
 }
@@ -160,13 +173,19 @@ func applyLSPCompletion(ed *gui.CodeEditor, s lspSnapshot, it core.LSPCompletion
 		if text == "" {
 			text = it.Label
 		}
-		col := s.col
-		line := strings.Split(s.text, "\n")[s.line]
-		r := []rune(line)
-		n := ed.CursorCol()
-		for n > 0 && (unicode.IsLetter(r[n-1]) || unicode.IsDigit(r[n-1]) || r[n-1] == '_') {
-			n--
-			col -= utf16.RuneLen(r[n])
+		p, ok := ed.CursorTextPosition()
+		if !ok || p.Line != s.line || p.UTF16Column != s.col {
+			return nil // stale/malformed fallback snapshot: never panic or edit another position
+		}
+		line, _ := ed.LineText(p.Line)
+		col, start := p.UTF16Column, p.ByteColumn
+		for start > 0 {
+			ch, width := utf8.DecodeLastRuneInString(line[:start])
+			if ch != '_' && !unicode.IsLetter(ch) && !unicode.IsDigit(ch) {
+				break
+			}
+			start -= width
+			col -= utf16.RuneLen(ch)
 		}
 		primary = &core.LSPTextEdit{Range: core.LSPRange{Start: core.LSPPosition{Line: s.line, Character: col}, End: core.LSPPosition{Line: s.line, Character: s.col}}, NewText: text}
 	}
@@ -216,12 +235,16 @@ func lspPositionOffset(text string, p core.LSPPosition) int {
 }
 
 func requestLSPCompletion(path string, ed *gui.CodeEditor) {
-	if globalLSP == nil || ed == nil || !isGoFile(path) {
+	if globalLSP == nil || ed == nil || !isGoFile(path) || fileRenameAffects(path) {
 		return
 	}
 	if lspDocuments[path] == nil {
 		openLSPDocument(path, ed.Text())
 	}
+	if lspDocuments[path] == nil {
+		return
+	}
+	ed.SetCompletionStatus("gopls: waiting for completion...")
 	lspVersions[path]++
 	lspDocuments[path].update(lspSnapshot{text: ed.Text(), version: lspVersions[path], line: ed.CursorLine(), col: ed.CursorUTF16Col(), complete: true})
 }

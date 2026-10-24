@@ -69,6 +69,11 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("edit.undo", "Undo", "edit-undo", key+"+Z", undo, func() { undoCurrentDocument(tabs, canvas, false) })
 		add("edit.redo", "Redo", "edit-redo", key+"+Shift+Z", redo, func() { undoCurrentDocument(tabs, canvas, true) })
 		menu.AddSeparator()
+		ed := visibleCaretEditor(tabs, canvas)
+		for _, spec := range editorCaretCommandSpecs() {
+			add(spec.id, spec.label, spec.icon, spec.hint, ed != nil && spec.enabled(ed), func() { runEditorCaretCommand(tabs, canvas, spec, ed) })
+		}
+		menu.AddSeparator()
 		add("edit.palette", "Command Palette", "search", key+"+Shift+P", true, func() { showCommandPalette(canvas) })
 		menu.AddSeparator()
 		history := editorNavigation(tabs)
@@ -148,6 +153,8 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("build.debug", "Debug", "debug", "Shift+F5", true, func() { runProjectInDebugger(canvas) })
 		add("build.stop", "Stop", "stop", "", true, stopProjectExecution)
 	case "Tools":
+		add("tools.status", "Toolchain Status", "settings", "", true, func() { showToolchainStatus(globalFrame) })
+		add("tools.restartLSP", "Restart LSP", "refresh", "", true, func() { restartLSP(canvas) })
 		add("tools.appearance", "Appearance & Editor", "settings", "", true, func() { showAppearanceDialog(globalFrame) })
 		add("tools.expandMacro", "Expand Silk Macros", "build", "", canExpandMacro(tabs, canvas), func() { expandActiveMacro(tabs, canvas) })
 		add("project.settings", "Project Settings", "settings", "", true, func() { showProjectSettingsDialog(canvas) })

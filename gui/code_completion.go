@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"github.com/uk0/silk/paint"
 	"math"
 	"sort"
@@ -21,19 +22,29 @@ type CompletionItem struct {
 	Text   string
 	Kind   int // CikKeyword, CikType, CikFunction, CikVariable
 	Detail string
+	Source string // optional provider name, shown in the popup footer
 }
 
 type completionApply struct{ run func(*CodeEditor) }
 
 // CompletionPopup manages the auto-completion dropdown for a CodeEditor.
 type CompletionPopup struct {
-	items       []CompletionItem
-	filtered    []CompletionItem
-	selectedIdx int
-	prefix      string
-	visible     bool
-	maxVisible  int
-	scrollY     int
+	items                    []CompletionItem
+	filtered                 []CompletionItem
+	selectedIdx              int
+	prefix                   string
+	visible                  bool
+	maxVisible               int
+	scrollY                  int
+	pageRows                 int    // actual row capacity after viewport clipping
+	status                   string // asynchronous provider feedback; never starts a timer
+	open                     bool   // user intent, distinct from an empty/temporarily hidden result
+	localReady, localPending bool
+	localKey                 completionIndexRequest
+	localGeneration          uint64
+	localItems               []CompletionItem
+	indexWorker              *completionIndexWorker
+	indexPost                func(func()) // nil uses Post; injected dispatcher for deterministic tests
 }
 
 // Built-in completion source lists.
@@ -95,6 +106,7 @@ func NewCompletionPopup(editor *CodeEditor) *CompletionPopup {
 
 // Show opens the completion popup with the given prefix, filtering candidates.
 func (this *CompletionPopup) Show(prefix string, editor *CodeEditor) {
+	this.open = true
 	this.prefix = prefix
 	this.buildItems(editor)
 	this.filter()
@@ -109,7 +121,8 @@ func (this *CompletionPopup) Show(prefix string, editor *CodeEditor) {
 
 // Dismiss hides the completion popup.
 func (this *CompletionPopup) Dismiss() {
-	this.visible = false
+	this.visible, this.open = false, false
+	this.cancelLocal(false)
 }
 
 // SelectNext moves selection down.
@@ -117,17 +130,7 @@ func (this *CompletionPopup) SelectNext() {
 	if len(this.filtered) == 0 {
 		return
 	}
-	this.selectedIdx++
-	if this.selectedIdx >= len(this.filtered) {
-		this.selectedIdx = 0
-	}
-	// Scroll to keep selected visible
-	if this.selectedIdx >= this.scrollY+this.maxVisible {
-		this.scrollY = this.selectedIdx - this.maxVisible + 1
-	}
-	if this.selectedIdx < this.scrollY {
-		this.scrollY = this.selectedIdx
-	}
+	this.selectIndex((this.selectedIdx + 1) % len(this.filtered))
 }
 
 // SelectPrev moves selection up.
@@ -135,16 +138,7 @@ func (this *CompletionPopup) SelectPrev() {
 	if len(this.filtered) == 0 {
 		return
 	}
-	this.selectedIdx--
-	if this.selectedIdx < 0 {
-		this.selectedIdx = len(this.filtered) - 1
-	}
-	if this.selectedIdx < this.scrollY {
-		this.scrollY = this.selectedIdx
-	}
-	if this.selectedIdx >= this.scrollY+this.maxVisible {
-		this.scrollY = this.selectedIdx - this.maxVisible + 1
-	}
+	this.selectIndex((this.selectedIdx - 1 + len(this.filtered)) % len(this.filtered))
 }
 
 // Accept inserts the selected completion into the editor.
@@ -153,66 +147,37 @@ func (this *CompletionPopup) Accept(editor *CodeEditor) {
 		return
 	}
 	item := this.filtered[this.selectedIdx]
-	this.visible = false
+	this.Dismiss()
 	if item.apply != nil {
 		item.apply.run(editor)
 		return
 	}
 
-	// Replace the current prefix with the completion text
-	prefixLen := len([]rune(this.prefix))
-	if prefixLen > 0 {
-		// Delete the prefix characters before cursor
-		runes := []rune(editor.lines[editor.cursorLine])
-		start := editor.cursorCol - prefixLen
-		if start < 0 {
-			start = 0
-		}
-		newRunes := append(runes[:start], runes[editor.cursorCol:]...)
-		editor.lines[editor.cursorLine] = string(newRunes)
-		editor.cursorCol = start
+	// Prefix replacement must be one undoable edit, including the removed
+	// prefix. Mutating lines before insertTextAtCursor lost the prefix on Undo.
+	editor.clampCursor()
+	line := editor.cursorLine
+	runes := []rune(editor.lines[line])
+	start := max(0, editor.cursorCol-len([]rune(this.prefix)))
+	lines := append([]string(nil), editor.lines...)
+	lines[line] = string(runes[:start]) + item.Text + string(runes[editor.cursorCol:])
+	inserted := strings.Split(item.Text, "\n")
+	col := len([]rune(inserted[len(inserted)-1]))
+	if len(inserted) == 1 {
+		col += start
 	}
-	// Insert the completion text
-	editor.insertTextAtCursor(item.Text)
-	editor.rebuildText()
-	editor.ensureCursorVisible()
+	editor.ReplaceAllTextAt(strings.Join(lines, "\n"), line+len(inserted)-1, col)
 }
 
 // buildItems gathers all completion candidates from static lists and file identifiers.
 func (this *CompletionPopup) buildItems(editor *CodeEditor) {
-	this.items = nil
-
-	// Static sources
-	this.items = append(this.items, completionKeywords...)
-	this.items = append(this.items, completionTypes...)
-	this.items = append(this.items, completionGuiItems...)
-
-	// Extract identifiers from current file
-	seen := make(map[string]bool)
-	for _, item := range this.items {
-		seen[item.Text] = true
+	text := editor.Text()
+	if len(text) > completionAsyncBytes {
+		this.items = this.asynchronousItems(editor, text)
+		return
 	}
-	for _, line := range editor.lines {
-		runes := []rune(line)
-		i := 0
-		for i < len(runes) {
-			if isIdentStart(runes[i]) {
-				start := i
-				for i < len(runes) && isIdentPart(runes[i]) {
-					i++
-				}
-				word := string(runes[start:i])
-				if len(word) >= 2 && !seen[word] {
-					seen[word] = true
-					this.items = append(this.items, CompletionItem{
-						Text: word, Kind: CikVariable, Detail: "identifier",
-					})
-				}
-			} else {
-				i++
-			}
-		}
-	}
+	this.cancelLocal(true)
+	this.items, _ = scanCompletionItemsForLanguage(context.Background(), text, editor.Language())
 }
 
 // filter narrows items by the current prefix using fuzzy subsequence matching
@@ -432,45 +397,13 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 		return
 	}
 
-	fe := editor.font.FontExtents()
-	lh := fe.Height + 2
-	itemH := fe.Height + 6
-	visibleCount := len(this.filtered)
-	if visibleCount > this.maxVisible {
-		visibleCount = this.maxVisible
-	}
-
-	edW, edH := editor.Size()
-	popupW := math.Min(math.Max(300, fe.Height*20), math.Min(480, edW-editor.gutterW-10))
-	if popupW < 40 {
+	layout := this.layout(editor)
+	if layout.rows == 0 {
 		return
 	}
-	popupH := float64(visibleCount) * itemH
-
-	// Position below cursor
-	editor.clampCursor()
-	line := editor.lines[editor.cursorLine]
-	lineRunes := []rune(line)
-	prefixEnd := editor.cursorCol
-	if prefixEnd > len(lineRunes) {
-		prefixEnd = len(lineRunes)
-	}
-	cx := editor.gutterW + 10 - editor.scrollX + editor.measureText(string(lineRunes[:prefixEnd]))
-
-	topOff := editor.topOffset()
-	cy := float64(editor.cursorLine+1)*lh - editor.scrollY + topOff
-
-	// Ensure popup doesn't go off-screen
-	if cx+popupW > edW {
-		cx = edW - popupW - 5
-	}
-	if cx < editor.gutterW+5 {
-		cx = editor.gutterW + 5
-	}
-	if cy+popupH > edH {
-		// Show above cursor
-		cy = float64(editor.cursorLine)*lh - editor.scrollY + topOff - popupH
-	}
+	fe := editor.font.FontExtents()
+	cx, cy, popupW, popupH := layout.x, layout.y, layout.w, layout.h
+	itemH, visibleCount := layout.rowH, layout.rows
 	g.Save()
 	defer g.Restore()
 	g.Rectangle(cx, cy, popupW, popupH)
@@ -524,17 +457,28 @@ func (this *CompletionPopup) drawPopup(g paint.Painter, editor *CodeEditor) {
 	}
 
 	// Scroll indicator if needed
-	if len(this.filtered) > this.maxVisible {
-		scrollRatio := float64(this.scrollY) / float64(len(this.filtered)-this.maxVisible)
-		scrollBarH := popupH * float64(this.maxVisible) / float64(len(this.filtered))
+	if len(this.filtered) > visibleCount {
+		listH := float64(visibleCount) * itemH
+		scrollRatio := float64(this.scrollY) / float64(len(this.filtered)-visibleCount)
+		scrollBarH := listH * float64(visibleCount) / float64(len(this.filtered))
 		if scrollBarH < 10 {
 			scrollBarH = 10
 		}
-		scrollBarY := cy + scrollRatio*(popupH-scrollBarH)
+		scrollBarY := cy + scrollRatio*(listH-scrollBarH)
 		g.SetBrush1(paint.Color{R: 80, G: 80, B: 100, A: 180})
 		g.Rectangle(cx+popupW-4, scrollBarY, 3, scrollBarH)
 		g.Fill()
 	}
+	// A fixed footer makes local fallback, provider waiting, and timeout
+	// distinguishable without animation or an independent floating window.
+	fy := cy + float64(visibleCount)*itemH
+	g.SetPen1(paint.Color{R: 70, G: 70, B: 90, A: 255}, 1)
+	g.MoveTo(cx, fy)
+	g.LineTo(cx+popupW, fy)
+	g.Stroke()
+	g.SetBrush1(paint.Color{R: 170, G: 180, B: 200, A: 255})
+	g.DrawText1(cx+6, fy+fe.Ascent+3, completionElide(editor.font, this.footerText(), popupW-12))
+
 }
 
 func completionRowText(font paint.Font, item CompletionItem, width float64) (label, detail string, detailX float64) {

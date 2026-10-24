@@ -634,6 +634,12 @@ func (this *TextArea) cut() {
 }
 
 func (this *TextArea) paste() {
+	text, line, col, sl, sc := this.Text(), this.cursorLine, this.cursorCol, this.selLine, this.selCol
+	if this.tryAsyncPaste(func() bool {
+		return !this.readonly && this.Text() == text && this.cursorLine == line && this.cursorCol == col && this.selLine == sl && this.selCol == sc
+	}, this.insertAtCursor) {
+		return
+	}
 	i, err := Clipboard.Data("text/plain")
 	if err != nil {
 		return

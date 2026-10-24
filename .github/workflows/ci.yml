@@ -120,6 +120,9 @@ jobs:
         if: runner.os == 'Windows'
         run: go test -race -count=1 ./win32/
 
+      - name: SDK async utilities and assembly examples
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -short -count=1 -p 1 ./async/ ./httpx/ ./jsonx/ ./internal/filetxn/ ./examples/download-monitor/ ./examples/json-inspector/
+
       - name: Pure-Go rendering parity
         env:
           CGO_ENABLED: '0'
@@ -137,7 +140,12 @@ jobs:
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./data/ ./driver/ ./device/ ./historian/ ./report/ ./recipe/ ./auth/ ./template/ ./calc/ ./eventlog/ ./gateway/ ./playback/ ./alarmbridge/ ./sim/ ./login/ ./stats/ ./script/
 
       - name: Test (IDE engines)
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./macro/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./internal/idetools/ ./cmd/silktools/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./macro/ ./locator/ ./filesearch/ ./snippet/ ./buildissues/
+
+      - name: Require bundled language server
+        run: |
+          go run ./cmd/silktools -out bin/tools
+          ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} bash scripts/test-bundled-gopls.sh bin
 
       - name: Build legacy entry points
         if: runner.os != 'Windows'

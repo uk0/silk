@@ -48,7 +48,11 @@ func waitDocument(t *testing.T, d *lspDocument) {
 func TestLSPDocumentBurstOrderedCoalesced(t *testing.T) {
 	p := &documentProbe{requests: make(chan int, 10)}
 	delivered := make(chan lspSnapshot, 4)
-	d := newLSPDocument(p, "file:///a.go", "start", nil, func(s lspSnapshot, _ []core.LSPCompletionItem) { delivered <- s })
+	d := newLSPDocument(p, "file:///a.go", "start", nil, func(s lspSnapshot, _ []core.LSPCompletionItem, err error) {
+		if err == nil {
+			delivered <- s
+		}
+	})
 	if _, err := d.sync(); err != nil {
 		t.Fatal(err)
 	}

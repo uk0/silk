@@ -53,17 +53,17 @@ type DiffRow struct {
 //	dv := gui.NewDiffView()
 //	dv.SetTexts(oldSrc, newSrc)
 //
-// The diff is line-based and computed via a simple LCS pass — the helper
-// lineDiff is exported package-locally so it can be unit-tested without
-// any widget/GL state.
+// The diff uses an exact linear-space comparison. SetTexts is synchronous;
+// interactive hosts can use SetTextsAsync for cancellable background work.
 type DiffView struct {
 	Widget
 
-	oldText  string
-	newText  string
-	oldLines []string
-	newLines []string
-	diffRows []DiffRow
+	oldText                   string
+	newText                   string
+	oldLines                  []string
+	newLines                  []string
+	diffRows                  []DiffRow
+	leftNumbers, rightNumbers []int // rebuilt with rows, not for every repaint
 
 	scrollY float64
 
@@ -97,6 +97,14 @@ type DiffView struct {
 
 	cbStageHunk  func(hunkIndex int)
 	cbRevertHunk func(hunkIndex int)
+
+	diffWorker       *diffWorker
+	diffGeneration   uint64
+	diffPending      bool
+	diffErr          error
+	diffSummary      DiffSummary
+	diffPost         func(func()) // optional dispatcher for deterministic SDK tests
+	diffStateChanged func(*DiffView)
 }
 
 // diffGutterWidth is the fixed pixel width reserved at the left edge of
@@ -322,9 +330,16 @@ func (this *DiffView) JumpToPrevChange() {
 // from the LCS pass, so the hunk map that SetPatchFile built no longer
 // describes them. The stage/revert callbacks stay registered.
 func (this *DiffView) recompute() {
+	this.stopDiff()
+	this.diffErr = nil
+	this.diffSummary = DiffSummary{}
 	this.oldLines = splitDiffLines(this.oldText)
 	this.newLines = splitDiffLines(this.newText)
 	this.diffRows = lineDiff(this.oldLines, this.newLines)
+	for _, r := range this.diffRows {
+		this.diffSummary.add(r.Status)
+	}
+	this.leftNumbers, this.rightNumbers = gutterLineNumbers(this.diffRows)
 	this.patchMode = false
 	this.patchFile = DiffPatchFile{}
 	this.rowHunk = nil
@@ -332,6 +347,7 @@ func (this *DiffView) recompute() {
 	this.scrollY = 0
 	this.activeChangeRow = -1
 	this.Self().Update()
+	this.notifyDiffState()
 }
 
 // splitDiffLines splits s on '\n' and treats the empty string as zero
@@ -344,137 +360,6 @@ func splitDiffLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
-// lineDiff computes a side-by-side row list from two line slices using a
-// classic LCS table. Lines that appear in the LCS become DiffSame rows;
-// runs of unmatched old/new lines between two matches (or at the file
-// ends) are paired by position into DiffModified rows for as many rows as
-// both sides have content, with the leftover tail emitted as DiffRemoved
-// (old-only) or DiffAdded (new-only).
-//
-// The pairing rule is the load-bearing semantic choice for "two strings
-// differ in the same row": old [A B C] vs new [A X C] yields rows
-// {A=same, B/X=modified, C=same} rather than {A=same, B=removed, X=added,
-// C=same}. This keeps the two columns visually aligned and matches how
-// Qt Creator / VS Code render small edits.
-//
-// The helper is package-private (lower-case) but unit-testable through
-// diffview_test.go in the same package.
-func lineDiff(oldLines, newLines []string) []DiffRow {
-	if len(oldLines) == 0 && len(newLines) == 0 {
-		return nil
-	}
-	m := len(oldLines)
-	n := len(newLines)
-
-	// Standard LCS length table, (m+1) x (n+1) ints. For the sizes we
-	// expect (a viewer comparing two file snapshots) the O(m*n) cost is
-	// fine and the code is small enough to keep in one place.
-	dp := make([][]int, m+1)
-	for i := range dp {
-		dp[i] = make([]int, n+1)
-	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if oldLines[i-1] == newLines[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] >= dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
-			}
-		}
-	}
-
-	// Walk the table back to front, classifying each step as "same",
-	// "delete from old", or "insert into new". We collect operations in
-	// reverse and reverse the slice at the end.
-	type op struct {
-		kind   int // 0=same, 1=removed, 2=added
-		oldIdx int
-		newIdx int
-	}
-	ops := make([]op, 0, m+n)
-	i, j := m, n
-	for i > 0 && j > 0 {
-		if oldLines[i-1] == newLines[j-1] {
-			ops = append(ops, op{kind: 0, oldIdx: i - 1, newIdx: j - 1})
-			i--
-			j--
-		} else if dp[i-1][j] >= dp[i][j-1] {
-			ops = append(ops, op{kind: 1, oldIdx: i - 1})
-			i--
-		} else {
-			ops = append(ops, op{kind: 2, newIdx: j - 1})
-			j--
-		}
-	}
-	for i > 0 {
-		ops = append(ops, op{kind: 1, oldIdx: i - 1})
-		i--
-	}
-	for j > 0 {
-		ops = append(ops, op{kind: 2, newIdx: j - 1})
-		j--
-	}
-	// Reverse to forward order.
-	for a, b := 0, len(ops)-1; a < b; a, b = a+1, b-1 {
-		ops[a], ops[b] = ops[b], ops[a]
-	}
-
-	// Emit rows. Buffer pending removed/added runs between matches; when
-	// the run ends (next "same" or end of input), pair them position-by-
-	// position into DiffModified for the overlap and emit the tail as
-	// pure DiffRemoved or DiffAdded.
-	var rows []DiffRow
-	var pendingRemoved, pendingAdded []int // indices into oldLines / newLines
-
-	flush := func() {
-		k := len(pendingRemoved)
-		if len(pendingAdded) < k {
-			k = len(pendingAdded)
-		}
-		for x := 0; x < k; x++ {
-			rows = append(rows, DiffRow{
-				OldLine: oldLines[pendingRemoved[x]],
-				NewLine: newLines[pendingAdded[x]],
-				Status:  DiffModified,
-			})
-		}
-		for x := k; x < len(pendingRemoved); x++ {
-			rows = append(rows, DiffRow{
-				OldLine: oldLines[pendingRemoved[x]],
-				Status:  DiffRemoved,
-			})
-		}
-		for x := k; x < len(pendingAdded); x++ {
-			rows = append(rows, DiffRow{
-				NewLine: newLines[pendingAdded[x]],
-				Status:  DiffAdded,
-			})
-		}
-		pendingRemoved = pendingRemoved[:0]
-		pendingAdded = pendingAdded[:0]
-	}
-
-	for _, o := range ops {
-		switch o.kind {
-		case 0:
-			flush()
-			rows = append(rows, DiffRow{
-				OldLine: oldLines[o.oldIdx],
-				NewLine: newLines[o.newIdx],
-				Status:  DiffSame,
-			})
-		case 1:
-			pendingRemoved = append(pendingRemoved, o.oldIdx)
-		case 2:
-			pendingAdded = append(pendingAdded, o.newIdx)
-		}
-	}
-	flush()
-	return rows
-}
-
 // --- Drawing ---
 
 // diffLinePad is the inner horizontal padding inside each column. Keeping
@@ -485,6 +370,13 @@ const diffLinePad = 6.0
 func (this *DiffView) Draw(g paint.Painter) {
 	t := Theme()
 	w, h := this.Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, 0, w, h)
+	g.Clip()
 
 	// Background — neutral form colour so untinted rows blend with the
 	// surrounding panel.
@@ -492,6 +384,12 @@ func (this *DiffView) Draw(g paint.Painter) {
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
 
+	if message := this.diffMessage(); message != "" {
+		g.SetFont(t.Font)
+		g.SetBrush1(t.TextColor)
+		g.DrawText1(12, 24, elideToWidth(t.Font, message, max(0, w-24)))
+		return
+	}
 	if len(this.diffRows) == 0 {
 		// Still draw the divider so the empty viewer reads as a diff
 		// widget rather than a blank panel.
@@ -514,25 +412,25 @@ func (this *DiffView) Draw(g paint.Painter) {
 	// the reservation and gives the text the whole column.
 	var gw float64
 	if this.showGutter {
-		gw = diffGutterWidth
+		gw = min(colW, max(diffGutterWidth, f.TextExtents(strconv.Itoa(len(this.diffRows))).Width+diffLinePad*2))
 	}
 
-	// Per-row tints. Light red/green washes — alpha kept moderate so the
-	// foreground text stays readable against the form background.
-	colRemoved := paint.Color{R: 255, G: 220, B: 220, A: 180}
-	colAdded := paint.Color{R: 220, G: 245, B: 220, A: 180}
+	// Semantic, opaque row surfaces preserve contrast in both themes.
+	colRemoved := t.DiffRemovedColor
+	colAdded := t.DiffAddedColor
 	colStripe := paint.Color{R: 0, G: 0, B: 0, A: 8} // subtle alternate stripe
 
-	// Dimmed gutter foreground — theme text colour at ~45% alpha so the
-	// numbers stay legible without competing with the diff text.
-	gutterFg := t.TextColor
-	gutterFg.A = 115
+	// A distinct opaque gutter ink remains readable on all row surfaces.
+	gutterFg := t.DiffGutterTextColor
 
-	// Precompute the per-side line numbers once per Draw; cheap and keeps
-	// the inner loop free of branching state.
+	// Numbering belongs to the row snapshot. Painting a small viewport must
+	// not traverse/allocate two arrays for a hundred-thousand-row diff.
 	var leftNums, rightNums []int
 	if this.showGutter {
-		leftNums, rightNums = gutterLineNumbers(this.diffRows)
+		if len(this.leftNumbers) != len(this.diffRows) {
+			this.leftNumbers, this.rightNumbers = gutterLineNumbers(this.diffRows)
+		}
+		leftNums, rightNums = this.leftNumbers, this.rightNumbers
 	}
 
 	startRow := int(this.scrollY / lh)
@@ -599,15 +497,26 @@ func (this *DiffView) Draw(g paint.Painter) {
 		// doesn't overlap the numbers.
 		g.SetBrush1(t.TextColor)
 		if dr.OldLine != "" {
-			g.DrawText1(leftX+gw+diffLinePad, ty, dr.OldLine)
+			drawDiffColumnText(g, leftX+gw, y, max(0, colW-gw), lh, leftX+gw+diffLinePad, ty, dr.OldLine)
 		}
 		if dr.NewLine != "" {
-			g.DrawText1(rightX+gw+diffLinePad, ty, dr.NewLine)
+			drawDiffColumnText(g, rightX+gw, y, max(0, colW-gw), lh, rightX+gw+diffLinePad, ty, dr.NewLine)
 		}
 	}
 
 	this.drawDivider(g, w, h, t)
 	this.drawActiveMarker(g, w, h, lh)
+}
+
+func drawDiffColumnText(g paint.Painter, x, y, w, h, tx, ty float64, text string) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	g.Save()
+	g.Rectangle(x, y, w, h)
+	g.Clip()
+	g.DrawText1(tx, ty, text)
+	g.Restore()
 }
 
 // drawActiveMarker paints a thin accent stripe on the left edge of the
@@ -626,7 +535,7 @@ func (this *DiffView) drawActiveMarker(g paint.Painter, w, h, lh float64) {
 	const markerW = 3.0
 	// Accent blue — distinct from the red/green row tints so the marker
 	// stays legible against any row status.
-	g.SetBrush1(paint.Color{R: 30, G: 110, B: 220, A: 255})
+	g.SetBrush1(Theme().Accent)
 	g.Rectangle(0, y, markerW, lh)
 	g.Fill()
 }
@@ -645,9 +554,10 @@ func (this *DiffView) drawDivider(g paint.Painter, w, h float64, t *defaultTheme
 // several lines without scrolling.
 func (this *DiffView) SizeHints() SizeHints {
 	return SizeHints{
-		Width:  480,
-		Height: 240,
-		Policy: GrowHorizontal | GrowVertical,
+		Width:   480,
+		Height:  240,
+		Policy:  GrowHorizontal | GrowVertical,
+		Stretch: 1,
 	}
 }
 
@@ -812,6 +722,9 @@ func NewDiffPatchFile(f core.FilePatch, original string) DiffPatchFile {
 // This is the multi-hunk, gap-aware counterpart to SetTexts. Calling either
 // SetTexts setter afterwards returns the view to plain two-text mode.
 func (this *DiffView) SetPatchFile(f DiffPatchFile) {
+	this.stopDiff()
+	this.diffErr = nil
+	this.diffSummary = DiffSummary{}
 	b := buildPatchRows(f)
 
 	this.patchFile = f
@@ -821,11 +734,16 @@ func (this *DiffView) SetPatchFile(f DiffPatchFile) {
 	this.oldLines = splitDiffLines(b.oldText)
 	this.newLines = splitDiffLines(b.newText)
 	this.diffRows = b.rows
+	for _, r := range this.diffRows {
+		this.diffSummary.add(r.Status)
+	}
+	this.leftNumbers, this.rightNumbers = gutterLineNumbers(this.diffRows)
 	this.rowHunk = b.rowHunk
 	this.hunkHeaderRows = b.headerRows
 	this.scrollY = 0
 	this.activeChangeRow = -1
 	this.Self().Update()
+	this.notifyDiffState()
 }
 
 // PatchFile returns the patch last handed to SetPatchFile (zero value when
@@ -1049,20 +967,22 @@ func diffRangeText(start, count int) string {
 // columns, the "@@ ... @@" text on the left, and the two action labels in
 // the right-edge zones HunkActionAt hit-tests.
 func (this *DiffView) drawHunkHeaderRow(g paint.Painter, text string, y, w, lh, ascent float64, t *defaultTheme) {
-	g.SetBrush1(paint.Color{R: 225, G: 232, B: 245, A: 220})
+	g.SetBrush1(t.DiffHeaderColor)
 	g.Rectangle(0, y, w, lh)
 	g.Fill()
 
 	ty := y + ascent + 1
-	hdr := t.TextColor
-	hdr.A = 200
-	g.SetBrush1(hdr)
-	g.DrawText1(diffLinePad, ty, text)
+	g.SetBrush1(t.TextColor)
+	headerW := w
+	if w >= 2*diffHunkActionW {
+		headerW -= 2 * diffHunkActionW
+	}
+	drawDiffColumnText(g, 0, y, max(0, headerW), lh, diffLinePad, ty, text)
 
 	if w-2*diffHunkActionW < 0 {
 		return
 	}
-	g.SetBrush1(paint.Color{R: 30, G: 110, B: 220, A: 255})
+	g.SetBrush1(t.DiffActionTextColor)
 	g.DrawText1(w-2*diffHunkActionW+diffLinePad, ty, diffStageLabel)
 	g.DrawText1(w-diffHunkActionW+diffLinePad, ty, diffRevertLabel)
 }

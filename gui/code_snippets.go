@@ -57,6 +57,9 @@ func expandSnippet(template string) string {
 // abbreviation, and if so, replaces it with the expanded snippet.
 // Returns true if a snippet was expanded.
 func (this *CodeEditor) tryExpandSnippet() bool {
+	if !this.usesGoSyntax() {
+		return false
+	}
 	if this.cursorLine >= len(this.lines) {
 		return false
 	}
@@ -84,15 +87,8 @@ func (this *CodeEditor) tryExpandSnippet() bool {
 	// Expand the snippet
 	expanded := expandSnippet(template)
 
-	// Record undo: replace the abbreviation with the expanded text
-	this.pushUndo(editAction{kind: 2, line: this.cursorLine, col: start, text: expanded, oldText: word})
-
-	// Delete the abbreviation text
-	newRunes := append(runes[:start], runes[end:]...)
-	this.lines[this.cursorLine] = string(newRunes)
-	this.cursorCol = start
-
-	// Insert the expanded snippet (may be multi-line)
+	// Include the actual indentation in the atomic history record, not the
+	// unindented template length (which otherwise leaves trailing text on Undo).
 	expandedLines := strings.Split(expanded, "\n")
 
 	// Apply indentation: use the current line's indentation for each new line
@@ -105,19 +101,18 @@ func (this *CodeEditor) tryExpandSnippet() bool {
 		}
 	}
 
-	if len(expandedLines) == 1 {
-		this.insertTextAtCursor(expanded)
-	} else {
-		// Add indent to lines after the first
-		for i := 1; i < len(expandedLines); i++ {
-			expandedLines[i] = indent + expandedLines[i]
-		}
-		this.insertMultilineAtCursor(expandedLines)
+	for i := 1; i < len(expandedLines); i++ {
+		expandedLines[i] = indent + expandedLines[i]
 	}
-
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
+	expanded = strings.Join(expandedLines, "\n")
+	oldText := this.Text()
+	insByte := byteOffsetForCursor(this.lines, this.cursorLine, start)
+	newText := oldText[:insByte] + expanded + oldText[insByte+len(word):]
+	line, col := cursorForByteOffset(expandedLines, len(expanded))
+	if line == 0 {
+		col += start
+	}
+	this.ReplaceAllTextAt(newText, this.cursorLine+line, col)
 	return true
 }
 

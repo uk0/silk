@@ -5,7 +5,6 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,13 +12,7 @@ import (
 )
 
 func TestGoplsUnsavedUnicodeCompletionAndFormatting(t *testing.T) {
-	if testing.Short() {
-		t.Skip("real gopls integration")
-	}
-	bin, err := exec.LookPath("gopls")
-	if err != nil {
-		t.Skip("gopls not installed")
-	}
+	bin := requireRealGopls(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source 空间#%.go")
 	for name, text := range map[string]string{"go.mod": "module qa\n\ngo 1.26\n", filepath.Base(path): "package demo\nfunc f(){}\n"} {
@@ -32,6 +25,7 @@ func TestGoplsUnsavedUnicodeCompletionAndFormatting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	progress := c.WorkProgressUpdates()
 	go func() {
 		for range c.Notifications() {
 		}
@@ -90,6 +84,21 @@ func TestGoplsUnsavedUnicodeCompletionAndFormatting(t *testing.T) {
 		t.Fatal(formatted)
 	}
 	t.Logf("real gopls completion textEdit=%+v; formatted unsaved source=%q", item.TextEdit, formatted)
+	for c.WorkProgressSnapshot().LastCompleted == "" {
+		select {
+		case _, ok := <-progress:
+			if !ok {
+				t.Fatal("gopls closed before reporting completed work")
+			}
+		case <-ctx.Done():
+			t.Fatal("real gopls work-done progress not observed", ctx.Err())
+		}
+	}
+	if s := c.WorkProgressSnapshot(); s.Limited {
+		t.Fatal("unexpectedly incomplete progress", s)
+	} else {
+		t.Logf("real gopls completed work: %q", s.LastCompleted)
+	}
 	ed.Undo()
 	if ed.Text() != text {
 		t.Fatal("undo lost unsaved source")

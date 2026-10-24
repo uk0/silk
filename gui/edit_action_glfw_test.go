@@ -3,6 +3,7 @@
 package gui
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"testing"
@@ -88,7 +89,22 @@ func TestEditActionClipboardKeysAndReadOnlyProtection(t *testing.T) {
 			clipboardMu.Lock()
 			clipboardLocalData["text/plain"] = "25"
 			clipboardMu.Unlock()
+			// Production macOS paste is asynchronous. Keep this a key-routing
+			// test with an explicit completion, never access the OS pasteboard.
+			var finish func(string, error)
+			edit.clipboardReader = func(_ context.Context, done func(string, error)) error {
+				finish = done
+				return nil
+			}
 			edit.OnKeyDown('V', false)
+			if finish == nil || edit.Text() != "10" || !edit.PastePending() {
+				t.Fatal("paste did not defer delivery without changing the selection")
+			}
+			data, err := Clipboard.Data("text/plain")
+			finish(data.(string), err)
+			if edit.PastePending() {
+				t.Fatal("paste completion left pending work")
+			}
 			if edit.Text() != "25" {
 				t.Fatal("platform Paste did not replace selection")
 			}

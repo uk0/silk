@@ -147,3 +147,10 @@ func Card(attrs ...Attr) *Node { return New("gui.Card", attrs...) }
 // does not send requests. Set URL / HTTP Method / Result Type / JSON Pointer
 // using P, then attach callbacks to the built gui.HTTPButton at runtime.
 func HTTPButton(attrs ...Attr) *Node { return New("gui.HTTPButton", attrs...) }
+
+// JSONView constructs a read-only JSON inspector. JSON Text is a persisted
+// sample; attach runtime response documents through gui.JSONView.SetDocument.
+func JSONView(attrs ...Attr) *Node { return New("gui.JSONView", attrs...) }
+
+// TransferProgress creates a passive progress display; runtime counts and state are not persisted.
+func TransferProgress(attrs ...Attr) *Node { return New("gui.TransferProgress", attrs...) }

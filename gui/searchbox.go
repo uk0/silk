@@ -243,11 +243,7 @@ func (this *SearchBox) OnKeyDown(key int, repeat bool) {
 			}
 			return
 		case 'V':
-			if data, err := Clipboard.Data("text/plain"); err == nil {
-				if text, ok := data.(string); ok {
-					this.OnTextInput(text)
-				}
-			}
+			this.pasteClipboard()
 			return
 		}
 	}
@@ -462,4 +458,16 @@ func (this *SearchBox) SizeHints() SizeHints {
 func (this *SearchBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
 	list.AddProperty("占位文本", this.Placeholder, this.SetPlaceholder)
+}
+
+func (this *SearchBox) pasteClipboard() {
+	text, pos, anchor := this.text, this.cursorPos, this.selectionAnchor
+	if this.tryAsyncPaste(func() bool { return this.text == text && this.cursorPos == pos && this.selectionAnchor == anchor }, this.OnTextInput) {
+		return
+	}
+	if data, err := Clipboard.Data("text/plain"); err == nil {
+		if text, ok := data.(string); ok {
+			this.OnTextInput(text)
+		}
+	}
 }

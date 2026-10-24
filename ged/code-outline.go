@@ -86,16 +86,18 @@ type outlineNode struct {
 type CodeOutlinePanel struct {
 	gui.Widget
 
-	symbols     []gui.CodeSymbol
-	semantic    []OutlineSymbol // host-supplied outline; wins over the heuristic scan
-	tree        []outlineNode
-	flatList    []outlineNode
-	hoverIdx    int
-	selectedIdx int
-	scrollY     float64
-	rowHeight   float64
-	editor      *gui.CodeEditor
-	cbNavigate  func(line int)
+	symbols            []gui.CodeSymbol
+	symbolsLoading     bool
+	symbolsUnsubscribe func()
+	semantic           []OutlineSymbol // host-supplied outline; wins over the heuristic scan
+	tree               []outlineNode
+	flatList           []outlineNode
+	hoverIdx           int
+	selectedIdx        int
+	scrollY            float64
+	rowHeight          float64
+	editor             *gui.CodeEditor
+	cbNavigate         func(line int)
 
 	// view options: how the symbol set is narrowed and ordered
 	filter       string
@@ -140,7 +142,14 @@ func (this *CodeOutlinePanel) SetEditor(editor *gui.CodeEditor) {
 		}
 		return
 	}
+	if this.symbolsUnsubscribe != nil {
+		this.symbolsUnsubscribe()
+		this.symbolsUnsubscribe = nil
+	}
 	this.editor = editor
+	if editor != nil {
+		this.symbolsUnsubscribe = editor.SubscribeSymbolsChanged(func() { this.Self().Update() })
+	}
 	this.semantic = nil
 	this.scrollY = 0
 	this.RefreshSymbols()
@@ -299,6 +308,7 @@ func (this *CodeOutlinePanel) RefreshSymbols() {
 	this.selectedIdx, this.hoverIdx = -1, -1
 	this.cursorCached = false
 	this.symbols = nil
+	this.symbolsLoading = false
 	this.tree = nil
 	this.flatList = nil
 
@@ -307,7 +317,9 @@ func (this *CodeOutlinePanel) RefreshSymbols() {
 			this.scrollY = 0
 			return
 		}
-		this.symbols = this.editor.ParseSymbols()
+		var ready bool
+		this.symbols, ready = this.editor.SymbolsSnapshot()
+		this.symbolsLoading = !ready
 	}
 
 	this.buildTree()
@@ -648,7 +660,11 @@ func (this *CodeOutlinePanel) Draw(g paint.Painter) {
 	g.Rectangle(0, hh, w, h-hh)
 	g.Clip()
 	if len(this.flatList) == 0 {
-		drawPanelText(g, this.normalFont, i18n.T("No symbols"), 8, hh, w-16, this.rowHeight, t.TextColor)
+		label := i18n.T("No symbols")
+		if this.symbolsLoading {
+			label = i18n.T("Indexing symbols...")
+		}
+		drawPanelText(g, this.normalFont, label, 8, hh, w-16, this.rowHeight, t.TextColor)
 		return
 	}
 	curIdx := this.currentSymbolIndex()

@@ -101,7 +101,7 @@ jobs:
 
       # ─── Test ───
       - name: Run tests
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./macro/
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -short -count=1 ./assets/branding/ ./printing/ ./core/ ./geom/ ./paint/ ./gui/ ./graph/ ./prop/ ./ged/ ./decl/ ./cmd/silkide/ ./cmd/silkgen/ ./internal/silkgen/ ./internal/idetools/ ./cmd/silktools/ ./macro/
 
       - name: Race regression (release gate)
         run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -p 1 -short -count=1 ./core/ ./purecairo/ ./paint/ ./gui/ ./scada/ ./macro/ ./cmd/silkide/ ./ide/taskrunner/ ./internal/processutil/
@@ -109,6 +109,9 @@ jobs:
       - name: Win32 SDK race regression
         if: runner.os == 'Windows'
         run: go test -race -count=1 ./win32/
+
+      - name: SDK async utilities and assembly examples
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} go test -race -short -count=1 -p 1 ./async/ ./httpx/ ./jsonx/ ./internal/filetxn/ ./examples/download-monitor/ ./examples/json-inspector/
 
       - name: Pure-Go rendering parity (release gate)
         env:
@@ -151,12 +154,15 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
         run: |
-          go build -v -ldflags="-s -w ${{ matrix.goos == 'windows' && '-H windowsgui' || '' }}" -o silkide-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkide/
+          go build -v -ldflags="-s -w -X github.com/uk0/silk/internal/idetools.RequireBundle=1 ${{ matrix.goos == 'windows' && '-H windowsgui' || '' }}" -o silkide-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkide/
           go build -v -ldflags="-s -w" -o silkgen-${{ matrix.label }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/silkgen/
 
-      - name: Smoke IDE (Linux virtual display)
-        if: runner.os == 'Linux'
-        run: bash scripts/linux-run-smoke.sh ./silkide-${{ matrix.label }}
+      - name: Build pinned bundled language server
+        run: go run ./cmd/silktools -out bin/tools
+
+      - name: Require real bundled language server integration
+        shell: bash
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} bash scripts/test-bundled-gopls.sh bin
 
       # ─── Package ───
       - name: Package (Unix)
@@ -168,7 +174,12 @@ jobs:
           cp silkide-${{ matrix.label }} dist/silk-${{ matrix.label }}/silkide
           cp silkgen-${{ matrix.label }} dist/silk-${{ matrix.label }}/silkgen
           cp -r icon dist/silk-${{ matrix.label }}/
+          cp -r bin/tools dist/silk-${{ matrix.label }}/
           bash scripts/package-silkide-branding.sh '${{ matrix.goos }}' 'dist/silk-${{ matrix.label }}'
+          go run ./cmd/silktools -verify -out 'dist/silk-${{ matrix.label }}/tools'
+          if [[ '${{ matrix.goos }}' == darwin ]]; then
+            go run ./cmd/silktools -verify -out 'dist/silk-${{ matrix.label }}/SilkIDE.app/Contents/MacOS/tools'
+          fi
           cp README.md LICENSE CHANGELOG.md dist/silk-${{ matrix.label }}/
           cat > dist/silk-${{ matrix.label }}/RUNTIME-DEPENDENCIES.txt <<'EOF'
           The macOS SilkIDE.app includes its native icon and SDK resources, but
@@ -180,8 +191,9 @@ jobs:
           Linux: requires Cairo, X11/OpenGL runtime libraries and an X11/XWayland
           desktop session. File dialogs use zenity; external links use xdg-open.
           Building generated Go applications also requires Go and the platform
-          development libraries documented in README.md. gopls/dlv are optional
-          separately installed IDE tools, not included in this archive.
+          development libraries documented in README.md. Pinned gopls is included
+          in tools/ (also inside the macOS .app), with its manifest and licenses.
+          Go SDK, Git and dlv are separate external tools; dlv/Git are optional.
           EOF
           cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
 
@@ -191,6 +203,10 @@ jobs:
       # with "|| true", so a wrong path or a new cairo dependency (harfbuzz,
       # brotli, glib...) shipped a zip that simply refuses to start on a machine
       # without MSYS2 — with no sign of trouble in the build log.
+      - name: Smoke packaged IDE (Linux virtual display)
+        if: runner.os == 'Linux'
+        run: bash scripts/linux-run-smoke.sh ./dist/silk-${{ matrix.label }}/silkide
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -203,10 +219,12 @@ jobs:
           cp silkide-${{ matrix.label }}.exe "$OUT/silkide.exe"
           cp silkgen-${{ matrix.label }}.exe "$OUT/silkgen.exe"
           cp -r icon "$OUT/"
+          cp -r bin/tools "$OUT/"
           bash scripts/package-silkide-branding.sh windows "$OUT"
           cp README.md LICENSE CHANGELOG.md "$OUT/"
 
           bash scripts/bundle-windows-dlls.sh "$OUT"
+          go run ./cmd/silktools -verify -out "$OUT/tools"
 
           cd dist && 7z a silk-${{ matrix.label }}.zip silk-${{ matrix.label }}
 

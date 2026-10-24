@@ -205,6 +205,10 @@ func TestDiffViewDrawNoPanic(t *testing.T) {
 // rest, which Draw never reaches.
 type diffViewNopPainter struct{ paint.Painter }
 
+func (diffViewNopPainter) Save() int    { return 0 }
+func (diffViewNopPainter) Restore() int { return 0 }
+func (diffViewNopPainter) Clip()        {}
+
 func (diffViewNopPainter) Rectangle(x, y, w, h float64)         {}
 func (diffViewNopPainter) MoveTo(x, y float64)                  {}
 func (diffViewNopPainter) LineTo(x, y float64)                  {}

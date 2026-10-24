@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,13 +15,7 @@ import (
 // Opt-in real protocol/IDE flow. No fake replies: the on-disk caller is stale
 // and gopls must consume didChange before resolving its Unicode-adjacent use.
 func TestRealGoplsNavigationUnsavedTypeImplementationAndBack(t *testing.T) {
-	if testing.Short() {
-		t.Skip("real gopls integration")
-	}
-	bin, err := exec.LookPath("gopls")
-	if err != nil {
-		t.Skip("gopls not installed")
-	}
+	bin := requireRealGopls(t)
 	w := testWorkbench(t)
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module navigationqa\n\ngo 1.26.10\n")
@@ -75,6 +68,7 @@ func TestRealGoplsNavigationUnsavedTypeImplementationAndBack(t *testing.T) {
 		globalLSP, lspDocuments, symbolNavigation, globalReferencesPanel, silkideToast = oldClient, oldDocs, oldQueue, oldPanel, oldToast
 		lspVersions = oldVersions
 	})
+	c.WorkProgressUpdates()
 	if _, err := c.Initialize(core.LSPInitializeParams{ProcessID: os.Getpid(), RootURI: fileURIOf(dir), Capabilities: ideLSPCapabilities()}); err != nil {
 		t.Fatal(err)
 	}

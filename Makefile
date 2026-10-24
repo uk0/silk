@@ -9,9 +9,13 @@ endif
 
 all: gen-resources ide silkgen designer demo
 
-ide:
+ide: ide-tools
 	@mkdir -p bin
-	$(CGO_FLAGS) go build -o bin/silkide$(IDE_EXE_SUFFIX) ./cmd/silkide
+	$(CGO_FLAGS) go build -ldflags="-X github.com/uk0/silk/internal/idetools.RequireBundle=1" -o bin/silkide$(IDE_EXE_SUFFIX) ./cmd/silkide
+
+.PHONY: ide-tools
+ide-tools:
+	go run ./cmd/silktools -out bin/tools
 
 # Native Windows builds use MSYS2's existing resource compiler. The generated
 # architecture-specific .syso is ignored on other operating systems.
@@ -26,6 +30,10 @@ bundle-ide: ide
 	@mkdir -p bin/icon
 	@cp -R icon/. bin/icon/
 	bash scripts/package-silkide-branding.sh "$$(go env GOOS)" bin
+	go run ./cmd/silktools -verify -out bin/tools
+	@if [ "$$(go env GOOS)" = "darwin" ]; then \
+		go run ./cmd/silktools -verify -out bin/SilkIDE.app/Contents/MacOS/tools; \
+	fi
 
 silkgen:
 	@mkdir -p bin
@@ -34,8 +42,16 @@ silkgen:
 run-ide: ide
 	./bin/silkide$(IDE_EXE_SUFFIX)
 
-test-ide:
-	$(CGO_FLAGS) go test ./assets/branding ./printing ./pdfexport ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
+.PHONY: test-ide-lsp
+test-ide-lsp: ide-tools
+	bash scripts/test-bundled-gopls.sh bin
+
+test-ide: test-ide-lsp test-sdk-utilities
+	$(CGO_FLAGS) go test ./internal/idetools ./cmd/silktools ./assets/branding ./printing ./pdfexport ./cmd/silkide ./cmd/silkgen ./internal/silkgen ./decl ./gui ./ged ./prop ./graph ./paint ./locator ./filesearch ./snippet ./buildissues
+
+.PHONY: test-sdk-utilities
+test-sdk-utilities:
+	$(CGO_FLAGS) go test -race -short -count=1 ./async ./httpx ./jsonx ./internal/filetxn ./examples/download-monitor ./examples/json-inspector
 
 test-platform-scripts:
 	bash scripts/test-platform-scripts.sh
@@ -99,10 +115,13 @@ help:
 	@echo "  make designer           Build the visual designer"
 	@echo "  make demo               Build the widget demo"
 	@echo "  make ide                Build the integrated Go designer / IDE"
-	@echo "  make bundle-ide         Add macOS app or Linux desktop launcher assets"
+	@echo "  make bundle-ide         Bundle IDE, pinned gopls and native launcher assets"
+	@echo "  make ide-tools          Build/repair the pinned bundled gopls"
 	@echo "  make silkgen            Build the Go form generator"
 	@echo "  make run-ide            Build and run the IDE"
-	@echo "  make test-ide           Run IDE, designer and UI regression tests"
+	@echo "  make test-ide           Run IDE regressions including required bundled LSP"
+	@echo "  make test-ide-lsp       Build tools and require real bundled LSP integration"
+	@echo "  make test-sdk-utilities Test async, HTTP/JSON, file transactions and examples"
 	@echo "  make test-platform-scripts Check dependency and release-packaging scripts"
 	@echo "  make gen-resources      Generate icon/theme PNG resources"
 	@echo "  make example-calculator Build the calculator example"

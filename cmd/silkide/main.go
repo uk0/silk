@@ -26,7 +26,6 @@ import (
 	"github.com/uk0/silk/hotreload"
 	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/internal/processutil"
-	"github.com/uk0/silk/internal/silkgen"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/pdfexport"
 	"github.com/uk0/silk/prop"
@@ -102,8 +101,8 @@ func main() {
 	refreshGitLog(designCanvas)
 	// Launch gopls in the background so subsequent .go file opens can
 	// push DidOpen notifications at it. Goroutine-bounded LookPath +
-	// initialize; failure is silent (core.Warn) so silkide works fine
-	// on machines without gopls installed.
+	// initialize; a missing/damaged bundle or unavailable Go SDK produces
+	// a recoverable diagnostic while the editor remains usable.
 	startLSPBackground(projectDir(designCanvas))
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
@@ -184,9 +183,13 @@ func main() {
 	finishPreferenceSaves(prefs)
 	// Stop and join gutter workers only after UI dispatch ends. Merely canceling
 	// at tab/window close can let the process exit before the child is reaped.
+	closeGitPaneRefreshers()
 	gitShutdown, cancelGitShutdown := context.WithTimeout(context.Background(), 3*time.Second)
 	if err := gui.ShutdownEditorGit(gitShutdown); err != nil {
 		core.Warn("[SILK-GIT002] editor Git shutdown: ", err)
+	}
+	if err := waitGitPaneRefreshers(gitShutdown); err != nil {
+		core.Warn("Git panel shutdown: ", err)
 	}
 	cancelGitShutdown()
 	if globalFileExplorer != nil {
@@ -811,13 +814,14 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// opens the file; the diff affordance opens it + shows vs HEAD. Fed by
 		// refreshGitChanges on startup / project change / manual refresh.
 		globalGitChanges = ged.NewGitChangesPanel()
+		globalGitChanges.SigRefreshRequested(func() { refreshGitChangesWith(designCanvas, true) })
 		globalGitChanges.SigFileActivated(func(entry core.GitStatusEntry) {
-			if dir := projectDir(designCanvas); dir != "" {
+			if dir := gitChangesRootFor(designCanvas); dir != "" {
 				openFileInEditor(editorTabs, filepath.Join(dir, entry.Path))
 			}
 		})
 		globalGitChanges.SigFileDiff(func(entry core.GitStatusEntry) {
-			if dir := projectDir(designCanvas); dir != "" {
+			if dir := gitChangesRootFor(designCanvas); dir != "" {
 				openFileInEditor(editorTabs, filepath.Join(dir, entry.Path))
 			}
 			showDiffVsHEAD(editorTabs, designCanvas)
@@ -825,7 +829,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// Commit workflow: the panel emits staged paths + message; we stage
 		// then commit off the main thread and refresh the file list.
 		globalGitChanges.SigCommit(func(message string, stagedPaths []string) {
-			dir := projectDir(designCanvas)
+			dir := gitChangesRootFor(designCanvas)
 			if dir == "" {
 				return
 			}
@@ -847,7 +851,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		})
 		// Unstage from the git index (git reset HEAD) for the checked set.
 		globalGitChanges.SigUnstageRequested(func(paths []string) {
-			dir := projectDir(designCanvas)
+			dir := gitChangesRootFor(designCanvas)
 			if dir == "" || len(paths) == 0 {
 				return
 			}
@@ -873,6 +877,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// Git history (git log). Row click toasts the commit; richer
 		// "show commit diff" is a follow-up. Fed by refreshGitLog.
 		globalGitLog = ged.NewGitLogPanel()
+		globalGitLog.SigRefreshRequested(func() { refreshGitLogWith(designCanvas, true) })
 		globalGitLog.SigCommitActivated(func(commit core.GitCommit) {
 			showCommitDiff(commit)
 		})
@@ -995,6 +1000,10 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 		default:
 			return false
 		}
+	}
+	if ed != nil {
+		ed.CancelCompletion()
+		ed.CancelSymbolIndex()
 	}
 	if path != "" {
 		ed.CancelGitStatus()
@@ -1194,9 +1203,12 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 	// documentMode can no longer distinguish design from a hidden editor.
 	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
 	frame.SetClosedCallback(func(*gui.Frame) {
+		closeGitPaneRefreshers()
 		for _, ed := range openEditors {
 			if ed != nil {
 				ed.CancelGitStatus()
+				ed.CancelCompletion()
+				ed.CancelSymbolIndex()
 			}
 		}
 		quitApp()
@@ -1355,88 +1367,20 @@ func toggleBlame(tabs *gui.TabWidget, canvas *ged.GedView) {
 	}()
 }
 
-// showCommitDiff fetches a commit's full diff (git show) off the main thread
-// and renders its first file's before/after in a DiffView dialog. Mirrors
-// showDiffVsHEAD's reconstruction; richer multi-file browsing is a follow-up.
+// showCommitDiff opens a cancellable dialog before fetching/reconstructing a
+// commit diff. Retrieval and exact comparison run off the UI thread.
 func showCommitDiff(commit core.GitCommit) {
-	dir := projectDir(globalCanvas)
+	dir := gitHistoryRootFor(globalCanvas)
 	if dir == "" || commit.Hash == "" {
 		return
 	}
-	go func() {
-		out, err := core.GitShowCommit(dir, commit.Hash)
+	showDiffDialog(i18n.Tf("%s  %s", commit.Hash, commit.Subject), func(ctx context.Context) (diffSource, error) {
+		patch, err := core.GitShowCommitContext(ctx, dir, commit.Hash)
 		if err != nil {
-			gui.Post(func() { silkideToast(i18n.Tf("git show failed: %v", err), gui.ToastError) })
-			return
+			return diffSource{}, err
 		}
-		files, perr := core.ParseUnifiedDiff(out)
-		if perr != nil || len(files) == 0 {
-			gui.Post(func() { silkideToast(i18n.T("No diff in commit"), gui.ToastInfo) })
-			return
-		}
-		oldLines, newLines := diffOldNewFromHunks(files[0].Hunks)
-		gui.Post(func() {
-			parent := gui.IWidget(globalFrame)
-			if parent == nil {
-				parent = gui.DefaultFrame()
-			}
-			dlg := gui.NewDialog(i18n.Tf("%s  %s", commit.Hash, commit.Subject), parent)
-			dv := gui.NewDiffView()
-			dv.SetTexts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"))
-			dlg.SetContent(dv)
-			dlg.AddButton(i18n.T("Close"), gui.DialogCancel)
-			dlg.SetSize(760, 560)
-			dlg.ShowModal()
-		})
-	}()
-}
-
-// refreshGitLog reloads recent commit history into the GitLogPanel off the
-// main thread. No-op outside a git repo / before the panel exists.
-func refreshGitLog(canvas *ged.GedView) {
-	if globalGitLog == nil {
-		return
-	}
-	dir := projectDir(canvas)
-	if dir == "" {
-		return
-	}
-	go func() {
-		commits, err := core.GitShortLog(dir, 100)
-		if err != nil {
-			core.Warn("git log: ", err)
-			return
-		}
-		gui.Post(func() {
-			if globalGitLog != nil {
-				globalGitLog.SetCommits(commits)
-			}
-		})
-	}()
-}
-
-// refreshGitChanges reloads the git-status file list into the GitChangesPanel
-// off the main thread. No-op outside a git repo / before the panel exists.
-func refreshGitChanges(canvas *ged.GedView) {
-	if globalGitChanges == nil {
-		return
-	}
-	dir := projectDir(canvas)
-	if dir == "" {
-		return
-	}
-	go func() {
-		entries, err := core.GitStatusPorcelain(dir)
-		if err != nil {
-			core.Warn("git status: ", err)
-			return
-		}
-		gui.Post(func() {
-			if globalGitChanges != nil {
-				globalGitChanges.SetEntries(entries)
-			}
-		})
-	}()
+		return loadPatchDiff(ctx, patch)
+	})
 }
 
 func refreshPackages(canvas *ged.GedView) {
@@ -1546,6 +1490,9 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	// Do not show invented branch/caret values or a hard-coded Go version.
 	// This is the IDE runtime, not a claim about the workspace toolchain.
 	sb.AddIconLabel("", "Runtime "+runtime.Version())
+	statusBarLSPButton = newLSPStatusButton(frame)
+	sb.AddPermanentWidget(statusBarLSPButton)
+	refreshLSPActivity()
 
 	// Canvas zoom percentage cell. Updated by setZoomLabel whenever
 	// Cmd+= / Cmd+- / Cmd+0 fires.
@@ -1890,54 +1837,22 @@ func dumpA11yNodeTo(out io.Writer, n *a11y.Node, depth int) {
 	}
 }
 
-// regenerateGoForSilkui writes a .silk.go file alongside the .silkui
-// at `silkuiPath`, mirroring what cmd/silkgen does. Called every time
-// silkide saves a .silkui so the user has a compilable Go snippet
-// next to the designer file without leaving the IDE.
-//
-// Errors are silently swallowed (logged via core.Warn): silkide is a
-// designer first; missing the codegen step shouldn't block the
-// designer-side save. Re-running on the same input is byte-stable
-// (subject to gofmt) so go:generate-style flows can call this
-// repeatedly without churn.
+// regenerateGoForSilkui updates a recognized generated companion without
+// switching its API from a typed SDK export to a declarative tree builder.
+// Errors are reported to Build Output and the log; they do not undo the
+// designer-side save. Identical generated contents leave the files untouched.
 func regenerateGoForSilkui(silkuiPath string) {
 	if silkuiPath == "" || filepath.Ext(silkuiPath) != ".silkui" {
 		return
 	}
-	doc, err := core.LoadTDocFile(silkuiPath)
-	if err != nil {
-		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen load failed: %v", silkuiPath, err))
-		core.Warn("silkgen: load ", silkuiPath, ": ", err)
-		return
-	}
-	tree, err := decl.FromTDoc(doc)
-	if err != nil {
-		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen parse failed: %v", silkuiPath, err))
-		core.Warn("silkgen: parse ", silkuiPath, ": ", err)
-		return
-	}
-	stem := strings.TrimSuffix(filepath.Base(silkuiPath), ".silkui")
-	packageName, err := companionPackage(filepath.Dir(silkuiPath))
-	if err != nil {
-		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen package failed: %v", silkuiPath, err))
-		core.Warn("silkgen: package ", silkuiPath, ": ", err)
-		return
-	}
-	formatted, err := silkgen.GenerateSource(silkuiPath, packageName, "", tree)
-	if err != nil {
-		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen generate failed: %v", silkuiPath, err))
-		core.Warn("silkgen: generate ", silkuiPath, ": ", err)
-		return
-	}
-	outPath := filepath.Join(filepath.Dir(silkuiPath), stem+".silk.go")
-	if err := os.WriteFile(outPath, formatted, 0o644); err != nil {
-		reportBuildOutput(fmt.Sprintf("%s:1:0: silkgen write failed: %v", outPath, err))
-		core.Warn("silkgen: write ", outPath, ": ", err)
+	if err := regenerateCompanion(silkuiPath); err != nil {
+		reportBuildOutput(fmt.Sprintf("%s:1:0: companion generation: %v", silkuiPath, err))
+		core.Warn("companion generation: ", silkuiPath, ": ", err)
 		return
 	}
 	// A successful background regeneration is not a build result. Do not steal
 	// focus from the handler editor or clear unrelated build diagnostics.
-	core.Debug("silkgen: wrote ", outPath)
+	core.Debug("companion generated: ", silkuiPath)
 }
 
 // reportBuildOutput pushes one line into the BuildOutput pane if the
@@ -2845,10 +2760,8 @@ func formatProjectStatus(project, module string, work *core.GoWork) string {
 // path that gets the diff in front of the user); a tabbed editor diff
 // is a follow-up.
 //
-// No-ops silently when there is no active code editor or the active
-// tab has no tracked file path (a fresh sample-seed tab never lived in
-// openEditors). Toast-and-return on read failure so the user sees why
-// nothing opened.
+// No-ops when there is no tracked active editor. Disk errors are shown in the
+// dialog; disk reads and comparison cannot hold up its UI thread.
 func showDiffVsSaved(tabs *gui.TabWidget) {
 	ed := activeEditor(tabs)
 	if ed == nil {
@@ -2858,25 +2771,8 @@ func showDiffVsSaved(tabs *gui.TabWidget) {
 	if path == "" {
 		return
 	}
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		silkideToast(i18n.T("Failed to read saved file"), gui.ToastError)
-		return
-	}
-	parent := gui.IWidget(globalFrame)
-	if parent == nil {
-		parent = gui.DefaultFrame()
-	}
-	dlg := gui.NewDialog(i18n.Tf("Diff vs Saved: %s", filepath.Base(path)), parent)
-	dv := gui.NewDiffView()
-	dv.SetTexts(string(saved), ed.Text())
-	box := gui.NewVBox()
-	box.SetSpacing(0)
-	box.AddWidget(dv)
-	dlg.SetContent(box)
-	dlg.AddButton(i18n.T("Close"), gui.DialogOK)
-	dlg.SetSize(820, 560)
-	dlg.ShowModal()
+	current := ed.Text()
+	showDiffDialog(i18n.Tf("Diff vs Saved: %s", filepath.Base(path)), func(ctx context.Context) (diffSource, error) { return loadSavedDiff(ctx, path, current) })
 }
 
 // buildEventLevel maps a build/test exit error to the LogPanel level
@@ -2932,13 +2828,12 @@ func diffOldNewFromHunks(hunks []core.DiffHunk) (oldLines, newLines []string) {
 // reports.
 //
 // No-ops silently when there is no active code editor or the active tab
-// has no tracked file path. On an empty diff a "no changes" toast fires;
-// on a git error (not a repo / git missing) a clear toast fires and the
-// function returns without crashing. The action is recorded via
+// has no tracked file path. On an empty diff the dialog reports no comparison;
+// on a git error (not a repo / git missing) the dialog shows the error.
+// The action is recorded via
 // logEvent regardless of outcome so the log shows the user asked.
 func showDiffVsHEAD(tabs *gui.TabWidget, canvas *ged.GedView) {
-	ed := activeEditor(tabs)
-	if ed == nil {
+	if activeEditor(tabs) == nil {
 		return
 	}
 	path := activeEditorPath(tabs)
@@ -2953,46 +2848,13 @@ func showDiffVsHEAD(tabs *gui.TabWidget, canvas *ged.GedView) {
 		}
 	}
 	logEvent(ged.LogInfo, "Diff vs HEAD: "+rel)
-
-	// Run git off the UI thread (it can block on credentials / a big repo);
-	// use core.GitDiffFile instead of a raw exec, then build the DiffView on
-	// the main thread via gui.Post.
-	go func() {
-		out, err := core.GitDiffFile(dir, rel)
+	showDiffDialog(i18n.Tf("Diff vs HEAD: %s", filepath.Base(path)), func(ctx context.Context) (diffSource, error) {
+		patch, err := core.GitDiffFileContext(ctx, dir, rel)
 		if err != nil {
-			gui.Post(func() { silkideToast(i18n.T("git diff failed (not a repo?)"), gui.ToastError) })
-			return
+			return diffSource{}, err
 		}
-		if strings.TrimSpace(out) == "" {
-			gui.Post(func() { silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo) })
-			return
-		}
-		files, parseErr := core.ParseUnifiedDiff(out)
-		if parseErr != nil {
-			core.Warn("silkide: parse git diff: ", parseErr)
-		}
-		if len(files) == 0 {
-			gui.Post(func() { silkideToast(i18n.T("No changes vs HEAD"), gui.ToastInfo) })
-			return
-		}
-		oldLines, newLines := diffOldNewFromHunks(files[0].Hunks)
-		gui.Post(func() {
-			parent := gui.IWidget(globalFrame)
-			if parent == nil {
-				parent = gui.DefaultFrame()
-			}
-			dlg := gui.NewDialog(i18n.Tf("Diff vs HEAD: %s", filepath.Base(path)), parent)
-			dv := gui.NewDiffView()
-			dv.SetTexts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"))
-			box := gui.NewVBox()
-			box.SetSpacing(0)
-			box.AddWidget(dv)
-			dlg.SetContent(box)
-			dlg.AddButton(i18n.T("Close"), gui.DialogOK)
-			dlg.SetSize(820, 560)
-			dlg.ShowModal()
-		})
-	}()
+		return loadPatchDiff(ctx, patch)
+	})
 }
 
 // escapeTestRunRegex escapes the regex metacharacters in a Go test
@@ -3162,6 +3024,8 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 		}
 	}
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		// Keep the OS error after the transient toast expires (not the buffer).
+		core.Warn("editor save failed: ", err)
 		silkideToast(i18n.Tf("Save failed: %v", err), gui.ToastError)
 		return false
 	}
@@ -4118,7 +3982,7 @@ func centerEditorTabs() *gui.TabWidget {
 
 // startLSPBackground kicks off gopls on a goroutine so the IDE main
 // thread keeps painting through the initialize handshake. The client
-// is stored in globalLSP on success; failure (gopls not on PATH, or
+// is stored in globalLSP on success; failure (missing/damaged packaged gopls, missing Go, or
 // initialize timed out) retains a stable error code/cause and recovery hint.
 // The editor remains usable; stale-session cancellation does not show a banner.
 //
@@ -4134,8 +3998,10 @@ func startLSPBackground(projectDir string) {
 	lspStartCancel = cancel
 	lspSessionGeneration++
 	epoch := lspSessionGeneration
+	lspActivityPhase = "starting"
+	refreshLSPActivity()
 	go func() {
-		client, err := core.LaunchLSPClient("gopls")
+		client, err := launchIDELanguageServer()
 		if err != nil {
 			gui.Post(func() {
 				if epoch != lspSessionGeneration || ctx.Err() != nil {
@@ -4146,6 +4012,7 @@ func startLSPBackground(projectDir string) {
 			return
 		}
 		abort := context.AfterFunc(ctx, func() { _ = client.Close() })
+		progress := client.WorkProgressUpdates() // opt in before advertising the capability
 		rootURI := ""
 		if projectDir != "" {
 			rootURI = fileURIOf(projectDir)
@@ -4182,6 +4049,9 @@ func startLSPBackground(projectDir string) {
 			lspStartCancel = nil
 			cancel()
 			globalLSP = client
+			lspActivityPhase = "connected"
+			refreshLSPActivity()
+			watchLSPActivity(client, epoch, progress)
 			core.Log("silkide: gopls ready (rootURI=", rootURI, ")")
 			logEvent(ged.LogInfo, "gopls started")
 			for path, ed := range openEditors {

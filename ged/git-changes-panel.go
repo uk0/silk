@@ -80,6 +80,7 @@ func init() {
 // consumes the same []GitFileState this panel takes through SetFiles.
 type GitChangesPanel struct {
 	gui.Widget
+	load panelLoadFeedback
 
 	entries   []core.GitStatusEntry
 	scrollY   float64
@@ -143,6 +144,7 @@ func (this *GitChangesPanel) Init(self gui.IWidget) {
 // index-driven mode. Hosts that can report where each file sits in the
 // index should push SetFiles instead.
 func (this *GitChangesPanel) SetEntries(entries []core.GitStatusEntry) {
+	this.load.set(this, PanelLoadState{})
 	out := make([]core.GitStatusEntry, len(entries))
 	copy(out, entries)
 	this.entries = out
@@ -165,6 +167,7 @@ func (this *GitChangesPanel) SetEntries(entries []core.GitStatusEntry) {
 // Any local commit selection left over from a previous SetEntries push is
 // dropped — the two models never mix.
 func (this *GitChangesPanel) SetFiles(files []GitFileState) {
+	this.load.set(this, PanelLoadState{})
 	entries := make([]core.GitStatusEntry, len(files))
 	states := make(map[string]GitIndexState, len(files))
 	for i, f := range files {
@@ -220,6 +223,7 @@ func (this *GitChangesPanel) Entries() []core.GitStatusEntry {
 // Clear empties the change list and resets the view. The host calls this
 // when the working tree is clean or the repo context goes away.
 func (this *GitChangesPanel) Clear() {
+	this.load.set(this, PanelLoadState{})
 	this.entries = nil
 	this.scrollY = 0
 	this.hoverIdx = -1
@@ -635,6 +639,10 @@ func (this *GitChangesPanel) Draw(g paint.Painter) {
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
 
+	if this.load.active() {
+		return
+	}
+
 	font := paint.NewFont("Menlo", 12, false, false)
 	g.SetFont(font)
 	fe := font.FontExtents()
@@ -912,6 +920,9 @@ func (this *GitChangesPanel) focusCommit(on bool) {
 // `staged`) or, in index-driven mode, via SetFiles — where the paths are
 // already staged in git, so the host's stage step is a no-op.
 func (this *GitChangesPanel) submitCommit() {
+	if this.load.active() {
+		return
+	}
 	msg := strings.TrimSpace(this.commitMsg)
 	if msg == "" {
 		return
@@ -950,6 +961,9 @@ func (this *GitChangesPanel) onCommitEnter(shift bool) {
 // second body-click on the same row fires SigFileDiff, the same
 // double-click idiom as file-explorer.go / debug-panel.go.
 func (this *GitChangesPanel) OnLeftDown(x, y float64) {
+	if this.load.active() {
+		return
+	}
 	this.SetFocus()
 
 	// Commit band at the bottom takes clicks first.
@@ -1010,6 +1024,9 @@ func (this *GitChangesPanel) OnLeftDown(x, y float64) {
 // ignored when the input is unfocused (the panel has no other key
 // handling).
 func (this *GitChangesPanel) OnKeyDown(key int, repeat bool) {
+	if this.load.active() {
+		return
+	}
 	if !this.commitFocused {
 		return
 	}
@@ -1031,6 +1048,9 @@ func (this *GitChangesPanel) OnKeyDown(key int, repeat bool) {
 // it holds focus. Enter / Backspace arrive via OnKeyDown, not here; when
 // the input is unfocused, typing is ignored.
 func (this *GitChangesPanel) OnTextInput(s string) {
+	if this.load.active() {
+		return
+	}
 	if !this.commitFocused {
 		return
 	}
@@ -1043,6 +1063,9 @@ func (this *GitChangesPanel) OnTextInput(s string) {
 
 // OnMouseMove tracks hover state for the row highlight.
 func (this *GitChangesPanel) OnMouseMove(x, y float64) {
+	if this.load.active() {
+		return
+	}
 	idx := this.rowAt(y)
 	if idx < 0 || idx >= len(this.entries) {
 		idx = -1
@@ -1063,6 +1086,9 @@ func (this *GitChangesPanel) OnMouseLeave() {
 
 // OnMouseWheel scrolls the row list vertically.
 func (this *GitChangesPanel) OnMouseWheel(x, y, z float64) {
+	if this.load.active() {
+		return
+	}
 	this.scrollY -= z * 3 * this.rowHeight
 	if this.scrollY < 0 {
 		this.scrollY = 0

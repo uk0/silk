@@ -99,20 +99,23 @@ jobs:
       - name: Package init is checkptr-clean
         run: go test -race -count=1 -run TestBackendRegistersMainLoop ./gui/ ./win32/
 
-      # silkide degrades gracefully without gopls (it warns and keeps running,
-      # which the smoke below proves), but then the whole LSP path — launching
-      # the server, the initialize handshake, didOpen — is never exercised.
-      # Install it so the smoke covers the wired-up case too. Non-fatal: a
-      # network hiccup here must not fail a Windows runtime check.
-      - name: Install gopls
-        continue-on-error: true
-        run: go install golang.org/x/tools/gopls@latest
+      # A missing tool is now a broken IDE bundle, never an optional CI skip.
+      - name: Build and verify pinned gopls
+        run: |
+          go run ./cmd/silktools -out bin/tools
+          go run ./cmd/silktools -verify -out bin/tools
+
+      - name: Require real bundled gopls protocol and editor integration
+        run: bash scripts/test-bundled-gopls.sh bin
 
       - name: Build the GUI binaries
         run: |
           go build -v -o design.exe design.go
           go build -v -o demo.exe demo.go
-          go build -v -o silkide.exe ./cmd/silkide/
+          go build -v -ldflags="-X github.com/uk0/silk/internal/idetools.RequireBundle=1" -o silkide.exe ./cmd/silkide/
+          mkdir -p tools
+          cp -R bin/tools/. tools/
+          go run ./cmd/silktools -verify -out tools
 
       # 3. The real check: start each binary and require it to still be running
       #    a few seconds later. An unregistered loop, a checkptr abort or a
