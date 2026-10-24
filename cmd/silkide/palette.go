@@ -92,6 +92,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Save", "Cmd+S", func() {
 		saveCurrentDocument(editorTabs, designCanvas)
 	})
+	add("Reopen Closed Editor", "Cmd+Shift+T", func() { reopenClosedEditor(editorTabs) })
 	add("Quick Open File", "Cmd+P", func() {
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
 	})
@@ -110,10 +111,8 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		showDiffVsHEAD(editorTabs, designCanvas)
 	})
 
-	// Run / Build / Test / Export. Run Tests carries two
-	// accelerators (F7 + Cmd+Shift+T); the hint surfaces F7 to match
-	// the canonical JetBrains label and Cmd+Shift+T stays
-	// discoverable through the shortcut wiring in prefs.go.
+	// Run / Build / Test / Export. F7 runs tests; Cmd+Shift+T reopens a
+	// closed editor. The palette keeps tests accessible without function keys.
 	add("Run", "F5", func() { runProjectInTerminal(designCanvas) })
 	add("Build", "F6", func() { buildProject(designCanvas) })
 	// Debugger + LSP wiring. "Debug" mirrors the Shift+F5 shortcut and

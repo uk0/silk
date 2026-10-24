@@ -173,6 +173,11 @@ func migrateRenamedMetadata(tx *editorRename, tabs *gui.TabWidget, canvas *ged.G
 	if history := editorNavigation(tabs); history != nil {
 		history.MapPaths(remap)
 	}
+	if history := closedEditors(tabs); history != nil {
+		for i := range history.items {
+			history.items[i].Path = remap(history.items[i].Path)
+		}
+	}
 	if globalProblems != nil {
 		rows := globalProblems.Problems()
 		for i := range rows {

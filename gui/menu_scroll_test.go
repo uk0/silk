@@ -149,7 +149,7 @@ func TestLongMenuRelayoutRestoresNaturalSizeAndClampsOffset(t *testing.T) {
 		t.Fatal("shortened menu retained stale scroll geometry")
 	}
 	m.fitPopupWorkArea(geom.Rect{Width: 1000, Height: 900})
-	if m.Height() != m.SizeHints().Height {
+	if m.Height() != math.Ceil(m.SizeHints().Height) {
 		t.Fatal("short menu did not recover its natural size")
 	}
 	for _, c := range m.items {
@@ -162,7 +162,7 @@ func TestLongMenuRelayoutRestoresNaturalSizeAndClampsOffset(t *testing.T) {
 	m.OnKeyDown(KeyEnd, false)
 	m.OnHide()
 	m.fitPopupWorkArea(geom.Rect{Width: 1000, Height: 10000})
-	if m.Height() != m.SizeHints().Height || m.scroll.offset != 0 || m.scroll.band != 0 {
+	if m.Height() != math.Ceil(m.SizeHints().Height) || m.scroll.offset != 0 || m.scroll.band != 0 {
 		t.Fatal("reopen retained previous monitor constraint or offset")
 	}
 }

@@ -175,6 +175,7 @@ func buildFileMenu(tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {
 	}, true})
 	recent := buildRecentFilesMenu(tabs, canvas)
 	m.AddSubMenu(i18n.T("Open Recent"), paint.LoadIcon("folder"), recent)
+	appendFileMenuCommand(m, fileMenuCommand{"file.reopen", "Reopen Closed Editor", "edit-undo", key + "+Shift+T", func() { reopenClosedEditor(tabs) }, canReopenEditor(tabs)})
 	m.AddSeparator()
 	canSave := documentMode(tabs, canvas) == modeEdit && activeEditor(tabs) != nil ||
 		documentMode(tabs, canvas) == modeDesign && canvas != nil

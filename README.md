@@ -21,6 +21,30 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Reopen closed editors
+
+- **File → Reopen Closed Editor**, the Command Palette and **Ctrl/Cmd+Shift+T**
+  restore a closed file's caret and vertical viewport, reveal Edit mode and
+  focus the editor for immediate typing. This also works from Welcome after
+  closing every editor.
+- The workbench keeps at most 32 distinct closed-file locations in memory;
+  it does not retain editor instances or resurrect explicitly discarded text.
+  Reopening reads current disk contents. Cancelled closes and failed saves
+  do not enter the history; manual reopen removes stale entries, and IDE file
+  renames update remembered paths.
+- Shortcut change: **Ctrl/Cmd+Shift+T** now reopens an editor instead of running
+  tests. **F7**, Build → Run Tests and the Run Tests palette command remain.
+- Validation: [editor reopen QA](EDITOR_REOPEN_QA_20261024.md).
+
+### Pixel-safe popup sizing
+
+- Popup menus round their natural dimensions up before native window creation,
+  preventing fractional font metrics from adding scroll arrows and hiding the
+  final command on otherwise short menus.
+- Long menus still round the monitor work-area limit down and keep natural row
+  heights. No polling, timers or animation were added.
+- Regression and native UI evidence: [menu pixel sizing QA](MENU_PIXEL_QA_20261024.md).
+
 ### Scrollable long menus and immediate editor input
 
 - Long popup menus keep natural row heights but cap their height to the anchor

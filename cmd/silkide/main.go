@@ -1002,6 +1002,10 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 			return false
 		}
 	}
+	var closed editorSession
+	if ed != nil && path != "" {
+		closed = editorSession{Path: path, Line: ed.CursorLine(), Column: ed.CursorCol(), ScrollY: ed.ScrollY()}
+	}
 	if ed != nil {
 		ed.CancelCompletion()
 		ed.CancelSymbolIndex()
@@ -1014,6 +1018,9 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 		lspDidCloseFile(path) // tell gopls + drop diag/version state
 	}
 	tabs.RemoveTab(idx)
+	if h := closedEditors(tabs); h != nil {
+		h.remember(closed)
+	}
 	return true
 }
 
@@ -2314,7 +2321,7 @@ func buildProject(canvas *ged.GedView) {
 // match buildProject so the IDE stays responsive while the toolchain
 // works.
 //
-// Wired to F7 + Cmd+Shift+T + the "Run Tests" palette command.
+// Wired to F7 + the "Run Tests" menu/palette command.
 func runProjectTests(canvas *ged.GedView) {
 	if globalBuildOutput == nil {
 		buildOutputPane()
@@ -3392,6 +3399,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	}
 	if ed, ok := openEditors[path]; ok && ed != nil {
 		focusEditorTab(tabs, ed)
+		forgetClosedEditor(tabs, path)
 		return true
 	}
 	data, err := os.ReadFile(path)
@@ -3495,6 +3503,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	// against. nil-safe when LSP launch failed at startup.
 	lspDidOpenFile(path, string(data))
 	updateMacroEditor(tabs, path, ed)
+	forgetClosedEditor(tabs, path)
 	return true
 }
 

@@ -17,12 +17,18 @@ type menuScrollState struct {
 // monitor, font, or live menu contents may have changed since the last popup.
 func (m *Menu) fitPopupWorkArea(area geom.Rect) {
 	hints := m.SizeHints()
-	height := hints.Height
+	// Native window sizes use integer coordinate units, while font metrics
+	// and content hints may be fractional. Round OUT before allocating the
+	// popup: truncating even 0.1 unit would otherwise look like overflow and
+	// reserve two full scroll bands on a menu that fits on screen.
+	width, height := math.Ceil(hints.Width), math.Ceil(hints.Height)
 	if m.IsVertical() && validPopupArea(area) {
-		height = math.Min(height, area.Height)
+		// A constrained long menu rounds IN to stay inside the work area.
+		// Native APIs cannot represent a window smaller than one unit.
+		height = math.Min(height, math.Max(1, math.Floor(area.Height)))
 	}
-	if m.Width() != hints.Width || m.Height() != height {
-		m.SetSize(hints.Width, height)
+	if m.Width() != width || m.Height() != height {
+		m.SetSize(width, height)
 	}
 	// A native backend may round dimensions to the same integer pixels and
 	// omit the resize notification. Reopening still needs to reset row bounds

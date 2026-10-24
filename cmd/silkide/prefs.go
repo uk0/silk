@@ -667,8 +667,7 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	// muscle memory. No modifier so they don't clash with Cmd+R
 	// (canvas refresh) and Cmd+B (which we may bind to "build" with
 	// a modifier later if the function-keyless laptop crowd asks for
-	// it). Cmd+Shift+T is the second F7 binding for laptops without
-	// function rows.
+	// it). Function-keyless keyboards can use the Run Tests palette/menu.
 	gui.RegisterShortcut(0, gui.KeyF5, func() { runProjectInTerminal(designCanvas) })
 	// Shift+F5 → launch dlv against the project. Pairs with the Debug
 	// toolbar button and the "Debug" palette command -- all three hit
@@ -696,7 +695,7 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModShift, gui.KeyF12, func() { findReferencesViaLSP(editorTabs) })
 	// Code Actions / quick-fixes via gopls (Cmd+.).
 	gui.RegisterShortcut(gui.ModAction, '.', func() { codeActionsViaLSP(editorTabs) })
-	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { runProjectTests(designCanvas) })
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'T', func() { reopenClosedEditor(editorTabs) })
 	// Cmd+T — Go to Symbol in Workspace (gopls workspace/symbol search).
 	gui.RegisterShortcut(gui.ModAction, 'T', func() { showSymbolFinder(designCanvas, editorTabs) })
 	// Cmd+Shift+B — toggle git-blame annotations on the active editor.
