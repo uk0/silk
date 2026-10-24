@@ -499,12 +499,14 @@ func findInParentCoord(this IWidget, xp, yp, cx, cy, cw, ch float64) IWidget {
 	wx, wy, ww, wh := this.Bounds()
 	cx1, cy1, cw1, ch1 := intersectRect(cx, cy, cw, ch, wx, wy, ww, wh)
 	if xp >= cx1 && yp >= cy1 && xp < cx1+cw1 && yp < cy1+ch1 {
+		v := widgetChildViewport(this)
+		childX, childY, childW, childH := intersectRect(cx1-wx, cy1-wy, cw1, ch1, v.X, v.Y, v.Width, v.Height)
 		head := this.NakedWidget().child
 		if head != nil {
 			for c := head.prev; ; c = c.prev {
 				ic := c.Self()
 				if ic.IsVisible() && ic.Window() == nil {
-					p := findInParentCoord(ic, xp-wx, yp-wy, cx1-wx, cy1-wy, cw1, ch1)
+					p := findInParentCoord(ic, xp-wx, yp-wy, childX, childY, childW, childH)
 					if p != nil {
 						return p
 					}
@@ -528,12 +530,13 @@ func (this *Widget) FindWidgetAt(x, y float64) IWidget {
 				return toast
 			}
 		}
+		v := widgetChildViewport(this.Self())
 		head := this.NakedWidget().child
 		if head != nil {
 			for c := head.prev; ; c = c.prev {
 				ic := c.Self()
 				if ic.IsVisible() && ic.Window() == nil {
-					p := findInParentCoord(ic, x, y, 0, 0, ww, wh)
+					p := findInParentCoord(ic, x, y, v.X, v.Y, v.Width, v.Height)
 					if p != nil {
 						return p
 					}

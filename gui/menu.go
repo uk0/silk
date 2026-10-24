@@ -30,6 +30,7 @@ type Menu struct {
 	compact    bool
 	typePrefix string
 	typeAt     time.Time
+	scroll     menuScrollState
 }
 
 // SetCompact opts a horizontal menu bar into dense desktop chrome. Popup menu
@@ -105,6 +106,10 @@ func sepCount(objCount int) int {
 }
 
 func (this *Menu) layoutVertical() {
+	if this.IsPopup() {
+		this.layoutPopupItems()
+		return
+	}
 	items := this.visibleItems()
 	count := len(items)
 	//if count == 0 {
@@ -396,6 +401,7 @@ func (this *Menu) OnShow() {
 }
 
 func (this *Menu) OnHide() {
+	this.scroll.offset = 0
 	this.resetTypeahead()
 	this.setHighlight(-1)
 	this.HideAllSubs()
@@ -440,6 +446,9 @@ func findRootPopup(w IWidget) IWidget {
 }
 
 func (this *Menu) OnLeftDown(x, y float64) {
+	if this.clickScrollBand(x, y) {
+		return
+	}
 	if x >= 0 && y >= 0 && x < this.w && y < this.h {
 		return
 	}
@@ -563,9 +572,6 @@ func (this *Menu) ShowAsPopup(xg, yg float64, autoClose bool) {
 		return
 	}
 	this.Window().SetCloseOnHide(autoClose)
-	hints := this.SizeHints()
-	this.SetSize(0, 0)
-	this.SetSize(hints.Width, hints.Height)
 	LayoutPopup1(this, xg, yg)
 	this.SetVisible(true)
 	this.PushCapture()
@@ -646,10 +652,15 @@ func (this *Menu) highlightedButton() *Button {
 func (this *Menu) setHighlight(idx int) {
 	old := this.highlightedButton()
 	this.highlight = idx
+	this.ensureHighlightedVisible()
 	if b := this.highlightedButton(); b != nil {
+		holdMenuPointerForKeyboard()
 		setMouseHoverWidget(b.Self())
-	} else if old != nil && mouseHoverWidget == old.Self() {
-		setMouseHoverWidget(nil)
+	} else {
+		menuPointer.keyboard = false
+		if old != nil && mouseHoverWidget == old.Self() {
+			setMouseHoverWidget(nil)
+		}
 	}
 	this.Update()
 }
@@ -670,7 +681,7 @@ func (this *Menu) OnKeyDown(key int, repeat bool) {
 	// Navigation/confirmation ends a prefix; modifier/letter key-down events
 	// must not reset it before the corresponding text-input event arrives.
 	switch key {
-	case KeyDown, KeyUp, KeyHome, KeyEnd, KeyEnter, KeySpace, KeyEsc, KeyRight, KeyLeft:
+	case KeyDown, KeyUp, KeyHome, KeyEnd, KeyPageUp, KeyPageDown, KeyEnter, KeySpace, KeyEsc, KeyRight, KeyLeft:
 		this.resetTypeahead()
 	case KeyBackSpace:
 		this.backspaceTypeahead(time.Now())
@@ -680,6 +691,10 @@ func (this *Menu) OnKeyDown(key int, repeat bool) {
 	}
 	kinds := this.itemKinds()
 	switch key {
+	case KeyPageUp:
+		this.pageHighlight(-1, kinds)
+	case KeyPageDown:
+		this.pageHighlight(1, kinds)
 	case KeyDown:
 		if idx := nextSelectableIndex(kinds, this.highlight, +1, true); idx >= 0 {
 			this.setHighlight(idx)

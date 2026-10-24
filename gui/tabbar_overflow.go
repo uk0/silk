@@ -98,6 +98,21 @@ func (b *TabBar) showAllTabs() {
 			for i, current := range b.tabs {
 				if current == tab {
 					b.SetActiveTab(i)
+					// The popup restored focus to its opener before this action.
+					// Selecting an editor must hand input to the selected page,
+					// not leave typing on the overflow button. Revalidate after
+					// activation callbacks, which can remove or replace the tab.
+					if b.activeTab >= 0 && b.activeTab < len(b.tabs) && b.tabs[b.activeTab] == tab {
+						var view IWidget
+						if page, ok := tab.data.(*tabPageRef); ok {
+							view = page.page
+						} else {
+							view, _ = tab.data.(IWidget)
+						}
+						if view != nil && view.IsVisible() && view.IsEnabled() && view.IsAllAncentorsVisible() {
+							view.SetFocus()
+						}
+					}
 					return
 				}
 			}

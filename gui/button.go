@@ -366,9 +366,13 @@ func (this *Button) ShowSubPopup() {
 		return
 	}
 
-	hints := this.subPopup.SizeHints()
-	this.subPopup.SetSize(0, 0)
-	this.subPopup.SetSize(hints.Width, hints.Height)
+	// Menus measure against the anchor monitor inside LayoutPopup, before
+	// allocating a native surface at their potentially very large height.
+	if _, menu := this.subPopup.(*Menu); !menu {
+		hints := this.subPopup.SizeHints()
+		this.subPopup.SetSize(0, 0)
+		this.subPopup.SetSize(hints.Width, hints.Height)
+	}
 	x, y := this.MapToGlobal(0, 0)
 	w, h := this.Size()
 	popupVertical := !this.IsInPopupMenu()

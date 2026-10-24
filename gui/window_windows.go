@@ -993,6 +993,11 @@ func drawWidgetOverlay(iw IWidget, g paint.Painter) (ok bool) {
 
 func drawWidgetChildren(iw IWidget, g paint.Painter) {
 	cx, cy, cw, ch := g.ClipBounds()
+	v := widgetChildViewport(iw)
+	cx, cy, cw, ch = intersectRect(cx, cy, cw, ch, v.X, v.Y, v.Width, v.Height)
+	if cw <= 0 || ch <= 0 {
+		return
+	}
 	head := iw.NakedWidget().child
 	if head != nil {
 		end := head.prev
@@ -1613,21 +1618,20 @@ func (win *Window) on_WM_MBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 
 func (win *Window) on_WM_MOUSEWHEEL(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	lastMouseTime = time.Now()
-	if lastMouseWidget != nil {
-		if i, ok := lastMouseWidget.(IEventMouseWheel); ok {
-			x, y := posFromLParam(lParam)
-			x1, y1 := lastMouseWidget.MapFromGlobal(x, y)
-			uz := win32.HIWORD(uint32(wParam))
-			z := float64(int16(uz)) / 120.0
-			i.OnMouseWheel(x1, y1, z)
-		}
+	if win.widget != nil {
+		x, y := posFromLParam(lParam)
+		z := float64(int16(win32.HIWORD(uint32(wParam)))) / 120.0
+		dispatchMouseWheel(win.widget, x, y, z)
 	}
-
 	return 0
-
 }
 
 func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	x, y := posFromLParam(lParam)
+	gx, gy := win.mapToGlobal(x, y)
+	if observeMenuPointerMotion(gx, gy) {
+		return 0
+	}
 	lastMouseTime = time.Now()
 	mouseMoving = true
 
@@ -1640,7 +1644,6 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 	}
 
 	_, _, ww, wh := win.widget.Bounds()
-	x, y := posFromLParam(lParam)
 	inClient := x >= 0 && y >= 0 && x < ww && y < wh
 	win.mouseEntered = inClient
 	var capWin *Window

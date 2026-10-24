@@ -133,6 +133,9 @@ func LayoutPopup1(popup IWidget, xref, yref float64) {
 
 func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, overlap float64) {
 	area := popupWorkAreaAt(xref, yref)
+	if menu, ok := popup.(*Menu); ok && menu.IsPopup() {
+		menu.fitPopupWorkArea(area)
+	}
 	pw, ph := popup.Size()
 	x, y := popupPositionInWorkArea(area, xref, yref, wref, href, pw, ph, vertical, overlap)
 	// Set popup position directly using global screen coordinates.

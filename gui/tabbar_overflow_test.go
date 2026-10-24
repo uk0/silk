@@ -208,3 +208,36 @@ func BenchmarkTabOverflowVisibleDraw(b *testing.B) {
 		tabs.Draw(r)
 	}
 }
+
+func TestTabChooserHandsTypingToSelectedPage(t *testing.T) {
+	oldPopup, oldFocus, oldHover := showTabBarPopup, focusWidget, mouseHoverWidget
+	t.Cleanup(func() { showTabBarPopup, focusWidget, mouseHoverWidget = oldPopup, oldFocus, oldHover })
+	tabs := NewTabWidget()
+	tabs.SetSize(600, 400)
+	a, b := NewEdit(), NewEdit()
+	tabs.AddTab(a, "Alpha", nil)
+	tabs.AddTab(b, "Zulu", nil)
+	chooser := tabs.tabBar
+	showTabBarPopup = func(menu *Menu, _, _ float64) {
+		focusWidget = chooser.allTabsButton()
+		menu.Items()[1].(*Button).Action().Trigger(nil)
+	}
+	for i := 0; i < 2; i++ {
+		chooser.showAllTabs()
+		if tabs.CurrentIndex() != 1 || focusWidget != b {
+			t.Fatal("chooser activated page without transferring typing focus")
+		}
+	}
+	// An application callback may remove a tab while activating it. Never
+	// restore focus to that now detached page after the callback returns.
+	tabs.SetCurrentIndex(0)
+	tabs.SetCurrentChangedCallback(func(_ interface{}, index int) {
+		if index == 1 {
+			tabs.RemoveTab(1)
+		}
+	})
+	chooser.showAllTabs()
+	if focusWidget == b {
+		t.Fatal("removed page stole focus")
+	}
+}

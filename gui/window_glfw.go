@@ -1119,6 +1119,11 @@ func drawWidgetOverlay(iw IWidget, g paint.Painter) (ok bool) {
 
 func drawWidgetChildren(iw IWidget, g paint.Painter) {
 	cx, cy, cw, ch := g.ClipBounds()
+	v := widgetChildViewport(iw)
+	cx, cy, cw, ch = intersectRect(cx, cy, cw, ch, v.X, v.Y, v.Width, v.Height)
+	if cw <= 0 || ch <= 0 {
+		return
+	}
 	head := iw.NakedWidget().child
 	if head != nil {
 		end := head.prev
@@ -2098,6 +2103,10 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 	if dndActive || !win.enabled {
 		return
 	}
+	gx, gy := win.mapToGlobal(xpos, ypos)
+	if observeMenuPointerMotion(gx, gy) {
+		return
+	}
 
 	lastMouseTime = time.Now()
 	mouseMoving = true
@@ -2242,23 +2251,8 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 	lastMouseTime = time.Now()
 	cx, cy := gw.GetCursorPos()
 
-	// Deliver to captured widget first, then widget under cursor
-	target := curCapture()
-	if target == nil {
-		target = lastMouseWidget
-	}
-	if target == nil {
-		target = win.widget.FindWidgetAt(cx, cy)
-	}
-
-	// Walk up the widget tree to find a widget that handles mouse wheel
-	for w := target; w != nil; w = w.Parent() {
-		if i, ok := w.(IEventMouseWheel); ok {
-			x1, y1 := w.MapFromWindow(cx, cy)
-			i.OnMouseWheel(x1, y1, yoff)
-			return
-		}
-	}
+	gx, gy := win.widget.MapToGlobal(cx, cy)
+	dispatchMouseWheel(win.widget, gx, gy, yoff)
 }
 
 var glfwCompositionActive = nativeHasMarkedText

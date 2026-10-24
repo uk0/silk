@@ -21,6 +21,30 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Scrollable long menus and immediate editor input
+
+- Long popup menus keep natural row heights but cap their height to the anchor
+  monitor's work area. Wheel scrolling, clickable scroll arrows, Page Up/Down, Home/End and
+  label typeahead keep the current keyboard target visible. Scrolling a parent
+  closes its anchored submenu instead of leaving a detached popup behind.
+- Reopening a menu lays out its rows again even when native pixel rounding suppresses
+  a resize event. Stationary cursor notifications caused by popup capture no
+  longer cancel keyboard navigation; actual pointer motion restores hover.
+- SDK `gui.IChildViewport` gives inline child painting and pointer hit-testing
+  the same clipping rectangle. Win32 and GLFW wheel dispatch now use the current
+  pointer/capture and bubble through non-scrollable children, not stale hover.
+- Choosing a document from **All Tabs** transfers typing focus to its live page,
+  including when the chosen tab was already active. Activation callbacks that
+  remove a tab cannot focus the removed page.
+- No scroll polling, idle animation or hover timer was added. Try the 80-command,
+  nested-menu example with `go run ./examples/menu-scroll`.
+
+Verification and limits: [Long-menu and viewport QA](MENU_SCROLL_QA_20261024.md).
+
+<img src="screenshots/silkide-menu-scroll-macos-20261024.png" width="760" alt="Native macOS All Tabs menu with 80 documents, scrolling and visible last item">
+
+<img src="screenshots/silkide-menu-scroll-windows-20261024.png" width="760" alt="Windows All Tabs selection returns typing focus to the selected editor and saves Unicode text">
+
 ### Keyboard-searchable menus and consistent tool-panel actions
 
 - In popup menus, type the start of a label to select it, then press Enter or
