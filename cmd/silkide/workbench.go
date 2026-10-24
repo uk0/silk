@@ -33,7 +33,10 @@ type workbench struct {
 	designActions  []designActionButton
 	dockVisibility map[*gui.Dock]bool
 	navigation     gui.NavigationStack
+	toolViews      map[workspaceMode]workbenchToolViews
 }
+
+type workbenchToolViews struct{ left, right gui.IWidget }
 
 var globalWorkbench *workbench
 
@@ -80,16 +83,8 @@ func (w *workbench) activate(mode workspaceMode) {
 		}
 	case modeEdit:
 		view = w.tabs
-		dockSetActiveView(globalLeftDock, globalFileExplorer)
-		dockSetActiveView(globalRightDock, globalOutline)
 	case modeDesign:
 		view = w.canvas
-		palette := w.paletteView
-		if palette == nil {
-			palette = w.palette
-		}
-		dockSetActiveView(globalLeftDock, palette)
-		dockSetActiveView(globalRightDock, globalPropSheet)
 	default:
 		return
 	}
@@ -121,6 +116,39 @@ func (w *workbench) syncMode() {
 	if mode == w.lastMode {
 		return
 	}
+	// Only a mode transition may restore mode-specific tools. Opening another
+	// editor, following a search hit or repainting must keep the chosen tabs.
+	if w.toolViews == nil {
+		w.toolViews = make(map[workspaceMode]workbenchToolViews)
+	}
+	if w.lastMode == modeEdit || w.lastMode == modeDesign {
+		var previous workbenchToolViews
+		if globalLeftDock != nil {
+			previous.left = globalLeftDock.ActiveView()
+		}
+		if globalRightDock != nil {
+			previous.right = globalRightDock.ActiveView()
+		}
+		w.toolViews[w.lastMode] = previous
+	}
+	previousMode := w.lastMode
+	w.lastMode = mode
+	if mode == modeEdit || mode == modeDesign {
+		views, saved := w.toolViews[mode]
+		if !saved {
+			if mode == modeEdit {
+				views = workbenchToolViews{globalFileExplorer, globalOutline}
+			} else {
+				palette := w.paletteView
+				if nilWidget(palette) {
+					palette = w.palette
+				}
+				views = workbenchToolViews{palette, globalPropSheet}
+			}
+		}
+		dockSetActiveView(globalLeftDock, views.left)
+		dockSetActiveView(globalRightDock, views.right)
+	}
 	changed := false
 	if mode == modeWelcome {
 		w.dockVisibility = make(map[*gui.Dock]bool)
@@ -134,7 +162,7 @@ func (w *workbench) syncMode() {
 				changed = true
 			}
 		}
-	} else if w.lastMode == modeWelcome {
+	} else if previousMode == modeWelcome {
 		for dock, visible := range w.dockVisibility {
 			if dock.IsVisible() != visible {
 				dock.SetVisible(visible)
@@ -143,9 +171,33 @@ func (w *workbench) syncMode() {
 		}
 		w.dockVisibility = nil
 	}
-	w.lastMode = mode
 	if changed && w.frame != nil {
 		w.frame.Layout()
+	}
+}
+
+// revealToolView is for explicit user requests, not background refreshes. A
+// selected tab inside a hidden dock is not visible and must not receive focus.
+func revealToolView(tabs *gui.TabWidget, canvas *ged.GedView, dock *gui.Dock, view gui.IWidget, preferred workspaceMode) bool {
+	if dock == nil || nilWidget(view) || dock.IndexOfView(view) < 0 {
+		return false
+	}
+	if w := globalWorkbench; w != nil && w.tabs == tabs && w.canvas == canvas && documentMode(tabs, canvas) == modeWelcome {
+		w.activate(preferred)
+	}
+	dockSetActiveView(dock, view)
+	if !dock.IsVisible() {
+		dock.SetVisible(true)
+		if frame := dock.Frame(); frame != nil {
+			frame.Layout()
+		}
+	}
+	return true
+}
+
+func showWorkspaceSearch(tabs *gui.TabWidget, canvas *ged.GedView) {
+	if revealToolView(tabs, canvas, globalLeftDock, globalSearch, modeEdit) {
+		globalSearch.FocusSearch()
 	}
 }
 

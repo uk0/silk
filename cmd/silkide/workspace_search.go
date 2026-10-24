@@ -28,19 +28,37 @@ func workspaceSearchAffects(path string) bool {
 }
 
 func configureWorkspaceSearch(p *ged.GlobalSearchPanel, tabs *gui.TabWidget, canvas *ged.GedView) {
-	p.SigOpenMatch(func(m ged.SearchMatch) {
-		navigateEditor(tabs, m.FilePath, func(ed *gui.CodeEditor) {
-			if !navigateSearchMatch(ed, m) {
-				silkideToast("Search result is stale; search again before jumping", gui.ToastWarning)
-			}
-		})
-	})
+	p.SigOpenMatch(func(m ged.SearchMatch) { openWorkspaceSearchMatch(p, tabs, canvas, m) })
 	p.SigPreviewReplacement(func(r ged.FileReplacement) {
 		showDiffDialog("Replace: "+filepath.Base(r.Path), func(context.Context) (diffSource, error) { return diffSource{r.Before, r.After}, nil })
 	})
 	p.SetReplacementGuard(func(reps []ged.FileReplacement) (func(error), error) {
 		return prepareWorkspaceReplacement(tabs, canvas, reps)
 	})
+}
+
+// A result click is an explicit request to keep Search visible, including when
+// it changes from Design to Edit and restores that mode's remembered tool tabs.
+func openWorkspaceSearchMatch(p *ged.GlobalSearchPanel, tabs *gui.TabWidget, canvas *ged.GedView, m ged.SearchMatch) {
+	if navigateEditor(tabs, m.FilePath, func(ed *gui.CodeEditor) {
+		if !navigateSearchMatch(ed, m) {
+			silkideToast("Search result is stale; search again before jumping", gui.ToastWarning)
+		}
+	}) {
+		revealToolView(tabs, canvas, globalLeftDock, p, modeEdit)
+	}
+}
+
+// F4 navigates source hits, never a replacement diff. The SDK rejects preview,
+// pending and invalidated results before this command changes workspace focus.
+func navigateWorkspaceSearch(tabs *gui.TabWidget, canvas *ged.GedView, previous bool) {
+	if globalSearch == nil || !globalSearch.CanNavigateMatches() {
+		return
+	}
+	showEditorWorkspace(tabs)
+	if revealToolView(tabs, canvas, globalLeftDock, globalSearch, modeEdit) {
+		globalSearch.NavigateMatch(previous)
+	}
 }
 
 func navigateSearchMatch(ed *gui.CodeEditor, m ged.SearchMatch) bool {

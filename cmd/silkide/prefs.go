@@ -720,28 +720,15 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		showFileFinder(designCanvas, projectDir(designCanvas), editorTabs)
 	})
 
-	// Cmd+Shift+F — focus the global-search panel in the left dock.
-	// VSCode / JetBrains muscle memory; bringing the dock tab to
-	// the front isn't enough — the panel handles its own input via
-	// OnTextInput, so we also need to give it keyboard focus so the
-	// user can start typing immediately.
-	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'F', func() {
-		if globalSearch != nil {
-			dockSetActiveView(globalLeftDock, globalSearch)
-			globalSearch.FocusSearch()
-		}
-	})
-
-	// Cmd+Shift+O — bring the code-outline tab to the front of the
-	// right dock. VSCode "Go to Symbol" muscle memory; the outline
-	// reacts to clicks rather than typed input, so flipping the tab
-	// (and focusing it for wheel scrolling) is all the shortcut needs.
+	// Explicit tool requests leave Welcome and reveal a manually hidden dock.
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'F', func() { showWorkspaceSearch(editorTabs, designCanvas) })
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'O', func() {
-		if globalOutline != nil {
-			dockSetActiveView(globalRightDock, globalOutline)
+		if revealToolView(editorTabs, designCanvas, globalRightDock, globalOutline, modeEdit) {
 			globalOutline.SetFocus()
 		}
 	})
+	gui.RegisterShortcut(0, gui.KeyF4, func() { navigateWorkspaceSearch(editorTabs, designCanvas, false) })
+	gui.RegisterShortcut(gui.ModShift, gui.KeyF4, func() { navigateWorkspaceSearch(editorTabs, designCanvas, true) })
 
 	// F2 — JetBrains "Rename Symbol" muscle memory: pop an input box
 	// prefilled with the identifier under the cursor and rewrite every

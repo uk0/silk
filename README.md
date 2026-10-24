@@ -21,6 +21,23 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Workbench continuity and search-result navigation
+
+- Opening a search hit or quick-open file keeps the chosen side panels. Edit and
+  Design remember their tool tabs independently; Welcome preserves manual visibility.
+- Find in Files / Show Outline and explicit panel commands reveal their dock from
+  Welcome or a hidden state instead of focusing an invisible widget.
+- **F4 / Shift+F4**, Edit menu and Command Palette navigate workspace matches,
+  wrap around, expand collapsed groups, scroll the selection into view, and use
+  the existing source-validation / Go Back history. Replacement previews disable
+  these source-navigation actions. SDK: `CanNavigateMatches` / `NavigateMatch`.
+
+Verification and platform limits: [Workbench navigation QA](WORKBENCH_NAVIGATION_QA_20261024.md).
+
+<img src="screenshots/silkide-search-navigation-macos-20261024.png" width="760" alt="Native macOS search-result navigation menu while preserving the search panel">
+
+<img src="screenshots/silkide-search-navigation-windows-20261024.png" width="760" alt="Native Windows search menu with source navigation and retained result context">
+
 ### Cancellable workspace search and previewed replacement
 
 - Find in files has real text inputs, case/Unicode-word/regex switches, type and

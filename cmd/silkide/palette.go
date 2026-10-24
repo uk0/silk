@@ -126,7 +126,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Step Out", "Shift+F11", func() { debugStep("out") })
 	add("Show Debug", "", func() {
 		if globalDebugPanel != nil {
-			dockSetActiveView(globalBottomDock, globalDebugPanel)
+			revealToolView(editorTabs, designCanvas, globalBottomDock, globalDebugPanel, modeEdit)
 		}
 	})
 	add("Restart Debug", "", func() { restartDebug() })
@@ -155,7 +155,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// Outline shape — same dock-flip + SetFocus idiom.
 	add("Show Test Results", "", func() {
 		if globalTestResults != nil {
-			dockSetActiveView(globalBottomDock, globalTestResults)
+			revealToolView(editorTabs, designCanvas, globalBottomDock, globalTestResults, modeEdit)
 			globalTestResults.SetFocus()
 		}
 	})
@@ -165,7 +165,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// pane; both are palette-only lifecycle controls (no accelerator).
 	add("Show Log", "", func() {
 		if globalLog != nil {
-			dockSetActiveView(globalBottomDock, globalLog)
+			revealToolView(editorTabs, designCanvas, globalBottomDock, globalLog, modeEdit)
 			globalLog.SetFocus()
 		}
 	})
@@ -195,13 +195,13 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// Navigation.
 	add("Show Files", "", func() {
 		if globalFileExplorer != nil {
-			dockSetActiveView(globalLeftDock, globalFileExplorer)
+			revealToolView(editorTabs, designCanvas, globalLeftDock, globalFileExplorer, modeEdit)
 			globalFileExplorer.SetFocus()
 		}
 	})
 	add("Filter Project Files", "", func() {
 		if globalFileExplorer != nil {
-			dockSetActiveView(globalLeftDock, globalFileExplorer)
+			revealToolView(editorTabs, designCanvas, globalLeftDock, globalFileExplorer, modeEdit)
 			globalFileExplorer.ShowFilterDialog()
 		}
 	})
@@ -221,18 +221,15 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			silkideToast(i18n.T("The active file is not inside the project"), gui.ToastInfo)
 			return
 		}
-		dockSetActiveView(globalLeftDock, globalFileExplorer)
+		revealToolView(editorTabs, designCanvas, globalLeftDock, globalFileExplorer, modeEdit)
 		globalFileExplorer.SetFocus()
 	})
-	add("Find in Files", "Cmd+Shift+F", func() {
-		if globalSearch != nil {
-			dockSetActiveView(globalLeftDock, globalSearch)
-			globalSearch.FocusSearch()
-		}
-	})
+	add("Find in Files", "Cmd+Shift+F", func() { showWorkspaceSearch(editorTabs, designCanvas) })
+	add("Next Search Result", "F4", func() { navigateWorkspaceSearch(editorTabs, designCanvas, false) })
+	add("Previous Search Result", "Shift+F4", func() { navigateWorkspaceSearch(editorTabs, designCanvas, true) })
 	add("Show Outline", "Cmd+Shift+O", func() {
 		if globalOutline != nil {
-			dockSetActiveView(globalRightDock, globalOutline)
+			revealToolView(editorTabs, designCanvas, globalRightDock, globalOutline, modeEdit)
 			globalOutline.SetFocus()
 		}
 	})
@@ -241,7 +238,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// SetFocus idiom, just targets globalProblems in the bottom dock.
 	add("Show Problems", "", func() {
 		if globalProblems != nil {
-			dockSetActiveView(globalBottomDock, globalProblems)
+			revealToolView(editorTabs, designCanvas, globalBottomDock, globalProblems, modeEdit)
 			globalProblems.SetFocus()
 		}
 	})
@@ -249,7 +246,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// bookmarks pane (sibling of Inspector + Outline).
 	add("Show Bookmarks", "", func() {
 		if globalBookmarks != nil {
-			dockSetActiveView(globalRightDock, globalBookmarks)
+			revealToolView(editorTabs, designCanvas, globalRightDock, globalBookmarks, modeEdit)
 			globalBookmarks.SetFocus()
 		}
 	})
@@ -258,7 +255,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// idiom, just targets globalPackages in the left dock.
 	add("Show Packages", "", func() {
 		if globalPackages != nil {
-			dockSetActiveView(globalLeftDock, globalPackages)
+			revealToolView(editorTabs, designCanvas, globalLeftDock, globalPackages, modeEdit)
 			globalPackages.SetFocus()
 		}
 	})
@@ -272,7 +269,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// Git changes — flip to the panel + reload git status.
 	add("Show Git Changes", "", func() {
 		if globalGitChanges != nil {
-			dockSetActiveView(globalBottomDock, globalGitChanges)
+			revealToolView(editorTabs, designCanvas, globalBottomDock, globalGitChanges, modeEdit)
 		}
 		refreshGitChangesWith(designCanvas, true)
 	})
@@ -296,7 +293,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// Git history — flip to the log panel + reload git log.
 	add("Show Git History", "", func() {
 		if globalGitLog != nil {
-			dockSetActiveView(globalBottomDock, globalGitLog)
+			revealToolView(editorTabs, designCanvas, globalBottomDock, globalGitLog, modeEdit)
 		}
 		refreshGitLogWith(designCanvas, true)
 	})

@@ -74,6 +74,11 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 			add(spec.id, spec.label, spec.icon, spec.hint, ed != nil && spec.enabled(ed), func() { runEditorCaretCommand(tabs, canvas, spec, ed) })
 		}
 		menu.AddSeparator()
+		add("search.files", "Find in Files", "search", key+"+Shift+F", globalSearch != nil, func() { showWorkspaceSearch(tabs, canvas) })
+		matches := globalSearch != nil && globalSearch.CanNavigateMatches()
+		add("search.next", "Next Search Result", "navigate-forward", "F4", matches, func() { navigateWorkspaceSearch(tabs, canvas, false) })
+		add("search.previous", "Previous Search Result", "navigate-back", "Shift+F4", matches, func() { navigateWorkspaceSearch(tabs, canvas, true) })
+		menu.AddSeparator()
 		add("edit.palette", "Command Palette", "search", key+"+Shift+P", true, func() { showCommandPalette(canvas) })
 		menu.AddSeparator()
 		history := editorNavigation(tabs)
@@ -110,10 +115,11 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 			{"log", "Show Log", "log", globalBottomDock, globalLog},
 		} {
 			add("view."+panel.id, panel.label, panel.icon, "", panel.dock != nil && !nilWidget(panel.view), func() {
-				if globalWorkbench != nil && documentMode(tabs, canvas) == modeWelcome {
-					globalWorkbench.activate(modeDesign)
+				mode := modeEdit
+				if panel.id == "properties" || panel.id == "objects" {
+					mode = modeDesign
 				}
-				dockSetActiveView(panel.dock, panel.view)
+				revealToolView(tabs, canvas, panel.dock, panel.view, mode)
 			})
 		}
 	case "Design":
