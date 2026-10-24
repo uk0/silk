@@ -18,6 +18,8 @@ func navigationWorkbench(t *testing.T) *workbench {
 	globalSearch, globalFileExplorer, globalOutline = ged.NewGlobalSearchPanel(), ged.NewFileExplorer(), ged.NewCodeOutlinePanel()
 	globalLeftDock = w.center.SplitNewDock(true, false).(*gui.Dock)
 	globalRightDock = w.center.SplitNewDock(false, false).(*gui.Dock)
+	globalLeftDock.SetRetainClosedViews(true)
+	globalRightDock.SetRetainClosedViews(true)
 	globalLeftDock.AddView(globalFileExplorer)
 	globalLeftDock.AddView(globalSearch)
 	w.paletteView = gui.NewButton()
@@ -155,5 +157,77 @@ func TestWorkspaceSearchResultFromDesignRetainsSearch(t *testing.T) {
 	openWorkspaceSearchMatch(globalSearch, w.tabs, w.canvas, ged.SearchMatch{FilePath: path, Line: 1, Column: 8, LineText: "中🙂 foo", MatchLen: 3})
 	if documentMode(w.tabs, w.canvas) != modeEdit || globalLeftDock.ActiveView() != globalSearch || activeEditor(w.tabs).CursorCol() != 3 {
 		t.Fatal("cross-mode search lost context or Unicode column")
+	}
+}
+
+func TestWorkbenchClosedSearchShortcutRestoresInstance(t *testing.T) {
+	w := navigationWorkbench(t)
+	original := globalSearch
+	if !globalLeftDock.PromptSaveCloseView(original) {
+		t.Fatal("close failed")
+	}
+	registerShortcuts(w.tabs, w.canvas)
+	gui.ShortcutHandler(gui.ModAction|gui.ModShift, 'F')()
+	if globalSearch != original || globalLeftDock.ActiveView() != original || !globalLeftDock.IsVisible() {
+		t.Fatal("closed search cannot be reopened with its configured instance")
+	}
+}
+
+func TestWorkbenchMinimizedAndMaximizedToolsRestore(t *testing.T) {
+	w := navigationWorkbench(t)
+	globalRightDock.SetMaximized(true)
+	showWorkspaceSearch(w.tabs, w.canvas)
+	if globalRightDock.IsMaximized() || !globalLeftDock.IsVisible() || !w.center.IsVisible() {
+		t.Fatal("search hidden behind maximized tool")
+	}
+	globalLeftDock.SetMinimized(true)
+	showWorkspaceSearch(w.tabs, w.canvas)
+	if globalLeftDock.IsMinimized() || globalLeftDock.ActiveView() != globalSearch {
+		t.Fatal("search remained minimized")
+	}
+	w.center.SetMinimized(true)
+	w.activate(modeEdit)
+	if w.center.IsMinimized() || !w.center.IsVisible() {
+		t.Fatal("mode toolbar cannot recover documents")
+	}
+	globalLeftDock.SetMaximized(true)
+	w.activate(modeWelcome)
+	w.activate(modeEdit)
+	if !globalRightDock.IsVisible() || !globalLeftDock.IsVisible() || !w.center.IsVisible() {
+		t.Fatal("welcome captured temporary maximize visibility")
+	}
+}
+
+func TestWorkbenchPanelChooserIncludesHiddenTools(t *testing.T) {
+	w := navigationWorkbench(t)
+	globalLeftDock.PromptSaveCloseView(globalSearch)
+	menu := workbenchPanelsMenu()
+	defer releaseWorkbenchMenu(menu)
+	found := false
+	for _, child := range menu.Items() {
+		button, ok := child.(*gui.Button)
+		if !ok || button.Action().Text() != gui.DockViewTitle(globalSearch) {
+			continue
+		}
+		if button.Action().IsChecked() {
+			t.Fatal("closed tool checked")
+		}
+		button.Action().Trigger(nil)
+		found = true
+		break
+	}
+	if !found || globalLeftDock.ActiveView() != globalSearch || documentMode(w.tabs, w.canvas) != modeEdit {
+		t.Fatal("all-panels recovery missing")
+	}
+}
+
+func TestWorkbenchRevealFindsMovedTool(t *testing.T) {
+	w := navigationWorkbench(t)
+	globalLeftDock.RemoveView(globalSearch)
+	globalRightDock.AddView(globalSearch)
+	globalRightDock.PromptSaveCloseView(globalSearch)
+	showWorkspaceSearch(w.tabs, w.canvas)
+	if globalRightDock.ActiveView() != globalSearch || !globalRightDock.IsVisible() {
+		t.Fatal("reveal used obsolete dock pointer")
 	}
 }

@@ -193,6 +193,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 
 	add("Refresh Editor Git Markers", "", func() { refreshActiveEditorGit(editorTabs) })
 	// Navigation.
+	add("Restore Panel Layout", "", func() {
+		if globalWorkbench != nil {
+			globalWorkbench.frame.RestoreDockLayout()
+		}
+	})
+
 	add("Show Files", "", func() {
 		if globalFileExplorer != nil {
 			revealToolView(editorTabs, designCanvas, globalLeftDock, globalFileExplorer, modeEdit)

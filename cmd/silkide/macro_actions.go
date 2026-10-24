@@ -79,7 +79,7 @@ func expandActiveMacro(tabs *gui.TabWidget, canvas *ged.GedView) {
 			}
 			if err != nil {
 				reportBuildOutput("macro: " + err.Error())
-				dockSetActiveView(globalBottomDock, globalBuildOutput)
+				revealWorkbenchTool(globalBottomDock, globalBuildOutput)
 				silkideToast("["+string(diagnostic.CodeOf(err))+"] "+i18n.T("Macro expansion failed; output unchanged"), gui.ToastError)
 				return
 			}

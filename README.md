@@ -21,6 +21,31 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Recoverable tool panels and non-overlapping dock layouts
+
+- Closing a tool tab now **hides its configured instance** instead of losing its
+  state and callbacks. Search / Outline shortcuts and **View → All Panels** can
+  restore it, even after the last tab in a tool dock is closed.
+- Minimize releases document space; explicitly revealing a panel restores it.
+  Maximize uses the split tree instead of overlapping siblings with saved pixel
+  bounds. Restore preserves split ratios and manually hidden panels.
+- Added a theme-aware, DPI-rasterized **Restore** icon, panel tooltips and a complete
+  panel chooser using the same titles/icons as the dock tabs. Background mode
+  memory does not resurrect closed tabs; application teardown disposes hidden tools.
+- SDK: `Dock.SetRetainClosedViews`, `HideView`, `RevealView`, `AvailableViews`,
+  `SetMinimized`, `SetMaximized`, and `Frame.RestoreDockLayout` are UI-thread APIs.
+  Retention is opt-in for tool docks; document save/close behavior is unchanged.
+
+Verification and limits: [Dock lifecycle QA](DOCK_LIFECYCLE_QA_20261024.md).
+
+macOS: maximized Search using the split layout, with an explicit Restore action.
+
+![macOS maximized tool panel](screenshots/silkide-dock-lifecycle-macos-20261024.png)
+
+Windows 10: all 18 default tool panels remain accessible from the panel chooser.
+
+![Windows tool panel chooser](screenshots/silkide-dock-lifecycle-windows-20261024.png)
+
 ### Workbench continuity and search-result navigation
 
 - Opening a search hit or quick-open file keeps the chosen side panels. Edit and

@@ -281,7 +281,7 @@ func findMacroReferences(tabs *gui.TabWidget) bool {
 		globalReferencesPanel.SetQuery(sym.Name)
 		globalReferencesPanel.SetFilter("")
 		globalReferencesPanel.SetReferences(refs)
-		dockSetActiveView(globalBottomDock, globalReferencesPanel)
+		revealWorkbenchTool(globalBottomDock, globalReferencesPanel)
 	}
 	return true
 }

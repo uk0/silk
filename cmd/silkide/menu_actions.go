@@ -44,12 +44,12 @@ func wireDesignerContextPanels(canvas *ged.GedView) {
 		if err := panel.OpenEventHandler(widget, event); err != nil {
 			return err
 		}
-		dockSetActiveView(globalBottomDock, panel)
+		revealWorkbenchTool(globalBottomDock, panel)
 		panel.Focus()
 		return nil
 	})
 	canvas.SetContextPanelCallbacks(func() {
-		dockSetActiveView(globalRightDock, globalPropSheet)
+		revealWorkbenchTool(globalRightDock, globalPropSheet)
 		if globalPropSheet != nil {
 			globalPropSheet.SetFocus()
 		}
@@ -60,7 +60,7 @@ func wireDesignerContextPanels(canvas *ged.GedView) {
 		ensureCode()
 		code.ShowTab(1) // read-only generated Go; event source remains a separate tab
 		code.RegenerateNow()
-		dockSetActiveView(globalBottomDock, code)
+		revealWorkbenchTool(globalBottomDock, code)
 	})
 }
 
@@ -123,7 +123,7 @@ func performExportTo(path string, canvas *ged.GedView) bool {
 	path = designExportPath(path)
 	if err := exportDesignCanvas(path, canvas); err != nil {
 		reportBuildOutput("export failed: " + err.Error())
-		dockSetActiveView(globalBottomDock, globalBuildOutput)
+		revealWorkbenchTool(globalBottomDock, globalBuildOutput)
 		silkideToast(i18n.T("Export failed"), gui.ToastError)
 		return false
 	}

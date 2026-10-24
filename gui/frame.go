@@ -39,8 +39,9 @@ type Frame struct {
 	Widget
 	root_ IBrick
 
-	mainDock   IDock
-	activeDock IDock
+	mainDock      IDock
+	activeDock    IDock
+	maximizedDock *Dock
 
 	title     string
 	mainMenu  *Menu
@@ -108,7 +109,7 @@ func (this *Frame) IsToolView(iw IWidget) bool {
 	return false
 }
 
-// 查找已打开的工具视图
+// 查找已创建的工具视图（包含暂时隐藏、等待恢复的实例）
 func (this *Frame) ToolViewById(id string) IWidget {
 	p, ok := this.toolViews[id]
 	if ok {
@@ -158,7 +159,9 @@ func (this *Frame) syncToolViewDefs() {
 	for _, v := range toolViewReg {
 		p, ok := this.toolViews[v.Id]
 		if ok {
-			p.Action.SetChecked(p.Widget != nil)
+			if p.Action != nil {
+				p.Action.SetChecked(this.IsToolViewVisible(p.Id))
+			}
 			continue
 		}
 		p = new(_ToolViewInfo)
@@ -173,7 +176,7 @@ func (this *Frame) syncToolViewDefs() {
 		p.Action.SetExtra(p.Id)
 
 		p.Action.BindFunc1(this.onToolViewAction)
-		p.Action.SetChecked(p.Widget != nil)
+		p.Action.SetChecked(this.IsToolViewVisible(p.Id))
 
 		this.toolViews[v.Id] = p
 	}
@@ -189,7 +192,11 @@ func (this *Frame) onToolViewAction(a IAction) {
 }
 
 func (this *Frame) IsToolViewVisible(id string) bool {
-	return this.ToolViewById(id) != nil
+	view := this.ToolViewById(id)
+	if dock, ok := FindOwnerDock(view).(*Dock); ok {
+		return dock.IndexOfView(view) >= 0 && dock.IsVisible()
+	}
+	return false
 }
 
 func (this *Frame) ShowToolView(id string) bool {
@@ -199,13 +206,17 @@ func (this *Frame) ShowToolView(id string) bool {
 	this.syncToolViewDefs()
 
 	p, create := this.requireToolView(id)
+	if p == nil || p.Widget == nil {
+		return false
+	}
 	if create {
 		dock := FallowDockPath(this.RootBrick(), p.DockPath)
 		dock.InsertView(p.ViewIdx, p.Widget)
-		//this.SuggestToolDock().AddView(w)
 	}
-
-	return true
+	if dock, ok := FindOwnerDock(p.Widget).(*Dock); ok {
+		return dock.RevealView(p.Widget)
+	}
+	return false
 }
 
 func (this *Frame) CloseToolView(id string) bool {
@@ -218,7 +229,6 @@ func (this *Frame) CloseToolView(id string) bool {
 	}
 
 	if this.PromptSaveCloseView(p.Widget) {
-		p.Widget = nil
 		return true
 	}
 	return false
@@ -678,13 +688,18 @@ func (this *Frame) OnDrop(x, y float64, dnd IDndContext) {
 	y1 := y
 	//this.doDrop(handle, x1, y1)
 	split, vert, left, merge := this.RootBrick().DropSplitHint(x1, y1)
-	iw := handle.dock.RemoveIndex(handle.index)
 	if merge {
 		dnd.SetAction(DndIgnore)
 		this.dropRect = nil
 		return
 	} else {
+		retain := false
+		if source, ok := handle.dock.(*Dock); ok {
+			retain = source.retainClosedViews
+		}
+		iw := handle.dock.RemoveIndex(handle.index)
 		dock := NewDock()
+		dock.SetRetainClosedViews(retain)
 		dock.SetParent(this)
 		dock.AddView(iw)
 		//DbgExportGuiGv(true)

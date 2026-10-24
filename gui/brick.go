@@ -480,6 +480,18 @@ func (this *Brick) FindSplitter(x, y float64) IBrick {
 	if x < this.rc.X || x >= this.rc.X+this.rc.Width || y < this.rc.Y || y >= this.rc.Y+this.rc.Height {
 		return nil
 	}
+	// A hidden branch consumes no space. Hit testing must follow the same
+	// tree as Layout rather than the remembered split position.
+	lv, rv := this.IsLeftVisible(), this.IsRightVisible()
+	if !lv {
+		if rv {
+			return this.right.FindSplitter(x, y)
+		}
+		return nil
+	}
+	if !rv {
+		return this.left.FindSplitter(x, y)
+	}
 	hsw := Theme().SplitterSize * 0.5
 	if this.vert {
 		ys := this.rc.Y + this.rc.Height*this.split

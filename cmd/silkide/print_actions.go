@@ -54,7 +54,7 @@ func performPrintDesign(canvas *ged.GedView) {
 		}
 		if err != nil {
 			reportBuildOutput("print: " + err.Error())
-			dockSetActiveView(globalBottomDock, globalBuildOutput)
+			revealWorkbenchTool(globalBottomDock, globalBuildOutput)
 			return // ShowPrintDialog already displayed its actionable error.
 		}
 		if job.Dispatched {
@@ -67,6 +67,6 @@ func performPrintDesign(canvas *ged.GedView) {
 
 func reportPrintFailure(err error) {
 	reportBuildOutput("print: " + err.Error())
-	dockSetActiveView(globalBottomDock, globalBuildOutput)
+	revealWorkbenchTool(globalBottomDock, globalBuildOutput)
 	silkideToast(i18n.T("Printing could not complete")+": "+err.Error(), gui.ToastError)
 }

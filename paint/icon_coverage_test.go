@@ -131,7 +131,7 @@ func TestIDEShellStaticIconReferencesHaveBuiltins(t *testing.T) {
 
 var designerPanelIconNames = []string{
 	"error", "question", "help", "window", "form", "link", "keymap", "test-explorer",
-	"call-hierarchy", "type-hierarchy", "project", "diagram", "merge", "maximize",
+	"call-hierarchy", "type-hierarchy", "project", "diagram", "merge", "maximize", "restore",
 	"layout-horizontal", "layout-vertical", "layout-grid", "layout-form", "layout-break", "layout-adjust",
 }
 
@@ -157,7 +157,7 @@ func TestDesignerPanelIconsRenderExactPaletteAndDeviceScale(t *testing.T) {
 					semantic = palette.Success
 				case "type-hierarchy", "merge":
 					semantic = palette.Violet
-				case "keymap", "maximize":
+				case "keymap", "maximize", "restore":
 					semantic = palette.Foreground
 				}
 				for _, size := range []int{16, 20, 24, 32, 48, 64} {

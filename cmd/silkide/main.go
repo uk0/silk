@@ -402,7 +402,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// brings the live property panel to the front rather than opening the
 	// modal settings dialog.
 	addIconAction("", "propsheet", "Properties", func() {
-		dockSetActiveView(globalRightDock, globalPropSheet)
+		revealWorkbenchTool(globalRightDock, globalPropSheet)
 	})
 
 	frame.SetToolBar(tb)
@@ -527,6 +527,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	leftDock, _ := leftDockI.(*gui.Dock)
 
 	if leftDock != nil {
+		leftDock.SetRetainClosedViews(true)
 		fileExplorer := ged.NewFileExplorer()
 		fileExplorer.SetRootDir(".")
 		globalFileExplorer = fileExplorer
@@ -588,6 +589,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	// properties (right) without crossing the bottom toolchain panel.
 	rightDockI := dock.SplitNewDock(false, false)
 	if rightDock, ok := rightDockI.(*gui.Dock); ok {
+		rightDock.SetRetainClosedViews(true)
 		inspector := ged.NewObjectInspector()
 		inspector.SetScene(designCanvas.GedScene())
 		// Expose at the package level so the File→New action
@@ -669,6 +671,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	// what just happened.
 	bottomDockI := dock.SplitNewDock(false, true)
 	if bottomDock, ok := bottomDockI.(*gui.Dock); ok {
+		bottomDock.SetRetainClosedViews(true)
 		bottomDock.AddView(buildTerminalPane())
 		bottomDock.AddView(buildOutputPane())
 
@@ -1329,7 +1332,7 @@ func scanTodos(canvas *ged.GedView) {
 		gui.Post(func() {
 			if globalTodoPanel != nil {
 				globalTodoPanel.SetRows(rows)
-				dockSetActiveView(globalBottomDock, globalTodoPanel)
+				revealWorkbenchTool(globalBottomDock, globalTodoPanel)
 			}
 		})
 	}()
@@ -1813,7 +1816,7 @@ func dumpA11yTree() {
 	dumpA11yNodeTo(&out, tree, 0)
 	fmt.Fprint(os.Stderr, out.String())
 	reportBuildOutput(out.String())
-	dockSetActiveView(globalBottomDock, globalBuildOutput)
+	revealWorkbenchTool(globalBottomDock, globalBuildOutput)
 	silkideToast(i18n.T("Accessibility tree shown in Output"), gui.ToastInfo)
 }
 
@@ -1883,7 +1886,7 @@ func reportBuildOutput(line string) {
 	if globalProblems != nil {
 		globalProblems.SetOutput(line)
 	}
-	dockSetActiveView(globalBottomDock, globalBuildOutput)
+	revealWorkbenchTool(globalBottomDock, globalBuildOutput)
 	setBuildStatus()
 }
 
@@ -1913,7 +1916,7 @@ func runProjectInTerminal(canvas *ged.GedView) {
 	if cwd != "" {
 		globalTerminal.SetCwd(cwd)
 	}
-	dockSetActiveView(globalBottomDock, globalTerminal)
+	revealWorkbenchTool(globalBottomDock, globalTerminal)
 	// Pre-flight: a designer-only project that hasn't grown a
 	// main.go yet would crash "go run ." with the cryptic
 	// "package . is not a main package" error. Detect that case up
@@ -2346,7 +2349,7 @@ func runProjectTests(canvas *ged.GedView) {
 			_, failed, _ := testResultCounts()
 			if err != nil || failed > 0 {
 				if globalTestResults != nil {
-					dockSetActiveView(globalBottomDock, globalTestResults)
+					revealWorkbenchTool(globalBottomDock, globalTestResults)
 				}
 				silkideToast(i18n.T("Tests failed"), gui.ToastError)
 			} else {
@@ -2924,7 +2927,7 @@ func runSingleTest(canvas *ged.GedView, name string) {
 			_, failed, _ := testResultCounts()
 			if err != nil || failed > 0 {
 				if globalTestResults != nil {
-					dockSetActiveView(globalBottomDock, globalTestResults)
+					revealWorkbenchTool(globalBottomDock, globalTestResults)
 				}
 				silkideToast(i18n.T("Tests failed"), gui.ToastError)
 			} else {
@@ -3831,7 +3834,7 @@ func debugHandleStop(sess *core.DebugSession, st *core.StopState) {
 			globalDebugPanel.SetCallStack(frames)
 			globalDebugPanel.SetVariables(locals)
 			globalDebugPanel.SetGoroutines(goroutines)
-			dockSetActiveView(globalBottomDock, globalDebugPanel)
+			revealWorkbenchTool(globalBottomDock, globalDebugPanel)
 			// Refresh watch values for this stop: read exprs on the main
 			// thread (panel state), Eval off-thread, push back via Post.
 			if exprs := globalDebugPanel.WatchExprs(); len(exprs) > 0 {

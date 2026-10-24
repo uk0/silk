@@ -70,6 +70,7 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"edit":               drawFunctionBraces,
 	"minimize":           drawMinimizeLine,
 	"maximize":           drawMaximizeWindow,
+	"restore":            drawRestoreWindow,
 	"close":              drawCloseX,
 	"error":              drawErrorCircle,
 	"question":           drawHelpCircle,
@@ -1044,5 +1045,19 @@ func drawTransferProgress(size int, cc *cairo.Context) {
 	cc.LineTo(.16*s, .85*s)
 	cc.LineTo(.84*s, .85*s)
 	cc.LineTo(.84*s, .64*s)
+	cc.Stroke()
+}
+
+// Offset window outlines distinguish restore from both maximize and minimize.
+func drawRestoreWindow(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	cc.MoveTo(w*.36, w*.29)
+	cc.LineTo(w*.36, w*.16)
+	cc.LineTo(w*.84, w*.16)
+	cc.LineTo(w*.84, w*.64)
+	cc.LineTo(w*.71, w*.64)
+	cc.Stroke()
+	roundedRect(cc, w*.16, w*.36, w*.48, w*.48, w*.025)
 	cc.Stroke()
 }

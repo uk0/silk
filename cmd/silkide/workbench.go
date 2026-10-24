@@ -88,7 +88,7 @@ func (w *workbench) activate(mode workspaceMode) {
 	default:
 		return
 	}
-	dockSetActiveView(w.center, view)
+	w.center.RevealView(view)
 	w.syncMode()
 	if mode == modeEdit {
 		if ed := activeEditor(w.tabs); ed != nil {
@@ -130,6 +130,9 @@ func (w *workbench) syncMode() {
 			previous.right = globalRightDock.ActiveView()
 		}
 		w.toolViews[w.lastMode] = previous
+	}
+	if w.frame != nil {
+		w.frame.RestoreDockLayout()
 	}
 	previousMode := w.lastMode
 	w.lastMode = mode
@@ -179,20 +182,28 @@ func (w *workbench) syncMode() {
 // revealToolView is for explicit user requests, not background refreshes. A
 // selected tab inside a hidden dock is not visible and must not receive focus.
 func revealToolView(tabs *gui.TabWidget, canvas *ged.GedView, dock *gui.Dock, view gui.IWidget, preferred workspaceMode) bool {
-	if dock == nil || nilWidget(view) || dock.IndexOfView(view) < 0 {
+	if nilWidget(view) {
+		return false
+	}
+	// A dragged tool belongs to its actual dock, not its original side.
+	var frame *gui.Frame
+	if dock != nil {
+		frame = dock.Frame()
+	}
+	if w := globalWorkbench; w != nil && w.tabs == tabs && w.canvas == canvas {
+		frame = w.frame
+	}
+	if owner, ok := view.Parent().(*gui.Dock); ok && owner.Frame() != nil && owner.Frame() == frame {
+		dock = owner
+	}
+
+	if dock == nil || !dock.HasView(view) {
 		return false
 	}
 	if w := globalWorkbench; w != nil && w.tabs == tabs && w.canvas == canvas && documentMode(tabs, canvas) == modeWelcome {
 		w.activate(preferred)
 	}
-	dockSetActiveView(dock, view)
-	if !dock.IsVisible() {
-		dock.SetVisible(true)
-		if frame := dock.Frame(); frame != nil {
-			frame.Layout()
-		}
-	}
-	return true
+	return dock.RevealView(view)
 }
 
 func showWorkspaceSearch(tabs *gui.TabWidget, canvas *ged.GedView) {

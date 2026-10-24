@@ -122,6 +122,7 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				revealToolView(tabs, canvas, panel.dock, panel.view, mode)
 			})
 		}
+		addWorkbenchPanelsMenu(menu)
 	case "Design":
 		if design && canvas.Selection().Count() == 1 {
 			if widget, ok := canvas.Selection().ItemList()[0].(*ged.FakeWidget); ok && len(ged.AvailableEvents(widget.WidgetFactoryName())) > 0 {

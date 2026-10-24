@@ -64,15 +64,15 @@ type Dock struct {
 	isMainDock bool
 	isDown     bool
 	isDraging  bool
-	isMax      bool
 	isMin      bool
-	isTempMin  bool // ignore when !isMinimized
 	menuInRow0 bool
 	dropRect   *geom.Rect
 
-	menu         *Menu
-	menuCache    map[IWidget]*Menu
-	cbTabChanged func(int)
+	menu              *Menu
+	menuCache         map[IWidget]*Menu
+	cbTabChanged      func(int)
+	retainClosedViews bool
+	hiddenViews       map[IWidget]int
 }
 
 type dockHitTest struct {
@@ -124,32 +124,43 @@ func (this *Dock) Init(self IWidget) {
 	this.maxBtn.Action().BindFunc0(func() {
 		this.toggleMaximize()
 	})
+	this.syncWindowButtons()
 }
 
 func (this *Dock) Detach() {
+	frame := this.Frame()
+	this.SetMaximized(false)
 	this.Brick.Detach()
 	this.Widget.Detach()
-	if this.Frame() != nil {
-		this.Frame().Layout()
+	this.setFrame(nil)
+	if frame != nil {
+		if frame.activeDock == this {
+			frame.activeDock = nil
+		}
+		frame.Layout()
 	}
 }
 
 func (this *Dock) AddView(iw IWidget) {
+	if this.HasView(iw) {
+		this.RevealView(iw)
+		return
+	}
 	iw.SetParent(this)
 	this.tabbar.AddTab(iw, true)
 
-	frame := this.Frame()
-	if p, ok := frame.toolViews[core.FactoryNameOf(iw)]; ok {
-		if p.Widget == nil {
-			p.Widget = iw
-		}
-	}
+	this.registerToolInstance(iw)
 
 	this.switchMenu()
 	this.Layout()
 }
 
 func (this *Dock) InsertView(idx int, iw IWidget) {
+	if this.HasView(iw) {
+		this.RevealView(iw)
+		return
+	}
+	this.registerToolInstance(iw)
 	iw.SetParent(this)
 	this.tabbar.InsertTab(idx, iw, true)
 	this.Layout()
@@ -158,22 +169,16 @@ func (this *Dock) InsertView(idx int, iw IWidget) {
 // 从Dock上移除视图
 // 注: 所有关闭/移除视图的操作, 最终都调用此接口来执行
 func (this *Dock) RemoveIndex(idx int) IWidget {
+	if idx < 0 || idx >= this.ViewCount() {
+		return nil
+	}
 	i := this.tabbar.RemoveTab(idx)
 	iw := i.(IWidget)
 	iw.SetParent(nil)
 
-	frame := this.Frame()
-	for _, v := range frame.toolViews {
-		if v.Widget == iw {
-			v.Widget = nil
-			v.DockPath = DockPath(this)
-			core.Debug("DockPath = ", v.DockPath)
-			v.ViewIdx = idx
-			break
-		}
-	}
+	this.forgetToolInstance(iw, idx)
 
-	delete(this.menuCache, iw)
+	this.releaseViewMenu(iw)
 	this.switchMenu()
 	this.Layout()
 	this.DetachIfEmpty()
@@ -181,6 +186,9 @@ func (this *Dock) RemoveIndex(idx int) IWidget {
 }
 
 func (this *Dock) RemoveView(iw IWidget) {
+	if this.removeHiddenView(iw) {
+		return
+	}
 	idx := this.IndexOfView(iw)
 	if idx == -1 {
 		return
@@ -205,6 +213,12 @@ func (this *Dock) CloseIndex(idx int) bool {
 }
 
 func (this *Dock) CloseView(iw IWidget) bool {
+	if this.removeHiddenView(iw) {
+		if closer, ok := iw.(interface{ Close() }); ok {
+			closer.Close()
+		}
+		return true
+	}
 	idx := this.IndexOfView(iw)
 	if idx == -1 {
 		return false
@@ -223,12 +237,21 @@ func (this *Dock) IndexOfView(iw IWidget) int {
 }
 
 func (this *Dock) ViewAtIndex(idx int) IWidget {
+	if idx < 0 || idx >= this.ViewCount() {
+		return nil
+	}
 	i := this.tabbar.Data(idx)
 	return i.(IWidget)
 }
 
 func (this *Dock) PromptSaveCloseIndex(idx int) bool {
 	iw := this.ViewAtIndex(idx)
+	if iw == nil {
+		return false
+	}
+	if this.retainClosedViews && !this.isMainDock {
+		return this.HideView(iw)
+	}
 	if PromptSaveClose(this, iw) {
 		this.RemoveIndex(idx)
 		return true
@@ -237,6 +260,9 @@ func (this *Dock) PromptSaveCloseIndex(idx int) bool {
 }
 
 func (this *Dock) PromptSaveCloseView(iw IWidget) bool {
+	if _, hidden := this.hiddenViews[iw]; hidden {
+		return true
+	}
 	idx := this.IndexOfView(iw)
 	if idx == -1 {
 		return false
@@ -257,7 +283,8 @@ func (this *Dock) ContainMainDock() bool {
 }
 
 func (this *Dock) IsVisible() bool {
-	return this.Widget.IsVisible()
+	f := this.Frame()
+	return this.Widget.IsVisible() && (f == nil || f.maximizedDock == nil || f.maximizedDock == this)
 }
 
 func (this *Dock) SetBounds(x, y, w, h float64) {
@@ -349,7 +376,17 @@ func (this *Dock) setFrame(a *Frame) {
 		return
 	}
 	this.Brick.setFrame(a)
-	this.SetParent(a)
+	if a == nil {
+		this.SetParent(nil)
+	} else {
+		this.SetParent(a)
+	}
+	if a != nil {
+		for _, view := range this.AllViews() {
+			this.registerToolInstance(view)
+		}
+	}
+
 	//if a != nil {
 	//	this.SetParent(a)
 	//	//this.setFrame(a.Frame())
@@ -568,6 +605,10 @@ func (this *Dock) OnDrop(x, y float64, dnd IDndContext) {
 		return
 	}
 
+	retain := false
+	if source, ok := handle.dock.(*Dock); ok {
+		retain = source.retainClosedViews
+	}
 	dnd.SetAction(DndMove)
 	x1 := this.Widget.x + x
 	y1 := this.Widget.y + y
@@ -577,11 +618,15 @@ func (this *Dock) OnDrop(x, y float64, dnd IDndContext) {
 	if merge {
 		if this != handle.dock {
 			iw := handle.dock.RemoveIndex(handle.index)
+			if retain {
+				this.SetRetainClosedViews(true)
+			}
 			this.AddView(iw)
 		}
 	} else {
 		iw := handle.dock.RemoveIndex(handle.index)
 		dock := NewDock()
+		dock.SetRetainClosedViews(retain)
 		dock.SetParent(frame)
 		dock.AddView(iw)
 		this.Split(dock, split, vert, left)
@@ -597,7 +642,7 @@ func (this *Dock) ViewCount() int {
 func (this *Dock) DetachIfEmpty() bool {
 	if this.isMainDock ||
 		this.ParentBrick() == nil ||
-		!this.tabbar.IsEmpty() {
+		!this.tabbar.IsEmpty() || len(this.hiddenViews) != 0 {
 		this.Layout()
 		return false
 	}
@@ -675,84 +720,15 @@ func (this *Dock) Close() {
 	this.CloseAllViews()
 }
 
-// savedBounds stores the dock bounds before minimize/maximize for restore
-type dockSavedBounds struct {
-	x, y, w, h float64
-}
-
-var dockSavedState = make(map[*Dock]*dockSavedBounds)
-
-// toggleMinimize collapses the dock panel to just its tab bar height, or restores it.
-func (this *Dock) toggleMinimize() {
-	if this.isMin {
-		// Restore from minimized state
-		this.isMin = false
-		this.minBtn.SetIcon(LoadIcon("minimize"))
-		if saved, ok := dockSavedState[this]; ok {
-			this.SetBounds(saved.x, saved.y, saved.w, saved.h)
-			delete(dockSavedState, this)
-		}
-		// Show all views
-		count := this.tabbar.Count()
-		active := this.tabbar.ActiveTab()
-		for i := 0; i < count; i++ {
-			iw := this.tabbar.Data(i).(IWidget)
-			iw.SetVisible(active == i)
-		}
-	} else {
-		// Minimize: collapse to tab bar height
-		this.isMin = true
-		this.isMax = false
-		this.minBtn.SetIcon(LoadIcon("maximize"))
-		x, y, w, h := this.Bounds()
-		dockSavedState[this] = &dockSavedBounds{x, y, w, h}
-		// Hide all views - only tab bar remains visible
-		count := this.tabbar.Count()
-		for i := 0; i < count; i++ {
-			iw := this.tabbar.Data(i).(IWidget)
-			iw.SetVisible(false)
-		}
-	}
-	frame := this.Frame()
-	if frame != nil {
-		frame.Layout()
-	}
-	this.Self().Update()
-}
-
-// toggleMaximize expands the dock panel to fill the frame area, or restores it.
-func (this *Dock) toggleMaximize() {
-	if this.isMax {
-		// Restore from maximized state
-		this.isMax = false
-		this.maxBtn.SetIcon(LoadIcon("maximize"))
-		if saved, ok := dockSavedState[this]; ok {
-			this.SetBounds(saved.x, saved.y, saved.w, saved.h)
-			delete(dockSavedState, this)
-		}
-	} else {
-		// Maximize: expand to fill parent frame
-		this.isMax = true
-		this.isMin = false
-		this.maxBtn.SetIcon(LoadIcon("minimize"))
-		this.minBtn.SetIcon(LoadIcon("minimize"))
-		x, y, w, h := this.Bounds()
-		dockSavedState[this] = &dockSavedBounds{x, y, w, h}
-
-		frame := this.Frame()
-		if frame != nil {
-			root := frame.RootBrick()
-			if root != nil {
-				rx, ry, rw, rh := root.Bounds()
-				this.SetBounds(rx, ry, rw, rh)
-			}
-		}
-	}
-	this.Layout()
-	this.Self().Update()
-}
+// Minimize releases the dock's space. RevealView/SetMinimized(false) restores
+// it through the split tree, rather than saving stale pixel rectangles.
+func (this *Dock) toggleMinimize() { this.SetMinimized(!this.IsMinimized()) }
+func (this *Dock) toggleMaximize() { this.SetMaximized(!this.IsMaximized()) }
 
 func (this *Dock) CloseAllViews() {
+	for view := range this.hiddenViews {
+		this.CloseView(view)
+	}
 	for i := this.ViewCount() - 1; i >= 0; i-- {
 		this.CloseIndex(i)
 	}

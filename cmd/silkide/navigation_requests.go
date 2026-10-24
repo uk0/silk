@@ -164,7 +164,7 @@ func requestSymbolNavigation(tabs *gui.TabWidget, operation string) {
 				refs = append(refs, lspReferenceLocation(p, loc.Range.Start, referenceSourceLine(p, loc.Range.Start.Line)))
 			}
 			panel.SetLocations(refs)
-			dockSetActiveView(globalBottomDock, panel)
+			revealWorkbenchTool(globalBottomDock, panel)
 		},
 	})
 }
