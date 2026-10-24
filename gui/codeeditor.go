@@ -289,6 +289,7 @@ type CodeEditor struct {
 	findText       string
 	findCursor     int // cursor position within findText
 	findMatches    []findMatch
+	findSpans      []editorFindSpan
 	findCurrentIdx int
 	findBarHeight  float64
 
@@ -714,6 +715,8 @@ func (this *CodeEditor) cacheText(text string) {
 		this.notifySymbolsChanged()
 		if this.findActive {
 			this.findUpdateMatches()
+		} else {
+			this.CancelFind()
 		}
 	}
 }
@@ -1898,13 +1901,14 @@ func replaceAllInText(text, query, repl string, caseSensitive bool) (string, int
 // (line,col), wrapping to the first match when none follow, and moves the caret
 // there. Used after a single Replace so the search continues past the text just
 // inserted.
-func (this *CodeEditor) selectMatchAtOrAfter(line, col int) {
+func (this *CodeEditor) selectMatchAtOrAfter(line, col int) { this.selectFindMatch(line, col, false) }
+func (this *CodeEditor) selectFindMatch(line, col int, strict bool) {
 	if len(this.findMatches) == 0 {
 		return
 	}
 	target := 0
 	for i, m := range this.findMatches {
-		if m.line > line || (m.line == line && m.col >= col) {
+		if m.line > line || (m.line == line && (m.col > col || (!strict && m.col == col))) {
 			target = i
 			break
 		}
@@ -1915,6 +1919,7 @@ func (this *CodeEditor) selectMatchAtOrAfter(line, col int) {
 	this.cursorCol = m.col
 	this.clearSelection()
 	this.ensureCursorVisible()
+	this.syncFindBar()
 	this.Self().Update()
 }
 
@@ -1939,6 +1944,14 @@ func (this *CodeEditor) replaceCurrent() {
 	}
 	m := this.findMatches[this.findCurrentIdx]
 	if m.line < 0 || m.line >= len(this.lines) {
+		return
+	}
+	if this.findState.options.Regex {
+		if len(this.findSpans) != len(this.findMatches) {
+			this.findUpdateMatches()
+			return
+		}
+		this.requestFindOperation(editorFindRequest{replace: true, one: true, target: this.findSpans[this.findCurrentIdx], anchor: cursorPos{m.line, m.col}})
 		return
 	}
 	line := this.lines[m.line]
@@ -2813,10 +2826,10 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		if this.findActive && len(this.findMatches) > 0 {
 			a, b := this.visibleFindRange(i, textView.left-textOffX, textView.right-textOffX)
 			for idx := a; idx < b; idx++ {
-				m := this.findMatches[idx]
-				start := this.measureText(this.linePrefix(i, m.col))
+				a, b := this.findHighlightColumns(idx, i)
+				start := this.measureText(this.linePrefix(i, a))
 				mx := textOffX + start
-				mw := this.measureText(this.linePrefix(i, m.end)) - start
+				mw := max(2, this.measureText(this.linePrefix(i, b))-start)
 				if idx == this.findCurrentIdx {
 					g.SetBrush1(paint.Color{R: 255, G: 152, A: 120})
 				} else {
@@ -6281,6 +6294,7 @@ func (this *CodeEditor) HighlightReferencesAtCursor() {
 	}
 	refs := FindReferences(word, this.Text())
 	this.CancelFind()
+	this.findState.options = EditorFindOptions{MatchCase: true, WholeWord: true}
 	this.findText = word
 	this.findCursor = len([]rune(word))
 	this.findMatches = nil

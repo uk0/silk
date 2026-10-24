@@ -8,9 +8,9 @@ import (
 	"unicode/utf8"
 )
 
-// EditorFindOptions controls literal, single-line Unicode search. Zero values
+// EditorFindOptions controls literal or Go regular-expression search. Zero values
 // preserve case-insensitive substring matching. All editor APIs are UI-thread only.
-type EditorFindOptions struct{ MatchCase, WholeWord bool }
+type EditorFindOptions struct{ MatchCase, WholeWord, Regex bool }
 
 const editorFindAsyncBytes = 32 << 10
 const editorFindHitLimit = 100000
@@ -25,11 +25,14 @@ type editorFindRequest struct {
 	text, query, replacement string
 	options                  EditorFindOptions
 	revision, generation     uint64
-	replace                  bool
+	replace, one             bool
+	target                   editorFindSpan
+	anchor                   cursorPos
 }
 type editorFindResult struct {
 	request editorFindRequest
 	matches []findMatch
+	spans   []editorFindSpan
 	count   int
 	text    string
 	err     error
@@ -171,6 +174,9 @@ func scanEditorFind(ctx context.Context, text, query string, options EditorFindO
 }
 
 func computeEditorFind(ctx context.Context, r editorFindRequest) editorFindResult {
+	if r.options.Regex {
+		return computeEditorRegex(ctx, r)
+	}
 	result := editorFindResult{request: r}
 	result.request.text = ""
 	copied := 0

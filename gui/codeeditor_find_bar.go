@@ -11,7 +11,7 @@ type editorFindBar struct {
 	editor                              *CodeEditor
 	query, replacement                  *editorFindEdit
 	prev, next, toggle, close, one, all *editorFindButton
-	matchCase, wholeWord                *editorFindCheck
+	matchCase, wholeWord, regex         *editorFindCheck
 	status                              *Label
 	syncing, tipsLive                   bool
 }
@@ -147,13 +147,15 @@ func (e *CodeEditor) ensureFindBar() {
 	}
 	b.matchCase = check("Aa")
 	b.wholeWord = check("Word")
+	b.regex = check(".*")
 	changed := func(bool) {
 		if !b.syncing {
-			e.SetFindOptions(EditorFindOptions{b.matchCase.IsChecked(), b.wholeWord.IsChecked()})
+			e.SetFindOptions(EditorFindOptions{MatchCase: b.matchCase.IsChecked(), WholeWord: b.wholeWord.IsChecked(), Regex: b.regex.IsChecked()})
 		}
 	}
 	b.matchCase.SigCheck(changed)
 	b.wholeWord.SigCheck(changed)
+	b.regex.SigCheck(changed)
 	b.status = NewLabel("")
 	b.status.SetParent(b)
 	b.status.SetFont(paint.NewFont(defaultFontFamily(), 11, false, false))
@@ -176,15 +178,19 @@ func (e *CodeEditor) syncFindBar() {
 	}
 	b.matchCase.SetChecked(e.findState.options.MatchCase)
 	b.wholeWord.SetChecked(e.findState.options.WholeWord)
+	b.regex.SetChecked(e.findState.options.Regex)
 	b.status.SetText(e.findStatusText())
 	ready := e.findRangesCurrent() && len(e.findMatches) > 0
 	b.prev.SetEnabled(ready)
 	b.next.SetEnabled(ready)
 	b.one.SetEnabled(ready)
-	b.all.SetEnabled(!e.findState.pending && e.findState.err == nil && e.findState.count > 0)
+	b.all.SetEnabled(ready)
 	b.syncing = false
 	b.SetVisible(e.findActive)
-	b.tooltips(e.findActive && e.Window() != nil)
+	b.tooltips(e.findActive && e.findVisible() && e.Window() != nil)
+	if b.tipsLive {
+		SetToolTip(b.status, e.findStatusText())
+	}
 }
 func (e *CodeEditor) focusFindInput(replace, selectAll bool) {
 	e.ensureFindBar()
@@ -204,7 +210,7 @@ func (b *editorFindBar) tooltips(live bool) {
 		return
 	}
 	b.tipsLive = live
-	tips := map[IWidget]string{b.query: "Find literal text", b.replacement: "Replacement text", b.prev: "Previous match (Shift+F3)", b.next: "Next match (F3)", b.matchCase: "Match case", b.wholeWord: "Whole word (Unicode letters, digits, marks and underscore)", b.toggle: "Show or hide replacement", b.close: "Close find (Esc)", b.one: "Replace current (Enter in replacement)", b.all: "Replace all (Shift+Enter in replacement)"}
+	tips := map[IWidget]string{b.query: "Find text (enable .* for a Go regular expression)", b.replacement: "Replacement text; regex mode supports $1, ${name} and $$", b.regex: "Regular expression (Go/RE2; no look-around or backreferences)", b.status: b.editor.findStatusText(), b.prev: "Previous match (Shift+F3)", b.next: "Next match (F3)", b.matchCase: "Match case", b.wholeWord: "Whole word (Unicode letters, digits, marks and underscore)", b.toggle: "Show or hide replacement", b.close: "Close find (Esc)", b.one: "Replace current (Enter in replacement)", b.all: "Replace all (Shift+Enter in replacement)"}
 	for w, s := range tips {
 		if !live {
 			s = ""
@@ -240,18 +246,22 @@ func (e *CodeEditor) layoutFindBar() {
 	// particular checkbox labels start AFTER both margins and their icon.
 	pw, nw := b.prev.SizeHints().Width, b.next.SizeHints().Width
 	cw, ww := b.matchCase.SizeHints().Width, b.wholeWord.SizeHints().Width
+	rw := b.regex.SizeHints().Width
 	tw, xw := b.toggle.SizeHints().Width, b.close.SizeHints().Width
 	ow, aw := b.one.SizeHints().Width, b.all.SizeHints().Width
 	statusW := 150.0
-	tail := pw + nw + cw + ww + statusW + tw + xw + 8*6
+	tail := pw + nw + cw + ww + rw + statusW + tw + xw + 9*6
 	wide := w >= tail+160
-	medium := w >= pw+nw+cw+ww+80+6*6
+	medium := w >= pw+nw+cw+ww+rw+80+7*6
 	rows := 1.0
 	if !wide {
 		rows = 2
 	}
 	if !medium {
 		rows = 3
+		if w < cw+ww+rw+4*6 {
+			rows++
+		}
 	}
 	e.findBarHeight = rows * codeEditorFindRowHeight
 	splitReplace := w < ow+aw+120+4*6
@@ -274,7 +284,7 @@ func (e *CodeEditor) layoutFindBar() {
 		for _, v := range []struct {
 			widget IWidget
 			width  float64
-		}{{b.prev, pw}, {b.next, nw}, {b.matchCase, cw}, {b.wholeWord, ww}, {b.status, statusW}} {
+		}{{b.prev, pw}, {b.next, nw}, {b.matchCase, cw}, {b.wholeWord, ww}, {b.regex, rw}, {b.status, statusW}} {
 			placeFind(v.widget, x, 0, v.width)
 			x += v.width + 6
 		}
@@ -288,11 +298,18 @@ func (e *CodeEditor) layoutFindBar() {
 			x += cw + 6
 			placeFind(b.wholeWord, x, 30, ww)
 			x += ww + 6
+			placeFind(b.regex, x, 30, rw)
+			x += rw + 6
 			placeFind(b.status, x, 30, max(0, w-x-6))
 		} else {
 			placeFind(b.status, x, 30, max(0, w-x-6))
 			placeFind(b.matchCase, 6, 60, cw)
 			placeFind(b.wholeWord, cw+12, 60, min(ww, max(0, w-cw-18)))
+			if rows == 4 {
+				placeFind(b.regex, 6, 90, min(rw, max(0, w-12)))
+			} else {
+				placeFind(b.regex, cw+ww+18, 60, rw)
+			}
 		}
 	}
 	b.replacement.SetVisible(e.replaceVisible)

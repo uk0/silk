@@ -21,7 +21,7 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
-### Safe, responsive Find / Replace
+### Safe, responsive Find / Replace with regular expressions
 
 - Find and replacement fields are real editor-owned widgets: selection,
   copy/paste, Delete, keyboard focus and platform CJK fonts work consistently.
@@ -35,14 +35,24 @@ signed/notarized standalone apps.
 - Counts remain complete; highlights/navigation retain at most 100,000 hits.
   Replace All still processes every match and commits one Undo transaction.
   Repainting visits only matches intersecting visible lines and columns.
-- Limits: single-line literal queries (no regex), 1 MiB query limit, 128 MiB
-  replacement-result limit. Applying the completed edit still uses the UI thread.
+- **Regex (`.*`)** supports Go/RE2 expressions, multiline matches, zero-width
+  markers, numbered/named captures (`$1`, `${name}`) and literal dollars (`$$`).
+  Regex compilation, searching and replacement proposals always run off-thread.
+  Invalid or timed-out expressions never apply partial replacements.
+- Hidden editors do not restart searches after external edits. Cancellation clears
+  stale counts/actions; `FindSnapshot().Ready` and `Revision` expose result validity.
+- Limits: literal queries are single-line, at most 1 MiB; regex patterns at most
+  64 KiB / 128 captures / 32,768 estimated expansion cost, with a 5-second compute
+  deadline. Regex replacement templates are at most 1 MiB, output at most 128 MiB.
+  Go syntax does not support look-around or pattern backreferences. Applying the
+  completed edit still uses the UI thread; this is not a universal latency bound.
 
-Verification: [Find / Replace QA](EDITOR_FIND_QA_20261024.md).
+Verification: [Find / Replace QA](EDITOR_FIND_QA_20261024.md),
+[Regex and lifecycle QA](EDITOR_REGEX_QA_20261024.md).
 
-<img src="screenshots/silkide-find-macos-20261024.png" width="760" alt="Native macOS find and replacement fields with readable Chinese text, case and whole-word options">
+<img src="screenshots/silkide-regex-macos-20261024.png" width="760" alt="Native macOS regular-expression search and named capture replacement with Chinese text">
 
-<img src="screenshots/silkide-find-windows-20261024.png" width="760" alt="Native Windows find and replacement fields with readable Chinese text and two exact whole-word matches">
+<img src="screenshots/silkide-regex-windows-20261024.png" width="760" alt="Native Windows regex search with three matches and a named capture replacement containing Chinese text">
 
 ### Clipboard responsiveness and honest empty states
 

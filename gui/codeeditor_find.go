@@ -19,26 +19,42 @@ type editorFindState struct {
 	post                          func(func()) // test dispatcher; production uses Post
 	jump                          *cursorPos
 	step                          int
+	jumpStrict                    bool
 }
 
-// EditorFindSnapshot describes a literal search without exposing mutable ranges.
+// EditorFindSnapshot describes search without exposing mutable ranges.
 // Count includes all matches; Retained is the bounded navigation/highlight set.
 type EditorFindSnapshot struct {
 	Query                    string
 	Options                  EditorFindOptions
 	Count, Retained, Current int
-	Pending                  bool
+	Pending, Ready           bool
+	Revision                 uint64
 	Err                      error
 }
 
 // FindSnapshot and the other find APIs must be called on the UI thread.
 func (e *CodeEditor) FindSnapshot() EditorFindSnapshot {
-	current := 0
-	if len(e.findMatches) > 0 {
-		current = e.findCurrentIdx + 1
+	s := EditorFindSnapshot{Query: e.findText, Options: e.findState.options, Pending: e.findState.pending, Err: e.findState.err, Revision: e.textRevision, Ready: e.findRangesCurrent()}
+	if s.Ready {
+		s.Count, s.Retained = e.findState.count, len(e.findMatches)
+		if s.Retained > 0 {
+			s.Current = e.findCurrentIdx + 1
+		}
 	}
-	return EditorFindSnapshot{e.findText, e.findState.options, e.findState.count, len(e.findMatches), current, e.findState.pending, e.findState.err}
+	return s
 }
+
+// Walk every ancestor: headless hosts and nested hidden pages have no Window.
+func (e *CodeEditor) findVisible() bool {
+	for w := e.Self(); w != nil; w = w.Parent() {
+		if !w.IsVisible() {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *CodeEditor) SetFindOptions(options EditorFindOptions) {
 	if e.findState.options == options {
 		return
@@ -78,12 +94,19 @@ func (e *CodeEditor) ShowFind(replace bool) {
 
 func (e *CodeEditor) findUpdateMatches() { e.requestFind(false) }
 func (e *CodeEditor) requestFind(replace bool) int {
+	return e.requestFindOperation(editorFindRequest{replace: replace})
+}
+func (e *CodeEditor) requestFindOperation(operation editorFindRequest) int {
+	if !e.findVisible() {
+		e.CancelFind()
+		return 0
+	}
 	s := &e.findState
 	s.generation++
 	if s.worker != nil {
 		s.worker.cancel()
 	}
-	r := editorFindRequest{text: e.Text(), query: e.findText, replacement: e.replaceText, options: s.options, revision: e.textRevision, generation: s.generation, replace: replace}
+	r := editorFindRequest{text: e.Text(), query: e.findText, replacement: e.replaceText, options: s.options, revision: e.textRevision, generation: s.generation, replace: operation.replace, one: operation.one, target: operation.target, anchor: operation.anchor}
 	s.request = r
 	s.request.text = ""
 	s.valid = false
@@ -91,7 +114,8 @@ func (e *CodeEditor) requestFind(replace bool) int {
 	s.err = nil
 	s.count = 0
 	e.findMatches = nil
-	if len(r.text)+len(r.query)+len(r.replacement) <= editorFindAsyncBytes || r.query == "" {
+	e.findSpans = nil
+	if (!r.options.Regex && len(r.text)+len(r.query)+len(r.replacement) <= editorFindAsyncBytes) || r.query == "" {
 		result := computeEditorFind(context.Background(), r)
 		e.acceptFindResult(result)
 		return result.count
@@ -116,9 +140,13 @@ func (e *CodeEditor) requestFind(replace bool) int {
 }
 func (e *CodeEditor) findRequestCurrent(r editorFindRequest) bool {
 	s := &e.findState
-	return s.pending && s.generation == r.generation && e.TextRevision() == r.revision && e.findText == r.query && s.options == r.options && (!r.replace || e.replaceText == r.replacement)
+	return e.findVisible() && s.pending && s.generation == r.generation && e.TextRevision() == r.revision && e.findText == r.query && s.options == r.options && (!r.replace || e.replaceText == r.replacement)
 }
 func (e *CodeEditor) acceptFindResult(result editorFindResult) {
+	if !e.findVisible() {
+		e.CancelFind()
+		return
+	}
 	if !e.findRequestCurrent(result.request) {
 		return
 	}
@@ -128,6 +156,10 @@ func (e *CodeEditor) acceptFindResult(result editorFindResult) {
 	if result.err != nil {
 		e.syncFindBar()
 		e.Update()
+		return
+	}
+	if result.request.one {
+		e.acceptRegexReplacement(result)
 		return
 	}
 	if result.request.replace {
@@ -141,13 +173,15 @@ func (e *CodeEditor) acceptFindResult(result editorFindResult) {
 	s.valid = true
 	s.count = result.count
 	e.findMatches = result.matches
+	e.findSpans = result.spans
 	if e.findCurrentIdx < 0 || e.findCurrentIdx >= len(e.findMatches) {
 		e.findCurrentIdx = 0
 	}
 	if s.jump != nil {
 		p := *s.jump
 		s.jump = nil
-		e.selectMatchAtOrAfter(p.line, p.col)
+		e.selectFindMatch(p.line, p.col, s.jumpStrict)
+		s.jumpStrict = false
 	}
 	if s.step != 0 {
 		step := s.step
@@ -159,7 +193,7 @@ func (e *CodeEditor) acceptFindResult(result editorFindResult) {
 }
 func (e *CodeEditor) findRangesCurrent() bool {
 	s := &e.findState
-	return s.valid && !s.pending && s.request.revision == e.TextRevision() && s.request.query == e.findText && s.request.options == s.options
+	return e.findVisible() && s.valid && !s.pending && s.request.revision == e.TextRevision() && s.request.query == e.findText && s.request.options == s.options
 }
 func (e *CodeEditor) moveFind(step int) {
 	if !e.findRangesCurrent() {
@@ -193,12 +227,21 @@ func (e *CodeEditor) CancelFind() {
 	s.valid = false
 	s.jump = nil
 	s.step = 0
+	s.jumpStrict = false
+	s.count = 0
+	s.err = nil
+	e.findMatches = nil
+	e.findSpans = nil
 	if s.worker != nil {
 		s.worker.close()
 		s.worker = nil
 	}
 	if e.findBar != nil {
 		e.findBar.tooltips(false)
+		e.findBar.status.SetText(e.findStatusText())
+		for _, b := range []*editorFindButton{e.findBar.prev, e.findBar.next, e.findBar.one, e.findBar.all} {
+			b.SetEnabled(false)
+		}
 	}
 }
 func (e *CodeEditor) OnHide() { e.CancelFind() }
@@ -243,6 +286,9 @@ func (e *CodeEditor) findStatusText() string {
 		}
 		return "Searching…"
 	}
+	if !s.Ready {
+		return "Search paused"
+	}
 	if s.Count > s.Retained {
 		return fmt.Sprintf("%d / %d (first %d)", s.Current, s.Count, s.Retained)
 	}
@@ -253,6 +299,13 @@ func (e *CodeEditor) findStatusText() string {
 // Clip rune columns before shaping prefixes, particularly on minified files.
 func (e *CodeEditor) visibleFindRange(line int, left, right float64) (int, int) {
 	ms := e.findMatches
+	if len(e.findSpans) == len(ms) && e.findState.options.Regex {
+		a := e.textColumnAtX(e.lines[line], left)
+		b := e.textColumnAtX(e.lines[line], right) + 1
+		lo := sort.Search(len(ms), func(i int) bool { s := e.findSpans[i]; return s.endLine > line || (s.endLine == line && s.endCol >= a) })
+		hi := sort.Search(len(ms), func(i int) bool { return ms[i].line > line || (ms[i].line == line && ms[i].col > b) })
+		return min(lo, hi), hi
+	}
 	lo := sort.Search(len(ms), func(i int) bool { return ms[i].line >= line })
 	hi := lo + sort.Search(len(ms)-lo, func(i int) bool { return ms[lo+i].line > line })
 	if lo == hi {
@@ -263,4 +316,41 @@ func (e *CodeEditor) visibleFindRange(line int, left, right float64) (int, int) 
 	lo += sort.Search(hi-lo, func(i int) bool { return ms[lo+i].end > a })
 	hi = lo + sort.Search(hi-lo, func(i int) bool { return ms[lo+i].col > b })
 	return lo, hi
+}
+
+func (e *CodeEditor) findHighlightColumns(index, line int) (int, int) {
+	m := e.findMatches[index]
+	if len(e.findSpans) != len(e.findMatches) || !e.findState.options.Regex {
+		return m.col, m.end
+	}
+	s := e.findSpans[index]
+	a, b := 0, s.endCol
+	if m.line == line {
+		a = m.col
+	}
+	if s.endLine != line {
+		b = utf8.RuneCountInString(e.lines[line])
+	}
+	return a, b
+}
+func (e *CodeEditor) acceptRegexReplacement(result editorFindResult) {
+	r := result.request
+	old := e.Text()[r.target.start:r.target.end]
+	p := cursorPos{r.target.endLine, r.target.endCol}
+	// An empty hit must advance strictly beyond the insertion position, or
+	// repeated Replace on ^ / \b would insert forever at the same caret.
+	e.findState.jumpStrict = r.target.start == r.target.end
+	if old != result.text {
+		e.pushUndo(editAction{kind: 2, line: r.anchor.line, col: r.anchor.col, text: result.text, oldText: old})
+		column := textPositionInLine(e.lines[r.anchor.line], r.anchor.col).ByteColumn
+		p = e.replaceByteRange(r.anchor.line, column, len(old), result.text)
+		e.cursorLine, e.cursorCol = p.line, p.col
+		e.findState.jump = &p
+		e.rebuildText()
+		if e.findActive {
+			return
+		}
+	}
+	e.findState.jump = &p
+	e.findUpdateMatches()
 }
