@@ -229,3 +229,44 @@ func drawClippedErrorWaves(g paint.Painter, x, width, y, left, right float64) {
 		g.Stroke()
 	}
 }
+
+// A cached certification is usable only for the current source. Tabs and
+// variable-width glyphs must keep the shaping path, even with a monospace font.
+func (e *CodeEditor) fixedColumnGeometry(line int) bool {
+	e.ensureFontMetrics()
+	c, ok := e.tokenCache[line]
+	return ok && c.source == e.lines[line] && e.fixedCellLine(line) && c.asciiMask[0]&(1<<9) == 0 && e.charWidth > 0
+}
+func (e *CodeEditor) lineColumnAtX(line int, x float64) int {
+	if e.fixedColumnGeometry(line) {
+		return int(math.Min(float64(len(e.lines[line])), math.Max(0, math.Floor(x/e.charWidth+0.5))))
+	}
+	return e.textColumnAtX(e.lines[line], x)
+}
+
+// Only fill geometry may be shortened outside the viewport guard band. Never
+// submit or shape an entire distant suffix merely to fill the visible wash.
+// A negative column denotes end-of-line without counting all its runes first.
+func (e *CodeEditor) boundedColumnX(line, col int, right float64) float64 {
+	s := e.lines[line]
+	if e.fixedColumnGeometry(line) {
+		if col < 0 {
+			col = len(s)
+		}
+		return math.Min(float64(min(col, len(s)))*e.charWidth, right)
+	}
+	// Unicode retains prefix shaping, tabs, combining marks and invalid bytes.
+	// This bounds right-of-viewport work; it is not a random-access Unicode index.
+	limit := min(len(s), e.textColumnAtX(s, right)+4)
+	if col < 0 || col > limit {
+		col = limit
+	}
+	return e.measureText(e.linePrefix(line, col))
+}
+func (e *CodeEditor) fillColumnSpan(g paint.Painter, v editorInkViewport, line, a, b int, origin, y, height, minWidth, endPadding float64) {
+	guard := math.Max(1024, 2*math.Max(v.right-v.left, v.bottom-v.top))
+	limit := math.Ceil(v.right) + guard - origin
+	x := e.boundedColumnX(line, a, limit)
+	end := e.boundedColumnX(line, b, limit) + endPadding
+	v.fillRect(g, origin+x, y, math.Max(minWidth, end-x), height)
+}

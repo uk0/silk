@@ -202,6 +202,7 @@ type editAction struct {
 	redoCursor                  *cursorPos // optional post-edit caret for atomic provider edits
 	group                       []editorByteEdit
 	beforeCursors, afterCursors []cursorPos
+	findScope                   *editorFindScopeHistory
 }
 
 // findMatch records a single search hit location.
@@ -698,6 +699,7 @@ func (this *CodeEditor) cacheText(text string) {
 	if changed {
 		this.text = text
 		this.textRevision++
+		this.findScopeTextChanged()
 		if this.completion != nil {
 			this.completion.Dismiss()
 			this.completion.cancelLocal(true)
@@ -1634,6 +1636,7 @@ func (this *CodeEditor) updateSelectionEnd() {
 // --- Undo/Redo Methods ---
 
 func (this *CodeEditor) pushUndo(a editAction) {
+	a.findScope = this.findState.scopeTransition
 	a.stamp = time.Now()
 	if a.kind < 3 && a.line >= 0 && a.line < len(this.lines) {
 		a.byteCol = textPositionInLine(this.lines[a.line], a.col).ByteColumn
@@ -1672,6 +1675,7 @@ func (this *CodeEditor) undo() {
 	this.snippetSess = nil // stored byte ranges belong to the pre-undo buffer
 	a := this.undoStack[len(this.undoStack)-1]
 	this.undoStack = this.undoStack[:len(this.undoStack)-1]
+	this.restoreFindScopeHistory(a.findScope, false)
 
 	switch a.kind {
 	case 0: // undo insert => delete the inserted text
@@ -1722,6 +1726,7 @@ func (this *CodeEditor) redo() {
 	this.snippetSess = nil
 	a := this.redoStack[len(this.redoStack)-1]
 	this.redoStack = this.redoStack[:len(this.redoStack)-1]
+	this.restoreFindScopeHistory(a.findScope, true)
 
 	switch a.kind {
 	case 0: // redo insert => re-insert
@@ -1946,7 +1951,7 @@ func (this *CodeEditor) replaceCurrent() {
 	if m.line < 0 || m.line >= len(this.lines) {
 		return
 	}
-	if this.findState.options.Regex {
+	if this.findState.options.Regex || this.findState.scope.enabled {
 		if len(this.findSpans) != len(this.findMatches) {
 			this.findUpdateMatches()
 			return
@@ -2784,23 +2789,31 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 			g.Fill()
 		}
 
-		// Draw selection highlight
+		if scope := this.findState.scope; scope.enabled && scope.valid && scope.revision == this.textRevision && i >= scope.first.line && i <= scope.last.line {
+			a, b := 0, -1
+			if i == scope.first.line {
+				a = scope.first.col
+			}
+			if i == scope.last.line {
+				b = scope.last.col
+			}
+			color := pal.selection
+			color.A = 35
+			g.SetBrush1(color)
+			this.fillColumnSpan(g, textView, i, a, b, textOffX, y, lh, 0, 0)
+		}
+		// Draw selection without measuring offscreen suffixes.
 		if this.hasSelection && i >= sSelL && i <= eSelL {
-			var selStartX, selEndX float64
+			a, b, pad := 0, -1, 8.0
 			if i == sSelL {
-				selStartX = textOffX + this.measureText(this.linePrefix(i, sSelC))
-			} else {
-				selStartX = textOffX
+				a = sSelC
 			}
 			if i == eSelL {
-				selEndX = textOffX + this.measureText(this.linePrefix(i, eSelC))
-			} else {
-				selEndX = textOffX + this.measureText(this.lines[i]) + 8
+				b = eSelC
+				pad = 0
 			}
-			if selEndX > selStartX {
-				g.SetBrush1(pal.selection)
-				textView.fillRect(g, selStartX, y, selEndX-selStartX, lh)
-			}
+			g.SetBrush1(pal.selection)
+			this.fillColumnSpan(g, textView, i, a, b, textOffX, y, lh, 0, pad)
 		}
 
 		// Draw host-fed occurrence highlights (LSP document-highlight): a
@@ -2814,11 +2827,8 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 				if m.end <= m.col {
 					continue
 				}
-				start := this.measureText(this.linePrefix(i, m.col))
-				ox := textOffX + start
-				ow := this.measureText(this.linePrefix(i, m.end)) - start
 				g.SetBrush1(paint.Color{R: 120, G: 130, B: 150, A: 60})
-				textView.fillRect(g, ox, y, ow, lh)
+				this.fillColumnSpan(g, textView, i, m.col, m.end, textOffX, y, lh, 0, 0)
 			}
 		}
 
@@ -2826,16 +2836,13 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		if this.findActive && len(this.findMatches) > 0 {
 			a, b := this.visibleFindRange(i, textView.left-textOffX, textView.right-textOffX)
 			for idx := a; idx < b; idx++ {
-				a, b := this.findHighlightColumns(idx, i)
-				start := this.measureText(this.linePrefix(i, a))
-				mx := textOffX + start
-				mw := max(2, this.measureText(this.linePrefix(i, b))-start)
+				a, b := this.findHighlightSpan(idx, i)
 				if idx == this.findCurrentIdx {
 					g.SetBrush1(paint.Color{R: 255, G: 152, A: 120})
 				} else {
 					g.SetBrush1(paint.Color{R: 255, G: 235, B: 59, A: 80})
 				}
-				textView.fillRect(g, mx, y, mw, lh)
+				this.fillColumnSpan(g, textView, i, a, b, textOffX, y, lh, 2, 0)
 			}
 		}
 
@@ -6295,6 +6302,7 @@ func (this *CodeEditor) HighlightReferencesAtCursor() {
 	refs := FindReferences(word, this.Text())
 	this.CancelFind()
 	this.findState.options = EditorFindOptions{MatchCase: true, WholeWord: true}
+	this.findState.scope = editorFindScope{}
 	this.findText = word
 	this.findCursor = len([]rune(word))
 	this.findMatches = nil

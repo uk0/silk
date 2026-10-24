@@ -41,6 +41,15 @@ signed/notarized standalone apps.
   Invalid or timed-out expressions never apply partial replacements.
 - Hidden editors do not restart searches after external edits. Cancellation clears
   stale counts/actions; `FindSnapshot().Ready` and `Revision` expose result validity.
+- **Selection** freezes the selection captured when Find opens. Literal/regex
+  search and replacement stay inside it; navigation does not change the scope.
+  The selected fragment is a separate search subject: regex anchors and whole-word
+  boundaries are local to it. Find-owned replacements and Undo/Redo track its extent;
+  unrelated edits invalidate the scope and disable replacement instead of widening it.
+  SDK hosts can use `SetFindInSelection` and the selection fields in `FindSnapshot`.
+- Long highlight/selection fills no longer measure invisible suffixes. Certified
+  fixed-width ASCII uses cached column geometry; Unicode and tabs retain shaping.
+  Fractional-scale raster parity tests protect visible highlight edges.
 - Limits: literal queries are single-line, at most 1 MiB; regex patterns at most
   64 KiB / 128 captures / 32,768 estimated expansion cost, with a 5-second compute
   deadline. Regex replacement templates are at most 1 MiB, output at most 128 MiB.
@@ -48,7 +57,12 @@ signed/notarized standalone apps.
   completed edit still uses the UI thread; this is not a universal latency bound.
 
 Verification: [Find / Replace QA](EDITOR_FIND_QA_20261024.md),
-[Regex and lifecycle QA](EDITOR_REGEX_QA_20261024.md).
+[Regex and lifecycle QA](EDITOR_REGEX_QA_20261024.md),
+[Selection scope and long-span QA](EDITOR_SELECTION_QA_20261024.md).
+
+<img src="screenshots/silkide-selection-macos-20261024.png" width="760" alt="Native macOS selection-only regex search: three inner matches, two outside matches untouched">
+
+<img src="screenshots/silkide-selection-windows-20261024.png" width="760" alt="Native Windows selection-scoped replacement with bundled gopls connected">
 
 <img src="screenshots/silkide-regex-macos-20261024.png" width="760" alt="Native macOS regular-expression search and named capture replacement with Chinese text">
 

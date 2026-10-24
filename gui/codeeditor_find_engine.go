@@ -28,14 +28,18 @@ type editorFindRequest struct {
 	replace, one             bool
 	target                   editorFindSpan
 	anchor                   cursorPos
+	scope                    editorFindScope
+	spans, budgetSet         bool
+	budget                   int
 }
 type editorFindResult struct {
-	request editorFindRequest
-	matches []findMatch
-	spans   []editorFindSpan
-	count   int
-	text    string
-	err     error
+	request    editorFindRequest
+	matches    []findMatch
+	spans      []editorFindSpan
+	count      int
+	text       string
+	err        error
+	scopeAfter editorFindScope
 }
 
 // A rune value above MaxRune preserves the identity of malformed UTF-8 bytes;
@@ -174,15 +178,21 @@ func scanEditorFind(ctx context.Context, text, query string, options EditorFindO
 }
 
 func computeEditorFind(ctx context.Context, r editorFindRequest) editorFindResult {
+	if r.scope.enabled {
+		return computeEditorScopedFind(ctx, r)
+	}
 	if r.options.Regex {
 		return computeEditorRegex(ctx, r)
+	}
+	if r.one {
+		return computeEditorLiteralOne(ctx, r)
 	}
 	result := editorFindResult{request: r}
 	result.request.text = ""
 	copied := 0
 	var out strings.Builder
 	write := func(s string) error {
-		if len(s) > editorFindReplacementLimit-out.Len() {
+		if len(s) > editorReplacementBudget(r)-out.Len() {
 			return ErrEditorFindReplacementTooLarge
 		}
 		out.WriteString(s)
@@ -200,6 +210,9 @@ func computeEditorFind(ctx context.Context, r editorFindRequest) editorFindResul
 			copied = end
 		} else if len(result.matches) < editorFindHitLimit {
 			result.matches = append(result.matches, m)
+			if r.spans {
+				result.spans = append(result.spans, editorFindSpan{start, end, m.line, m.end})
+			}
 		}
 		return nil
 	})
@@ -211,6 +224,7 @@ func computeEditorFind(ctx context.Context, r editorFindRequest) editorFindResul
 	}
 	if result.err != nil {
 		result.matches = nil
+		result.spans = nil
 		result.text = ""
 		result.count = 0
 	}

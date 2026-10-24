@@ -8,12 +8,12 @@ import (
 // native windows, custom text editing, or unbounded text drawing are involved.
 type editorFindBar struct {
 	Widget
-	editor                              *CodeEditor
-	query, replacement                  *editorFindEdit
-	prev, next, toggle, close, one, all *editorFindButton
-	matchCase, wholeWord, regex         *editorFindCheck
-	status                              *Label
-	syncing, tipsLive                   bool
+	editor                                 *CodeEditor
+	query, replacement                     *editorFindEdit
+	prev, next, toggle, close, one, all    *editorFindButton
+	matchCase, wholeWord, regex, selection *editorFindCheck
+	status                                 *Label
+	syncing, tipsLive                      bool
 }
 type editorFindEdit struct {
 	Edit
@@ -148,6 +148,12 @@ func (e *CodeEditor) ensureFindBar() {
 	b.matchCase = check("Aa")
 	b.wholeWord = check("Word")
 	b.regex = check(".*")
+	b.selection = check("Selection")
+	b.selection.SigCheck(func(on bool) {
+		if !b.syncing {
+			_ = e.SetFindInSelection(on)
+		}
+	})
 	changed := func(bool) {
 		if !b.syncing {
 			e.SetFindOptions(EditorFindOptions{MatchCase: b.matchCase.IsChecked(), WholeWord: b.wholeWord.IsChecked(), Regex: b.regex.IsChecked()})
@@ -179,6 +185,7 @@ func (e *CodeEditor) syncFindBar() {
 	b.matchCase.SetChecked(e.findState.options.MatchCase)
 	b.wholeWord.SetChecked(e.findState.options.WholeWord)
 	b.regex.SetChecked(e.findState.options.Regex)
+	b.selection.SetChecked(e.findState.scope.enabled)
 	b.status.SetText(e.findStatusText())
 	ready := e.findRangesCurrent() && len(e.findMatches) > 0
 	b.prev.SetEnabled(ready)
@@ -189,7 +196,7 @@ func (e *CodeEditor) syncFindBar() {
 	b.SetVisible(e.findActive)
 	b.tooltips(e.findActive && e.findVisible() && e.Window() != nil)
 	if b.tipsLive {
-		SetToolTip(b.status, e.findStatusText())
+		SetToolTip(b.status, e.findStatusText()+"\n"+e.findScopeStatus())
 	}
 }
 func (e *CodeEditor) focusFindInput(replace, selectAll bool) {
@@ -210,7 +217,7 @@ func (b *editorFindBar) tooltips(live bool) {
 		return
 	}
 	b.tipsLive = live
-	tips := map[IWidget]string{b.query: "Find text (enable .* for a Go regular expression)", b.replacement: "Replacement text; regex mode supports $1, ${name} and $$", b.regex: "Regular expression (Go/RE2; no look-around or backreferences)", b.status: b.editor.findStatusText(), b.prev: "Previous match (Shift+F3)", b.next: "Next match (F3)", b.matchCase: "Match case", b.wholeWord: "Whole word (Unicode letters, digits, marks and underscore)", b.toggle: "Show or hide replacement", b.close: "Close find (Esc)", b.one: "Replace current (Enter in replacement)", b.all: "Replace all (Shift+Enter in replacement)"}
+	tips := map[IWidget]string{b.query: "Find text (enable .* for a Go regular expression)", b.replacement: "Replacement text; regex mode supports $1, ${name} and $$", b.selection: "Freeze selection from Find opening; local regex anchors / word edges. Unrelated edits require a new selection.", b.regex: "Regular expression (Go/RE2; no look-around or backreferences)", b.status: b.editor.findStatusText(), b.prev: "Previous match (Shift+F3)", b.next: "Next match (F3)", b.matchCase: "Match case", b.wholeWord: "Whole word (Unicode letters, digits, marks and underscore)", b.toggle: "Show or hide replacement", b.close: "Close find (Esc)", b.one: "Replace current (Enter in replacement)", b.all: "Replace all (Shift+Enter in replacement)"}
 	for w, s := range tips {
 		if !live {
 			s = ""
@@ -242,37 +249,25 @@ func (e *CodeEditor) layoutFindBar() {
 		w = 1200
 	}
 	b.SetPos(0, 0)
-	// Honor actual theme metrics, not ASCII character-count estimates. In
-	// particular checkbox labels start AFTER both margins and their icon.
+	// Wrap complete measured controls. This also handles narrow panes and fonts
+	// whose checkbox padding is substantially wider than their label text.
+	type control struct {
+		widget IWidget
+		width  float64
+	}
+	options := []control{{b.matchCase, b.matchCase.SizeHints().Width}, {b.wholeWord, b.wholeWord.SizeHints().Width}, {b.regex, b.regex.SizeHints().Width}, {b.selection, b.selection.SizeHints().Width}}
 	pw, nw := b.prev.SizeHints().Width, b.next.SizeHints().Width
-	cw, ww := b.matchCase.SizeHints().Width, b.wholeWord.SizeHints().Width
-	rw := b.regex.SizeHints().Width
 	tw, xw := b.toggle.SizeHints().Width, b.close.SizeHints().Width
 	ow, aw := b.one.SizeHints().Width, b.all.SizeHints().Width
+	optionW := 0.0
+	for _, v := range options {
+		optionW += v.width + 6
+	}
 	statusW := 150.0
-	tail := pw + nw + cw + ww + rw + statusW + tw + xw + 9*6
+	tail := pw + nw + optionW + statusW + tw + xw + 6*6
 	wide := w >= tail+160
-	medium := w >= pw+nw+cw+ww+rw+80+7*6
+	medium := w >= pw+nw+optionW+80+4*6
 	rows := 1.0
-	if !wide {
-		rows = 2
-	}
-	if !medium {
-		rows = 3
-		if w < cw+ww+rw+4*6 {
-			rows++
-		}
-	}
-	e.findBarHeight = rows * codeEditorFindRowHeight
-	splitReplace := w < ow+aw+120+4*6
-	if e.replaceVisible {
-		e.findBarHeight += codeEditorFindRowHeight
-		if splitReplace {
-			e.findBarHeight += codeEditorFindRowHeight
-		}
-	}
-	b.SetSize(w, e.findBarHeight)
-	// Extremely small panes clip rather than sharing the same hit rectangle.
 	xw = min(xw, max(0, w-12))
 	tw = min(tw, max(0, w-xw-18))
 	placeFind(b.close, w-xw-6, 0, xw)
@@ -281,50 +276,57 @@ func (e *CodeEditor) layoutFindBar() {
 		input := w - tail
 		placeFind(b.query, 6, 0, input)
 		x := input + 12
-		for _, v := range []struct {
-			widget IWidget
-			width  float64
-		}{{b.prev, pw}, {b.next, nw}, {b.matchCase, cw}, {b.wholeWord, ww}, {b.regex, rw}, {b.status, statusW}} {
+		controls := []control{{b.prev, pw}, {b.next, nw}}
+		controls = append(controls, options...)
+		controls = append(controls, control{b.status, statusW})
+		for _, v := range controls {
 			placeFind(v.widget, x, 0, v.width)
 			x += v.width + 6
 		}
 	} else {
+		rows = 2
 		placeFind(b.query, 6, 0, max(0, w-xw-tw-24))
-		placeFind(b.prev, 6, 30, pw)
-		placeFind(b.next, pw+12, 30, nw)
+		placeFind(b.prev, 6, 30, min(pw, max(0, w-12)))
+		placeFind(b.next, pw+12, 30, min(nw, max(0, w-pw-18)))
 		x := pw + nw + 18
 		if medium {
-			placeFind(b.matchCase, x, 30, cw)
-			x += cw + 6
-			placeFind(b.wholeWord, x, 30, ww)
-			x += ww + 6
-			placeFind(b.regex, x, 30, rw)
-			x += rw + 6
+			for _, v := range options {
+				placeFind(v.widget, x, 30, v.width)
+				x += v.width + 6
+			}
 			placeFind(b.status, x, 30, max(0, w-x-6))
 		} else {
 			placeFind(b.status, x, 30, max(0, w-x-6))
-			placeFind(b.matchCase, 6, 60, cw)
-			placeFind(b.wholeWord, cw+12, 60, min(ww, max(0, w-cw-18)))
-			if rows == 4 {
-				placeFind(b.regex, 6, 90, min(rw, max(0, w-12)))
-			} else {
-				placeFind(b.regex, cw+ww+18, 60, rw)
+			x = 6
+			y := 60.0
+			for _, v := range options {
+				if x > 6 && x+v.width > w-6 {
+					x = 6
+					y += 30
+				}
+				placeFind(v.widget, x, y, min(v.width, max(0, w-12)))
+				x += v.width + 6
 			}
+			rows = y/30 + 1
 		}
 	}
+	e.findBarHeight = rows * codeEditorFindRowHeight
 	b.replacement.SetVisible(e.replaceVisible)
 	b.one.SetVisible(e.replaceVisible)
 	b.all.SetVisible(e.replaceVisible)
 	if e.replaceVisible {
-		y := rows * codeEditorFindRowHeight
-		if !splitReplace {
+		y := e.findBarHeight
+		e.findBarHeight += 30
+		if w >= ow+aw+120+4*6 {
 			placeFind(b.replacement, 6, y, w-ow-aw-24)
 			placeFind(b.one, w-ow-aw-12, y, ow)
 			placeFind(b.all, w-aw-6, y, aw)
 		} else {
+			e.findBarHeight += 30
 			placeFind(b.replacement, 6, y, max(0, w-12))
 			placeFind(b.one, 6, y+30, min(ow, max(0, w-12)))
 			placeFind(b.all, ow+12, y+30, min(aw, max(0, w-ow-18)))
 		}
 	}
+	b.SetSize(w, e.findBarHeight)
 }

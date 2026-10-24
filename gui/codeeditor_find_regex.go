@@ -361,7 +361,7 @@ func computeEditorRegex(parent context.Context, r editorFindRequest) (result edi
 		return result
 	}
 	var out strings.Builder
-	limit := editorFindReplacementLimit
+	limit := editorReplacementBudget(r)
 	if r.one {
 		limit -= len(r.text) - (r.target.end - r.target.start)
 	}
