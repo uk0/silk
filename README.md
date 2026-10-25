@@ -21,6 +21,19 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Safe clipboard commands
+
+- **Edit → Cut / Copy / Paste / Select All** now have shortcuts, scalable icons
+  and Command Palette entries, using the same SDK operations as the keyboard
+  and editor context menu. Clipboard commands bind to the focused editor;
+  opening a menu while a search/property field owns focus cannot cut the document.
+- Failed clipboard writes no longer delete source text. Copy/Cut return errors,
+  reject embedded NUL and payloads over 16 MiB, and do not clear the clipboard
+  before validation. Paste keeps the existing asynchronous macOS target guards.
+- `examples/editor-clipboard` demonstrates the SDK commands and state snapshots.
+  Menu availability never reads native clipboard content.
+  [Verification and limitations](EDITOR_CLIPBOARD_ACTIONS_QA_20261025.md).
+
 ### History-aware editor actions
 
 - Undo/Redo now reflect the visible document's actual history in the menu and

@@ -23,7 +23,8 @@ type paletteCommand struct {
 	Name      string
 	Hint      string
 	Fn        func()
-	Available func() bool // nil means available; evaluated on the UI thread
+	Available func() bool           // nil means available; evaluated on the UI thread
+	Bind      func() paletteCommand // optional per-open scope, before modal input takes focus
 }
 
 // paletteCommands is populated by registerPaletteCommands at IDE
@@ -76,6 +77,14 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		}
 		add(name, hint, func() { undoCurrentDocument(editorTabs, designCanvas, redo) })
 		paletteCommands[len(paletteCommands)-1].Available = func() bool { return currentDocumentHistory(editorTabs, designCanvas).available(redo) }
+	}
+	for _, spec := range editorClipboardCommandSpecs() {
+		add(spec.label, spec.hint, func() { runEditorClipboardCommand(editorTabs, designCanvas, spec, nil) })
+		paletteCommands[len(paletteCommands)-1].Available = func() bool {
+			ed := focusedClipboardEditor(editorTabs, designCanvas)
+			return ed != nil && spec.available(ed)
+		}
+		paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindEditorClipboardCommand(editorTabs, designCanvas, spec) }
 	}
 	for _, spec := range editorCaretCommandSpecs() {
 		add(spec.label, spec.hint, func() { runEditorCaretCommand(editorTabs, designCanvas, spec, nil) })
@@ -489,6 +498,7 @@ func (s *paletteSelection) run(result gui.DialogResult) {
 }
 
 func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
+	commands := bindPaletteCommands(paletteCommands)
 	selection := &paletteSelection{}
 	dlg := gui.NewDialog(i18n.T("Command Palette"), parent)
 	box := gui.NewVBox()
@@ -503,7 +513,7 @@ func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
 	box.AddWidget(list)
 
 	repopulate := func(query string) {
-		cmds := filterCommands(paletteCommands, query)
+		cmds := filterCommands(commands, query)
 		items := make([]gui.ListItem, 0, len(cmds))
 		for _, c := range cmds {
 			items = append(items, gui.ListItem{Text: c.displayText(), Data: c})
@@ -540,4 +550,14 @@ func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
 	dlg.SetSize(520, 420)
 	dlg.SetInitialFocus(input)
 	return dlg, selection
+}
+
+func bindPaletteCommands(commands []paletteCommand) []paletteCommand {
+	bound := append([]paletteCommand(nil), commands...)
+	for i, c := range bound {
+		if c.Bind != nil {
+			bound[i] = c.Bind()
+		}
+	}
+	return bound
 }

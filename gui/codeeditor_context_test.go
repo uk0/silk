@@ -28,7 +28,7 @@ func TestContextMenuItemsLabels(t *testing.T) {
 	e := NewCodeEditor()
 	e.SetText("package p\n")
 
-	items := e.contextMenuItems(false, false, "")
+	items := e.contextMenuItems("")
 
 	// The seven action labels plus one separator after Select All. We don't
 	// pin a strict ordering test beyond "the canonical entries are present"
@@ -53,23 +53,24 @@ func TestContextMenuItemsLabels(t *testing.T) {
 	}
 }
 
-func TestContextMenuItemsDisabledWithoutSelection(t *testing.T) {
+func TestContextMenuItemsPrimaryLineWithoutClipboardProbe(t *testing.T) {
 	e := NewCodeEditor()
 	e.SetText("package p\nfunc Foo() {}\n")
 	e.cursorLine = 1
 	e.cursorCol = 5 // inside "Foo"
 
-	// No selection, no clipboard, but a word is at the cursor.
-	items := e.contextMenuItems(false, false, e.wordAtCursor())
+	// No selection: Copy/Cut match keyboard primary-line behavior. Paste is
+	// permission to read on activation, never a native read during menu creation.
+	items := e.contextMenuItems(e.wordAtCursor())
 
-	if cut := findMenuItem(items, "剪切"); cut == nil || cut.Enabled {
-		t.Errorf("剪切 should be disabled without a selection: %+v", cut)
+	if cut := findMenuItem(items, "剪切"); cut == nil || !cut.Enabled {
+		t.Errorf("剪切 should be enabled on a non-empty primary line: %+v", cut)
 	}
-	if cp := findMenuItem(items, "复制"); cp == nil || cp.Enabled {
-		t.Errorf("复制 should be disabled without a selection: %+v", cp)
+	if cp := findMenuItem(items, "复制"); cp == nil || !cp.Enabled {
+		t.Errorf("复制 should be enabled on a non-empty primary line: %+v", cp)
 	}
-	if pst := findMenuItem(items, "粘贴"); pst == nil || pst.Enabled {
-		t.Errorf("粘贴 should be disabled without clipboard text: %+v", pst)
+	if pst := findMenuItem(items, "粘贴"); pst == nil || !pst.Enabled {
+		t.Errorf("粘贴 must be requestable without probing native content: %+v", pst)
 	}
 	if all := findMenuItem(items, "全选"); all == nil || !all.Enabled {
 		t.Errorf("全选 should always be enabled: %+v", all)
@@ -83,7 +84,8 @@ func TestContextMenuItemsEnabledWithSelection(t *testing.T) {
 	e := NewCodeEditor()
 	e.SetText("package p\nfunc Foo() {}\n")
 
-	items := e.contextMenuItems(true, true, "Foo")
+	e.SelectAll()
+	items := e.contextMenuItems("Foo")
 
 	if cut := findMenuItem(items, "剪切"); cut == nil || !cut.Enabled {
 		t.Errorf("剪切 should be enabled with a selection: %+v", cut)
@@ -100,7 +102,7 @@ func TestContextMenuItemsRenameDisabledOnEmptyWord(t *testing.T) {
 	e := NewCodeEditor()
 	e.SetText("package p\n")
 
-	items := e.contextMenuItems(false, false, "")
+	items := e.contextMenuItems("")
 
 	if rn := findMenuItem(items, "重命名符号"); rn == nil || rn.Enabled {
 		t.Errorf("重命名符号 should be disabled on empty word: %+v", rn)
@@ -120,7 +122,7 @@ func TestContextMenuItemsRenameDisabledOnEmptyWord(t *testing.T) {
 func TestContextMenuActionsWire(t *testing.T) {
 	e := NewCodeEditor()
 	e.SetText("alpha\nbeta\ngamma")
-	items := e.contextMenuItems(false, false, "")
+	items := e.contextMenuItems("")
 
 	all := findMenuItem(items, "全选")
 	if all == nil || all.Action == nil {

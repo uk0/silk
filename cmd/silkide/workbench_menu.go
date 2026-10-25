@@ -66,6 +66,15 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("edit.redo", "Redo", "edit-redo", key+"+Shift+Z", target.available(true), func() { runHistoryMenu(tabs, canvas, target, true) })
 		menu.AddSeparator()
 		ed := visibleCaretEditor(tabs, canvas)
+		clipboard := focusedClipboardEditor(tabs, canvas)
+		for _, spec := range editorClipboardCommandSpecs() {
+			add(spec.id, spec.label, spec.icon, spec.hint, clipboard != nil && spec.available(clipboard), func() {
+				if clipboard != nil {
+					runEditorClipboardCommand(tabs, canvas, spec, clipboard)
+				}
+			})
+		}
+		menu.AddSeparator()
 		for _, spec := range editorCaretCommandSpecs() {
 			add(spec.id, spec.label, spec.icon, spec.hint, ed != nil && spec.enabled(ed), func() { runEditorCaretCommand(tabs, canvas, spec, ed) })
 		}

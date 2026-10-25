@@ -3946,34 +3946,38 @@ func (this *CodeEditor) RequestGoToImplementation() {
 }
 
 // contextMenuItems builds the right-click menu for the editor at the
-// current cursor / selection state. The Cut and Copy entries are
-// disabled when there is no selection (matches Qt Creator / VS Code).
-// Paste is disabled when the clipboard carries no text. Rename Symbol
+// current cursor / selection state. Clipboard actions share the keyboard/SDK
+// policy, including primary-line Copy/Cut. Opening the menu never reads native
+// clipboard content; Paste checks its content only when invoked. Rename Symbol
 // is disabled when the cursor sits on whitespace / punctuation (empty
 // word). Go to Definition and Find References require a word at
 // cursor, mirroring the underlying methods which silently no-op on an
 // empty word — disabling here just makes that visible to the user.
-func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []editorContextMenuItem {
+func (this *CodeEditor) contextMenuItems(word string) []editorContextMenuItem {
 	hasWord := word != ""
 	return []editorContextMenuItem{
 		{
 			Label:   "剪切",
-			Enabled: hasSel,
+			Icon:    "edit-cut",
+			Enabled: this.CanCut(),
 			Action:  func() { this.editorCut() },
 		},
 		{
 			Label:   "复制",
-			Enabled: hasSel,
+			Icon:    "edit-copy",
+			Enabled: this.CanCopy(),
 			Action:  func() { this.editorCopy() },
 		},
 		{
 			Label:   "粘贴",
-			Enabled: hasClip,
-			Action:  func() { this.pasteClipboard() },
+			Icon:    "edit-paste",
+			Enabled: this.CanPaste(),
+			Action:  this.Paste,
 		},
 		{
 			Label:   "全选",
-			Enabled: true,
+			Icon:    "edit-select-all",
+			Enabled: this.CanSelectAll(),
 			Action:  func() { this.editorSelectAll() },
 		},
 		{Separator: true},
@@ -3999,23 +4003,6 @@ func (this *CodeEditor) contextMenuItems(hasSel, hasClip bool, word string) []ed
 		{Label: "跳转类型定义", Enabled: hasWord && this.symbolActions.GoToTypeDefinition != nil, Action: this.RequestGoToTypeDefinition},
 		{Label: "跳转实现", Enabled: hasWord && this.symbolActions.GoToImplementation != nil, Action: this.RequestGoToImplementation},
 	}
-}
-
-// clipboardHasText reports whether the framework clipboard currently
-// holds plain text. Used by OnRightDown to decide whether to enable
-// the Paste entry; tests drive contextMenuItems directly with a bool
-// so this never runs without a real GLFW window.
-func (this *CodeEditor) clipboardHasText() bool {
-	// Do not materialize potentially promised pasteboard data just to open a menu.
-	if asyncClipboardControls {
-		return true
-	}
-	d, err := Clipboard.Data("text/plain")
-	if err != nil {
-		return false
-	}
-	s, ok := d.(string)
-	return ok && s != ""
 }
 
 // promptRenameSymbol pops an input dialog seeded with the identifier
@@ -4079,7 +4066,7 @@ func (this *CodeEditor) OnRightDown(x, y float64) {
 	this.SetFocus()
 	this.repositionCaretForRightClick(x, y)
 
-	items := this.contextMenuItems(this.hasSelection, this.clipboardHasText(), this.wordAtCursor())
+	items := this.contextMenuItems(this.wordAtCursor())
 	ShowContextMenu(this.Self(), x, y, func(m *Menu) {
 		for _, it := range items {
 			if it.Separator {
@@ -4092,7 +4079,10 @@ func (this *CodeEditor) OnRightDown(x, y float64) {
 				continue
 			}
 			action := it.Action
-			btn.Action().BindFunc0(func() { action() })
+			btn.Action().BindFunc0(func() {
+				this.SetFocus()
+				action()
+			})
 		}
 	})
 }
@@ -4953,7 +4943,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 
 	case 'V':
 		if ctrl {
-			this.pasteClipboard()
+			this.Paste()
 		}
 
 	case 'X':
@@ -5128,53 +5118,17 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 
 // editorSelectAll selects all text in the editor.
 func (this *CodeEditor) editorSelectAll() {
-	this.selStartLine = 0
-	this.selStartCol = 0
-	this.selEndLine = len(this.lines) - 1
-	this.selEndCol = len([]rune(this.lines[len(this.lines)-1]))
-	this.hasSelection = true
-	this.cursorLine = this.selEndLine
-	this.cursorCol = this.selEndCol
-	this.Self().Update()
+	this.SelectAll()
 }
 
 // editorCopy copies the selection (or current line) to clipboard.
 func (this *CodeEditor) editorCopy() {
-	this.clampCursor()
-	var text string
-	if this.hasSelection {
-		text = this.SelectedText()
-	} else {
-		text = this.lines[this.cursorLine]
-	}
-	if text != "" {
-		Clipboard.Clear()
-		Clipboard.SetData(text)
-	}
+	this.clipboardCommandFailed("copy", this.Copy())
 }
 
 // editorCut copies and removes the selection (or current line).
 func (this *CodeEditor) editorCut() {
-	this.clampCursor()
-	if this.hasSelection {
-		text := this.SelectedText()
-		if text != "" {
-			Clipboard.Clear()
-			Clipboard.SetData(text)
-		}
-		sl, sc, _, _ := this.selectionRange()
-		this.pushUndo(editAction{kind: 1, line: sl, col: sc, text: text})
-		this.DeleteSelection()
-		this.ensureCursorVisible()
-		this.Self().Update()
-		return
-	}
-	text := this.lines[this.cursorLine]
-	if text != "" {
-		Clipboard.Clear()
-		Clipboard.SetData(text)
-	}
-	this.deleteCurrentLine()
+	this.clipboardCommandFailed("cut", this.Cut())
 }
 
 // pasteClipboard inserts clipboard text at cursor, replacing selection.

@@ -18,7 +18,7 @@ func TestCodeEditorContextSymbolActionsReachTheirHost(t *testing.T) {
 	ed.SetSymbolActions(CodeEditorSymbolActions{
 		RenameSymbol: host("rename"), GoToDefinition: host("definition"), FindReferences: host("references"),
 	})
-	items := ed.contextMenuItems(false, false, ed.wordAtCursor())
+	items := ed.contextMenuItems(ed.wordAtCursor())
 	for i, label := range []string{"重命名符号", "跳转定义", "查找引用"} {
 		item := findMenuItem(items, label)
 		if item == nil || !item.Enabled || item.Action == nil {
@@ -49,12 +49,12 @@ func TestCodeEditorContextDefaultAndPartialOverridesKeepSDKBehavior(t *testing.T
 		if configured {
 			ed.SetSymbolActions(CodeEditorSymbolActions{RenameSymbol: func(*CodeEditor) { t.Fatal("unrelated hook invoked") }})
 		}
-		findMenuItem(ed.contextMenuItems(false, false, ed.wordAtCursor()), "跳转定义").Action()
+		findMenuItem(ed.contextMenuItems(ed.wordAtCursor()), "跳转定义").Action()
 		if ed.cursorLine != 1 {
 			t.Fatal("default SDK definition navigation was lost")
 		}
 		ed.cursorLine, ed.cursorCol = 2, 18
-		findMenuItem(ed.contextMenuItems(false, false, ed.wordAtCursor()), "查找引用").Action()
+		findMenuItem(ed.contextMenuItems(ed.wordAtCursor()), "查找引用").Action()
 		if len(ed.findMatches) != 2 {
 			t.Fatalf("default SDK references were lost: %v", ed.findMatches)
 		}
@@ -73,7 +73,7 @@ func TestCodeEditorContextSymbolActionsRemainDisabledOnWhitespace(t *testing.T) 
 	fail := func(*CodeEditor) { t.Fatal("disabled symbol command invoked its host") }
 	ed.SetSymbolActions(CodeEditorSymbolActions{RenameSymbol: fail, GoToDefinition: fail, FindReferences: fail})
 	for _, label := range []string{"重命名符号", "跳转定义", "查找引用"} {
-		item := findMenuItem(ed.contextMenuItems(false, false, ""), label)
+		item := findMenuItem(ed.contextMenuItems(""), label)
 		if item.Enabled {
 			t.Fatalf("%s enabled without a symbol", label)
 		}

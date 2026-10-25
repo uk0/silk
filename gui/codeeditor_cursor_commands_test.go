@@ -172,7 +172,7 @@ func TestCaretKeepPrimaryAndEscapeRevealPrimaryWithoutEditing(t *testing.T) {
 
 func TestCaretContextMenuActionsAndStatus(t *testing.T) {
 	e, api := caretCommandEditor(t, "abcd\nefgh\nijkl")
-	items := e.contextMenuItems(false, false, "")
+	items := e.contextMenuItems("")
 	for _, label := range []string{"向上添加光标", "向下添加光标", "仅保留主光标"} {
 		item := findMenuItem(items, label)
 		if item == nil || item.Icon == "" || item.Action == nil {
@@ -186,7 +186,7 @@ func TestCaretContextMenuActionsAndStatus(t *testing.T) {
 	if api.CursorCount() != 2 || !strings.Contains(e.cursorStatusLabel(false), "2 carets") || !strings.Contains(e.cursorStatusLabel(true), "2 carets") {
 		t.Fatal("missing count/status")
 	}
-	findMenuItem(e.contextMenuItems(false, false, ""), "仅保留主光标").Action()
+	findMenuItem(e.contextMenuItems(""), "仅保留主光标").Action()
 	if api.CursorCount() != 1 || strings.Contains(e.cursorStatusLabel(false), "carets") {
 		t.Fatal("clear count/status")
 	}

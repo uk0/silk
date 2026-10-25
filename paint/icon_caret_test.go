@@ -11,7 +11,7 @@ func TestCaretIconsAreDistinctThemeAwareVectors(t *testing.T) {
 		SetIconPalette(palette)
 		for _, size := range []int{16, 20, 24, 32, 48, 64} {
 			fingerprints := map[string]bool{}
-			for _, name := range []string{"cursor-add-above", "cursor-add-below", "cursor-primary", "line-move-up", "line-move-down", "line-duplicate", "line-delete"} {
+			for _, name := range []string{"edit-cut", "edit-copy", "edit-paste", "edit-select-all", "cursor-add-above", "cursor-add-below", "cursor-primary", "line-move-up", "line-move-down", "line-duplicate", "line-delete"} {
 				ico, ok := LoadIcon(name).(*icon)
 				if !ok || ico.name != name || ico.draw == nil {
 					t.Fatalf("missing vector %s", name)
