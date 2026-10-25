@@ -12,9 +12,10 @@ import (
 
 type linesDemo struct {
 	gui.Form
-	editor  *gui.CodeEditor
-	status  *gui.Label
-	buttons []*gui.Button
+	editor             *gui.CodeEditor
+	status             *gui.Label
+	buttons            []*gui.Button
+	unsubscribeHistory func()
 }
 
 func newLinesDemo() *linesDemo {
@@ -25,11 +26,12 @@ func newLinesDemo() *linesDemo {
 	f.editor.SetParent(f)
 	f.status = gui.NewLabel("Move, duplicate or delete selected/caret lines; Undo restores the whole group.")
 	f.status.SetParent(f)
-	add := func(label string, run func()) {
+	add := func(label string, run func()) *gui.Button {
 		b := gui.NewButton1(label, nil)
 		b.SetParent(f)
 		b.Action().BindFunc0(run)
 		f.buttons = append(f.buttons, b)
+		return b
 	}
 	f.editor.SetFilePath("sample.txt")
 	f.editor.SetText("中🙂 alpha\n    beta\n\tgamma\nlast\n")
@@ -37,18 +39,33 @@ func newLinesDemo() *linesDemo {
 	add("Move Down", func() { f.editor.MoveLinesDown(); f.editor.SetFocus() })
 	add("Duplicate", func() { f.editor.DuplicateLines(); f.editor.SetFocus() })
 	add("Delete", func() { f.editor.DeleteLines(); f.editor.SetFocus() })
-	add("Undo", func() { f.editor.Undo(); f.editor.SetFocus() })
-	add("Redo", func() { f.editor.Redo(); f.editor.SetFocus() })
+	undo := add("Undo", func() { f.editor.Undo(); f.editor.SetFocus() })
+	redo := add("Redo", func() { f.editor.Redo(); f.editor.SetFocus() })
 	add("Add Caret", func() { f.editor.AddCursorBelow() })
 	add("Snapshot", func() {
 		data, _ := json.Marshal(struct {
-			Text                   string
-			CanMoveUp, CanMoveDown bool
-			CanDelete              bool
-			Cursors, Line, Column  int
-		}{f.editor.Text(), f.editor.CanMoveLinesUp(), f.editor.CanMoveLinesDown(), f.editor.CanDeleteLines(), f.editor.CursorCount(), f.editor.CursorLine(), f.editor.CursorCol()})
+			Text                        string
+			CanMoveUp, CanMoveDown      bool
+			CanDelete, CanUndo, CanRedo bool
+			Cursors, Line, Column       int
+		}{f.editor.Text(), f.editor.CanMoveLinesUp(), f.editor.CanMoveLinesDown(), f.editor.CanDeleteLines(), f.editor.CanUndo(), f.editor.CanRedo(), f.editor.CursorCount(), f.editor.CursorLine(), f.editor.CursorCol()})
 		fmt.Println("SNAPSHOT " + string(data))
 	})
+	refreshHistory := func() {
+		for i, b := range []*gui.Button{undo, redo} {
+			enabled := f.editor.CanUndo()
+			if i == 1 {
+				enabled = f.editor.CanRedo()
+			}
+			if b.IsEnabled() != enabled {
+				b.SetEnabled(enabled)
+				b.Action().SetEnabled(enabled)
+				b.Update()
+			}
+		}
+	}
+	f.unsubscribeHistory = f.editor.SubscribeHistoryChanged(refreshHistory)
+	refreshHistory()
 	return f
 }
 
@@ -85,6 +102,7 @@ func (f *linesDemo) OnResize() {
 func main() {
 	defer core.Close()
 	f := newLinesDemo()
+	defer f.unsubscribeHistory()
 	defer f.editor.CancelFormat()
 	defer f.editor.CancelFind()
 	defer f.editor.CancelCompletion()

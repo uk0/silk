@@ -61,13 +61,9 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 	}
 	switch group {
 	case "Edit":
-		undo, redo := document, document
-		if design {
-			undo = canvas.GedScene().UndoStack().CanUndo()
-			redo = canvas.GedScene().UndoStack().CanRedo()
-		}
-		add("edit.undo", "Undo", "edit-undo", key+"+Z", undo, func() { undoCurrentDocument(tabs, canvas, false) })
-		add("edit.redo", "Redo", "edit-redo", key+"+Shift+Z", redo, func() { undoCurrentDocument(tabs, canvas, true) })
+		target := currentDocumentHistory(tabs, canvas)
+		add("edit.undo", "Undo", "edit-undo", key+"+Z", target.available(false), func() { runHistoryMenu(tabs, canvas, target, false) })
+		add("edit.redo", "Redo", "edit-redo", key+"+Shift+Z", target.available(true), func() { runHistoryMenu(tabs, canvas, target, true) })
 		menu.AddSeparator()
 		ed := visibleCaretEditor(tabs, canvas)
 		for _, spec := range editorCaretCommandSpecs() {

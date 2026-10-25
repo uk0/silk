@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### History-aware editor actions
+
+- Undo/Redo now reflect the visible document's actual history in the menu and
+  toolbar; palette entries explain when an action is unavailable. Stale menus
+  cannot undo a different editor after a tab switch.
+- SDK `CanUndo` / `CanRedo` and `SubscribeHistoryChanged` let tools bind history
+  controls without polling the text or replacing `SigChanged`. Availability
+  notifications are transition-only; save and caret movement remain silent.
+- Designer drafts remain undoable before explicit commit. An outstanding draft
+  disables Redo rather than accidentally replacing its existing redo branch.
+  [Verification details](EDITOR_HISTORY_STATE_QA_20261025.md).
+
 ### Atomic duplicate/delete line commands
 
 - **Edit → Duplicate Lines / Delete Lines** and the Command Palette now share

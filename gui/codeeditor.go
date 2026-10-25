@@ -283,8 +283,10 @@ type CodeEditor struct {
 	lastClickCol  int
 
 	// --- Undo/Redo ---
-	undoStack []editAction
-	redoStack []editAction
+	undoStack                      []editAction
+	redoStack                      []editAction
+	historyObservers               []*editorHistoryObserver
+	historyHadUndo, historyHadRedo bool
 
 	// --- Find/Replace ---
 	findState      editorFindState
@@ -675,6 +677,7 @@ func (this *CodeEditor) SetText(s string) {
 	this.clearTokenCache()
 	this.tokenCacheLineCt = len(this.lines)
 	this.invalidateFoldCache() // new buffer + reset folds: drop both fold caches
+	this.notifyHistoryChanged()
 	this.Self().Update()
 }
 
@@ -1544,6 +1547,7 @@ func (this *CodeEditor) rebuildText() {
 	// even when the line count is unchanged, so drop the fold caches here on
 	// every mutation — this is the funnel every edit path hits.
 	this.invalidateFoldCache()
+	this.notifyHistoryChanged()
 	if this.onChanged != nil {
 		this.onChanged(this.text)
 	}

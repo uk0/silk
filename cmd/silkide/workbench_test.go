@@ -41,6 +41,8 @@ func testWorkbench(t *testing.T) *workbench {
 	dock.AddView(w.welcome)
 	w.canvas.GedScene().SetFilename(filepath.Join(t.TempDir(), "Form.silkui"))
 	globalWorkbench = w
+	dock.SetTabChangedCallback(func(_ int) { w.syncHistoryActions() })
+	t.Cleanup(w.closeHistoryActions)
 	return w
 }
 
@@ -341,7 +343,13 @@ func TestDesignHistoryNotifiesDependentPanels(t *testing.T) {
 	w.canvas.GedScene().AddDesignChangedCallback(func() { calls++ })
 	undoCurrentDocument(w.tabs, w.canvas, false)
 	undoCurrentDocument(w.tabs, w.canvas, true)
-	if calls != 2 {
+	if calls != 0 {
+		t.Fatalf("empty history notified panels: %d", calls)
+	}
+	w.canvas.GedScene().PushCommand(gui.NewCompoundCommand())
+	undoCurrentDocument(w.tabs, w.canvas, false)
+	undoCurrentDocument(w.tabs, w.canvas, true)
+	if calls != 3 { // one push, one actual Undo, one actual Redo
 		t.Fatalf("design history notifications = %d", calls)
 	}
 }

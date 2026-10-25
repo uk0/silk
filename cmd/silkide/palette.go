@@ -20,9 +20,10 @@ import (
 // entry doubles as keyboard documentation when the user types
 // "build" and sees "Build (F6)".
 type paletteCommand struct {
-	Name string
-	Hint string
-	Fn   func()
+	Name      string
+	Hint      string
+	Fn        func()
+	Available func() bool // nil means available; evaluated on the UI thread
 }
 
 // paletteCommands is populated by registerPaletteCommands at IDE
@@ -67,8 +68,15 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		})
 	}
 	add("Save All", actionKeyHint()+"+Shift+S", func() { performSaveAll(editorTabs, designCanvas) })
-	add("Undo", actionKeyHint()+"+Z", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
-	add("Redo", actionKeyHint()+"+Shift+Z", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
+	for i, name := range []string{"Undo", "Redo"} {
+		redo := i == 1
+		hint := actionKeyHint() + "+Z"
+		if redo {
+			hint = actionKeyHint() + "+Shift+Z"
+		}
+		add(name, hint, func() { undoCurrentDocument(editorTabs, designCanvas, redo) })
+		paletteCommands[len(paletteCommands)-1].Available = func() bool { return currentDocumentHistory(editorTabs, designCanvas).available(redo) }
+	}
 	for _, spec := range editorCaretCommandSpecs() {
 		add(spec.label, spec.hint, func() { runEditorCaretCommand(editorTabs, designCanvas, spec, nil) })
 	}
@@ -451,10 +459,22 @@ func showCommandPalette(parent gui.IWidget) {
 	selection.run(result)
 }
 
+func (c paletteCommand) available() bool { return c.Available == nil || c.Available() }
+func (c paletteCommand) displayText() string {
+	label := c.Name
+	if c.Hint != "" {
+		label += "    " + c.Hint
+	}
+	if !c.available() {
+		label += "    (" + i18n.T("Unavailable") + ")"
+	}
+	return label
+}
+
 type paletteSelection struct{ command *paletteCommand }
 
 func (s *paletteSelection) choose(dlg *gui.Dialog, command paletteCommand) {
-	if s.command != nil {
+	if s.command != nil || !command.available() {
 		return
 	}
 	s.command = &command
@@ -463,7 +483,7 @@ func (s *paletteSelection) choose(dlg *gui.Dialog, command paletteCommand) {
 func (s *paletteSelection) run(result gui.DialogResult) {
 	command := s.command
 	s.command = nil // consume before invoking a possibly reentrant command
-	if result == gui.DialogOK && command != nil && command.Fn != nil {
+	if result == gui.DialogOK && command != nil && command.Fn != nil && command.available() {
 		command.Fn()
 	}
 }
@@ -486,11 +506,7 @@ func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
 		cmds := filterCommands(paletteCommands, query)
 		items := make([]gui.ListItem, 0, len(cmds))
 		for _, c := range cmds {
-			label := c.Name
-			if c.Hint != "" {
-				label = c.Name + "    " + c.Hint
-			}
-			items = append(items, gui.ListItem{Text: label, Data: c})
+			items = append(items, gui.ListItem{Text: c.displayText(), Data: c})
 		}
 		fillFinderList(list, items)
 	}

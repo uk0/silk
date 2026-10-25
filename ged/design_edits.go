@@ -41,12 +41,18 @@ func (s *GedScene) IsClean() bool {
 	if !s.SceneItem.IsClean() {
 		return false
 	}
+	return !s.HasPendingEdits()
+}
+
+// HasPendingEdits reports UI-owned drafts not yet represented by undo commands.
+// This query never commits a draft. Like pending editors, it is UI-thread-only.
+func (s *GedScene) HasPendingEdits() bool {
 	for _, entry := range s.pendingEditors {
 		if entry.editor.HasPendingChanges() {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // CommitPendingEdits materializes drafts as undoable commands, not disk writes.

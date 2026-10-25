@@ -180,6 +180,9 @@ func main() {
 
 	frame.Show()
 	core.EventLoop()
+	if globalWorkbench != nil {
+		globalWorkbench.closeHistoryActions()
+	}
 	finishPreferenceSaves(prefs)
 	// Stop and join gutter workers only after UI dispatch ends. Merely canceling
 	// at tab/window close can let the process exit before the child is reaped.
@@ -328,7 +331,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	// goes through i18n.T() so a Chinese locale shows "保存" instead of
 	// "Save", matching the i18n contract for the rest of the IDE
 	// chrome.
-	addIconAction := func(label, iconName, tipKey string, cb func()) {
+	addIconAction := func(label, iconName, tipKey string, cb func()) *gui.Button {
 		if label == "" {
 			label = i18n.T(tipKey)
 		}
@@ -336,6 +339,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		if btn != nil && tipKey != "" {
 			gui.SetToolTip(btn, i18n.T(tipKey))
 		}
+		return btn
 	}
 
 	// New: clears the design canvas to a fresh scene. Bound to
@@ -372,8 +376,8 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	tb.AddSeparator()
 
 	// Document history always follows the visible editor or designer.
-	addIconAction("", "edit-undo", "Undo", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
-	addIconAction("", "edit-redo", "Redo", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
+	undo := addIconAction("", "edit-undo", "Undo", func() { undoCurrentDocument(editorTabs, designCanvas, false) })
+	redo := addIconAction("", "edit-redo", "Redo", func() { undoCurrentDocument(editorTabs, designCanvas, true) })
 	tb.AddSeparator()
 
 	// Project execution actions; tooltips advertise their keyboard shortcuts.
@@ -405,6 +409,11 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		revealWorkbenchTool(globalRightDock, globalPropSheet)
 	})
 
+	if w := globalWorkbench; w != nil && w.frame == frame {
+		w.closeHistoryActions()
+		w.historyActions = &workbenchHistoryActions{undo: undo, redo: redo}
+		w.syncHistoryActions()
+	}
 	frame.SetToolBar(tb)
 	buildDesignToolBar(frame, designCanvas)
 }
@@ -491,6 +500,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	dock.AddView(designCanvas)
 	w := &workbench{frame: frame, center: dock, tabs: editorTabs, canvas: designCanvas}
 	globalWorkbench = w
+	dock.SetTabChangedCallback(func(_ int) { w.syncHistoryActions() })
 
 	// Welcome screen — third sibling tab. Mirrors Qt Creator's start
 	// page: title, recent projects, New / Open buttons. The user
@@ -658,9 +668,6 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// check, so binding the editor once per tab switch is enough —
 		// no per-keystroke hook needed.
 		syncOutlineToActiveEditor(editorTabs)
-		editorTabs.SetCurrentChangedCallback(func(_ interface{}, _ int) {
-			syncOutlineToActiveEditor(editorTabs)
-		})
 	}
 
 	// Bottom dock: terminal + build output + problems. Toolchain stuff
@@ -961,6 +968,12 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	})
 	tabs.TabBar().SetContextMenuCallback(func(_ *gui.TabBar, menu *gui.Menu, idx int) {
 		buildEditorTabContextMenu(menu, tabs, idx)
+	})
+	tabs.SetCurrentChangedCallback(func(_ interface{}, _ int) {
+		syncOutlineToActiveEditor(tabs)
+		if w := globalWorkbench; w != nil && w.tabs == tabs {
+			w.syncHistoryActions()
+		}
 	})
 	return tabs
 }

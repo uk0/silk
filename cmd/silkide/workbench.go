@@ -29,6 +29,7 @@ type workbench struct {
 	paletteView    gui.IWidget
 	buttons        map[workspaceMode]*gui.Button
 	lastMode       workspaceMode
+	historyActions *workbenchHistoryActions
 	designToolbar  *gui.ToolBar
 	designActions  []designActionButton
 	dockVisibility map[*gui.Dock]bool
@@ -112,6 +113,7 @@ func (w *workbench) syncMode() {
 		}
 	}
 	w.syncDesignActions(mode)
+	w.syncHistoryActions()
 	// Welcome temporarily hides tool docks. Do not force them open on every
 	// heartbeat: manual dock visibility must survive both redraws and Welcome.
 	if mode == w.lastMode {
@@ -261,27 +263,27 @@ func saveCurrentDocument(tabs *gui.TabWidget, canvas *ged.GedView) bool {
 }
 
 func undoCurrentDocument(tabs *gui.TabWidget, canvas *ged.GedView, redo bool) {
-	switch documentMode(tabs, canvas) {
-	case modeEdit:
-		if ed := activeEditor(tabs); ed != nil {
-			if redo {
-				ed.Redo()
-			} else {
-				ed.Undo()
-			}
+	target := currentDocumentHistory(tabs, canvas)
+	if !target.available(redo) {
+		return
+	}
+	if target.editor != nil {
+		if redo {
+			target.editor.Redo()
+		} else {
+			target.editor.Undo()
 		}
-	case modeDesign:
-		if canvas == nil || canvas.GedScene() == nil {
-			return
-		}
+		target.editor.SetFocus()
+	} else if target.scene != nil {
 		if redo {
 			canvas.Redo()
 		} else {
 			canvas.Undo()
 		}
+		canvas.SetFocus()
 	}
 	if w := globalWorkbench; w != nil {
-		w.syncMode()
+		w.syncHistoryActions()
 	}
 }
 

@@ -156,3 +156,27 @@ func TestDesignCopyIncludesPendingHandlerDraft(t *testing.T) {
 		t.Fatal("copy omitted pending handler source")
 	}
 }
+
+func TestHasPendingEditsDoesNotCommitDraft(t *testing.T) {
+	v, p, w := draftPanel(t)
+	s := v.GedScene()
+	count := s.UndoStack().Count()
+	if s.HasPendingEdits() {
+		t.Fatal("template is not a draft")
+	}
+	p.HandlerEditor().ReplaceAllText("func pending(){}")
+	for i := 0; i < 10; i++ {
+		if !s.HasPendingEdits() {
+			t.Fatal("missing draft")
+		}
+	}
+	if w.GetCode() != "" || s.UndoStack().Count() != count {
+		t.Fatal("query committed draft")
+	}
+	if err := s.CommitPendingEdits(); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasPendingEdits() {
+		t.Fatal("committed draft remains pending")
+	}
+}

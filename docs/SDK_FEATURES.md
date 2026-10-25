@@ -40,6 +40,22 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 撤销历史状态与订阅
+
+`CodeEditor.CanUndo()` / `CanRedo()` 是 O(1) 查询，与 `Modified()` 独立：保存不清除
+历史；撤销恢复到已保存文本也不代表没有 Redo。`SubscribeHistoryChanged(func())`
+返回可重复调用的取消订阅函数，支持多个观察者，不覆盖 `SigChanged`。绑定后先查询
+一次状态；之后只在两个可用性布尔值变化时回调，编辑完成、Undo/Redo、`SetText`
+清空历史均有覆盖。连续输入、保存和光标移动若未改变可用性，不额外通知。
+
+查询、订阅、取消与回调均在 UI 线程进行；回调应短小，不能同步修改正文。消费者
+拆卸时必须取消订阅。`examples/editor-lines` 展示 Undo/Redo 按钮按事件启用，以及
+`CanUndo` / `CanRedo` 快照。IDE 工具栏随编辑、切换文档和模式同步，空历史命令
+不再发出伪设计变更。菜单持有文档身份；长期注册的工具栏/快捷键解析当前可见文档。
+
+设计器 `GedScene.HasPendingEdits()` 仅查询草稿，不触发提交或写盘。有草稿时 Undo
+仍可先提交后撤销，提交失败则保留草稿；Redo 不可用，避免无意清除已有重做分支。
+
 ### 行块复制与删除
 
 在 UI 线程使用 `CodeEditor.DuplicateLines()`、`DeleteLines()`，以及纯可用性查询
