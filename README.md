@@ -21,6 +21,16 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Quick Open at a line and column
+
+- Quick Open accepts `file.go:line[:column]`, using one-based Unicode code-point
+  columns in the live, unsaved document. Successful jumps participate in Back /
+  Forward history. Invalid syntax stays in the finder; out-of-range destinations
+  show a warning without moving the destination caret or recording a jump.
+- Absolute paths are limited to indexed files. Quote colon-bearing filenames,
+  e.g. `"report:2026":3:2`. The SDK exposes `locator.ParseFileQuery` without I/O or
+  GUI dependencies. See [verification](QUICK_OPEN_LOCATION_QA_20261025.md).
+
 ### Keyboard-driven search results
 
 - Command Palette, Quick Open and Workspace Symbols now let **Up / Down /

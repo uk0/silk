@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/uk0/silk/diagnostic"
@@ -90,6 +91,21 @@ func walkProjectFiles(root string) []fileEntry {
 // contract. Path survives the Item.Detail round-trip so the caller still
 // opens the same absolute file it selected.
 func rankFiles(files []fileEntry, query string) []fileEntry {
+	parsed, err := locator.ParseFileQuery(query)
+	if err != nil {
+		return nil
+	}
+	query = filepath.FromSlash(parsed.Path)
+	// Absolute paths still select only indexed files; never open arbitrary input.
+	if filepath.IsAbs(query) {
+		query = filepath.Clean(query)
+		for _, entry := range files {
+			if entry.Path == query || runtime.GOOS == "windows" && strings.EqualFold(entry.Path, query) {
+				return []fileEntry{entry}
+			}
+		}
+		return nil
+	}
 	items := make([]locator.Item, len(files))
 	for i, f := range files {
 		items[i] = locator.Item{Name: f.Display, Detail: f.Path, Kind: "file"}
@@ -103,15 +119,16 @@ func rankFiles(files []fileEntry, query string) []fileEntry {
 }
 
 type fileFinder struct {
-	dialog   *gui.Dialog
-	input    *gui.Edit
-	list     *gui.ListWidget
-	status   *gui.Label
-	service  *fileSearchService
-	session  *fileSearchSession
-	closed   bool
-	selected *fileEntry
-	reported bool
+	dialog      *gui.Dialog
+	input       *gui.Edit
+	list        *gui.ListWidget
+	status      *gui.Label
+	service     *fileSearchService
+	session     *fileSearchSession
+	closed      bool
+	selected    *fileEntry
+	reported    bool
+	destination string
 }
 
 // Construction never scans, ranks or waits for disk I/O on the GUI thread.
@@ -127,13 +144,16 @@ func showFileFinder(parent gui.IWidget, root string, tabs *gui.TabWidget) {
 		return
 	}
 	if result == gui.DialogOK && f.selected != nil && tabs != nil {
-		openFileInEditor(tabs, f.selected.Path)
+		openFileFinderSelection(tabs, f.selected.Path, f.destination)
 	}
 }
 func newFileFinder(parent gui.IWidget, root string, service *fileSearchService) *fileFinder {
 	f := &fileFinder{dialog: gui.NewDialog(i18n.T("Open File"), parent), input: gui.NewEdit(), list: gui.NewListWidget(), status: gui.NewLabel(i18n.T("Indexing project files...")), service: service}
 	box := gui.NewVBox()
 	box.SetSpacing(6)
+	box.AddWidget(gui.NewLabel(i18n.T("File or file:line[:column] (1-based)")))
+	f.input.SetMaxLength(locator.MaxFileQueryLength)
+	gui.SetToolTip(f.input, i18n.T("Quote paths containing colons, e.g. \"report:2026\":3:2"))
 	box.AddWidget(f.input)
 	f.list.SetFillAvailable(true)
 	f.list.SetSelectionVisible(true)
@@ -142,6 +162,11 @@ func newFileFinder(parent gui.IWidget, root string, service *fileSearchService) 
 	box.AddWidget(f.status)
 	f.session = service.open(root, func(r fileSearchResult) {
 		if f.closed {
+			return
+		}
+		if _, err := locator.ParseFileQuery(f.input.Text()); err != nil {
+			fillFinderList(f.list, nil)
+			f.status.SetText(i18n.T("Invalid location; use file:line[:column] with positive numbers"))
 			return
 		}
 		items := make([]gui.ListItem, 0, len(r.files))
@@ -176,7 +201,11 @@ func newFileFinder(parent gui.IWidget, root string, service *fileSearchService) 
 			return
 		}
 		fillFinderList(f.list, nil) // Old rows cannot be opened while a new query runs.
-		f.status.SetText(i18n.T("Searching files..."))
+		if _, err := locator.ParseFileQuery(q); err != nil {
+			f.status.SetText(i18n.T("Invalid location; use file:line[:column] with positive numbers"))
+		} else {
+			f.status.SetText(i18n.T("Searching files..."))
+		}
 		gui.SetToolTip(f.status, "")
 		f.service.update(f.session, q)
 	})
@@ -196,6 +225,11 @@ func (f *fileFinder) choose(idx int) {
 	if !ok {
 		return
 	}
+	query, err := locator.ParseFileQuery(f.input.Text())
+	if err != nil {
+		return
+	}
+	f.destination = query.Location
 	f.selected = &entry
 	dismissDialog(f.dialog)
 }
@@ -205,5 +239,32 @@ func (f *fileFinder) close() {
 	}
 	f.closed = true
 	f.input.SetNavigationList(nil)
+	gui.SetToolTip(f.input, "")
+	gui.SetToolTip(f.status, "")
 	f.service.close(f.session)
+}
+
+// Validate against the live (possibly dirty) destination, never disk text. A
+// rejected range may open the file but never moves its caret or records a jump.
+// This runs after native dialog teardown, not from its input callback.
+func openFileFinderSelection(tabs *gui.TabWidget, path, location string) bool {
+	if location == "" {
+		return openFileInEditor(tabs, path)
+	}
+	from := editorNavigationPosition(tabs)
+	if !openFileInEditor(tabs, path) {
+		return false
+	}
+	ed := activeEditor(tabs)
+	if ed == nil {
+		return false
+	}
+	if err := ed.NavigateToLocation(location); err != nil {
+		silkideToast(err.Error(), gui.ToastWarning)
+		return false
+	}
+	if history := editorNavigation(tabs); history != nil && from.FilePath != "" {
+		history.RecordJump(from, ed.NavigationPosition())
+	}
+	return true
 }

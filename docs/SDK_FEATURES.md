@@ -40,6 +40,36 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 文件查询与行列定位
+
+`locator.ParseFileQuery(text) (FileQuery, error)` 将文件搜索文本拆分为 `Path` 与
+可选的 `Location`（从 1 开始的 `行号[:列号]`）。支持 Windows 盘符／UNC、相对路径、
+Unicode 文件名和带空格的路径；含数字尾缀冒号的文件名需要加双引号，例如
+`"report:2026"` 搜索字面文件名，`"report:2026":3:2` 才表示附带位置。
+
+```go
+query, err := locator.ParseFileQuery("gui/edit.go:120:4")
+if err != nil {
+    // errors.Is(err, locator.ErrFileQuerySyntax)；不要使用失败的目标。
+    return
+}
+// 对 query.Path 做宿主自己的索引匹配和路径约束。
+// 只有拿到实际目标编辑器以后，才对它的实时缓冲区定位：
+if query.Location != "" {
+    err = editor.NavigateToLocation(query.Location)
+}
+```
+
+解析器不做 I/O、路径授权、环境变量展开或文档范围校验；空文本是合法的空搜索。
+输入上限 `MaxFileQueryLength` 为 4096 字节，位置部分最多 64 字节；不完整引号、
+空位置、零、负数和数字溢出均不可作为可执行目标。Windows `C:`／`C:123` 保留
+盘符语义；普通非数字冒号可以是文件名的一部分。
+
+IDE 快速打开复用该解析器及现有有界异步索引，接受已索引文件的绝对路径。
+列号按 Unicode code point，而非字节／UTF-16／制表符视觉宽度；使用未保存文本，
+只读文档也能定位。成功后加入工作台后退／前进历史，不自动保存或修改文本。
+范围错误会打开或激活目标文件以展示警告，但不移动其光标，也不新增导航记录。
+
 ### 搜索输入框与结果列表联动
 
 `Edit.SetNavigationList(list)` / `NavigationList()` 将单行输入框与同一控件树、

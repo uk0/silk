@@ -475,6 +475,11 @@ func registerSilkideTranslations() {
 		"Renamed across %d file(s)":               "已重命名 %d 个文件",
 		"Find References":                         "查找引用",
 		"Go to Symbol in Workspace":               "跳转到工作区符号",
+
+		"File or file:line[:column] (1-based)":                           "文件名 或 文件名:行号[:列号]（从 1 开始）",
+		"Quote paths containing colons, e.g. \"report:2026\":3:2":        "含冒号的路径请加双引号，例如 \"report:2026\":3:2",
+		"Invalid location; use file:line[:column] with positive numbers": "位置格式无效，请输入 文件名:行号[:列号]，行列须为正整数",
+
 		"Indexing project files...":               "正在索引项目文件…",
 		"Searching files...":                      "正在搜索文件…",
 		"No files found":                          "未找到文件",
