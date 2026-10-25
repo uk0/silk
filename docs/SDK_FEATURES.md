@@ -37,6 +37,25 @@
 | 编辑器文件类型 | `CodeEditor.Language()`、`SetFilePath()` | 自动识别 Go／SilkGo／JSON／普通文本；切换类型清理旧投影与后台候选，不修改正文 |
 | 离线文本格式化 | `formatx.Format/FormatAsync` | Go 标准格式化、JSON 美化／压缩，不调用外部程序；输入／输出／深度限制 |
 | 编辑器后台格式化 | `CodeEditor.FormatDocumentAsync/CancelFormat/Formatting` | 有界任务、版本校验、UI 派发；保留历史并合为一次 Undo |
+| 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
+| 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
+
+### 缩进与原始内容
+
+在 UI 线程调用 `editor.SetInsertSpaces(true)`、`editor.SetTabSize(2)`，即可配置
+后续 Tab／Enter／行缩进。配置不修改正文或 dirty 状态，也不转换粘贴、片段和格式化器
+返回的内容；Go 格式化仍遵循 gofmt 的标准风格。Tab 的逻辑列按 rune 计数，已有 Tab
+按制表位展开，不等同于终端 wcwidth 或比例字体的像素宽度。
+
+`IndentLines/OutdentLines` 使用选区覆盖的行；无选区则使用各光标所在行。选区终点在
+下一行第 0 列时不包含该行。Outdent 删除一个前导 Tab 或最多 `TabSize()` 个空格；
+无前导空白的行不改动，无变化不记录历史或发出 Changed。旧 Selection API 仍要求选区。
+单行选区的普通 Tab 保留原先“替换选区”的语义，Shift+Tab 改为减少当前行缩进；
+活动片段的 Tab／Shift+Tab 仍优先导航占位符。
+
+每次缩进操作只为修改过的前缀保存历史，不存储两份完整文档；最终文本发布、布局和
+重绘仍在 UI 线程，不宣称任意大小文档零延迟。示例：`go run ./examples/editor-indent`。
+IDE 配置是全局持久化选项，不是自动检测或每文件 `.editorconfig` 支持。
 
 ### 离线格式化与取消
 

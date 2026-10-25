@@ -199,6 +199,7 @@ type editAction struct {
 	group                       []editorByteEdit
 	beforeCursors, afterCursors []cursorPos
 	findScope                   *editorFindScopeHistory
+	selection                   *editorSelectionHistory
 }
 
 // findMatch records a single search hit location.
@@ -227,6 +228,7 @@ type CodeEditor struct {
 	customPalette             *editorPalette
 	paletteRev                uint64
 	tabSize                   int
+	insertSpaces              bool
 	savedText                 string
 	Widget
 	// Text and its derived metadata are refreshed at the edit boundary, never
@@ -1715,6 +1717,9 @@ func (this *CodeEditor) undo() {
 		this.redoStack = append(this.redoStack, a)
 	}
 	this.clearSelection()
+	if a.selection != nil {
+		this.restoreSelection(a.selection.before)
+	}
 	this.rebuildText()
 	this.ensureCursorVisible()
 	this.Self().Update()
@@ -1765,6 +1770,9 @@ func (this *CodeEditor) redo() {
 		this.undoStack = append(this.undoStack, a)
 	}
 	this.clearSelection()
+	if a.selection != nil {
+		this.restoreSelection(a.selection.after)
+	}
 	this.rebuildText()
 	this.ensureCursorVisible()
 	this.Self().Update()
@@ -2493,118 +2501,19 @@ func cursorForByteOffset(lines []string, offset int) (int, int) {
 
 // --- Multi-line Tab / Shift+Tab indent ---
 //
-// applyLineIndent is a pure helper that inserts (remove==false) or removes
-// (remove==true) one indent unit at the start of each line in
-// [startLine, endLine]. It returns the modified slice (input untouched) and
-// a per-line byte delta (positive on insert, negative or zero on remove) so
-// callers can adjust cursor and selection columns when the line they sit on
-// got narrower or wider.
-//
-// Remove semantics follow Go's tab-or-4-space convention: a leading tab is
-// stripped if present, otherwise up to 4 leading spaces. Lines with no
-// leading whitespace are left unchanged (delta 0). Lines OUTSIDE the
-// [startLine, endLine] range are copied verbatim with delta 0 — keeping the
-// returned slice the same length as the input makes the caller's bookkeeping
-// trivial.
-func applyLineIndent(lines []string, startLine, endLine int, indent string, remove bool) ([]string, []int) {
-	out := make([]string, len(lines))
-	copy(out, lines)
-	deltas := make([]int, len(lines))
-	if startLine < 0 {
-		startLine = 0
-	}
-	if endLine >= len(lines) {
-		endLine = len(lines) - 1
-	}
-	if startLine > endLine {
-		return out, deltas
-	}
-	for i := startLine; i <= endLine; i++ {
-		ln := out[i]
-		if remove {
-			// Strip one tab, or up to 4 leading spaces.
-			if strings.HasPrefix(ln, "\t") {
-				out[i] = ln[1:]
-				deltas[i] = -1
-				continue
-			}
-			n := 0
-			for n < 4 && n < len(ln) && ln[n] == ' ' {
-				n++
-			}
-			if n > 0 {
-				out[i] = ln[n:]
-				deltas[i] = -n
-			}
-			// else: no leading whitespace — leave untouched, delta 0
-		} else {
-			out[i] = indent + ln
-			deltas[i] = len(indent)
-		}
-	}
-	return out, deltas
-}
-
-// IndentSelection inserts one indent unit at the start of every line spanned
-// by the active selection. With no selection it is a no-op (single-caret Tab
-// goes through OnTextInput("\t") in OnKeyDown).
+// IndentSelection indents selected logical lines as one undoable transaction.
+// With no selection it is a no-op; IndentLines also handles caret-only commands.
 func (this *CodeEditor) IndentSelection() {
-	if !this.hasSelection {
-		return
+	if this.hasSelection {
+		this.IndentLines()
 	}
-	sl, _, el, _ := this.selectionRange()
-	newLines, deltas := applyLineIndent(this.lines, sl, el, "\t", false)
-	this.lines = newLines
-	this.shiftSelectionAfterIndent(sl, el, deltas)
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
 }
 
-// DedentSelection removes one indent unit (one tab or up to 4 spaces) from
-// the start of every line spanned by the active selection. Lines with no
-// leading whitespace are skipped.
+// DedentSelection removes one Tab or up to TabSize leading spaces per line.
 func (this *CodeEditor) DedentSelection() {
-	if !this.hasSelection {
-		return
+	if this.hasSelection {
+		this.OutdentLines()
 	}
-	sl, _, el, _ := this.selectionRange()
-	newLines, deltas := applyLineIndent(this.lines, sl, el, "\t", true)
-	this.lines = newLines
-	this.shiftSelectionAfterIndent(sl, el, deltas)
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
-
-// shiftSelectionAfterIndent re-anchors the selection + cursor after an
-// indent/dedent so the selection still spans the SAME logical lines, with
-// column offsets adjusted by the per-line delta. Columns that would go
-// negative (over-aggressive dedent of a leading-whitespace cursor) are
-// clamped to 0; columns past the new line length are clamped to it.
-func (this *CodeEditor) shiftSelectionAfterIndent(sl, el int, deltas []int) {
-	shift := func(line, col int) int {
-		if line < 0 || line >= len(deltas) {
-			return col
-		}
-		col += deltas[line]
-		if col < 0 {
-			col = 0
-		}
-		if line < len(this.lines) {
-			runes := len([]rune(this.lines[line]))
-			if col > runes {
-				col = runes
-			}
-		}
-		return col
-	}
-	this.selStartCol = shift(this.selStartLine, this.selStartCol)
-	this.selEndCol = shift(this.selEndLine, this.selEndCol)
-	this.cursorCol = shift(this.cursorLine, this.cursorCol)
-	// Keep selection range coverage in [sl, el] even if both ends collapsed
-	// to the same column — users expect the selection to persist.
-	this.hasSelection = !(this.selStartLine == this.selEndLine && this.selStartCol == this.selEndCol) || sl != el
 }
 
 // --- Word detection for double-click ---
@@ -3322,12 +3231,12 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	if this.Formatting() {
 		wrapStr = "Formatting…"
 	}
-	labels := [5]string{
+	labels := [6]string{
 		this.cursorStatusLabel(false),
 		fmt.Sprintf("%d chars, %d lines", this.textRuneCount, len(this.lines)),
-		"UTF-8", this.languageLabel(), wrapStr,
+		"UTF-8", this.languageLabel(), wrapStr, this.indentationLabel(),
 	}
-	var widths [5]float64
+	var widths [6]float64
 	for i, label := range labels {
 		ext := smallFont.TextExtents(label)
 		widths[i] = math.Max(ext.Width, ext.XAdvance)
@@ -3337,7 +3246,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 		ext := smallFont.TextExtents(labels[0])
 		widths[0] = math.Max(ext.Width, ext.XAdvance)
 	}
-	for i, x := range editorStatusSlots(w, widths) {
+	for i, x := range editorStatusSlotsWithIndent(w, widths) {
 		if x < 0 {
 			continue
 		}
@@ -4836,7 +4745,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 			return
 		}
 		this.clampCursor()
-		insertedText := editorNewlineText(this.lines[this.cursorLine], this.cursorCol)
+		insertedText := editorNewlineWithIndent(this.lines[this.cursorLine], this.cursorCol, this.indentUnit(), this.TabSize())
 		if this.hasSelection {
 			this.replaceSelectionRecorded(insertedText)
 		} else {
@@ -4868,17 +4777,17 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 			// Past the final stop: drop the session and fall back to plain Tab.
 			this.snippetSess = nil
 		}
+		if !ctrl && shift {
+			this.OutdentLines()
+			return
+		}
 		// Multi-line selection: Tab indents every spanned line, Shift+Tab
 		// dedents. Snippet expansion only makes sense when there is a single
 		// caret on one line, so it runs only in the no-selection branch below.
 		if this.hasSelection && !ctrl {
 			sl, _, el, _ := this.selectionRange()
 			if sl != el {
-				if shift {
-					this.DedentSelection()
-				} else {
-					this.IndentSelection()
-				}
+				this.IndentSelection()
 				return
 			}
 		}
@@ -4893,7 +4802,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 				return
 			}
 		}
-		this.OnTextInput("\t")
+		this.insertIndentTab()
 
 	case KeyLeft:
 		if alt && !ctrl && !shift {
@@ -5977,17 +5886,15 @@ type foldRegion struct {
 // The function is pure (no editor state, no side effects) so it can be unit
 // tested in isolation. cursorCol is a rune-count, matching CodeEditor.cursorCol.
 // indentUnit is whatever the caller's editor uses for a single indent step
-// (the CodeEditor uses a literal "\t").
+// (CodeEditor chooses tabs or spaces through InsertSpaces/TabSize).
 func nextLineIndent(currentLine string, cursorCol int, indentUnit string) string {
-	// Leading whitespace of the current line.
-	indent := ""
-	for _, r := range currentLine {
-		if r == ' ' || r == '\t' {
-			indent += string(r)
-		} else {
-			break
-		}
+	// Slice once: repeated string concatenation was quadratic for a long
+	// indentation prefix. Keep the legacy indentation-preservation semantics.
+	n := 0
+	for n < len(currentLine) && (currentLine[n] == ' ' || currentLine[n] == '\t') {
+		n++
 	}
+	indent := currentLine[:n]
 
 	column := textPositionInLine(currentLine, cursorCol).ByteColumn
 	// "End of line" means only whitespace remains after the caret.

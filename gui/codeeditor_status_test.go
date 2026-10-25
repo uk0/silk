@@ -39,3 +39,30 @@ func TestEditorStatusKeepsPrimaryFieldsBeforeCounts(t *testing.T) {
 		}
 	}
 }
+
+func TestEditorStatusIndentNeverDisplacesPrimaryFields(t *testing.T) {
+	for _, widths := range [][6]float64{{80, 125, 34, 24, 62, 72}, {210, 220, 50, 40, 90, 96}} {
+		for width := 0.0; width < 1200; width++ {
+			old := editorStatusSlots(width, [5]float64{widths[0], widths[1], widths[2], widths[3], widths[4]})
+			got := editorStatusSlotsWithIndent(width, widths)
+			for i, v := range old {
+				if got[i] != v {
+					t.Fatal("indentation displaced existing field", width, got, old)
+				}
+			}
+			if got[5] >= 0 {
+				if got[5] < 10 || got[5]+widths[5] > width-10 {
+					t.Fatal("indent label clipped", width, got)
+				}
+				for i := 0; i < 5; i++ {
+					if got[i] >= 0 && got[5] < got[i]+widths[i]+16 && got[i] < got[5]+widths[5]+16 {
+						t.Fatal("indent label overlaps", width, got)
+					}
+				}
+			}
+			if width >= 1100 && got[5] < 0 {
+				t.Fatal("wide pane hid indentation")
+			}
+		}
+	}
+}

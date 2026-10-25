@@ -14,6 +14,7 @@ import (
 )
 
 type ideAppearance struct {
+	InsertSpaces                                             bool
 	Locale, Theme, UIFont, EditorFont                        string
 	UISize, EditorSize, TabSize                              int
 	Accent, Background, Foreground, Keyword, Comment, String string
@@ -32,6 +33,7 @@ func defaultIDEAppearance() ideAppearance {
 
 func (p *preferences) Appearance() ideAppearance {
 	a := defaultIDEAppearance()
+	a.InsertSpaces = p.store.Bool("appearance/insertSpaces", false)
 	for key, ptr := range map[string]*string{"locale": &a.Locale, "theme": &a.Theme, "uiFont": &a.UIFont, "editorFont": &a.EditorFont, "accent": &a.Accent, "background": &a.Background, "foreground": &a.Foreground, "keyword": &a.Keyword, "comment": &a.Comment, "string": &a.String} {
 		*ptr = p.store.String("appearance/"+key, *ptr)
 	}
@@ -93,11 +95,15 @@ func (p *preferences) SetAppearance(a ideAppearance) error {
 			return err
 		}
 	}
+	if err := p.store.SetBool("appearance/insertSpaces", a.InsertSpaces); err != nil {
+		return err
+	}
 	return p.requestSave()
 }
 func applyEditorAppearance(ed *gui.CodeEditor, a ideAppearance) {
 	ed.SetFont(paint.NewFont(a.EditorFont, a.EditorSize, false, false))
 	ed.SetTabSize(a.TabSize)
+	ed.SetInsertSpaces(a.InsertSpaces)
 	bg, _ := parseAppearanceColor(a.Background)
 	fg, _ := parseAppearanceColor(a.Foreground)
 	kw, _ := parseAppearanceColor(a.Keyword)
@@ -172,6 +178,14 @@ func buildAppearanceDialog(parent gui.IWidget, a ideAppearance) (*gui.Dialog, fu
 	add("editorFont", "Editor font", a.EditorFont)
 	add("editorSize", "Editor font size", strconv.Itoa(a.EditorSize))
 	add("tabSize", "Tab width", strconv.Itoa(a.TabSize))
+	indentation := gui.NewComboBox()
+	indentation.SetItems([]string{i18n.T("Tabs"), i18n.T("Spaces")})
+	if a.InsertSpaces {
+		indentation.SetActiveIndex(1)
+	} else {
+		indentation.SetActiveIndex(0)
+	}
+	form.AddRow(i18n.T("Indent using"), indentation)
 	for _, v := range []struct{ k, l, v string }{{"accent", "Accent (#RRGGBB)", a.Accent}, {"background", "Editor background", a.Background}, {"foreground", "Editor text", a.Foreground}, {"keyword", "Keywords", a.Keyword}, {"comment", "Comments", a.Comment}, {"string", "Strings", a.String}} {
 		add(v.k, v.l, v.v)
 	}
@@ -179,9 +193,10 @@ func buildAppearanceDialog(parent gui.IWidget, a ideAppearance) (*gui.Dialog, fu
 	d.SetContent(form)
 	d.AddButton(i18n.T("Apply"), gui.DialogOK)
 	d.AddButton(i18n.T("Cancel"), gui.DialogCancel)
-	d.SetSize(math.Max(740, labelWidth+480), math.Max(600, rowHeight*14+100))
+	d.SetSize(math.Max(740, labelWidth+480), math.Max(600, rowHeight*15+100))
 	return d, func() (ideAppearance, error) {
 		n := a
+		n.InsertSpaces = indentation.ActiveIndex() == 1
 		n.Locale = "en"
 		if language.ActiveIndex() == 1 {
 			n.Locale = "zh-CN"
@@ -229,7 +244,7 @@ func localizeWorkbenchPanels() {
 	if globalWorkbench != nil && globalWorkbench.welcome != nil {
 		globalWorkbench.welcome.SetDockTitle(i18n.T("Welcome"))
 	}
-	i18n.AddMany("zh-CN", map[string]string{"Files": "文件", "Search": "搜索", "Packages": "包列表", "Objects": "对象", "Outline": "大纲", "Bookmarks": "书签", "Terminal": "终端", "Output": "输出", "Problems": "问题", "Tests": "测试", "Log": "日志", "Debugger": "调试", "References": "引用", "Git Changes": "Git 更改", "TODO": "待办", "Git Log": "Git 历史"})
+	i18n.AddMany("zh-CN", map[string]string{"Indent Lines": "增加行缩进", "Outdent Lines": "减少行缩进", "Indent using": "缩进方式", "Tabs": "制表符", "Spaces": "空格", "Files": "文件", "Search": "搜索", "Packages": "包列表", "Objects": "对象", "Outline": "大纲", "Bookmarks": "书签", "Terminal": "终端", "Output": "输出", "Problems": "问题", "Tests": "测试", "Log": "日志", "Debugger": "调试", "References": "引用", "Git Changes": "Git 更改", "TODO": "待办", "Git Log": "Git 历史"})
 	for view, label := range map[gui.IWidget]string{globalFileExplorer: "Files", globalSearch: "Search", globalPackages: "Packages", globalInspector: "Objects", globalOutline: "Outline", globalBookmarks: "Bookmarks", globalTerminal: "Terminal", globalBuildOutput: "Output", globalProblems: "Problems", globalTestResults: "Tests", globalLog: "Log", globalDebugPanel: "Debugger", globalReferencesPanel: "References", globalGitChanges: "Git Changes", globalTodoPanel: "TODO", globalGitLog: "Git Log"} {
 		if !nilWidget(view) {
 			if titled, ok := view.(interface{ SetDockTitle(string) }); ok {

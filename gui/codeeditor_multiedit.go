@@ -16,6 +16,7 @@ const (
 	byteCursorBackspace
 	byteCursorDelete
 	byteCursorEnter
+	byteCursorTab
 )
 
 func lineByteStarts(lines []string) []int {
@@ -64,7 +65,9 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 		case byteCursorInsert:
 			edit.after = text
 		case byteCursorEnter:
-			edit.after = editorNewlineText(line, p.col)
+			edit.after = editorNewlineWithIndent(line, p.col, e.indentUnit(), e.TabSize())
+		case byteCursorTab:
+			edit.after = e.tabText(line, p.col)
 		case byteCursorBackspace:
 			if column > 0 {
 				_, width := utf8.DecodeLastRuneInString(line[:column])
@@ -128,15 +131,15 @@ func (e *CodeEditor) restoreEditCursors(cursors []cursorPos) {
 	e.additionalCursors = append([]cursorPos(nil), cursors[1:]...)
 }
 
-func editorNewlineText(line string, col int) string {
-	indent := nextLineIndent(line, col, "\t")
+func editorNewlineWithIndent(line string, col int, unit string, width int) string {
+	indent := nextLineIndent(line, col, unit)
 	column := textPositionInLine(line, col).ByteColumn
 	after := strings.TrimLeft(line[column:], " \t")
 	if strings.HasPrefix(after, "}") && len(indent) > 0 {
 		if indent[len(indent)-1] == '\t' {
 			indent = indent[:len(indent)-1]
 		} else {
-			for n := 0; n < 4 && len(indent) > 0 && indent[len(indent)-1] == ' '; n++ {
+			for n := 0; n < width && len(indent) > 0 && indent[len(indent)-1] == ' '; n++ {
 				indent = indent[:len(indent)-1]
 			}
 		}

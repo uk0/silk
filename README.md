@@ -21,6 +21,20 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Consistent indentation and reversible line edits
+
+- **Appearance & Editor → Indent using** chooses Tabs or Spaces; the existing
+  tab width controls soft-tab stops, line indent/outdent and Enter indentation.
+  Preferences persist and apply to open and newly opened editors without
+  rewriting their contents. The status bar shows the policy when space permits.
+- **Indent Lines / Outdent Lines** are available in Edit and Command Palette.
+  Selected lines and distinct caret lines form one Undo transaction, preserving
+  selection direction, existing history and untouched bytes. A selection ending
+  at column zero does not indent that excluded line.
+- Shift+Tab now outdents without requiring a multiline selection, rather than
+  inserting another Tab. Long indentation prefixes no longer build strings
+  quadratically. SDK usage and verification: [indentation QA](EDITOR_INDENT_QA_20261025.md).
+
 ### Background Go and JSON formatting
 
 - **Edit → Format Document** and Ctrl/Cmd+Shift+I format JSON locally; Go keeps

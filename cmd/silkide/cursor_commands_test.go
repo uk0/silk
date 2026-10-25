@@ -115,3 +115,60 @@ func TestCaretPaletteResolvesVisibleEditorAtExecution(t *testing.T) {
 		t.Fatal("palette clear failed")
 	}
 }
+
+func TestIndentMenuPaletteDocumentGuardAndUndo(t *testing.T) {
+	w := testWorkbench(t)
+	old := paletteCommands
+	t.Cleanup(func() { paletteCommands = old })
+	path := writeFile(t, t.TempDir(), "indent.txt", "abc\nxyz")
+	openFileInEditor(w.tabs, path)
+	w.activate(modeEdit)
+	ed := activeEditor(w.tabs)
+	ed.SetInsertSpaces(true)
+	ed.SetTabSize(2)
+	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
+	defer releaseWorkbenchMenu(m)
+	for _, id := range []string{"editor.indentLines", "editor.outdentLines"} {
+		b := menuCommandButton(m, id)
+		if b == nil || b.Icon() == nil || !b.IsEnabled() {
+			t.Fatal("missing indentation menu", id)
+		}
+	}
+	b := menuCommandButton(m, "editor.indentLines")
+	b.Action().Trigger(b)
+	if ed.Text() != "  abc\nxyz" {
+		t.Fatal("menu indent", ed.Text())
+	}
+	ed.Undo()
+	if ed.Text() != "abc\nxyz" {
+		t.Fatal("menu undo")
+	}
+	registerPaletteCommands(w.tabs, w.canvas)
+	for _, name := range []string{"Indent Lines", "Outdent Lines"} {
+		found := false
+		for _, c := range paletteCommands {
+			if c.Name == i18n.T(name) {
+				found = true
+				c.Fn()
+				break
+			}
+		}
+		if !found {
+			t.Fatal("missing palette", name)
+		}
+	}
+	if ed.Text() != "abc\nxyz" {
+		t.Fatal("palette indent/outdent", ed.Text())
+	}
+	other := writeFile(t, t.TempDir(), "other.txt", "other")
+	openFileInEditor(w.tabs, other)
+	b.Action().Trigger(b)
+	if activeEditor(w.tabs).Text() != "other" || ed.Text() != "abc\nxyz" {
+		t.Fatal("stale menu edited another document")
+	}
+	w.activate(modeDesign)
+	b.Action().Trigger(b)
+	if activeEditor(w.tabs).Text() != "other" {
+		t.Fatal("hidden edit")
+	}
+}

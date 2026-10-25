@@ -272,3 +272,40 @@ func TestCodeEditorIndentSelectionSingleLine(t *testing.T) {
 		t.Errorf("Text() = %q, want %q", got, "\thello")
 	}
 }
+
+// Legacy vector adapter; actual editor history uses sparse prefix transactions.
+func applyLineIndent(lines []string, startLine, endLine int, indent string, remove bool) ([]string, []int) {
+	out := make([]string, len(lines))
+	copy(out, lines)
+	deltas := make([]int, len(lines))
+	if startLine < 0 {
+		startLine = 0
+	}
+	if endLine >= len(lines) {
+		endLine = len(lines) - 1
+	}
+	if startLine > endLine {
+		return out, deltas
+	}
+	for i := startLine; i <= endLine; i++ {
+		ln := out[i]
+		if remove {
+			// Strip one tab, or up to 4 leading spaces.
+			if strings.HasPrefix(ln, "\t") {
+				out[i] = ln[1:]
+				deltas[i] = -1
+				continue
+			}
+			n := indentRemoval(ln, 4)
+			if n > 0 {
+				out[i] = ln[n:]
+				deltas[i] = -n
+			}
+			// else: no leading whitespace — leave untouched, delta 0
+		} else {
+			out[i] = indent + ln
+			deltas[i] = len(indent)
+		}
+	}
+	return out, deltas
+}

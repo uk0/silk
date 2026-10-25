@@ -42,6 +42,9 @@ func TestJSONEditorDrawThemesAndScales(t *testing.T) {
 				if _, ok := r.fragments["JSON"]; !ok {
 					t.Fatal("language absent from status bar")
 				}
+				if _, ok := r.fragments["Tabs: 4"]; !ok {
+					t.Fatal("indentation policy absent from wide status bar")
+				}
 				pix := paint.NewPixmap(1000*scale, 500*scale)
 				g := pix.NewPainter()
 				defer paint.ClosePainter(g)
