@@ -75,8 +75,24 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 			})
 		}
 		menu.AddSeparator()
+		lines, lineButton := menu.AddSubMenu(i18n.T("Lines and Cursors"), gui.LoadIcon("line-move-down"), gui.NewPopupMenu())
+		lineButton.Action().SetObjName("editor.lineOps")
+		lineButton.SetEnabled(ed != nil)
+		lineButton.Action().SetEnabled(ed != nil)
 		for _, spec := range editorCaretCommandSpecs() {
-			add(spec.id, spec.label, spec.icon, spec.hint, ed != nil && spec.enabled(ed), func() { runEditorCaretCommand(tabs, canvas, spec, ed) })
+			appendFileMenuCommand(lines, fileMenuCommand{spec.id, spec.label, spec.icon, spec.hint, func() { runEditorCaretCommand(tabs, canvas, spec, ed) }, ed != nil && spec.enabled(ed)})
+		}
+		endings, endingButton := menu.AddSubMenu(i18n.T("Line Endings"), gui.LoadIcon("document"), gui.NewPopupMenu())
+		endingButton.Action().SetObjName("editor.lineEndings")
+		endingTarget := focusedClipboardEditor(tabs, canvas)
+		endingButton.SetEnabled(endingTarget != nil && !endingTarget.IsReadOnly())
+		endingButton.Action().SetEnabled(endingButton.IsEnabled())
+		for _, spec := range editorLineEndingCommands() {
+			appendFileMenuCommand(endings, fileMenuCommand{spec.id, spec.label, "document", "", func() {
+				if endingTarget != nil {
+					runEditorLineEndingCommand(tabs, canvas, endingTarget, spec.style)
+				}
+			}, endingTarget != nil && endingTarget.CanConvertLineEndings(spec.style)})
 		}
 		menu.AddSeparator()
 		formatOK := ed != nil && !ed.IsReadOnly() && (ed.Language() == "go" || ed.Language() == "json") && !ed.Formatting()

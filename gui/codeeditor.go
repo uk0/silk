@@ -188,7 +188,7 @@ type cursorPos struct {
 
 // editAction records a single undoable edit operation.
 type editAction struct {
-	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=byte transaction, 5=line rotation, 6=line splice
+	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=byte transaction, 5=line rotation, 6=line splice, 7=line ending conversion
 	line                        int
 	col                         int
 	text                        string // inserted text (kind 0,2) or deleted text (kind 1)
@@ -199,6 +199,7 @@ type editAction struct {
 	group                       []editorByteEdit
 	lineMoves                   []editorLineMove
 	lineSplices                 []editorLineSplice
+	lineEndings                 *editorLineEndingHistory
 	beforeCursors, afterCursors []cursorPos
 	findScope                   *editorFindScopeHistory
 	selection                   *editorSelectionHistory
@@ -220,19 +221,24 @@ const codeEditorFindRowHeight = 30
 // CodeEditor is a syntax-highlighted code editing widget with line numbers,
 // cursor, and basic editing support, designed for Go source code.
 type CodeEditor struct {
-	syntaxHighlights          map[int][]SyntaxHighlight
-	syntaxRevision            uint64
-	additionalSymbols         []CodeSymbol
-	additionalSymbolsRevision uint64
-	symbolsRevision           uint64 // text and asynchronous provider invalidation
-	onCompletionRequested     func()
-	customColors              EditorColors
-	customPalette             *editorPalette
-	paletteRev                uint64
-	tabSize                   int
-	insertSpaces              bool
-	savedText                 string
-	readOnly                  bool
+	syntaxHighlights             map[int][]SyntaxHighlight
+	syntaxRevision               uint64
+	additionalSymbols            []CodeSymbol
+	additionalSymbolsRevision    uint64
+	symbolsRevision              uint64 // text and asynchronous provider invalidation
+	onCompletionRequested        func()
+	customColors                 EditorColors
+	customPalette                *editorPalette
+	paletteRev                   uint64
+	tabSize                      int
+	insertSpaces                 bool
+	savedText                    string
+	readOnly                     bool
+	preferredLineEnding          EditorLineEnding
+	lineEndingLF, lineEndingCRLF int
+	ambiguousLineEndingCR        bool
+	lineEndingObservers          []*editorLineEndingObserver
+	lastLineEndingInfo           EditorLineEndingInfo
 	Widget
 	// Text and its derived metadata are refreshed at the edit boundary, never
 	// by idle title polling or painting. Low-level splice helpers mark dirty
@@ -670,6 +676,7 @@ func (this *CodeEditor) SetText(s string) {
 		this.lines = []string{""}
 	}
 	this.cacheText(s)
+	this.detectPreferredLineEnding()
 	this.cursorLine = 0
 	this.cursorCol = 0
 	this.scrollY = 0
@@ -683,6 +690,7 @@ func (this *CodeEditor) SetText(s string) {
 	this.tokenCacheLineCt = len(this.lines)
 	this.invalidateFoldCache() // new buffer + reset folds: drop both fold caches
 	this.notifyHistoryChanged()
+	this.notifyLineEndingsChanged()
 	this.Self().Update()
 }
 
@@ -721,6 +729,7 @@ func (this *CodeEditor) cacheText(text string) {
 		this.invalidateHoverHint()
 		this.ClearExternalCompletions()
 		this.textRuneCount = utf8.RuneCountInString(text)
+		this.cacheLineEndings(text)
 	}
 	this.textDirty = false
 	this.updateGoLineStates()
@@ -1556,6 +1565,7 @@ func (this *CodeEditor) rebuildText() {
 	// every mutation — this is the funnel every edit path hits.
 	this.invalidateFoldCache()
 	this.notifyHistoryChanged()
+	this.notifyLineEndingsChanged()
 	if this.onChanged != nil {
 		this.onChanged(this.text)
 	}
@@ -1731,6 +1741,10 @@ func (this *CodeEditor) undo() {
 		this.cursorLine = a.line
 		this.cursorCol = a.col
 		this.redoStack = append(this.redoStack, a)
+	case 7:
+		this.applyLineEndingHistory(a.lineEndings, true)
+		this.restoreEditCursors(a.beforeCursors)
+		this.redoStack = append(this.redoStack, a)
 	case 6:
 		this.applyLineSplices(a.lineSplices, true)
 		this.restoreEditCursors(a.beforeCursors)
@@ -1753,6 +1767,10 @@ func (this *CodeEditor) undo() {
 	this.clearSelection()
 	if a.selection != nil {
 		this.restoreSelection(a.selection.before)
+	}
+	if a.kind == 7 {
+		this.finishLineEndingChange(a.lineEndings)
+		return
 	}
 	this.rebuildText()
 	this.ensureCursorVisible()
@@ -1799,6 +1817,10 @@ func (this *CodeEditor) redo() {
 			this.cursorLine, this.cursorCol = a.redoCursor.line, a.redoCursor.col
 		}
 		this.undoStack = append(this.undoStack, a)
+	case 7:
+		this.applyLineEndingHistory(a.lineEndings, false)
+		this.restoreEditCursors(a.afterCursors)
+		this.undoStack = append(this.undoStack, a)
 	case 6:
 		this.applyLineSplices(a.lineSplices, false)
 		this.restoreEditCursors(a.afterCursors)
@@ -1820,6 +1842,10 @@ func (this *CodeEditor) redo() {
 	this.clearSelection()
 	if a.selection != nil {
 		this.restoreSelection(a.selection.after)
+	}
+	if a.kind == 7 {
+		this.finishLineEndingChange(a.lineEndings)
+		return
 	}
 	this.rebuildText()
 	this.ensureCursorVisible()
@@ -3219,7 +3245,7 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	labels := [6]string{
 		this.cursorStatusLabel(false),
 		fmt.Sprintf("%d chars, %d lines", this.textRuneCount, len(this.lines)),
-		"UTF-8", this.languageLabel(), wrapStr, this.indentationLabel(),
+		"UTF-8 · " + this.LineEndings().String(), this.languageLabel(), wrapStr, this.indentationLabel(),
 	}
 	var widths [6]float64
 	for i, label := range labels {
@@ -4656,7 +4682,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 	case KeyBackSpace:
 		completionWasOpen := this.completion != nil && (this.completion.visible || this.completion.open)
 		// Multi-cursor: delete at every caret in reverse order.
-		if len(this.additionalCursors) > 0 && !this.hasSelection {
+		if !this.hasSelection && (len(this.additionalCursors) > 0 || this.crlfBackspaceBoundary()) {
 			this.backspaceAtAllCursors()
 			this.rebuildText()
 			this.ensureCursorVisible()
@@ -4708,7 +4734,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 
 	case KeyDelete:
 		// Multi-cursor: forward-delete at every caret.
-		if len(this.additionalCursors) > 0 && !this.hasSelection {
+		if !this.hasSelection && (len(this.additionalCursors) > 0 || this.crlfDeleteBoundary()) {
 			this.deleteAtAllCursors()
 			this.rebuildText()
 			this.ensureCursorVisible()
@@ -4742,7 +4768,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 		this.Self().Update()
 
 	case KeyEnter:
-		if len(this.additionalCursors) > 0 && !this.hasSelection {
+		if !this.hasSelection && (len(this.additionalCursors) > 0 || this.preferredLineEnding == LineEndingCRLF || this.lineHasCRLF(this.cursorLine)) {
 			this.editAtAllCursors(byteCursorEnter, "")
 			this.rebuildText()
 			this.ensureCursorVisible()
@@ -4750,7 +4776,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 			return
 		}
 		this.clampCursor()
-		insertedText := editorNewlineWithIndent(this.lines[this.cursorLine], this.cursorCol, this.indentUnit(), this.TabSize())
+		insertedText := this.newlineWithIndent(this.lines[this.cursorLine], this.cursorCol)
 		if this.hasSelection {
 			this.replaceSelectionRecorded(insertedText)
 		} else {

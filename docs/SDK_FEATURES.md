@@ -40,6 +40,28 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 行尾检测、转换与事件订阅
+
+`CodeEditor.LineEndings()` 返回 LF/CRLF 数量与 `Preferred`；混合行尾显示 `Mixed`。
+宿主 `SetText` 检测多数行尾，平局取首次出现的分隔符；无分隔符默认 LF。
+UI 线程调用 `CanConvertLineEndings(gui.LineEndingLF/LineEndingCRLF)` 查询可用性，
+`ConvertLineEndings(style)` 原子转换并设置后续 Enter 的行尾。一轮 Undo/Redo 恢复
+混合行尾、光标、选区方向和偏好；历史为每个分隔符一位，不复制整篇正文。
+
+`SubscribeLineEndingsChanged(func())` 返回幂等退订函数；先查询一次，再接收数量或
+偏好的变化通知，不覆盖 `SigChanged`，没有轮询定时器。回调须短小，不能同步编辑
+正文；组件拆卸时退订。空／单行文档仅改变偏好也可撤销，但不增加文本 revision，
+不标记 Modified，不发文本变更事件；尚未实际插入行尾时，偏好不会写入文件。
+
+- 粘贴与宿主 `SetText` 不隐式规范化；SDK 格式化提供者的输出也保持原义。
+- SilkIDE 的 Go 自动保存格式化会将 gofmt 输出转换为文档选定的 CRLF；显式格式化
+  命令不承诺保留该偏好。文本末尾有无换行由显式转换保留，不补尾换行。
+- 独立 CR 是正文；为避免歧义与反复转换丢字节，`CRCRLF → LF` 返回
+  `gui.ErrEditorAmbiguousCR` 且不修改内容；未知类型返回 `gui.ErrEditorLineEnding`，
+  只读返回 `gui.ErrEditorReadOnly`。不支持旧 Mac CR-only 分行。
+- `examples/editor-line-endings` 提供转换、历史、只读切换、混合重载与 JSON 快照。
+  [验证记录](../EDITOR_LINE_ENDINGS_QA_20261025.md)。
+
 ### 只读代码与文本查看器
 
 ```go

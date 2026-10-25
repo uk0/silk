@@ -59,13 +59,17 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 	for i, p := range before {
 		line := e.lines[p.line]
 		column := textPositionInLine(line, p.col).ByteColumn
+		if (mode == byteCursorEnter || mode == byteCursorDelete || mode == byteCursorBackspace) && e.lineHasCRLF(p.line) && column == len(line) {
+			column--
+			p.col-- // End can address after CR; insert before the existing CRLF.
+		}
 		offsets[i] = starts[p.line] + column
 		edit := editorByteEdit{line: p.line, column: column, offset: offsets[i]}
 		switch mode {
 		case byteCursorInsert:
 			edit.after = text
 		case byteCursorEnter:
-			edit.after = editorNewlineWithIndent(line, p.col, e.indentUnit(), e.TabSize())
+			edit.after = e.newlineWithIndent(line, p.col)
 		case byteCursorTab:
 			edit.after = e.tabText(line, p.col)
 		case byteCursorBackspace:
@@ -79,11 +83,18 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 				edit.column = len(e.lines[edit.line])
 				edit.offset--
 				edit.before = "\n"
+				if e.lineHasCRLF(edit.line) {
+					edit.column--
+					edit.offset--
+					edit.before = "\r\n"
+				}
 			} else {
 				continue
 			}
 		case byteCursorDelete:
-			if column < len(line) {
+			if e.lineHasCRLF(p.line) && column == len(line)-1 {
+				edit.before = "\r\n"
+			} else if column < len(line) {
 				_, width := utf8.DecodeRuneInString(line[column:])
 				edit.before = strings.Clone(line[column : column+width])
 			} else if p.line < len(e.lines)-1 {
@@ -98,6 +109,15 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 		return
 	}
 	sort.Slice(edits, func(i, j int) bool { return edits[i].offset > edits[j].offset })
+	if mode == byteCursorEnter || mode == byteCursorDelete || mode == byteCursorBackspace {
+		unique := edits[:0]
+		for _, edit := range edits {
+			if len(unique) == 0 || unique[len(unique)-1].offset != edit.offset {
+				unique = append(unique, edit)
+			}
+		}
+		edits = unique
+	}
 	// Normalized/deduplicated carets produce disjoint rune/newline ranges.
 	for _, edit := range edits {
 		e.replaceByteRange(edit.line, edit.column, len(edit.before), edit.after)

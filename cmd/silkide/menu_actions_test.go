@@ -13,8 +13,15 @@ import (
 
 func menuCommandButton(menu *gui.Menu, id string) *gui.Button {
 	for _, child := range menu.Children() {
-		if b, ok := child.(*gui.Button); ok && b.Action().ObjName() == id {
-			return b
+		if b, ok := child.(*gui.Button); ok {
+			if b.Action().ObjName() == id {
+				return b
+			}
+			if sub, ok := b.SubPopup().(*gui.Menu); ok {
+				if found := menuCommandButton(sub, id); found != nil {
+					return found
+				}
+			}
 		}
 	}
 	return nil

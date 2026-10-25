@@ -3076,6 +3076,10 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 	if strings.EqualFold(filepath.Ext(path), ".go") {
 		if formatted, err := gofmtSource(text); err == nil {
 			out = formatted
+			// gofmt emits LF; saving must honor this document's selected mode.
+			if ed.LineEndings().Preferred == gui.LineEndingCRLF {
+				out = strings.ReplaceAll(strings.ReplaceAll(formatted, "\r\n", "\n"), "\n", "\r\n")
+			}
 		} else {
 			silkideToast(i18n.T("gofmt failed; saved unformatted"), gui.ToastWarning)
 		}

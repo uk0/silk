@@ -21,6 +21,19 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Explicit line endings and compact editing menus
+
+- **Edit → Line Endings** and the Command Palette convert LF/CRLF as one
+  undoable operation; the status bar reports LF, CRLF or Mixed. Enter follows
+  the detected/selected style, and CRLF boundary Delete/Backspace stays atomic.
+- Go save formatting respects the selected CRLF style. Paste and host reload
+  remain byte-verbatim; converting a document preserves its final-newline state.
+- Line/caret actions now live under **Edit → Lines and Cursors**, retaining
+  their icons, shortcuts and command IDs without extending the root menu.
+- SDK metadata subscriptions need no polling; conversion history uses one bit
+  per separator. See `examples/editor-line-endings` and
+  [verification and limitations](EDITOR_LINE_ENDINGS_QA_20261025.md).
+
 ### Real read-only code previews
 
 - `CodeEditor.SetReadOnly` now locks editing commands, replacement, paste,
@@ -72,7 +85,7 @@ signed/notarized standalone apps.
 
 ### Atomic duplicate/delete line commands
 
-- **Edit → Duplicate Lines / Delete Lines** and the Command Palette now share
+- **Edit → Lines and Cursors → Duplicate Lines / Delete Lines** and the Command Palette now share
   SDK transactions with Cmd/Ctrl+Shift+D and Cmd/Ctrl+Shift+K. Selected blocks
   exclude a next-line column-zero endpoint; multi-caret rows are grouped once.
 - One Undo restores original bytes, selection direction and all caret positions.
@@ -87,7 +100,7 @@ signed/notarized standalone apps.
 
 ### Reversible line-block movement
 
-- **Edit → Move Lines Up / Down**, the Command Palette and Alt+↑/↓ share the
+- **Edit → Lines and Cursors → Move Lines Up / Down**, the Command Palette and Alt+↑/↓ share the
   same SDK operation. Selected blocks and contiguous multi-caret groups move
   together; one Undo restores text, caret positions and selection direction.
 - Moving lines keeps LF/CRLF separator slots and an existing final-newline sentinel.

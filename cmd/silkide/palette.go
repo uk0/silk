@@ -89,6 +89,14 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	for _, spec := range editorCaretCommandSpecs() {
 		add(spec.label, spec.hint, func() { runEditorCaretCommand(editorTabs, designCanvas, spec, nil) })
 	}
+	for _, spec := range editorLineEndingCommands() {
+		add(spec.label, "", func() { runEditorLineEndingCommand(editorTabs, designCanvas, nil, spec.style) })
+		paletteCommands[len(paletteCommands)-1].Available = func() bool {
+			ed := focusedClipboardEditor(editorTabs, designCanvas)
+			return ed != nil && ed.CanConvertLineEndings(spec.style)
+		}
+		paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindEditorLineEndingCommand(editorTabs, designCanvas, spec) }
+	}
 	add("Expand Silk Macros", "", func() { expandActiveMacro(editorTabs, designCanvas) })
 	add("Appearance & Editor", "", func() { showAppearanceDialog(globalFrame) })
 	// File actions.
