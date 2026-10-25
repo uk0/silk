@@ -21,6 +21,16 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Discoverable platform shortcuts
+
+- Windows menus now recommend **Ctrl+Shift+Alt+Up/Down** for adding carets;
+  macOS keeps **Cmd+Alt+Up/Down**. The old Windows chord remains an alias, but
+  the test desktop consumed its key-down before it reached the editor.
+- Editor context menus now show shortcut columns for clipboard and multi-caret
+  commands. Main menus and the palette share `gui.CodeEditorShortcuts()` metadata
+  instead of maintaining separate platform strings.
+- [Native tracing, regression results and limits](EDITOR_SHORTCUT_HINTS_QA_20261025.md).
+
 ### Safe clipboard commands
 
 - **Edit → Cut / Copy / Paste / Select All** now have shortcuts, scalable icons

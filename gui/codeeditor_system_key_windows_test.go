@@ -80,3 +80,47 @@ func TestWindowsSystemKeyReachesOptInWidget(t *testing.T) {
 		t.Fatalf("system-key routing: keys=%v repeat=%v", spy.keys, spy.repeats)
 	}
 }
+
+// Controlled native dispatch proves both old and preferred chords still route.
+// It cannot prove an OS/driver forwards a reserved hotkey: GUI replay covers that.
+func TestWindowsCaretChordsNormalSystemRepeatAndKeyUp(t *testing.T) {
+	e := nativeTextInputEditor(t)
+	dll := syscall.NewLazyDLL("user32.dll")
+	get, set := dll.NewProc("GetKeyboardState"), dll.NewProc("SetKeyboardState")
+	var original [256]byte
+	if ok, _, _ := get.Call(uintptr(unsafe.Pointer(&original[0]))); ok == 0 {
+		t.Fatal("GetKeyboardState")
+	}
+	defer set.Call(uintptr(unsafe.Pointer(&original[0])))
+	for _, shift := range []bool{false, true} {
+		for _, msg := range []uint32{win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN} {
+			for _, key := range []int{KeyUp, KeyDown} {
+				e.SetText("one\ntwo\nthree\nfour")
+				e.cursorLine = 0
+				if key == KeyUp {
+					e.cursorLine = 3
+				}
+				e.SetFocus()
+				var state [256]byte
+				state[KeyCtrl], state[KeyMenu] = 0x80, 0x80
+				if shift {
+					state[KeyShift] = 0x80
+				}
+				if ok, _, _ := set.Call(uintptr(unsafe.Pointer(&state[0]))); ok == 0 {
+					t.Fatal("SetKeyboardState")
+				}
+				h := e.Window().hWnd
+				// A swallowed key-down must never become an edit on key-up.
+				win32.SendMessage(h, win32.WM_KEYUP, uintptr(key), 1<<31)
+				if e.CursorCount() != 1 {
+					t.Fatal("synthesized caret from orphan key-up")
+				}
+				win32.SendMessage(h, msg, uintptr(key), 1)
+				win32.SendMessage(h, msg, uintptr(key), 1<<30)
+				if e.CursorCount() != 3 || e.Text() != "one\ntwo\nthree\nfour" || e.CanUndo() {
+					t.Fatalf("shift=%v msg=%x key=%d carets=%d", shift, msg, key, e.CursorCount())
+				}
+			}
+		}
+	}
+}

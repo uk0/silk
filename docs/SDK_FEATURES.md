@@ -75,6 +75,18 @@ UI 线程调用 `CodeEditor.Copy() error`、`Cut() error`、`Paste()`、`SelectA
 IDE 菜单和命令面板以打开时的编辑器身份绑定剪贴板目标；其它输入框拥有焦点时，
 这些文档命令不可用，不会偷改后台文档。独立文本框继续使用自己的快捷键。
 
+### 平台快捷键提示
+
+`gui.CodeEditorShortcuts()` 返回独立的 `CodeEditorShortcutHints` 值，提供剪贴板、
+多光标、行移动、复制行、删除行、缩进等内置键位文本，可用于工具按钮、菜单和帮助。
+Windows 推荐 `Ctrl+Shift+Alt+Up/Down` 添加光标，macOS 为 `Cmd+Alt+Up/Down`，
+Linux 为 `Ctrl+Alt+Up/Down`。Windows 旧组合仍可接受，但系统或桌面可能在事件到达
+应用前吞掉它；不通过全局键盘钩子或抬键补造按键规避。
+
+此 API 是提示元数据，不是键位注册/重映射功能；宿主覆盖键位后须展示自己的提示。
+`Tab`/`Esc` 保留完成列表、片段、查找框等上下文的优先级，不能视为无条件行缩进/清除光标。
+IDE 主菜单、命令面板和编辑器右键菜单共用这些提示，禁用命令也保留其快捷键信息。
+
 ### 行块复制与删除
 
 在 UI 线程使用 `CodeEditor.DuplicateLines()`、`DeleteLines()`，以及纯可用性查询

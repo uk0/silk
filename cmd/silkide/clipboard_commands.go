@@ -13,12 +13,12 @@ type editorClipboardCommand struct {
 }
 
 func editorClipboardCommandSpecs() []editorClipboardCommand {
-	key := actionKeyHint()
+	keys := gui.CodeEditorShortcuts()
 	return []editorClipboardCommand{
-		{"editor.cut", "Cut", "edit-cut", key + "+X", (*gui.CodeEditor).CanCut, (*gui.CodeEditor).Cut},
-		{"editor.copy", "Copy", "edit-copy", key + "+C", (*gui.CodeEditor).CanCopy, (*gui.CodeEditor).Copy},
-		{"editor.paste", "Paste", "edit-paste", key + "+V", (*gui.CodeEditor).CanPaste, func(e *gui.CodeEditor) error { e.Paste(); return nil }},
-		{"editor.selectAll", "Select All", "edit-select-all", key + "+A", (*gui.CodeEditor).CanSelectAll, func(e *gui.CodeEditor) error { e.SelectAll(); return nil }},
+		{"editor.cut", "Cut", "edit-cut", keys.Cut, (*gui.CodeEditor).CanCut, (*gui.CodeEditor).Cut},
+		{"editor.copy", "Copy", "edit-copy", keys.Copy, (*gui.CodeEditor).CanCopy, (*gui.CodeEditor).Copy},
+		{"editor.paste", "Paste", "edit-paste", keys.Paste, (*gui.CodeEditor).CanPaste, func(e *gui.CodeEditor) error { e.Paste(); return nil }},
+		{"editor.selectAll", "Select All", "edit-select-all", keys.SelectAll, (*gui.CodeEditor).CanSelectAll, func(e *gui.CodeEditor) error { e.SelectAll(); return nil }},
 	}
 }
 

@@ -13,17 +13,17 @@ type editorCaretCommand struct {
 }
 
 func editorCaretCommandSpecs() []editorCaretCommand {
-	key := actionKeyHint()
+	keys := gui.CodeEditorShortcuts()
 	return []editorCaretCommand{
-		{"editor.addCursorAbove", "Add Cursor Above", "cursor-add-above", key + "+Alt+Up", (*gui.CodeEditor).CanAddCursorAbove, func(e *gui.CodeEditor) { e.AddCursorAbove() }},
-		{"editor.addCursorBelow", "Add Cursor Below", "cursor-add-below", key + "+Alt+Down", (*gui.CodeEditor).CanAddCursorBelow, func(e *gui.CodeEditor) { e.AddCursorBelow() }},
-		{"editor.moveLinesUp", "Move Lines Up", "line-move-up", "Alt+Up", (*gui.CodeEditor).CanMoveLinesUp, (*gui.CodeEditor).MoveLinesUp},
-		{"editor.moveLinesDown", "Move Lines Down", "line-move-down", "Alt+Down", (*gui.CodeEditor).CanMoveLinesDown, (*gui.CodeEditor).MoveLinesDown},
-		{"editor.duplicateLines", "Duplicate Lines", "line-duplicate", key + "+Shift+D", (*gui.CodeEditor).CanDuplicateLines, (*gui.CodeEditor).DuplicateLines},
-		{"editor.deleteLines", "Delete Lines", "line-delete", key + "+Shift+K", (*gui.CodeEditor).CanDeleteLines, (*gui.CodeEditor).DeleteLines},
+		{"editor.addCursorAbove", "Add Cursor Above", "cursor-add-above", keys.AddCursorAbove, (*gui.CodeEditor).CanAddCursorAbove, func(e *gui.CodeEditor) { e.AddCursorAbove() }},
+		{"editor.addCursorBelow", "Add Cursor Below", "cursor-add-below", keys.AddCursorBelow, (*gui.CodeEditor).CanAddCursorBelow, func(e *gui.CodeEditor) { e.AddCursorBelow() }},
+		{"editor.moveLinesUp", "Move Lines Up", "line-move-up", keys.MoveLinesUp, (*gui.CodeEditor).CanMoveLinesUp, (*gui.CodeEditor).MoveLinesUp},
+		{"editor.moveLinesDown", "Move Lines Down", "line-move-down", keys.MoveLinesDown, (*gui.CodeEditor).CanMoveLinesDown, (*gui.CodeEditor).MoveLinesDown},
+		{"editor.duplicateLines", "Duplicate Lines", "line-duplicate", keys.DuplicateLines, (*gui.CodeEditor).CanDuplicateLines, (*gui.CodeEditor).DuplicateLines},
+		{"editor.deleteLines", "Delete Lines", "line-delete", keys.DeleteLines, (*gui.CodeEditor).CanDeleteLines, (*gui.CodeEditor).DeleteLines},
 		{"editor.indentLines", "Indent Lines", "navigate-forward", "", func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).IndentLines},
-		{"editor.outdentLines", "Outdent Lines", "navigate-back", "Shift+Tab", func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).OutdentLines},
-		{"editor.clearCursors", "Keep Primary Cursor", "cursor-primary", "Esc", func(e *gui.CodeEditor) bool { return e.CursorCount() > 1 }, func(e *gui.CodeEditor) { e.KeepPrimaryCursor() }},
+		{"editor.outdentLines", "Outdent Lines", "navigate-back", keys.OutdentLines, func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).OutdentLines},
+		{"editor.clearCursors", "Keep Primary Cursor", "cursor-primary", keys.KeepPrimaryCursor, func(e *gui.CodeEditor) bool { return e.CursorCount() > 1 }, func(e *gui.CodeEditor) { e.KeepPrimaryCursor() }},
 	}
 }
 func visibleCaretEditor(tabs *gui.TabWidget, canvas *ged.GedView) *gui.CodeEditor {

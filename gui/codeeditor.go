@@ -3867,6 +3867,7 @@ func (this *CodeEditor) OnLeftUp(x, y float64) {
 type editorContextMenuItem struct {
 	Label     string
 	Icon      string
+	Shortcut  string
 	Enabled   bool
 	Separator bool   // true when this entry is just a visual separator
 	Action    func() // nil when Separator or Enabled is false
@@ -3955,35 +3956,40 @@ func (this *CodeEditor) RequestGoToImplementation() {
 // empty word — disabling here just makes that visible to the user.
 func (this *CodeEditor) contextMenuItems(word string) []editorContextMenuItem {
 	hasWord := word != ""
+	keys := CodeEditorShortcuts()
 	return []editorContextMenuItem{
 		{
-			Label:   "剪切",
-			Icon:    "edit-cut",
-			Enabled: this.CanCut(),
-			Action:  func() { this.editorCut() },
+			Label:    "剪切",
+			Icon:     "edit-cut",
+			Shortcut: keys.Cut,
+			Enabled:  this.CanCut(),
+			Action:   func() { this.editorCut() },
 		},
 		{
-			Label:   "复制",
-			Icon:    "edit-copy",
-			Enabled: this.CanCopy(),
-			Action:  func() { this.editorCopy() },
+			Label:    "复制",
+			Icon:     "edit-copy",
+			Shortcut: keys.Copy,
+			Enabled:  this.CanCopy(),
+			Action:   func() { this.editorCopy() },
 		},
 		{
-			Label:   "粘贴",
-			Icon:    "edit-paste",
-			Enabled: this.CanPaste(),
-			Action:  this.Paste,
+			Label:    "粘贴",
+			Icon:     "edit-paste",
+			Shortcut: keys.Paste,
+			Enabled:  this.CanPaste(),
+			Action:   this.Paste,
 		},
 		{
-			Label:   "全选",
-			Icon:    "edit-select-all",
-			Enabled: this.CanSelectAll(),
-			Action:  func() { this.editorSelectAll() },
+			Label:    "全选",
+			Icon:     "edit-select-all",
+			Shortcut: keys.SelectAll,
+			Enabled:  this.CanSelectAll(),
+			Action:   func() { this.editorSelectAll() },
 		},
 		{Separator: true},
-		{Label: "向上添加光标", Icon: "cursor-add-above", Enabled: this.CanAddCursorAbove(), Action: func() { this.AddCursorAbove() }},
-		{Label: "向下添加光标", Icon: "cursor-add-below", Enabled: this.CanAddCursorBelow(), Action: func() { this.AddCursorBelow() }},
-		{Label: "仅保留主光标", Icon: "cursor-primary", Enabled: this.CursorCount() > 1, Action: func() { this.KeepPrimaryCursor() }},
+		{Label: "向上添加光标", Icon: "cursor-add-above", Shortcut: keys.AddCursorAbove, Enabled: this.CanAddCursorAbove(), Action: func() { this.AddCursorAbove() }},
+		{Label: "向下添加光标", Icon: "cursor-add-below", Shortcut: keys.AddCursorBelow, Enabled: this.CanAddCursorBelow(), Action: func() { this.AddCursorBelow() }},
+		{Label: "仅保留主光标", Icon: "cursor-primary", Shortcut: keys.KeepPrimaryCursor, Enabled: this.CursorCount() > 1, Action: func() { this.KeepPrimaryCursor() }},
 		{Separator: true},
 		{
 			Label:   "重命名符号",
@@ -4074,6 +4080,7 @@ func (this *CodeEditor) OnRightDown(x, y float64) {
 				continue
 			}
 			btn := m.AddButton1(it.Label, paint.LoadIcon(it.Icon))
+			btn.SetShortcutText(it.Shortcut)
 			if !it.Enabled {
 				btn.SetEnabled(false)
 				continue

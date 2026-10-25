@@ -81,6 +81,10 @@ of one core). This short sample is not a frame-time or long-duration guarantee.
 
 ## Open findings and coverage limits
 
+Follow-up: [shortcut delivery investigation](EDITOR_SHORTCUT_HINTS_QA_20261025.md)
+records the missing native key-down and a verified Shift-inclusive alternative.
+The observations below remain the original clipboard iteration's results.
+
 **Windows Ctrl+Alt+Down is not accepted as passing.** The IDE shortcut attempt
 produced one caret rather than two. An independent SDK retry with a focused
 editor also remained at one caret. Menu/SDK-button Add Caret followed by Paste
