@@ -34,7 +34,7 @@
 | 可运行示例 | `examples/http-tool` | URL、方法、返回类型、JSON 字段、请求体、结果编辑器、错误／取消状态 |
 | 编辑器后台补全索引 | `gui.CodeEditor`、`CompletionIndexLoading()` | 大于 32 KiB 的完整文档后台收集／排序；只保留最新请求，静置无索引定时器 |
 | 编辑器补全生命周期 | `CodeEditor.CancelCompletion()` | UI 线程调用；关闭候选并取消后台工作、释放索引；下次触发可复用编辑器 |
-| 编辑器文件类型 | `CodeEditor.Language()`、`SetFilePath()` | 自动识别 Go／SilkGo／普通文本；切换类型清理旧投影与后台候选，不修改正文 |
+| 编辑器文件类型 | `CodeEditor.Language()`、`SetFilePath()` | 自动识别 Go／SilkGo／JSON／普通文本；切换类型清理旧投影与后台候选，不修改正文 |
 
 既有组装入口：`gui.Edit`、`ComboBox`、`Label`、`Button`、`CodeEditor`；
 布局使用 `HBox`、`VBox`、`FormLayout`、`GridLayout`；设计文件使用 `ged`，声明式树使用 `decl`。
@@ -91,10 +91,13 @@
 
 ### CodeEditor 文件类型与显式提供者
 
-`Language()` 是 UI 线程 getter，返回 `go`、`silkgo` 或 `plaintext`，由
+`Language()` 是 UI 线程 getter，返回 `go`、`silkgo`、`json` 或 `plaintext`，由
 `SetFilePath()` 的扩展名自动决定（不区分大小写）。未命名编辑器保留原有 Go 默认；
-其他已命名文件，包括 `.txt`、`.json`、README 与 go.mod，暂按普通文本处理。
-这不是 JSON／Markdown 解析器，也不是手动语言选择器或多语言 LSP 管理器。
+`.json` 使用独立词法高亮（键、字符串、数字、布尔值与 null）、状态栏与缩略图颜色，
+内置 `true`／`false`／`null` 候选，并保留文档词补全。它不启用 Go 符号、折叠或片段。
+词法扫描逐行进行，达到 4,000 字节的长行回退为普通文本；不增加轮询或整文档解析。
+这不是 JSON 校验／Schema／格式化服务；`.jsonc`、`.txt`、README 与 go.mod 仍按普通文本处理，
+也未提供手动语言选择器或多语言 LSP 管理器。验收见 [JSON 编辑器 QA](../EDITOR_JSON_QA_20261024.md)。
 
 普通文本不启用内置 Go 高亮、符号解析、折叠、关键词候选和默认 Go 片段；
 仍可从整份文档补全标识符。`FormatCode()` 仅格式化 Go，不把普通文本或未展开的

@@ -6,7 +6,7 @@ import (
 )
 
 // Language returns the built-in document dialect inferred from FilePath:
-// "go", "silkgo", or "plaintext". An unnamed SDK editor retains Go as its
+// "go", "silkgo", "json", or "plaintext". An unnamed SDK editor retains Go as its
 // historical default. Unknown named formats are plain text, not pretend Go.
 // This is a UI-thread accessor; external language services remain host-owned.
 func (e *CodeEditor) Language() string { return editorLanguageForPath(e.filePath) }
@@ -18,10 +18,19 @@ func editorLanguageForPath(path string) string {
 	if strings.EqualFold(filepath.Ext(path), ".silkgo") {
 		return "silkgo"
 	}
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		return "json"
+	}
 	return "plaintext"
 }
 
-func (e *CodeEditor) usesGoSyntax() bool { return e.Language() != "plaintext" }
+func (e *CodeEditor) usesGoSyntax() bool {
+	return goSyntaxLanguage(e.Language())
+}
+
+func goSyntaxLanguage(language string) bool {
+	return language == "go" || language == "silkgo"
+}
 
 func (e *CodeEditor) languageLabel() string {
 	switch e.Language() {
@@ -29,6 +38,8 @@ func (e *CodeEditor) languageLabel() string {
 		return "Go"
 	case "silkgo":
 		return "SilkGo"
+	case "json":
+		return "JSON"
 	default:
 		return "Plain Text"
 	}

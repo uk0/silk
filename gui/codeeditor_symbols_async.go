@@ -47,7 +47,7 @@ func newSymbolIndexWorker(post func(func()), consume func(symbolIndexResult)) *s
 	delivery, _ := async.NewLatest(post, consume)
 	return &symbolIndexWorker{delivery: delivery, debounce: 90 * time.Millisecond, parse: func(r symbolIndexRequest) codeSymbolCache {
 		var c codeSymbolCache
-		c.store(r.key, mergeCodeSymbols(r.text, r.key.language != "plaintext", r.additional))
+		c.store(r.key, mergeCodeSymbols(r.text, goSyntaxLanguage(r.key.language), r.additional))
 		return c
 	}}
 }

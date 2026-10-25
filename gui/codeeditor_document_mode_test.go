@@ -82,7 +82,8 @@ func TestEditorLanguagePathDetection(t *testing.T) {
 	for _, tc := range []struct{ path, language, label string }{
 		{"", "go", "Go"}, {"main.go", "go", "Go"}, {"MAIN.GO", "go", "Go"},
 		{"main.silkgo", "silkgo", "SilkGo"}, {"MAIN.SILKGO", "silkgo", "SilkGo"},
-		{"notes.txt", "plaintext", "Plain Text"}, {"config.json", "plaintext", "Plain Text"},
+		{"notes.txt", "plaintext", "Plain Text"}, {"config.json", "json", "JSON"},
+		{"SETTINGS.JSON", "json", "JSON"}, {"settings.jsonc", "plaintext", "Plain Text"},
 		{"README", "plaintext", "Plain Text"}, {"go.mod", "plaintext", "Plain Text"},
 		{"script.go.txt", "plaintext", "Plain Text"},
 	} {

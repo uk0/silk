@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### JSON document mode
+
+- `.json` files now have their own lexical highlighting, status label and minimap
+  colors, with `true` / `false` / `null` completion instead of Go keywords.
+- Language-aware caches prevent colors, symbols and Go snippets from leaking
+  between JSON, plain text and Go. Renaming a document preserves its text and undo
+  history. Highlighting is line-local and retains the existing long-line fallback.
+- This is not a JSON schema service, validator, formatter or JSONC implementation.
+  See [JSON editor QA](EDITOR_JSON_QA_20261024.md) for tests and platform limits.
+
+<img src="screenshots/windows-editor-json-20261024.png" width="760" alt="Native Windows JSON editor with lexical colors, minimap and connected bundled gopls">
+
 ### Safe background batch close
 
 - Tab menus now provide **Close Other Editors**, **Close Editors to the Right**

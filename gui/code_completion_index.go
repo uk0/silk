@@ -180,10 +180,17 @@ func scanCompletionItems(ctx context.Context, text string) ([]CompletionItem, er
 }
 
 func staticCompletionItemsForLanguage(language string) []CompletionItem {
-	if language == "plaintext" {
-		return nil
+	if goSyntaxLanguage(language) {
+		return staticCompletionItems()
 	}
-	return staticCompletionItems()
+	if language == "json" {
+		return []CompletionItem{
+			{Text: "true", Kind: CikKeyword, Detail: "JSON literal"},
+			{Text: "false", Kind: CikKeyword, Detail: "JSON literal"},
+			{Text: "null", Kind: CikKeyword, Detail: "JSON literal"},
+		}
+	}
+	return nil
 }
 
 func scanCompletionItemsForLanguage(ctx context.Context, text, language string) ([]CompletionItem, error) {

@@ -512,7 +512,7 @@ type tokenCacheEntry struct {
 	syntaxRevision uint64
 	source         string
 	inState        goLexState
-	goSyntax       bool
+	language       string
 	fixedCells     bool
 	asciiMask      [2]uint64
 	tokens         []token
@@ -3578,27 +3578,30 @@ func (this *CodeEditor) tokenizeLineCached(idx int, line string, inBlock bool) (
 
 // UI-thread-only cache; state changes invalidate an otherwise unchanged line.
 func (this *CodeEditor) tokenizeGoLineCached(idx int, line string, state goLexState) ([]token, goLexState) {
-	goSyntax := this.usesGoSyntax()
+	language := this.Language()
 	var overlayRevision uint64
 	if this.syntaxRevision == this.TextRevision() && len(this.syntaxHighlights[idx]) > 0 {
 		overlayRevision = this.syntaxRevision
 	}
-	if e, ok := this.tokenCache[idx]; ok && e.source == line && e.inState == state && e.goSyntax == goSyntax && e.syntaxRevision == overlayRevision {
+	if e, ok := this.tokenCache[idx]; ok && e.source == line && e.inState == state && e.language == language && e.syntaxRevision == overlayRevision {
 		// Rebind the key to the currently supplied immutable source.
 		e.source = line
 		this.tokenCache[idx] = e
 		return e.tokens, e.nextState
 	}
 	tokens, next := []token{{text: line, typ: tokNormal}}, goLexNormal
-	if goSyntax {
+	switch language {
+	case "go", "silkgo":
 		tokens, next = tokenizeGoLine(line, state)
+	case "json":
+		tokens = tokenizeJSONLine(line)
 	}
 	tokens = this.overlayTokens(idx, tokens)
 	if this.tokenCache == nil {
 		this.tokenCache = make(map[int]tokenCacheEntry)
 	}
 	fixed, mask := classifyFixedCellSource(line)
-	this.tokenCache[idx] = tokenCacheEntry{asciiMask: mask, source: line, inState: state, goSyntax: goSyntax, fixedCells: fixed, tokens: tokens, nextState: next, syntaxRevision: overlayRevision}
+	this.tokenCache[idx] = tokenCacheEntry{asciiMask: mask, source: line, inState: state, language: language, fixedCells: fixed, tokens: tokens, nextState: next, syntaxRevision: overlayRevision}
 	return tokens, next
 }
 
