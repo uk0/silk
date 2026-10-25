@@ -708,9 +708,8 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(gui.ModAlt, gui.KeyF12, func() { requestSymbolNavigation(editorTabs, "Go to Implementation") })
 	gui.RegisterShortcut(gui.ModAlt, gui.KeyLeft, func() { navigateEditorHistory(editorTabs, false) })
 	gui.RegisterShortcut(gui.ModAlt, gui.KeyRight, func() { navigateEditorHistory(editorTabs, true) })
-	// Format Document via gopls (Cmd+Shift+I). Complements gofmt-on-save
-	// with an on-demand reformat; gopls also applies goimports.
-	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'I', func() { formatDocumentViaLSP(editorTabs) })
+	// Go retains gopls; JSON and offline Go use bounded local formatting.
+	registerEditorFormatShortcut(editorTabs, designCanvas)
 	// Find References via gopls (Shift+F12) — lists usages in the panel.
 	gui.RegisterShortcut(gui.ModShift, gui.KeyF12, func() { findReferencesViaLSP(editorTabs) })
 	// Code Actions / quick-fixes via gopls (Cmd+.).

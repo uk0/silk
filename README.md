@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Background Go and JSON formatting
+
+- **Edit → Format Document** and Ctrl/Cmd+Shift+I format JSON locally; Go keeps
+  gopls when connected and has a local fallback. **Compact JSON** is also
+  available in the Edit menu and Command Palette.
+- SDK editor shortcuts and code-panel buttons no longer wait for external
+  `gofmt` on the UI thread. Formatting preserves earlier Undo history and adds
+  one undoable edit; stale results cannot overwrite subsequent typing.
+- Local jobs are bounded and cancellable, with input/depth/output limits and no
+  idle timer. JSON preserves duplicate keys, number spelling and string escapes.
+  See [formatting SDK](formatx/README.md) and [formatting QA](EDITOR_FORMAT_QA_20261025.md).
+
 ### Predictable dialog keyboard focus
 
 - Label-only confirmations focus the default action when opened: the first
@@ -40,7 +52,8 @@ signed/notarized standalone apps.
 - Language-aware caches prevent colors, symbols and Go snippets from leaking
   between JSON, plain text and Go. Renaming a document preserves its text and undo
   history. Highlighting is line-local and retains the existing long-line fallback.
-- This is not a JSON schema service, validator, formatter or JSONC implementation.
+- Highlighting is not a JSON schema service, live validator or JSONC implementation.
+  Explicit formatting is available separately as described above.
   See [JSON editor QA](EDITOR_JSON_QA_20261024.md) for tests and platform limits.
 
 <img src="screenshots/windows-editor-json-20261024.png" width="760" alt="Native Windows JSON editor with lexical colors, minimap and connected bundled gopls">

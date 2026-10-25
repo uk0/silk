@@ -233,7 +233,7 @@ func showRecentFilesMenu(tabs *gui.TabWidget, canvas *ged.GedView) {
 
 func editorCommand(name string) bool {
 	switch name {
-	case "Refresh Editor Git Markers", "Show Diff vs Saved", "Diff vs HEAD", "Go to Definition", "Go to Type Definition", "Go to Implementation", "Go Back", "Go Forward", "Format Document", "Find References", "Code Actions", "Trim Trailing Whitespace", "Toggle Blame", "Add Bookmark", "Rename Symbol":
+	case "Refresh Editor Git Markers", "Show Diff vs Saved", "Diff vs HEAD", "Go to Definition", "Go to Type Definition", "Go to Implementation", "Go Back", "Go Forward", "Format Document", "Compact JSON", "Cancel Local Formatting", "Find References", "Code Actions", "Trim Trailing Whitespace", "Toggle Blame", "Add Bookmark", "Rename Symbol":
 		return true
 	}
 	return false

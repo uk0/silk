@@ -111,11 +111,11 @@ func (this *CodePanel) Init(self gui.IWidget) {
 		this.SaveCode()
 	})
 
-	// Format button (runs gofmt)
+	// Format button (bounded background formatting)
 	this.fmtBtn = gui.NewButton1("Format", nil)
 	this.fmtBtn.SetParent(self)
 	this.fmtBtn.Action().BindFunc0(func() {
-		this.editor.FormatCode()
+		this.editor.RequestFormat()
 	})
 }
 

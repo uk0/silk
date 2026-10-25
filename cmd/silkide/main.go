@@ -1039,6 +1039,7 @@ func detachEditorTab(tabs *gui.TabWidget, target gui.IWidget, ed *gui.CodeEditor
 		ed.CancelCompletion()
 		ed.CancelSymbolIndex()
 		ed.CancelFind()
+		ed.CancelFormat()
 	}
 	if path != "" {
 		ed.CancelGitStatus()
@@ -1251,6 +1252,7 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 				ed.CancelCompletion()
 				ed.CancelSymbolIndex()
 				ed.CancelFind()
+				ed.CancelFormat()
 			}
 		}
 		quitApp()

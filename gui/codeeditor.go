@@ -1,17 +1,13 @@
 package gui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/internal/processutil"
 	"github.com/uk0/silk/paint"
 	"hash/fnv"
 	"math"
-	"os"
-	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
@@ -237,6 +233,9 @@ type CodeEditor struct {
 	// by idle title polling or painting. Low-level splice helpers mark dirty
 	// until rebuildText publishes the edit (or a direct Text read needs it).
 	textDirty          bool
+	formatJob          *editorFormatJob
+	formatPost         func(func())
+	formatWork         func(context.Context, string, string, EditorFormatOptions) (string, error)
 	textRevision       uint64
 	textRuneCount      int
 	modifiedRevision   uint64
@@ -697,6 +696,7 @@ func (this *CodeEditor) TextRevision() uint64 {
 func (this *CodeEditor) cacheText(text string) {
 	changed := text != this.text
 	if changed {
+		this.CancelFormat()
 		this.text = text
 		this.textRevision++
 		this.findScopeTextChanged()
@@ -948,6 +948,7 @@ func (this *CodeEditor) SigWidgetClicked(fn func(string)) {
 func (this *CodeEditor) SetFilePath(path string) {
 	oldLanguage := this.Language()
 	if this.filePath != path {
+		this.CancelFormat()
 		this.CancelGitStatus()
 		this.gitStatus = nil
 		this.gitErr = nil
@@ -3318,6 +3319,9 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	if this.wordWrap {
 		wrapStr = "Wrap: On"
 	}
+	if this.Formatting() {
+		wrapStr = "Formatting…"
+	}
 	labels := [5]string{
 		this.cursorStatusLabel(false),
 		fmt.Sprintf("%d chars, %d lines", this.textRuneCount, len(this.lines)),
@@ -5074,6 +5078,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 	case KeyEsc:
 		// Escape ends any in-flight snippet tab-stop session, then behaves as a
 		// normal Escape (clearing extra cursors / the current selection).
+		this.CancelFormat()
 		this.snippetSess = nil
 		// Multi-cursor: Escape first collapses extra cursors, then the selection.
 		if len(this.additionalCursors) > 0 {
@@ -5119,7 +5124,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 
 	case 'F':
 		if ctrl && shift {
-			this.FormatCode()
+			this.RequestFormat()
 		} else if ctrl {
 			this.ShowFind(false)
 		}
@@ -5432,78 +5437,6 @@ func (this *CodeEditor) Layout() {
 
 func (this *CodeEditor) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
-}
-
-// FormatCode runs gofmt on the current editor text with a timeout to prevent
-// UI freezes. If formatting succeeds, the text is replaced with the formatted
-// output. If it fails or times out, the text remains unchanged.
-func (this *CodeEditor) FormatCode() {
-	if this.Language() != "go" {
-		return // never hand prose or unexpanded SilkGo directives to gofmt
-	}
-	text := this.Text()
-	if text == "" {
-		return
-	}
-
-	// Write current text to a temp file
-	tmpFile, err := os.CreateTemp("", "silk_fmt_*.go")
-	if err != nil {
-		core.Error(err)
-		return
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.WriteString(text); err != nil {
-		tmpFile.Close()
-		core.Error(err)
-		return
-	}
-	tmpFile.Close()
-
-	// Run gofmt with a timeout so a hung process cannot freeze the UI
-	cmd := exec.Command("gofmt", tmpPath)
-	processutil.NoConsoleWindow(cmd)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Start(); err != nil {
-		core.Error(fmt.Errorf("gofmt start: %v", err))
-		return
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			core.Error(fmt.Errorf("gofmt: %v", err))
-			return
-		}
-	case <-time.After(3 * time.Second):
-		cmd.Process.Kill()
-		core.Error(fmt.Errorf("gofmt: timed out after 3s"))
-		return
-	}
-
-	// Replace text with formatted output
-	formatted := out.String()
-	if formatted != "" && formatted != text {
-		// Save cursor position
-		saveLine := this.cursorLine
-		saveCol := this.cursorCol
-		this.SetText(formatted)
-		// Restore cursor approximately
-		this.cursorLine = saveLine
-		if this.cursorLine >= len(this.lines) {
-			this.cursorLine = len(this.lines) - 1
-		}
-		this.cursorCol = saveCol
-		this.clampCursor()
-		this.ensureCursorVisible()
-		this.Self().Update()
-	}
 }
 
 // --- Error Markers ---

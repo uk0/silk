@@ -74,6 +74,11 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 			add(spec.id, spec.label, spec.icon, spec.hint, ed != nil && spec.enabled(ed), func() { runEditorCaretCommand(tabs, canvas, spec, ed) })
 		}
 		menu.AddSeparator()
+		formatOK := ed != nil && (ed.Language() == "go" || ed.Language() == "json") && !ed.Formatting()
+		add("editor.format", "Format Document", "edit", key+"+Shift+I", formatOK, func() { formatActiveDocument(tabs, canvas, ed, false) })
+		add("editor.compactJSON", "Compact JSON", "edit", "", formatOK && ed.Language() == "json", func() { formatActiveDocument(tabs, canvas, ed, true) })
+		add("editor.cancelFormat", "Cancel Local Formatting", "stop", "", ed != nil && ed.Formatting(), func() { cancelActiveFormatting(tabs, canvas, ed) })
+		menu.AddSeparator()
 		add("search.files", "Find in Files", "search", key+"+Shift+F", globalSearch != nil, func() { showWorkspaceSearch(tabs, canvas) })
 		matches := globalSearch != nil && globalSearch.CanNavigateMatches()
 		add("search.next", "Next Search Result", "navigate-forward", "F4", matches, func() { navigateWorkspaceSearch(tabs, canvas, false) })

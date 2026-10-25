@@ -260,7 +260,7 @@ func (e *CodeEditor) CancelFind() {
 		}
 	}
 }
-func (e *CodeEditor) OnHide() { e.CancelFind() }
+func (e *CodeEditor) OnHide() { e.CancelFind(); e.CancelFormat() }
 func (e *CodeEditor) OnShow() {
 	if e.findActive {
 		e.findUpdateMatches()

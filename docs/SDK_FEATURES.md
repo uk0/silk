@@ -35,6 +35,23 @@
 | 编辑器后台补全索引 | `gui.CodeEditor`、`CompletionIndexLoading()` | 大于 32 KiB 的完整文档后台收集／排序；只保留最新请求，静置无索引定时器 |
 | 编辑器补全生命周期 | `CodeEditor.CancelCompletion()` | UI 线程调用；关闭候选并取消后台工作、释放索引；下次触发可复用编辑器 |
 | 编辑器文件类型 | `CodeEditor.Language()`、`SetFilePath()` | 自动识别 Go／SilkGo／JSON／普通文本；切换类型清理旧投影与后台候选，不修改正文 |
+| 离线文本格式化 | `formatx.Format/FormatAsync` | Go 标准格式化、JSON 美化／压缩，不调用外部程序；输入／输出／深度限制 |
+| 编辑器后台格式化 | `CodeEditor.FormatDocumentAsync/CancelFormat/Formatting` | 有界任务、版本校验、UI 派发；保留历史并合为一次 Undo |
+
+### 离线格式化与取消
+
+`FormatDocumentAsync(gui.EditorFormatOptions{Compact: false}, done)` 在 UI 线程调用，
+后台仅处理不可变文本；`done` 也在 UI 线程执行。立即返回错误时不会调用 `done`。
+正文修改、路径变化、隐藏或显式取消会使结果与回调失效，包括编辑后 Undo 回原文。
+宿主销毁编辑器／停止事件循环前必须调用 `CancelFormat()`；取消不等待标准库解析器退出，
+任务真正结束前仍占用该编辑器的任务槽，立即重试可能得到 `async.ErrBusy`。
+`Formatting()` 表示尚未取消且等待 UI 交付的本地请求，不表示 gopls 的任务状态。
+
+`FormatDocument` 是同步入口；兼容入口 `FormatCode` 仍只处理 Go，但不再调用外部 gofmt。
+交互式入口使用异步版本：SDK 编辑器 Ctrl/Cmd+Shift+F、代码面板格式化按钮；SilkIDE 使用
+Ctrl/Cmd+Shift+I（Ctrl/Cmd+Shift+F 留给工作区搜索）。IDE 的 Go 文档优先保留 gopls 路径，
+JSON 与无 LSP 时的 Go 使用本地版本。`Cancel Local Formatting` 只取消本地任务。
+示例 `go run ./examples/editor-format`；资源限制、取消边界见 [formatx](../formatx/README.md)。
 
 既有组装入口：`gui.Edit`、`ComboBox`、`Label`、`Button`、`CodeEditor`；
 布局使用 `HBox`、`VBox`、`FormLayout`、`GridLayout`；设计文件使用 `ged`，声明式树使用 `decl`。
@@ -108,7 +125,8 @@
 `.json` 使用独立词法高亮（键、字符串、数字、布尔值与 null）、状态栏与缩略图颜色，
 内置 `true`／`false`／`null` 候选，并保留文档词补全。它不启用 Go 符号、折叠或片段。
 词法扫描逐行进行，达到 4,000 字节的长行回退为普通文本；不增加轮询或整文档解析。
-这不是 JSON 校验／Schema／格式化服务；`.jsonc`、`.txt`、README 与 go.mod 仍按普通文本处理，
+词法高亮不是 JSON 实时校验／Schema 服务；显式美化／压缩见上方格式化接口。
+`.jsonc`、`.txt`、README 与 go.mod 仍按普通文本处理，
 也未提供手动语言选择器或多语言 LSP 管理器。验收见 [JSON 编辑器 QA](../EDITOR_JSON_QA_20261024.md)。
 
 普通文本不启用内置 Go 高亮、符号解析、折叠、关键词候选和默认 Go 片段；
