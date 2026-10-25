@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Predictable dialog keyboard focus
+
+- Label-only confirmations focus the default action when opened: the first
+  **Tab** advances to the next button, **Shift+Tab** wraps backwards, and Enter
+  activates the focused choice. Forms with input fields start in usable content;
+  an explicit `Dialog.SetInitialFocus` remains authoritative.
+- Dialog and message-box roots no longer add invisible Tab stops. Hidden or
+  disabled subtrees are skipped, and detached, foreign, hidden or disabled
+  default buttons cannot be activated through the default-action fallback.
+- Initial focus uses an early-exit traversal, without a timer or idle polling.
+  Validation and remaining limits: [dialog focus QA](DIALOG_FOCUS_QA_20261025.md).
+
 ### JSON document mode
 
 - `.json` files now have their own lexical highlighting, status label and minimap
@@ -47,9 +59,11 @@ signed/notarized standalone apps.
   reopen history keep the workflow controlled. Individual Save/Close still use
   their previous synchronous I/O path.
 - Validation and limitations: [batch-close QA](EDITOR_BATCH_CLOSE_QA_20261024.md).
-  Windows Cancel and Save All were exercised with exact-byte readback; the
-  remaining native workflows and 64-tab stress run are not yet verified because
-  the test machine became unreachable. This is not a full-platform release gate.
+  The [dialog-focus follow-up](DIALOG_FOCUS_QA_20261025.md) adds fresh Windows
+  Cancel / Save All / Discard All, inactive-tab ownership, reopen history,
+  File-menu / Palette batch-close, 64-document stress and normal-exit checks
+  with exact readback.
+  This is not a full-platform release gate.
 
 <img src="screenshots/windows-editor-batch-close-20261024.png" width="760" alt="Windows editor tab menu with background batch-close commands">
 

@@ -48,9 +48,9 @@ func isTabFocusable(w IWidget) bool {
 }
 
 // collectFocusable 以前序 (pre-order) 深度优先遍历可见子树, 按视觉顺序
-// 把可 Tab 聚焦的控件收集到 out. 不可见的容器整棵跳过 (其子孙也不可见).
+// 把可 Tab 聚焦的控件收集到 out. 不可见或被禁用的容器整棵跳过.
 func collectFocusable(w IWidget, out *[]IWidget) {
-	if w == nil || !w.IsVisible() {
+	if w == nil || !w.IsVisible() || !w.IsEnabled() {
 		return
 	}
 	if isTabFocusable(w) {
@@ -59,6 +59,23 @@ func collectFocusable(w IWidget, out *[]IWidget) {
 	for _, c := range w.Children() {
 		collectFocusable(c, out)
 	}
+}
+
+// Initial activation needs only the first target, not a materialized Tab chain.
+// Stop immediately when found; large forms do not scan all later controls.
+func firstFocusable(w IWidget) IWidget {
+	if w == nil || !w.IsVisible() || !w.IsEnabled() {
+		return nil
+	}
+	if isTabFocusable(w) {
+		return w
+	}
+	for _, child := range w.Children() {
+		if target := firstFocusable(child); target != nil {
+			return target
+		}
+	}
+	return nil
 }
 
 // nextFocusable 在以 root 为根的可见控件树里, 返回 current 之后 (forward 为

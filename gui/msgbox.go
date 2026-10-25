@@ -19,6 +19,7 @@ type MessageBox struct {
 
 func (this *MessageBox) Init(iw IWidget) {
 	this.Form.Init(iw)
+	this.SetFocusPolicy(NoFocus)
 
 	this.btnBox = new(dialogButtonBar)
 	this.btnBox.Init(this.btnBox)

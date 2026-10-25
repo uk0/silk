@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,8 +85,19 @@ func TestTransferDownloadUsesCoalescedUIQueue(t *testing.T) {
 	v := NewTransferProgress()
 	_ = v.SetState(TransferRunning)
 	updates := 0
-	latest, _ := async.NewLatest(Post, func(p httpx.DownloadProgress) { updates++; v.SetProgress(p.Received, p.Total) })
+	// Post is shared with background services (including Git status). Count this
+	// producer's dispatches, not unrelated callbacks already in the UI queue.
+	var posted atomic.Int32
+	latest, err := async.NewLatest(func(fn func()) {
+		posted.Add(1)
+		Post(fn)
+	}, func(p httpx.DownloadProgress) { updates++; v.SetProgress(p.Received, p.Total) })
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer latest.Close()
+	unrelatedRan := false
+	Post(func() { unrelatedRan = true })
 	future, err := httpx.Default().DownloadToAsync(context.Background(), httpx.Request{URL: server.URL}, io.Discard, httpx.DownloadOptions{ProgressInterval: time.Nanosecond, OnProgress: func(p httpx.DownloadProgress) { latest.Publish(p) }})
 	if err != nil {
 		t.Fatal(err)
@@ -97,13 +109,13 @@ func TestTransferDownloadUsesCoalescedUIQueue(t *testing.T) {
 	if v.ReceivedBytes() != 0 || updates != 0 {
 		t.Fatal("worker mutated GUI")
 	}
-	uiTaskMu.Lock()
-	queued := len(uiTasks)
-	uiTaskMu.Unlock()
-	if queued != 1 {
-		t.Fatal("progress flooded queue", queued)
+	if got := posted.Load(); got != 1 {
+		t.Fatal("progress flooded queue", got)
 	}
 	drainUITasks()
+	if !unrelatedRan {
+		t.Fatal("shared UI callback was not dispatched")
+	}
 	if updates != 1 || v.ReceivedBytes() != result.BytesWritten() || v.TotalBytes() != -1 {
 		t.Fatal(updates, v.ReceivedBytes())
 	}

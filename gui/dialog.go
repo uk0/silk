@@ -55,6 +55,8 @@ func NewDialog(title string, parent IWidget) *Dialog {
 // cancelResult left at 0 makes Esc return DialogOK instead of rejecting.
 func (this *Dialog) Init(iw IWidget) {
 	this.Form.Init(iw)
+	// The form handles fallback keys but is not an extra invisible Tab stop.
+	this.SetFocusPolicy(NoFocus)
 
 	this.resultMap = make(map[string]DialogResult)
 	this.cancelResult = DialogCancel
@@ -153,15 +155,40 @@ func (this *Dialog) LastError() error { return this.lastError }
 func (this *Dialog) SetInitialFocus(target IWidget) { this.initialFocus = target }
 
 func (this *Dialog) activateInitialFocus() {
-	for p := this.initialFocus; p != nil; p = p.Parent() {
+	this.markDefaultButton()
+	if this.initialFocus != nil {
+		this.focusDescendant(this.initialFocus)
+		return
+	}
+	// Keep an explicitly focused child, otherwise start in usable content. A
+	// label-only confirmation starts on its default action, so the first Tab
+	// moves to the next button rather than silently selecting the default again.
+	if this.focusDescendant(focusWidget) {
+		return
+	}
+	if this.focusDescendant(firstFocusable(this.contentWidget)) {
+		return
+	}
+	if b := this.defaultButton(); b != nil && isTabFocusable(b) && this.focusDescendant(b) {
+		return
+	}
+	this.focusDescendant(firstFocusable(this.btnBox))
+}
+
+func (this *Dialog) focusDescendant(target IWidget) bool {
+	if target == nil || target == this.Self() {
+		return false
+	}
+	for p := target; p != nil; p = p.Parent() {
 		if !p.IsVisible() || !p.IsEnabled() {
-			return
+			return false
 		}
 		if p == this.Self() {
-			this.initialFocus.SetFocus()
-			return
+			target.SetFocus()
+			return true
 		}
 	}
+	return false
 }
 
 // Result returns the dialog result after ShowModal has returned.
@@ -247,28 +274,40 @@ func (this *Dialog) SetCancelResult(r DialogResult) {
 // role exists). Hidden or disabled buttons are skipped. Returns nil only when
 // there are no usable buttons.
 func (this *Dialog) defaultButton() *Button {
-	if this.defaultBtn != nil {
+	if this.usableButton(this.defaultBtn) {
 		return this.defaultBtn
 	}
 	for _, want := range []DialogResult{DialogOK, DialogYes} {
 		for _, b := range this.buttons {
-			if b.IsVisible() && b.IsEnabled() && this.resultMap[btnKey(b)] == want {
+			if this.usableButton(b) && this.resultMap[btnKey(b)] == want {
 				return b
 			}
 		}
 	}
 	for i := len(this.buttons) - 1; i >= 0; i-- {
-		if b := this.buttons[i]; b.IsVisible() && b.IsEnabled() {
+		if b := this.buttons[i]; this.usableButton(b) {
 			return b
 		}
 	}
 	return nil
 }
 
+// Explicit defaults are not permission to activate a disabled, detached or
+// foreign action. Stop at the dialog: its owner is disabled during ShowModal.
+func (this *Dialog) usableButton(b *Button) bool {
+	return b != nil && b.Parent() == this.btnBox && b.IsVisible() && b.IsEnabled() &&
+		this.btnBox.IsVisible() && this.btnBox.IsEnabled()
+}
+
 // resolveDefault invokes the default button action, including custom validation
 // that may deliberately leave the dialog open. Reports whether a
 // default button was found. Exposed for headless testing of the Enter path.
 func (this *Dialog) resolveDefault() bool {
+	// Default metadata is also queried while a dialog is being constructed
+	// hidden (e.g. printer discovery); activation additionally requires the form.
+	if !this.IsVisible() || !this.IsEnabled() {
+		return false
+	}
 	b := this.defaultButton()
 	if b == nil {
 		return false
