@@ -1093,6 +1093,7 @@ type designProp struct {
 // reproduces per SCADA/组态 widget. Only properties whose value differs from a
 // fresh instance's default are emitted, so unchanged widgets stay terse.
 var industrialDesignProps = map[string][]designProp{
+	"gui.CodeEditor":     {{"IsReadOnly", "SetReadOnly", dpBool}},
 	"gui.Tank":           {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"ShowLabel", "SetShowLabel", dpBool}},
 	"gui.Indicator":      {{"Color", "SetColor", dpColor}, {"OffColor", "SetOffColor", dpColor}, {"IsBlink", "SetBlink", dpBool}},
 	"gui.DigitalDisplay": {{"Color", "SetColor", dpColor}, {"Unit", "SetUnit", dpString}, {"Format", "SetFormat", dpString}},

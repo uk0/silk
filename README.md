@@ -21,6 +21,20 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Real read-only code previews
+
+- `CodeEditor.SetReadOnly` now locks editing commands, replacement, paste,
+  completion and formatting while preserving Copy, Find, navigation and history.
+  Pending editor-owned work is retired when locking, including lock/unlock races.
+- Designer CodeEditor widgets expose a persisted **只读** property and generate
+  `SetReadOnly(true)`. Generated-code viewers use the same SDK protection rather
+  than a keyboard allowlist, with disabled edit actions and a Read-only indicator.
+- Focused generated previews consume mutating host shortcuts so Undo cannot
+  silently modify the source document behind them. `SetText` remains the explicit
+  host reload API, not a user edit. See [QA and scope](EDITOR_READONLY_QA_20261025.md)
+  and `examples/editor-readonly`.
+
+
 ### Discoverable platform shortcuts
 
 - Windows menus now recommend **Ctrl+Shift+Alt+Up/Down** for adding carets;

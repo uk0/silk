@@ -19,7 +19,7 @@ func registerEditorFormatShortcut(tabs *gui.TabWidget, canvas *ged.GedView) {
 // JSON is local; Go retains gopls when available, with an offline local fallback.
 func formatActiveDocument(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.CodeEditor, compact bool) {
 	ed := visibleCaretEditor(tabs, canvas)
-	if ed == nil || expected != nil && ed != expected {
+	if ed == nil || ed.IsReadOnly() || expected != nil && ed != expected {
 		return
 	}
 	if !compact && ed.Language() == "go" && globalLSP != nil {

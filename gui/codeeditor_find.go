@@ -112,6 +112,9 @@ func (e *CodeEditor) requestFind(replace bool) int {
 	return e.requestFindOperation(editorFindRequest{replace: replace})
 }
 func (e *CodeEditor) requestFindOperation(operation editorFindRequest) int {
+	if operation.replace && e.readOnly {
+		return 0
+	}
 	if !e.findVisible() {
 		e.CancelFind()
 		return 0
@@ -155,7 +158,7 @@ func (e *CodeEditor) requestFindOperation(operation editorFindRequest) int {
 }
 func (e *CodeEditor) findRequestCurrent(r editorFindRequest) bool {
 	s := &e.findState
-	return e.findVisible() && s.pending && s.generation == r.generation && e.TextRevision() == r.revision && e.findText == r.query && s.options == r.options && s.scope == r.scope && (!r.replace || e.replaceText == r.replacement)
+	return e.findVisible() && s.pending && s.generation == r.generation && e.TextRevision() == r.revision && e.findText == r.query && s.options == r.options && s.scope == r.scope && (!r.replace || !e.readOnly && e.replaceText == r.replacement)
 }
 func (e *CodeEditor) acceptFindResult(result editorFindResult) {
 	if !e.findVisible() {

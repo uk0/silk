@@ -25,13 +25,13 @@ func (e *CodeEditor) CanCopy() bool {
 // the existing keyboard command, a no-selection cut affects only the primary
 // caret's line, not secondary caret rows.
 func (e *CodeEditor) CanCut() bool {
-	return e.CanCopy() || e.IsEnabled() && !e.hasSelection && len(e.lines) > 1
+	return !e.readOnly && (e.CanCopy() || e.IsEnabled() && !e.hasSelection && len(e.lines) > 1)
 }
 
 // CanPaste is permission to request a paste, not a clipboard-content probe.
 // Menus must not materialize promised/large native clipboard data. An empty
 // clipboard remains a no-op when Paste executes.
-func (e *CodeEditor) CanPaste() bool { return e.IsEnabled() }
+func (e *CodeEditor) CanPaste() bool { return !e.readOnly && e.IsEnabled() }
 func (e *CodeEditor) CanSelectAll() bool {
 	return e.IsEnabled() && (len(e.lines) > 1 || len(e.lines) == 1 && e.lines[0] != "")
 }
@@ -72,7 +72,7 @@ func (e *CodeEditor) copyOrCut(cut bool, write func(string) error) error {
 			return err
 		}
 	}
-	if !cut {
+	if !cut || e.readOnly {
 		return nil
 	}
 	e.CancelPendingPaste()

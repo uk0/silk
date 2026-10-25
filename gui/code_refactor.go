@@ -80,6 +80,9 @@ func runesEqual(a, b []rune) bool {
 
 // activateRename enters rename mode, pre-filling the word at the cursor.
 func (this *CodeEditor) activateRename() {
+	if this.readOnly {
+		return
+	}
 	word := this.wordAtCursor()
 	if word == "" {
 		return
@@ -93,6 +96,9 @@ func (this *CodeEditor) activateRename() {
 
 // renameAccept performs the whole-word rename and pushes to undo stack.
 func (this *CodeEditor) renameAccept() {
+	if this.readOnly {
+		return
+	}
 	if !this.renameActive {
 		return
 	}

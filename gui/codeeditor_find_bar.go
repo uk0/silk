@@ -190,8 +190,8 @@ func (e *CodeEditor) syncFindBar() {
 	ready := e.findRangesCurrent() && len(e.findMatches) > 0
 	b.prev.SetEnabled(ready)
 	b.next.SetEnabled(ready)
-	b.one.SetEnabled(ready)
-	b.all.SetEnabled(ready)
+	b.one.SetEnabled(ready && !e.readOnly)
+	b.all.SetEnabled(ready && !e.readOnly)
 	b.syncing = false
 	b.SetVisible(e.findActive)
 	b.tooltips(e.findActive && e.findVisible() && e.Window() != nil)

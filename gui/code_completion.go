@@ -143,6 +143,10 @@ func (this *CompletionPopup) SelectPrev() {
 
 // Accept inserts the selected completion into the editor.
 func (this *CompletionPopup) Accept(editor *CodeEditor) {
+	if editor.readOnly {
+		this.Dismiss()
+		return
+	}
 	if !this.visible || len(this.filtered) == 0 {
 		return
 	}

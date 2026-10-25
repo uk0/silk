@@ -232,6 +232,7 @@ type CodeEditor struct {
 	tabSize                   int
 	insertSpaces              bool
 	savedText                 string
+	readOnly                  bool
 	Widget
 	// Text and its derived metadata are refreshed at the edit boundary, never
 	// by idle title polling or painting. Low-level splice helpers mark dirty
@@ -579,6 +580,9 @@ func (this *CodeEditor) Snippets() *SnippetSet {
 // to the right). When the snippets field is nil or no trigger matches, returns
 // false so the caller can fall through to the legacy ${N:} path / Tab insert.
 func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
+	if this.readOnly {
+		return false
+	}
 	if this.snippets == nil || (this.defaultGoSnippets && !this.usesGoSyntax()) {
 		return false
 	}
@@ -655,7 +659,8 @@ func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
 	return true
 }
 
-// SetText replaces the entire editor content.
+// SetText replaces the entire editor content, even in read-only mode.
+// It is the explicit host/model loading API; edit commands honor IsReadOnly.
 func (this *CodeEditor) SetText(s string) {
 	this.DismissLanguageHints()
 	this.snippetSess = nil
@@ -747,6 +752,9 @@ func (this *CodeEditor) ReplaceAllTextAt(s string, line, col int) {
 }
 
 func (this *CodeEditor) replaceAllText(s string, after *cursorPos) {
+	if this.readOnly {
+		return
+	}
 	oldFull := this.Text()
 	if s == oldFull {
 		return
@@ -1593,6 +1601,9 @@ func (this *CodeEditor) SelectedText() string {
 
 // DeleteSelection removes the selected text and places cursor at start.
 func (this *CodeEditor) DeleteSelection() {
+	if this.readOnly {
+		return
+	}
 	if !this.hasSelection {
 		return
 	}
@@ -1606,6 +1617,9 @@ func (this *CodeEditor) DeleteSelection() {
 
 // ReplaceSelection replaces selected text with new text.
 func (this *CodeEditor) ReplaceSelection(text string) {
+	if this.readOnly {
+		return
+	}
 	if this.hasSelection {
 		sl, sc, _, _ := this.selectionRange()
 		column := textPositionInLine(this.lines[sl], sc).ByteColumn
@@ -1678,6 +1692,9 @@ func (this *CodeEditor) pushUndo(a editAction) {
 }
 
 func (this *CodeEditor) undo() {
+	if this.readOnly {
+		return
+	}
 	if len(this.undoStack) == 0 {
 		return
 	}
@@ -1743,6 +1760,9 @@ func (this *CodeEditor) undo() {
 }
 
 func (this *CodeEditor) redo() {
+	if this.readOnly {
+		return
+	}
 	if len(this.redoStack) == 0 {
 		return
 	}
@@ -1971,6 +1991,9 @@ func (this *CodeEditor) selectFindMatch(line, col int, strict bool) {
 // match. The search resumes AFTER the inserted text so a replacement that itself
 // contains the query is not immediately re-matched.
 func (this *CodeEditor) replaceCurrent() {
+	if this.readOnly {
+		return
+	}
 	if !this.findRangesCurrent() {
 		this.findUpdateMatches()
 		if !this.findRangesCurrent() {
@@ -2017,6 +2040,9 @@ func (this *CodeEditor) replaceCurrent() {
 // asynchronously; zero is returned while pending. Revision guards reject stale
 // proposals and ReplaceAllText records exactly one undo/change notification.
 func (this *CodeEditor) replaceAll() int {
+	if this.readOnly {
+		return 0
+	}
 	if this.findText == "" {
 		return 0
 	}
@@ -2150,6 +2176,9 @@ func joinLinesInText(lines []string, from, to int) []string {
 // selection) into one, collapsing each break to a single space. A no-op on the
 // last line. Recorded as one undoable full-text edit routed through rebuildText.
 func (this *CodeEditor) JoinLines() {
+	if this.readOnly {
+		return
+	}
 	this.clampCursor()
 	from, to := this.cursorLine, this.cursorLine+1
 	if this.hasSelection {
@@ -2194,6 +2223,9 @@ func trimTrailingInText(text string) string {
 // column is clamped to its (possibly shorter) line. Callable by the host and
 // recorded as one undoable full-text edit routed through rebuildText.
 func (this *CodeEditor) TrimTrailingWhitespace() {
+	if this.readOnly {
+		return
+	}
 	oldFull := this.Text()
 	newFull := trimTrailingInText(oldFull)
 	if newFull == oldFull {
@@ -2313,6 +2345,9 @@ func toggleComment(lines []string, prefix string) []string {
 // line spanned by the active selection (Cmd/Ctrl+/). It delegates the transform
 // to the pure toggleComment helper, then fires the changed callback and repaints.
 func (this *CodeEditor) ToggleLineComment() {
+	if this.readOnly {
+		return
+	}
 	this.clampCursor()
 	startLine := this.cursorLine
 	endLine := this.cursorLine
@@ -2367,6 +2402,9 @@ func (this *CodeEditor) ToggleLineComment() {
 // newName, name collision) the buffer is left untouched and an error is
 // returned alongside (oldName, 0).
 func (this *CodeEditor) RenameSymbolAtCursor(newName string) (string, int, error) {
+	if this.readOnly {
+		return "", 0, ErrEditorReadOnly
+	}
 	oldName := this.wordAtCursor()
 	if oldName == "" {
 		return "", 0, errors.New("rename: no identifier at cursor")
@@ -3175,6 +3213,9 @@ func (this *CodeEditor) drawStatusBar(g paint.Painter, w, h, sbH float64) {
 	if this.Formatting() {
 		wrapStr = "Formatting…"
 	}
+	if this.readOnly {
+		wrapStr = "Read-only"
+	}
 	labels := [6]string{
 		this.cursorStatusLabel(false),
 		fmt.Sprintf("%d chars, %d lines", this.textRuneCount, len(this.lines)),
@@ -3895,6 +3936,9 @@ func (this *CodeEditor) SetSymbolActions(actions CodeEditorSymbolActions) {
 // RequestRenameSymbol dispatches the user command to the host, or opens the
 // SDK's local single-buffer rename dialog when no host has registered it.
 func (this *CodeEditor) RequestRenameSymbol() {
+	if this.readOnly {
+		return
+	}
 	word := this.wordAtCursor()
 	if word == "" {
 		return
@@ -3993,7 +4037,7 @@ func (this *CodeEditor) contextMenuItems(word string) []editorContextMenuItem {
 		{Separator: true},
 		{
 			Label:   "重命名符号",
-			Enabled: hasWord,
+			Enabled: hasWord && !this.readOnly,
 			Action:  this.RequestRenameSymbol,
 		},
 		{
@@ -4185,6 +4229,10 @@ func (this *CodeEditor) OnTextInput(s string) {
 		return
 	}
 
+	// Auxiliary find/goto/symbol fields stay usable in read-only documents.
+	if this.readOnly {
+		return
+	}
 	this.clampCursor()
 
 	// Each multi-caret input (including multiline paste/IME text) is one byte-
@@ -4281,6 +4329,9 @@ func isSignatureTrigger(s string) bool {
 
 // tryTriggerCompletion checks whether to show the completion popup after input.
 func (this *CodeEditor) tryTriggerCompletion(typed string) {
+	if this.readOnly {
+		return
+	}
 	if this.completion == nil {
 		this.completion = NewCompletionPopup(this)
 	}
@@ -4308,6 +4359,9 @@ func (this *CodeEditor) tryTriggerCompletion(typed string) {
 // injected candidates into it. It is the single internal entry point for
 // (re)building the popup; only current provider snapshots may be merged.
 func (this *CodeEditor) showCompletion(prefix string) {
+	if this.readOnly {
+		return
+	}
 	this.expireExternalCompletions()
 	if this.completion == nil {
 		this.completion = NewCompletionPopup(this)
@@ -4360,6 +4414,9 @@ func (this *CodeEditor) currentWordPrefix() string {
 // Ctrl/Alt/action-modified Tab remains available to the host's focus shortcuts.
 // Ordinary Tab must use the same completion/find/snippet route as other keys.
 func (this *CodeEditor) WantsTab(shift bool) bool {
+	if this.readOnly && !this.findActive {
+		return false
+	}
 	if IsKeyDown(KeyCtrl) || IsKeyDown(KeyMenu) || isActionModifier() {
 		return false
 	}
@@ -4567,8 +4624,15 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 		}
 	}
 
+	// Block document edits after auxiliary input routing; navigation remains live.
+	if this.readOnly {
+		switch key {
+		case KeyBackSpace, KeyDelete, KeyEnter, KeyTab:
+			return
+		}
+	}
 	// Ctrl+Space triggers completion
-	if ctrl && key == KeySpace {
+	if ctrl && key == KeySpace && !this.readOnly {
 		if this.onCompletionRequested != nil {
 			this.onCompletionRequested()
 		}
@@ -5140,12 +5204,18 @@ func (this *CodeEditor) editorCut() {
 
 // pasteClipboard inserts clipboard text at cursor, replacing selection.
 func (this *CodeEditor) pasteClipboard() {
+	if !this.CanPaste() {
+		return
+	}
 	revision := this.TextRevision()
 	line, col := this.cursorLine, this.cursorCol
 	selected := this.hasSelection
 	sl, sc, el, ec := this.selStartLine, this.selStartCol, this.selEndLine, this.selEndCol
 	cursors := append([]cursorPos(nil), this.additionalCursors...)
 	valid := func() bool {
+		if !this.CanPaste() {
+			return false
+		}
 		if this.TextRevision() != revision || this.cursorLine != line || this.cursorCol != col || this.hasSelection != selected || this.selStartLine != sl || this.selStartCol != sc || this.selEndLine != el || this.selEndCol != ec || len(cursors) != len(this.additionalCursors) {
 			return false
 		}
@@ -5171,6 +5241,9 @@ func (this *CodeEditor) pasteClipboard() {
 }
 
 func (this *CodeEditor) pasteText(text string) {
+	if this.readOnly {
+		return
+	}
 	this.clampCursor()
 	if len(this.additionalCursors) > 0 && !this.hasSelection {
 		this.insertAtAllCursors(text)
@@ -5251,6 +5324,7 @@ func (this *CodeEditor) Layout() {
 
 func (this *CodeEditor) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
+	list.AddProperty("只读", this.IsReadOnly, this.SetReadOnly)
 }
 
 // --- Error Markers ---
@@ -6163,7 +6237,7 @@ type ExternalCompletion struct {
 // (re)build and expire on text mutation. A nil/empty slice is
 // equivalent to ClearExternalCompletions.
 func (this *CodeEditor) SetExternalCompletions(items []ExternalCompletion) {
-	if len(items) == 0 {
+	if this.readOnly || len(items) == 0 {
 		this.ClearExternalCompletions()
 		return
 	}
@@ -6195,6 +6269,9 @@ func (this *CodeEditor) ClearExternalCompletions() {
 // provider results (e.g. an LSP completion response) and injecting them via
 // SetExternalCompletions.
 func (this *CodeEditor) TriggerCompletion() {
+	if this.readOnly {
+		return
+	}
 	this.expireExternalCompletions()
 	this.showCompletion(this.currentWordPrefix())
 	this.Self().Update()

@@ -138,6 +138,9 @@ func (e *CodeEditor) commitLineSplices(changes []editorLineSplice, before, after
 // duplicated. New EOF separators follow the preceding line, or LF for one line.
 // All CodeEditor command and availability APIs are UI-thread-only.
 func (e *CodeEditor) DuplicateLines() {
+	if e.readOnly {
+		return
+	}
 	groups := e.editorLineGroups(true)
 	if len(groups) == 0 {
 		return
@@ -190,7 +193,9 @@ func (e *CodeEditor) DuplicateLines() {
 	}
 	e.commitLineSplices(changes, before, after, selection, next)
 }
-func (e *CodeEditor) CanDuplicateLines() bool { return len(e.editorLineGroups(true)) > 0 }
+func (e *CodeEditor) CanDuplicateLines() bool {
+	return !e.readOnly && len(e.editorLineGroups(true)) > 0
+}
 
 // DeleteLines removes the selected logical block or every distinct caret row.
 // Carets on removed rows collapse to the next surviving row (or the last row at
@@ -198,9 +203,13 @@ func (e *CodeEditor) CanDuplicateLines() bool { return len(e.editorLineGroups(tr
 // Undo restores original bytes, all carets and selection direction. Deleting the
 // last row removes its preceding separator; deleting all rows leaves one empty
 // row. An already empty document is a no-op, including its history and revision.
-func (e *CodeEditor) DeleteLines() { e.deleteLineGroups(e.editorLineGroups(true)) }
+func (e *CodeEditor) DeleteLines() {
+	if !e.readOnly {
+		e.deleteLineGroups(e.editorLineGroups(true))
+	}
+}
 func (e *CodeEditor) CanDeleteLines() bool {
-	return !(len(e.lines) == 1 && e.lines[0] == "") && len(e.editorLineGroups(true)) > 0
+	return !e.readOnly && !(len(e.lines) == 1 && e.lines[0] == "") && len(e.editorLineGroups(true)) > 0
 }
 func (e *CodeEditor) deleteLineGroups(groups []editorLineGroup) {
 	if len(groups) == 0 || len(e.lines) == 1 && e.lines[0] == "" {

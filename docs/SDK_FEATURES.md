@@ -40,6 +40,28 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 只读代码与文本查看器
+
+```go
+viewer := gui.NewCodeEditor()
+viewer.SetText(source)       // 宿主加载；即使只读也允许
+viewer.SetReadOnly(true)    // 禁止用户编辑，不清空撤销历史
+```
+
+`IsReadOnly()`、`CanCut/CanPaste/CanUndo/CanRedo` 可直接驱动命令状态；锁定后仍可
+选择、复制、查找、跳转与滚动。解锁恢复原有历史，不修改 revision、dirty 或正文。
+`FormatDocument/FormatDocumentAsync` 和带错误返回的重命名操作返回
+`gui.ErrEditorReadOnly`，无错误返回的修改命令不执行。
+
+锁定会撤销编辑器拥有的异步粘贴、格式化、补全与替换请求；即使随后解锁也不接纳
+旧结果。外部提供者仍须检查自己的请求身份／版本。状态切换与全部编辑器 API 一样，
+必须在 UI 线程调用；不是并发锁或文件系统访问控制。宿主 `SetText` 有意绕过只读并
+重置历史；应用自己的写盘／跨文件事务仍由宿主负责。
+
+设计器属性 **只读** 支持保存、重载、预览及 Go 导出。`examples/editor-readonly`
+演示切换、复制、查找、宿主重载与状态快照，窄窗口按钮换行。
+[本轮验证和限制](../EDITOR_READONLY_QA_20261025.md)。
+
 ### 撤销历史状态与订阅
 
 `CodeEditor.CanUndo()` / `CanRedo()` 是 O(1) 查询，与 `Modified()` 独立：保存不清除

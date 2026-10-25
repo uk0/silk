@@ -1,15 +1,16 @@
 package gui
 
 // CanUndo and CanRedo query the edit history in constant time, independently of
-// Modified (saved content can still have undo history). UI-thread-only.
-func (e *CodeEditor) CanUndo() bool { return len(e.undoStack) != 0 }
-func (e *CodeEditor) CanRedo() bool { return len(e.redoStack) != 0 }
+// Modified (saved content can still have undo history). Read-only mode hides
+// availability without clearing stored history. UI-thread-only.
+func (e *CodeEditor) CanUndo() bool { return !e.readOnly && len(e.undoStack) != 0 }
+func (e *CodeEditor) CanRedo() bool { return !e.readOnly && len(e.redoStack) != 0 }
 
 type editorHistoryObserver struct{ notify func() }
 
 // SubscribeHistoryChanged observes changes to CanUndo/CanRedo after a complete
-// edit, Undo/Redo or SetText reset. It does not replace SigChanged or publish an
-// initial event: read CanUndo/CanRedo when binding. Save/caret moves and edits
+// edit, Undo/Redo, SetText reset or read-only transition. It does not replace
+// SigChanged or publish an initial event: read CanUndo/CanRedo when binding. Save/caret moves and edits
 // that preserve both booleans are silent. Callbacks run on the UI thread and
 // must be short and not synchronously mutate text. Multiple observers run in
 // registration order; the returned unsubscribe is idempotent. Call it when the

@@ -19,6 +19,9 @@ type editorFormatJob struct {
 // FormatDocument is the synchronous SDK form. Interactive callers should use
 // FormatDocumentAsync. Replacement preserves earlier history and adds one Undo.
 func (e *CodeEditor) FormatDocument(options EditorFormatOptions) error {
+	if e.readOnly {
+		return ErrEditorReadOnly
+	}
 	e.CancelFormat()
 	text, err := formatx.Format(context.Background(), e.Language(), e.Text(), options)
 	if err == nil {
@@ -30,7 +33,7 @@ func (e *CodeEditor) FormatDocument(options EditorFormatOptions) error {
 // FormatCode retains its Go-only synchronous compatibility contract. It no
 // longer launches gofmt through PATH or resets the editor's Undo history.
 func (e *CodeEditor) FormatCode() {
-	if e.Language() != "go" {
+	if e.readOnly || e.Language() != "go" {
 		return
 	}
 	if err := e.FormatDocument(EditorFormatOptions{}); err != nil {
@@ -57,6 +60,9 @@ func (e *CodeEditor) CancelFormat() {
 // returned immediately (done is not called). Editing, changing path, hiding or
 // cancelling an editor retires both result and callback, including edit/undo ABA.
 func (e *CodeEditor) FormatDocumentAsync(options EditorFormatOptions, done func(error)) error {
+	if e.readOnly {
+		return ErrEditorReadOnly
+	}
 	if e.formatJob != nil {
 		return async.ErrBusy
 	}
@@ -103,6 +109,9 @@ var editorFormatExecutor = async.NewExecutor(2)
 
 // Used by the embedded editor's shortcut and the SDK code-panel button.
 func (e *CodeEditor) RequestFormat() {
+	if e.readOnly {
+		return
+	}
 	report := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			core.Error(err)

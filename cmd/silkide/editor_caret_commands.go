@@ -21,8 +21,8 @@ func editorCaretCommandSpecs() []editorCaretCommand {
 		{"editor.moveLinesDown", "Move Lines Down", "line-move-down", keys.MoveLinesDown, (*gui.CodeEditor).CanMoveLinesDown, (*gui.CodeEditor).MoveLinesDown},
 		{"editor.duplicateLines", "Duplicate Lines", "line-duplicate", keys.DuplicateLines, (*gui.CodeEditor).CanDuplicateLines, (*gui.CodeEditor).DuplicateLines},
 		{"editor.deleteLines", "Delete Lines", "line-delete", keys.DeleteLines, (*gui.CodeEditor).CanDeleteLines, (*gui.CodeEditor).DeleteLines},
-		{"editor.indentLines", "Indent Lines", "navigate-forward", "", func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).IndentLines},
-		{"editor.outdentLines", "Outdent Lines", "navigate-back", keys.OutdentLines, func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).OutdentLines},
+		{"editor.indentLines", "Indent Lines", "navigate-forward", "", func(e *gui.CodeEditor) bool { return !e.IsReadOnly() }, (*gui.CodeEditor).IndentLines},
+		{"editor.outdentLines", "Outdent Lines", "navigate-back", keys.OutdentLines, func(e *gui.CodeEditor) bool { return !e.IsReadOnly() }, (*gui.CodeEditor).OutdentLines},
 		{"editor.clearCursors", "Keep Primary Cursor", "cursor-primary", keys.KeepPrimaryCursor, func(e *gui.CodeEditor) bool { return e.CursorCount() > 1 }, func(e *gui.CodeEditor) { e.KeepPrimaryCursor() }},
 	}
 }

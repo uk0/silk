@@ -27,6 +27,9 @@ func (e *CodeEditor) CanMoveLinesUp() bool   { return len(e.lineMovePlan(false))
 func (e *CodeEditor) CanMoveLinesDown() bool { return len(e.lineMovePlan(true)) > 0 }
 
 func (e *CodeEditor) lineMovePlan(down bool) []editorLineMove {
+	if e.readOnly {
+		return nil
+	}
 	count := len(e.lines)
 	if count > 1 && e.lines[count-1] == "" {
 		count--

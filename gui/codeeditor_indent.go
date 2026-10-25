@@ -75,6 +75,9 @@ func (e *CodeEditor) restoreSelection(s editorSelection) {
 func (e *CodeEditor) IndentLines()  { e.changeLineIndent(false) }
 func (e *CodeEditor) OutdentLines() { e.changeLineIndent(true) }
 func (e *CodeEditor) changeLineIndent(remove bool) {
+	if e.readOnly {
+		return
+	}
 	if len(e.lines) == 0 {
 		return
 	}
@@ -166,6 +169,9 @@ func indentRemoval(line string, width int) int {
 }
 
 func (e *CodeEditor) insertIndentTab() {
+	if e.readOnly {
+		return
+	}
 	if len(e.additionalCursors) > 0 && !e.hasSelection {
 		e.editAtAllCursors(byteCursorTab, "")
 		e.rebuildText()
