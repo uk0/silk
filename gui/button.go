@@ -102,7 +102,16 @@ func (this *Button) OnLeftDown(x, y float64) {
 	//core.Debug("(this *Button) OnLeftDown()")
 	if this.IsEnabled() && this.IsAllAncentorsVisible() {
 		this.pushed = true
-		this.SetFocus()
+		// Mouse-opened menu bars return to the content when cancelled. Focusing
+		// the header here would make the popup remember that button instead.
+		// Explicit keyboard focus and ordinary/nested buttons stay unchanged.
+		menuHeader := false
+		if bar, ok := this.Parent().(*Menu); ok && !bar.IsPopup() && !bar.IsVertical() {
+			_, menuHeader = this.subPopup.(*Menu)
+		}
+		if !menuHeader {
+			this.SetFocus()
+		}
 		this.Self().Update()
 	}
 }

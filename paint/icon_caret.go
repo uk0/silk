@@ -63,3 +63,28 @@ func drawLineMove(direction int) proceduralIconDrawer {
 		cc.Stroke()
 	}
 }
+
+// A line stack plus/minus distinguishes duplicate/delete from clipboard actions.
+func drawLineChange(remove bool) proceduralIconDrawer {
+	return func(size int, cc *cairo.Context) {
+		s := float64(size)
+		setIconStroke(cc, size)
+		for _, y := range []float64{.25, .45, .65} {
+			cc.MoveTo(.12*s, y*s)
+			cc.LineTo(.52*s, y*s)
+		}
+		cc.Stroke()
+		color := currentIconPalette.Accent
+		if remove {
+			color = currentIconPalette.Danger
+		}
+		setIconColor(cc, color)
+		cc.MoveTo(.62*s, .7*s)
+		cc.LineTo(.94*s, .7*s)
+		if !remove {
+			cc.MoveTo(.78*s, .54*s)
+			cc.LineTo(.78*s, .86*s)
+		}
+		cc.Stroke()
+	}
+}

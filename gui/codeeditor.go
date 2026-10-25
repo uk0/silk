@@ -188,7 +188,7 @@ type cursorPos struct {
 
 // editAction records a single undoable edit operation.
 type editAction struct {
-	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=byte transaction, 5=line rotation
+	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=byte transaction, 5=line rotation, 6=line splice
 	line                        int
 	col                         int
 	text                        string // inserted text (kind 0,2) or deleted text (kind 1)
@@ -198,6 +198,7 @@ type editAction struct {
 	redoCursor                  *cursorPos // optional post-edit caret for atomic provider edits
 	group                       []editorByteEdit
 	lineMoves                   []editorLineMove
+	lineSplices                 []editorLineSplice
 	beforeCursors, afterCursors []cursorPos
 	findScope                   *editorFindScopeHistory
 	selection                   *editorSelectionHistory
@@ -1709,6 +1710,10 @@ func (this *CodeEditor) undo() {
 		this.cursorLine = a.line
 		this.cursorCol = a.col
 		this.redoStack = append(this.redoStack, a)
+	case 6:
+		this.applyLineSplices(a.lineSplices, true)
+		this.restoreEditCursors(a.beforeCursors)
+		this.redoStack = append(this.redoStack, a)
 	case 5:
 		this.unfoldLineMoves(a.lineMoves)
 		for i := len(a.lineMoves) - 1; i >= 0; i-- {
@@ -1769,6 +1774,10 @@ func (this *CodeEditor) redo() {
 		if a.redoCursor != nil {
 			this.cursorLine, this.cursorCol = a.redoCursor.line, a.redoCursor.col
 		}
+		this.undoStack = append(this.undoStack, a)
+	case 6:
+		this.applyLineSplices(a.lineSplices, false)
+		this.restoreEditCursors(a.afterCursors)
 		this.undoStack = append(this.undoStack, a)
 	case 5:
 		this.unfoldLineMoves(a.lineMoves)
@@ -2018,43 +2027,12 @@ func (this *CodeEditor) findMatchingBracket() (int, int, bool) {
 
 // --- Line Operations ---
 
-func (this *CodeEditor) duplicateLine() {
-	this.clampCursor()
-	dup := this.lines[this.cursorLine]
-	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: utf8.RuneCountInString(dup), text: "\n" + dup})
-	newLines := make([]string, 0, len(this.lines)+1)
-	newLines = append(newLines, this.lines[:this.cursorLine+1]...)
-	newLines = append(newLines, dup)
-	newLines = append(newLines, this.lines[this.cursorLine+1:]...)
-	this.lines = newLines
-	this.cursorLine++
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
+func (this *CodeEditor) duplicateLine() { this.DuplicateLines() }
 
+// Cut-without-selection still removes only the line it put on the clipboard.
 func (this *CodeEditor) deleteCurrentLine() {
 	this.clampCursor()
-	deleted := this.lines[this.cursorLine]
-	if len(this.lines) > 1 {
-		if this.cursorLine == len(this.lines)-1 {
-			this.pushUndo(editAction{kind: 1, line: this.cursorLine - 1, col: utf8.RuneCountInString(this.lines[this.cursorLine-1]), text: "\n" + deleted})
-		} else {
-			this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: 0, text: deleted + "\n"})
-		}
-		this.lines = append(this.lines[:this.cursorLine], this.lines[this.cursorLine+1:]...)
-		if this.cursorLine >= len(this.lines) {
-			this.cursorLine = len(this.lines) - 1
-		}
-	} else {
-		this.pushUndo(editAction{kind: 1, line: 0, col: 0, text: deleted})
-		this.lines[0] = ""
-	}
-	this.cursorCol = 0
-	this.clearSelection()
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
+	this.deleteLineGroups([]editorLineGroup{{this.cursorLine, this.cursorLine}})
 }
 
 func (this *CodeEditor) moveLineUp()   { this.MoveLinesUp() }
@@ -2254,36 +2232,6 @@ func duplicateLinesInText(lines []string, from, to int) []string {
 	out = append(out, block...)
 	out = append(out, lines[to+1:]...)
 	return out
-}
-
-// DuplicateLines copies the current line (or each line of a multi-line
-// selection) below itself. With no selection it reuses duplicateLine (the Cmd+D
-// empty-selection fallback); a selection duplicates the whole block as one
-// undoable full-text edit and re-selects the copy. Routed through rebuildText.
-func (this *CodeEditor) DuplicateLines() {
-	this.clampCursor()
-	if !this.hasSelection {
-		this.duplicateLine()
-		return
-	}
-	sl, sc, el, ec := this.selectionRange()
-	oldFull := this.Text()
-	newLines := duplicateLinesInText(this.lines, sl, el)
-	newFull := strings.Join(newLines, "\n")
-	this.pushUndo(editAction{kind: 3, line: this.cursorLine, col: this.cursorCol, text: newFull, oldText: oldFull})
-	this.lines = newLines
-	span := el - sl + 1
-	this.hasSelection = true
-	this.selStartLine = sl + span
-	this.selStartCol = sc
-	this.selEndLine = el + span
-	this.selEndCol = ec
-	this.cursorLine = this.selEndLine
-	this.cursorCol = ec
-	this.clampCursor()
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
 }
 
 // --- Comment Toggling ---
@@ -5066,8 +5014,8 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 		}
 
 	case 'K':
-		if ctrl && shift {
-			this.deleteCurrentLine()
+		if (ctrl || isActionModifier()) && shift {
+			this.DeleteLines()
 		}
 
 	case 'O':

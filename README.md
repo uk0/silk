@@ -21,6 +21,21 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Atomic duplicate/delete line commands
+
+- **Edit → Duplicate Lines / Delete Lines** and the Command Palette now share
+  SDK transactions with Cmd/Ctrl+Shift+D and Cmd/Ctrl+Shift+K. Selected blocks
+  exclude a next-line column-zero endpoint; multi-caret rows are grouped once.
+- One Undo restores original bytes, selection direction and all caret positions.
+  Empty-document Delete is disabled and does not create history. EOF duplication
+  follows the preceding line's LF/CRLF style instead of inserting a stray LF.
+- Batch line splices rebuild the line index once and retain only affected line
+  bodies in history. Unaffected collapsed folds track their new line numbers.
+- Cancelling a mouse-opened menu returns keyboard input to its previous content;
+  normal buttons and explicit keyboard focus keep their existing behavior.
+  Example: `go run ./examples/editor-lines`;
+  [verification details](EDITOR_LINE_COPY_DELETE_QA_20261025.md).
+
 ### Reversible line-block movement
 
 - **Edit → Move Lines Up / Down**, the Command Palette and Alt+↑/↓ share the

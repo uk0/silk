@@ -32,45 +32,16 @@ func (e *CodeEditor) lineMovePlan(down bool) []editorLineMove {
 		count--
 	}
 	var result []editorLineMove
-	add := func(first, last int) {
-		if first < 0 || last >= count || first > last {
-			return
-		}
-		lo, hi := first-1, last
+	for _, g := range e.editorLineGroups(false) {
+		lo, hi := g.lo-1, g.hi
 		if down {
-			lo, hi = first, last+1
+			lo, hi = g.lo, g.hi+1
 		}
 		if lo >= 0 && hi < count {
 			result = append(result, editorLineMove{lo: lo, hi: hi, down: down})
 		}
 	}
-	if e.hasSelection {
-		first, _, last, col := e.selectionRange()
-		if last > first && col == 0 {
-			last--
-		}
-		add(first, last)
-	} else {
-		rows := make([]int, 0, len(e.additionalCursors)+1)
-		if e.cursorLine >= 0 && e.cursorLine < count {
-			rows = append(rows, e.cursorLine)
-		}
-		for _, p := range e.additionalCursors {
-			if p.line >= 0 && p.line < count {
-				rows = append(rows, p.line)
-			}
-		}
-		sort.Ints(rows)
-		for i := 0; i < len(rows); {
-			first, last := rows[i], rows[i]
-			i++
-			for i < len(rows) && rows[i] <= last+1 {
-				last = rows[i]
-				i++
-			}
-			add(first, last)
-		}
-	}
+
 	return result
 }
 

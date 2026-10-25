@@ -15,6 +15,8 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"cursor-add-above":   drawCaretCommand(-1),
 	"cursor-add-below":   drawCaretCommand(1),
 	"cursor-primary":     drawCaretCommand(0),
+	"line-duplicate":     drawLineChange(false),
+	"line-delete":        drawLineChange(true),
 	"line-move-up":       drawLineMove(-1),
 	"line-move-down":     drawLineMove(1),
 	"edit-copy":          drawCopyPages,

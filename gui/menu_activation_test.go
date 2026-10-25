@@ -176,3 +176,33 @@ func TestFocusedButtonEscapeCancelsDialogButPopupTakesPriority(t *testing.T) {
 		t.Fatal("Escape must close only the popup before reaching its owner dialog")
 	}
 }
+
+func TestMouseMenuBarHeaderKeepsContentReturnFocus(t *testing.T) {
+	oldFocus := focusWidget
+	t.Cleanup(func() { focusWidget = oldFocus })
+	content := NewEdit()
+	content.SetFocus()
+	bar := NewMenuBar()
+	_, header := bar.AddSubMenu("Edit", nil, nil)
+	header.OnLeftDown(0, 0)
+	if focusWidget != content {
+		t.Fatalf("mouse header stole return focus: %T", focusWidget)
+	}
+	// Keyboard focus remains possible; do not disable header accessibility.
+	header.SetFocus()
+	header.OnLeftDown(0, 0)
+	if focusWidget != header {
+		t.Fatal("explicit keyboard focus changed")
+	}
+	ordinary := NewButton1("ordinary", nil)
+	ordinary.OnLeftDown(0, 0)
+	if focusWidget != ordinary {
+		t.Fatal("ordinary button lost mouse focus")
+	}
+	popup := visibleActivationMenu()
+	_, nested := popup.AddSubMenu("Nested", nil, nil)
+	nested.OnLeftDown(0, 0)
+	if focusWidget != nested {
+		t.Fatal("nested submenu focus contract changed")
+	}
+}

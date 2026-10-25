@@ -40,6 +40,24 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 行块复制与删除
+
+在 UI 线程使用 `CodeEditor.DuplicateLines()`、`DeleteLines()`，以及纯可用性查询
+`CanDuplicateLines()`、`CanDeleteLines()`。Edit 菜单、命令面板与 Cmd/Ctrl+Shift+D/K
+共用同一操作。有选区时复制或删除覆盖的逻辑行块，下一行第 0 列端点不包含该行；
+无选区时各光标的相邻行合为组，同一行不重复处理。复制后光标跟随副本；删除后的
+重合光标合并到下一条存活行（EOF 处回落末行），第 0 列。Undo/Redo 精确恢复文本、
+所有光标及选区方向。无选区剪切仍仅删除已放入剪贴板的主光标行，不误删其他光标行。
+
+复制末行时新增分隔符跟随上一行的 LF/CRLF，单行文件默认 LF；原末行的字面 CR
+保留。复制 EOF 空行会增加一个空白行。删除末行同时移除前置分隔符；删除所有行
+留下一个空行，空文档再次删除不改变 revision、dirty、撤销栈或临时输入状态。
+
+撤销历史只保留受影响行的独立字符串，不保存整篇正文，也不引用完整行索引的底层
+切片。任意数量的行组一次构造新行索引；涉及的折叠展开，未涉及的折叠重新定位。
+可用性查询不扫描正文；真实编辑仍在 UI 线程重新发布文本，不能据此保证任意大小
+文档零延迟。示例 `examples/editor-lines` 增加 Duplicate/Delete 按钮和 CanDelete 快照。
+
 ### 行块移动
 
 `CodeEditor.MoveLinesUp/MoveLinesDown` 与 `CanMoveLinesUp/CanMoveLinesDown` 为

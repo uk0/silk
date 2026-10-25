@@ -1,4 +1,4 @@
-// Editor Lines demonstrates reversible line-block movement.
+// Editor Lines demonstrates reversible line-block operations.
 // All contents are temporary. Snapshot prints the actual editor state as JSON.
 package main
 
@@ -20,10 +20,10 @@ type linesDemo struct {
 func newLinesDemo() *linesDemo {
 	f := new(linesDemo)
 	f.Form.Init(f)
-	f.SetTitle("Silk - Line Movement")
+	f.SetTitle("Silk - Line Operations")
 	f.editor = gui.NewCodeEditor()
 	f.editor.SetParent(f)
-	f.status = gui.NewLabel("Alt+Up/Down or buttons move selected lines; Undo restores the whole group.")
+	f.status = gui.NewLabel("Move, duplicate or delete selected/caret lines; Undo restores the whole group.")
 	f.status.SetParent(f)
 	add := func(label string, run func()) {
 		b := gui.NewButton1(label, nil)
@@ -35,6 +35,8 @@ func newLinesDemo() *linesDemo {
 	f.editor.SetText("中🙂 alpha\n    beta\n\tgamma\nlast\n")
 	add("Move Up", func() { f.editor.MoveLinesUp(); f.editor.SetFocus() })
 	add("Move Down", func() { f.editor.MoveLinesDown(); f.editor.SetFocus() })
+	add("Duplicate", func() { f.editor.DuplicateLines(); f.editor.SetFocus() })
+	add("Delete", func() { f.editor.DeleteLines(); f.editor.SetFocus() })
 	add("Undo", func() { f.editor.Undo(); f.editor.SetFocus() })
 	add("Redo", func() { f.editor.Redo(); f.editor.SetFocus() })
 	add("Add Caret", func() { f.editor.AddCursorBelow() })
@@ -42,8 +44,9 @@ func newLinesDemo() *linesDemo {
 		data, _ := json.Marshal(struct {
 			Text                   string
 			CanMoveUp, CanMoveDown bool
+			CanDelete              bool
 			Cursors, Line, Column  int
-		}{f.editor.Text(), f.editor.CanMoveLinesUp(), f.editor.CanMoveLinesDown(), f.editor.CursorCount(), f.editor.CursorLine(), f.editor.CursorCol()})
+		}{f.editor.Text(), f.editor.CanMoveLinesUp(), f.editor.CanMoveLinesDown(), f.editor.CanDeleteLines(), f.editor.CursorCount(), f.editor.CursorLine(), f.editor.CursorCol()})
 		fmt.Println("SNAPSHOT " + string(data))
 	})
 	return f

@@ -240,3 +240,70 @@ func TestMoveLinesMenuPaletteBoundaryAndDocumentGuard(t *testing.T) {
 		t.Fatal("palette captured old editor")
 	}
 }
+
+func TestDuplicateDeleteLinesMenuPaletteAndDocumentGuards(t *testing.T) {
+	w := testWorkbench(t)
+	old := paletteCommands
+	t.Cleanup(func() { paletteCommands = old })
+	first := writeFile(t, t.TempDir(), "lines.txt", "a\nb\n")
+	openFileInEditor(w.tabs, first)
+	w.activate(modeEdit)
+	e := activeEditor(w.tabs)
+	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
+	defer releaseWorkbenchMenu(menu)
+	dup, del := menuCommandButton(menu, "editor.duplicateLines"), menuCommandButton(menu, "editor.deleteLines")
+	if dup == nil || del == nil || dup.Icon() == nil || del.Icon() == nil || !dup.IsEnabled() || !del.IsEnabled() {
+		t.Fatal("menu commands/icons")
+	}
+	dup.Action().Trigger(dup)
+	if e.Text() != "a\na\nb\n" {
+		t.Fatal("menu copy")
+	}
+	e.Undo()
+	registerPaletteCommands(w.tabs, w.canvas)
+	var copy, remove func()
+	for _, c := range paletteCommands {
+		if c.Name == i18n.T("Duplicate Lines") {
+			copy = c.Fn
+		}
+		if c.Name == i18n.T("Delete Lines") {
+			remove = c.Fn
+		}
+	}
+	if copy == nil || remove == nil {
+		t.Fatal("palette missing")
+	}
+	remove()
+	if e.Text() != "b\n" {
+		t.Fatal("palette delete")
+	}
+	e.Undo()
+	w.activate(modeDesign)
+	copy()
+	remove()
+	if e.Text() != "a\nb\n" {
+		t.Fatal("hidden edit")
+	}
+	w.activate(modeEdit)
+	second := writeFile(t, t.TempDir(), "empty.txt", "")
+	openFileInEditor(w.tabs, second)
+	other := activeEditor(w.tabs)
+	dup.Action().Trigger(dup)
+	del.Action().Trigger(del)
+	if other.Text() != "" || e.Text() != "a\nb\n" {
+		t.Fatal("stale menu")
+	}
+	emptyMenu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
+	defer releaseWorkbenchMenu(emptyMenu)
+	if menuCommandButton(emptyMenu, "editor.deleteLines").IsEnabled() || !menuCommandButton(emptyMenu, "editor.duplicateLines").IsEnabled() {
+		t.Fatal("empty boundary")
+	}
+	copy()
+	if other.Text() != "\n" {
+		t.Fatal("current palette document")
+	}
+	remove()
+	if other.Text() != "" {
+		t.Fatal("delete current")
+	}
+}
