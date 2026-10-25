@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Visible, event-driven navigation history
+
+- Toolbar Back / Forward buttons mirror the editor's location history, with
+  shortcut hints and immediate disabled states. The same navigation commands
+  work from Welcome / Design, revealing the target editor instead of rejecting
+  the command in the palette.
+- Edit menu and Command Palette include **Clear Navigation History**. This only
+  clears visited locations, never document text, caret, dirty state or Undo.
+- SDK `NavigationStack` adds `Len`, `Clear` and `SubscribeChanged`: bounded to 256
+  positions, UI-thread-owned, one notification per completed jump, no polling.
+  See [verification](NAVIGATION_ACTIONS_QA_20261025.md).
+
 ### Quick Open at a line and column
 
 - Quick Open accepts `file.go:line[:column]`, using one-based Unicode code-point

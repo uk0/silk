@@ -41,28 +41,44 @@ type NavPosition struct {
 	ScrollY  float64
 }
 
-// NavigationStack provides back/forward navigation history.
+// NavigationStack provides bounded, UI-thread-owned back/forward history.
+// Its zero value is ready to use. Do not copy a stack after first use.
 type NavigationStack struct {
-	stack   []NavPosition
-	current int // points to the current position (-1 = empty)
+	stack     []NavPosition
+	current   int // points to the current position (-1 = empty)
+	observers []*navigationObserver
 }
 
 // Push adds a new position to the stack, discarding any forward history.
 func (ns *NavigationStack) Push(pos NavPosition) {
+	if ns.push(pos) {
+		ns.notifyChanged()
+	}
+}
+
+// push lets RecordJump publish one completed transaction, not two partial ones.
+func (ns *NavigationStack) push(pos NavPosition) bool {
 	if len(ns.stack) > 0 && sameNavLocation(ns.stack[ns.current], pos) {
+		if ns.stack[ns.current] == pos {
+			return false
+		}
 		ns.stack[ns.current] = pos
-		return
+		return true
 	}
 	if ns.current < len(ns.stack)-1 {
+		clear(ns.stack[ns.current+1:]) // Do not retain discarded forward paths.
 		ns.stack = ns.stack[:ns.current+1]
 	}
-	ns.stack = append(ns.stack, pos)
-	// A long IDE session must not retain unbounded paths/positions.
-	if len(ns.stack) > 256 {
-		copy(ns.stack, ns.stack[len(ns.stack)-256:])
-		ns.stack = ns.stack[:256]
+	// A long IDE session must not retain unbounded paths/positions. Reuse the
+	// buffer at capacity instead of appending a 257th entry and allocating.
+	if len(ns.stack) == 256 {
+		copy(ns.stack, ns.stack[1:])
+		ns.stack[255] = pos
+	} else {
+		ns.stack = append(ns.stack, pos)
 	}
 	ns.current = len(ns.stack) - 1
+	return true
 }
 
 func sameNavLocation(a, b NavPosition) bool {
@@ -75,8 +91,9 @@ func (ns *NavigationStack) RecordJump(from, to NavPosition) {
 	if sameNavLocation(from, to) {
 		return
 	}
-	ns.Push(from)
-	ns.Push(to)
+	ns.push(from)
+	ns.push(to)
+	ns.notifyChanged()
 }
 
 // Navigate traverses history using the live caret as the return position.
@@ -97,19 +114,29 @@ func (ns *NavigationStack) Navigate(live NavPosition, forward bool, visit func(N
 		}
 		ns.stack[ns.current] = live
 		ns.current = i
+		ns.notifyChanged()
 		return true
 	}
 	return false
 }
 
 // MapPaths keeps history attached to files after a successful file/directory
-// rename. Call only after the filesystem operation commits.
+// rename. Call only after the filesystem operation commits. mapPath must not
+// mutate the stack; observers see all renamed paths in one notification.
 func (ns *NavigationStack) MapPaths(mapPath func(string) string) {
 	if mapPath == nil {
 		return
 	}
+	changed := false
 	for i := range ns.stack {
-		ns.stack[i].FilePath = mapPath(ns.stack[i].FilePath)
+		path := mapPath(ns.stack[i].FilePath)
+		if path != ns.stack[i].FilePath {
+			ns.stack[i].FilePath = path
+			changed = true
+		}
+	}
+	if changed {
+		ns.notifyChanged()
 	}
 }
 
@@ -124,7 +151,9 @@ func (ns *NavigationStack) GoBack() (NavPosition, bool) {
 		return NavPosition{}, false
 	}
 	ns.current--
-	return ns.stack[ns.current], true
+	pos := ns.stack[ns.current]
+	ns.notifyChanged()
+	return pos, true
 }
 
 // CanGoForward returns true if there is a next position in history.
@@ -138,7 +167,9 @@ func (ns *NavigationStack) GoForward() (NavPosition, bool) {
 		return NavPosition{}, false
 	}
 	ns.current++
-	return ns.stack[ns.current], true
+	pos := ns.stack[ns.current]
+	ns.notifyChanged()
+	return pos, true
 }
 
 // FindDefinition searches for the definition of an identifier.

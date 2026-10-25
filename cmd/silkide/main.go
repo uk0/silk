@@ -182,6 +182,7 @@ func main() {
 	core.EventLoop()
 	if globalWorkbench != nil {
 		globalWorkbench.closeHistoryActions()
+		globalWorkbench.closeNavigationActions()
 	}
 	finishPreferenceSaves(prefs)
 	// Stop and join gutter workers only after UI dispatch ends. Merely canceling
@@ -342,6 +343,17 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		return btn
 	}
 
+	// Workspace navigation is distinct from document Undo/Redo. Reuse the
+	// same actions as menu/palette/shortcuts and publish only state changes.
+	keys := gui.CodeEditorShortcuts()
+	back := addIconAction("", "navigate-back", "Go Back", func() { navigateEditorHistory(editorTabs, false) })
+	forward := addIconAction("", "navigate-forward", "Go Forward", func() { navigateEditorHistory(editorTabs, true) })
+	back.Action().SetObjName("navigate.back")
+	forward.Action().SetObjName("navigate.forward")
+	gui.SetToolTip(back, i18n.T("Go Back")+" ("+keys.GoBack+")")
+	gui.SetToolTip(forward, i18n.T("Go Forward")+" ("+keys.GoForward+")")
+	tb.AddSeparator()
+
 	// New: clears the design canvas to a fresh scene. Bound to
 	// Cmd+N too via registerShortcuts. silk's resource theme has no
 	// "plus" PNG; the procedural fallback in paint draws a simple
@@ -412,6 +424,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	if w := globalWorkbench; w != nil && w.frame == frame {
 		w.closeHistoryActions()
 		w.historyActions = &workbenchHistoryActions{undo: undo, redo: redo}
+		w.bindNavigationActions(back, forward)
 		w.syncHistoryActions()
 	}
 	frame.SetToolBar(tb)

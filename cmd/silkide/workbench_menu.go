@@ -144,9 +144,10 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				globalBookmarks.SetFocus()
 			}
 		}, globalBookmarks != nil})
-		history := editorNavigation(tabs)
-		add("navigate.back", "Go Back", "navigate-back", "Alt+Left", history != nil && history.CanGoBack(), func() { navigateEditorHistory(tabs, false) })
-		add("navigate.forward", "Go Forward", "navigate-forward", "Alt+Right", history != nil && history.CanGoForward(), func() { navigateEditorHistory(tabs, true) })
+		keys := gui.CodeEditorShortcuts()
+		add("navigate.back", "Go Back", "navigate-back", keys.GoBack, editorNavigationAvailable(tabs, false), func() { navigateEditorHistory(tabs, false) })
+		add("navigate.forward", "Go Forward", "navigate-forward", keys.GoForward, editorNavigationAvailable(tabs, true), func() { navigateEditorHistory(tabs, true) })
+		add("navigate.clear", "Clear Navigation History", "line-delete", "", editorNavigationCount(tabs) > 0, func() { clearEditorNavigation(tabs) })
 		editor := activeEditor(tabs)
 		semantic := !design && document && editor != nil && isGoFile(editor.FilePath())
 		add("navigate.definition", "Go to Definition", "function", "F12", !design && document, func() { goToDefinitionViaLSP(tabs) })

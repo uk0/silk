@@ -40,6 +40,36 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 可观察的导航历史
+
+`gui.NavigationStack` 零值可用，保存最多 256 个位置；所有访问均由 UI 线程负责，
+首次使用后不要复制。`RecordJump`、`Navigate` 仍负责跨文件／实时光标的后退与前进，
+新增以下宿主绑定接口：
+
+- `Len()`：已保留的位置数（含当前位置），不探测磁盘文件是否可用。
+- `Clear()`：释放位置记录，保留订阅；不触碰编辑器文本、光标、dirty 或 Undo。
+- `SubscribeChanged(fn) func()`：返回幂等退订函数。回调在完整变更后按注册顺序调用；
+  `RecordJump` 的两端和 `MapPaths` 的所有路径只发布一次通知。没有初始通知，
+  绑定后应主动读取 `CanGoBack/CanGoForward/Len`。
+
+失败导航、边界操作、完全相同的 `Push`、空 `Clear` 不通知。回调必须简短且不得
+同步修改历史；回调内订阅／退订安全，退订立即生效，新订阅从下次变更开始接收。
+宿主卸载时调用退订函数。位置更新不创建定时器、后台轮询或每次回调的切片副本。
+
+```go
+refresh := func() {
+    back.SetEnabled(history.CanGoBack())
+    forward.SetEnabled(history.CanGoForward())
+}
+stop := history.SubscribeChanged(refresh)
+refresh()
+// 窗口／工具栏销毁时调用 stop()。
+```
+
+可用状态表示记录中存在相邻位置，不承诺文件仍在磁盘上；`Navigate` 通过宿主的
+`visit` 返回值跳过不可打开的目标。IDE 的菜单、工具栏和命令面板统一复用该历史，
+从 Welcome／Design 也能返回目标代码页；工具栏重建及退出会退订并清理提示。
+
 ### 文件查询与行列定位
 
 `locator.ParseFileQuery(text) (FileQuery, error)` 将文件搜索文本拆分为 `Path` 与

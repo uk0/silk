@@ -43,6 +43,7 @@ func testWorkbench(t *testing.T) *workbench {
 	globalWorkbench = w
 	dock.SetTabChangedCallback(func(_ int) { w.syncHistoryActions() })
 	t.Cleanup(w.closeHistoryActions)
+	t.Cleanup(w.closeNavigationActions)
 	return w
 }
 

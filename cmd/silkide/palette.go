@@ -168,8 +168,17 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Go to Definition", "F12", func() { goToDefinitionViaLSP(editorTabs) })
 	add("Go to Type Definition", actionKeyHint()+"+F12", func() { requestSymbolNavigation(editorTabs, "Go to Type Definition") })
 	add("Go to Implementation", "Alt+F12", func() { requestSymbolNavigation(editorTabs, "Go to Implementation") })
-	add("Go Back", "Alt+Left", func() { navigateEditorHistory(editorTabs, false) })
-	add("Go Forward", "Alt+Right", func() { navigateEditorHistory(editorTabs, true) })
+	for i, name := range []string{"Go Back", "Go Forward"} {
+		forward := i == 1
+		hint := gui.CodeEditorShortcuts().GoBack
+		if forward {
+			hint = gui.CodeEditorShortcuts().GoForward
+		}
+		add(name, hint, func() { navigateEditorHistory(editorTabs, forward) })
+		paletteCommands[len(paletteCommands)-1].Available = func() bool { return editorNavigationAvailable(editorTabs, forward) }
+	}
+	add("Clear Navigation History", "", func() { clearEditorNavigation(editorTabs) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { return editorNavigationCount(editorTabs) > 0 }
 	add("Format Document", "Cmd+Shift+I", func() { formatActiveDocument(editorTabs, designCanvas, nil, false) })
 	add("Compact JSON", "", func() { formatActiveDocument(editorTabs, designCanvas, nil, true) })
 	add("Cancel Local Formatting", "", func() { cancelActiveFormatting(editorTabs, designCanvas, nil) })

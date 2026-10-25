@@ -465,6 +465,7 @@ func registerSilkideTranslations() {
 		"Go to Type Definition":                   "跳转到类型定义",
 		"Go to Implementation":                    "跳转到实现",
 		"Event Handlers":                          "事件处理函数",
+		"Clear Navigation History":                "清空导航历史",
 		"Go Back":                                 "后退",
 		"Go Forward":                              "前进",
 		"No navigation targets found":             "未找到可跳转的目标",

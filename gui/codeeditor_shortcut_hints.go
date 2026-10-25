@@ -10,7 +10,7 @@ type CodeEditorShortcutHints struct {
 	AddCursorAbove, AddCursorBelow, KeepPrimaryCursor       string
 	MoveLinesUp, MoveLinesDown, DuplicateLines, DeleteLines string
 	IndentLines, OutdentLines                               string
-	GoToLine                                                string
+	GoToLine, GoBack, GoForward                             string
 }
 
 // CodeEditorShortcuts returns platform-aware built-in shortcuts. On Windows the
@@ -34,6 +34,6 @@ func codeEditorShortcutsForOS(goos string) CodeEditorShortcutHints {
 		Cut: key + "+X", Copy: key + "+C", Paste: key + "+V", SelectAll: key + "+A",
 		AddCursorAbove: caret + "+Up", AddCursorBelow: caret + "+Down", KeepPrimaryCursor: "Esc",
 		MoveLinesUp: "Alt+Up", MoveLinesDown: "Alt+Down", DuplicateLines: key + "+Shift+D", DeleteLines: key + "+Shift+K",
-		IndentLines: "Tab", OutdentLines: "Shift+Tab", GoToLine: key + "+G",
+		IndentLines: "Tab", OutdentLines: "Shift+Tab", GoToLine: key + "+G", GoBack: "Alt+Left", GoForward: "Alt+Right",
 	}
 }

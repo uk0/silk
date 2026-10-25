@@ -20,24 +20,25 @@ const (
 // The active dock view is the authority, even when the user switches its tabs
 // directly. Never infer the save target from the presence of a hidden editor.
 type workbench struct {
-	frame          *gui.Frame
-	center         *gui.Dock
-	tabs           *gui.TabWidget
-	canvas         *ged.GedView
-	welcome        *ged.WelcomeScreen
-	palette        *ged.WidgetList
-	paletteView    gui.IWidget
-	buttons        map[workspaceMode]*gui.Button
-	lastMode       workspaceMode
-	historyActions *workbenchHistoryActions
-	designToolbar  *gui.ToolBar
-	designActions  []designActionButton
-	dockVisibility map[*gui.Dock]bool
-	navigation     gui.NavigationStack
-	bookmarks      *editorBookmarks
-	notifications  *notificationsPane
-	closedEditors  closedEditorHistory
-	toolViews      map[workspaceMode]workbenchToolViews
+	frame             *gui.Frame
+	center            *gui.Dock
+	tabs              *gui.TabWidget
+	canvas            *ged.GedView
+	welcome           *ged.WelcomeScreen
+	palette           *ged.WidgetList
+	paletteView       gui.IWidget
+	buttons           map[workspaceMode]*gui.Button
+	lastMode          workspaceMode
+	historyActions    *workbenchHistoryActions
+	navigationActions *workbenchNavigationActions
+	designToolbar     *gui.ToolBar
+	designActions     []designActionButton
+	dockVisibility    map[*gui.Dock]bool
+	navigation        gui.NavigationStack
+	bookmarks         *editorBookmarks
+	notifications     *notificationsPane
+	closedEditors     closedEditorHistory
+	toolViews         map[workspaceMode]workbenchToolViews
 }
 
 type workbenchToolViews struct{ left, right gui.IWidget }
