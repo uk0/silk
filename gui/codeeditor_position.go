@@ -12,6 +12,10 @@ type EditorTextPosition struct {
 	HasPreviousRune                           bool
 }
 
+// LineCount returns the number of logical rows, including an empty final row.
+// Constant time and allocation-free; like LineText, call on the UI thread.
+func (e *CodeEditor) LineCount() int { return len(e.lines) }
+
 // LineText reads one current line without copying the document's line slice.
 // An empty valid line returns ("", true); invalid indices return ("", false).
 // The returned string is immutable and remains valid after subsequent edits.

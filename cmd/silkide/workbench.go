@@ -34,6 +34,7 @@ type workbench struct {
 	designActions  []designActionButton
 	dockVisibility map[*gui.Dock]bool
 	navigation     gui.NavigationStack
+	bookmarks      *editorBookmarks
 	closedEditors  closedEditorHistory
 	toolViews      map[workspaceMode]workbenchToolViews
 }

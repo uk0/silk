@@ -334,3 +334,28 @@ func TestReanchorBeyondDrift(t *testing.T) {
 		t.Errorf("Line = %d, want 1 (unchanged)", got)
 	}
 }
+
+func TestReplaceFileAndMapPathsKeepClosedMarks(t *testing.T) {
+	s := NewStore()
+	s.Add(Bookmark{Path: "a", Line: 1, Context: "old"})
+	s.Add(Bookmark{Path: "b", Line: 2, Note: "keep"})
+	in := []Bookmark{{Path: "ignored", Line: 3, Context: "target"}, {Line: 3, Context: "updated"}, {Line: 0}}
+	s.ReplaceFile("a", in)
+	in[0].Context = "mutated"
+	if s.Count() != 2 || len(s.ByFile("a")) != 1 || s.ByFile("a")[0].Context != "updated" || s.ByFile("b")[0].Note != "keep" {
+		t.Fatal(s.List())
+	}
+	s.MapPaths(func(path string) string {
+		if path == "a" {
+			return "c"
+		}
+		return path
+	})
+	if len(s.ByFile("a")) != 0 || len(s.ByFile("c")) != 1 {
+		t.Fatal(s.List())
+	}
+	s.ReplaceFile("c", nil)
+	if s.Count() != 1 {
+		t.Fatal(s.List())
+	}
+}

@@ -203,6 +203,7 @@ type editAction struct {
 	beforeCursors, afterCursors []cursorPos
 	findScope                   *editorFindScopeHistory
 	selection                   *editorSelectionHistory
+	bookmarks                   *editorBookmarkHistory
 }
 
 // findMatch records a single search hit location.
@@ -361,7 +362,8 @@ type CodeEditor struct {
 	errorLines map[int]string // line number -> error message
 
 	// --- Bookmarks ---
-	bookmarks map[int]bool // bookmarked line numbers
+	bookmarks     map[int]bool // bookmarked line numbers
+	bookmarkState editorBookmarkState
 
 	// --- Breakpoints ---
 	// breakpoints holds lines (0-based, matching cursorLine/bookmarks) that carry
@@ -669,6 +671,8 @@ func (this *CodeEditor) tryExpandSnippetAtCursor() bool {
 // SetText replaces the entire editor content, even in read-only mode.
 // It is the explicit host/model loading API; edit commands honor IsReadOnly.
 func (this *CodeEditor) SetText(s string) {
+	this.bookmarkState.pending = false
+	this.bookmarkState.epoch++
 	this.DismissLanguageHints()
 	this.snippetSess = nil
 	this.minimapDragging = false
@@ -716,6 +720,9 @@ func (this *CodeEditor) TextRevision() uint64 {
 // Keep the old string on equality so no-op edits preserve the cached storage.
 func (this *CodeEditor) cacheText(text string) {
 	changed := text != this.text
+	if changed && !this.bookmarkState.mapped {
+		this.reanchorBookmarks(this.text)
+	}
 	if changed {
 		this.CancelFormat()
 		this.text = text
@@ -733,6 +740,7 @@ func (this *CodeEditor) cacheText(text string) {
 		this.cacheLineEndings(text)
 	}
 	this.textDirty = false
+	this.publishBookmarks(changed)
 	this.updateGoLineStates()
 	this.updateGutterWidth()
 	if changed {
@@ -1671,6 +1679,7 @@ func (this *CodeEditor) updateSelectionEnd() {
 // --- Undo/Redo Methods ---
 
 func (this *CodeEditor) pushUndo(a editAction) {
+	this.bookmarkState.pending = true
 	a.findScope = this.findState.scopeTransition
 	a.stamp = time.Now()
 	if a.kind < 3 && a.line >= 0 && a.line < len(this.lines) {
@@ -1713,6 +1722,7 @@ func (this *CodeEditor) undo() {
 	this.snippetSess = nil // stored byte ranges belong to the pre-undo buffer
 	a := this.undoStack[len(this.undoStack)-1]
 	this.undoStack = this.undoStack[:len(this.undoStack)-1]
+	this.bookmarkState.pending = false
 	this.restoreFindScopeHistory(a.findScope, false)
 
 	switch a.kind {
@@ -1754,6 +1764,7 @@ func (this *CodeEditor) undo() {
 	case 5:
 		this.unfoldLineMoves(a.lineMoves)
 		for i := len(a.lineMoves) - 1; i >= 0; i-- {
+			this.mapMoveBookmarks(a.lineMoves[i], true)
 			a.lineMoves[i].apply(this.lines, true)
 		}
 		this.restoreEditCursors(a.beforeCursors)
@@ -1766,6 +1777,7 @@ func (this *CodeEditor) undo() {
 		this.restoreEditCursors(a.beforeCursors)
 		this.redoStack = append(this.redoStack, a)
 	}
+	this.restoreBookmarkHistory(a.bookmarks, false)
 	this.clearSelection()
 	if a.selection != nil {
 		this.restoreSelection(a.selection.before)
@@ -1789,6 +1801,7 @@ func (this *CodeEditor) redo() {
 	this.snippetSess = nil
 	a := this.redoStack[len(this.redoStack)-1]
 	this.redoStack = this.redoStack[:len(this.redoStack)-1]
+	this.bookmarkState.pending = false
 	this.restoreFindScopeHistory(a.findScope, true)
 
 	switch a.kind {
@@ -1830,6 +1843,7 @@ func (this *CodeEditor) redo() {
 	case 5:
 		this.unfoldLineMoves(a.lineMoves)
 		for _, m := range a.lineMoves {
+			this.mapMoveBookmarks(m, false)
 			m.apply(this.lines, false)
 		}
 		this.restoreEditCursors(a.afterCursors)
@@ -1841,6 +1855,7 @@ func (this *CodeEditor) redo() {
 		this.restoreEditCursors(a.afterCursors)
 		this.undoStack = append(this.undoStack, a)
 	}
+	this.restoreBookmarkHistory(a.bookmarks, true)
 	this.clearSelection()
 	if a.selection != nil {
 		this.restoreSelection(a.selection.after)
@@ -4677,11 +4692,9 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 			this.rebuildText()
 		} else if this.cursorLine > 0 {
 			prevLine := this.lines[this.cursorLine-1]
-			curLine := this.lines[this.cursorLine]
 			newCol := len([]rune(prevLine))
 			this.pushUndo(editAction{kind: 1, line: this.cursorLine - 1, col: newCol, text: "\n"})
-			this.lines[this.cursorLine-1] = prevLine + curLine
-			this.lines = append(this.lines[:this.cursorLine], this.lines[this.cursorLine+1:]...)
+			this.replaceByteRange(this.cursorLine-1, len(prevLine), 1, "")
 			this.cursorLine--
 			this.cursorCol = newCol
 			this.rebuildText()
@@ -4726,9 +4739,7 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 			this.rebuildText()
 		} else if this.cursorLine < len(this.lines)-1 {
 			this.pushUndo(editAction{kind: 1, line: this.cursorLine, col: this.cursorCol, text: "\n"})
-			nextLine := this.lines[this.cursorLine+1]
-			this.lines[this.cursorLine] = line + nextLine
-			this.lines = append(this.lines[:this.cursorLine+1], this.lines[this.cursorLine+2:]...)
+			this.replaceByteRange(this.cursorLine, len(line), 1, "")
 			this.rebuildText()
 		}
 		this.Self().Update()
@@ -5337,81 +5348,6 @@ func (this *CodeEditor) ErrorAtLine(line int) string {
 		return ""
 	}
 	return this.errorLines[line]
-}
-
-// --- Bookmarks ---
-
-// ToggleBookmark toggles a bookmark on the current cursor line.
-func (this *CodeEditor) ToggleBookmark() {
-	this.clampCursor()
-	if this.bookmarks == nil {
-		this.bookmarks = make(map[int]bool)
-	}
-	if this.bookmarks[this.cursorLine] {
-		delete(this.bookmarks, this.cursorLine)
-	} else {
-		this.bookmarks[this.cursorLine] = true
-	}
-	this.Self().Update()
-}
-
-// NextBookmark moves the cursor to the next bookmark after the current line.
-func (this *CodeEditor) NextBookmark() {
-	if len(this.bookmarks) == 0 {
-		return
-	}
-	// Collect and sort bookmark lines
-	bms := make([]int, 0, len(this.bookmarks))
-	for ln := range this.bookmarks {
-		bms = append(bms, ln)
-	}
-	sort.Ints(bms)
-	// Find next bookmark after current line
-	for _, ln := range bms {
-		if ln > this.cursorLine {
-			this.cursorLine = ln
-			this.cursorCol = 0
-			this.clearSelection()
-			this.ensureCursorVisible()
-			this.Self().Update()
-			return
-		}
-	}
-	// Wrap around to first bookmark
-	this.cursorLine = bms[0]
-	this.cursorCol = 0
-	this.clearSelection()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
-
-// PrevBookmark moves the cursor to the previous bookmark before the current line.
-func (this *CodeEditor) PrevBookmark() {
-	if len(this.bookmarks) == 0 {
-		return
-	}
-	bms := make([]int, 0, len(this.bookmarks))
-	for ln := range this.bookmarks {
-		bms = append(bms, ln)
-	}
-	sort.Ints(bms)
-	// Find previous bookmark before current line
-	for i := len(bms) - 1; i >= 0; i-- {
-		if bms[i] < this.cursorLine {
-			this.cursorLine = bms[i]
-			this.cursorCol = 0
-			this.clearSelection()
-			this.ensureCursorVisible()
-			this.Self().Update()
-			return
-		}
-	}
-	// Wrap around to last bookmark
-	this.cursorLine = bms[len(bms)-1]
-	this.cursorCol = 0
-	this.clearSelection()
-	this.ensureCursorVisible()
-	this.Self().Update()
 }
 
 // --- Run-Test Gutter Marker ---

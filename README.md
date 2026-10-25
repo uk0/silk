@@ -21,6 +21,22 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Unified, edit-aware bookmarks
+
+- **Edit → Bookmarks** and the Command Palette share live editor anchors:
+  **Cmd/Ctrl+F2** toggles, **Alt+F2 / Alt+Shift+F2** navigate across files;
+  plain F2 remains Rename Symbol. Add Bookmark stays an idempotent palette alias.
+- Bookmarks follow insert/delete, line movement and text Undo/Redo. Explicitly
+  removed marks are not resurrected by later text Undo. Jumps reveal folded
+  targets, retire extra carets and integrate with the IDE's Back/Forward history.
+- The gutter, keyboard-accessible Bookmarks panel and persisted preferences now
+  stay in sync, including closed files and file/folder rename. Dark/light panel
+  colors, scalable icons, font sizing and clipped visible-row drawing are shared.
+- Updates are event-driven, using the existing coalesced preference writer.
+  Whole-buffer reload/external edits use bounded context matching, not semantic
+  tracking. See `examples/editor-bookmarks`, [SDK guide](docs/SDK_FEATURES.md),
+  and [verification / limits](EDITOR_BOOKMARKS_QA_20261025.md).
+
 ### Validated Go to Line / Column
 
 - **Edit → Go to Line / Column**, the Command Palette and **Cmd/Ctrl+G** share

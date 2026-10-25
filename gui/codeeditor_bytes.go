@@ -29,6 +29,7 @@ func (e *CodeEditor) replaceByteRange(line, column, count int, text string) curs
 		end = 0
 	}
 	end += count
+	e.mapByteBookmarks(line, column, endLine, end, strings.Count(text, "\n"))
 	before, after := e.lines[line][:column], e.lines[endLine][end:]
 	e.textDirty = true
 	if endLine == line && !strings.Contains(text, "\n") {

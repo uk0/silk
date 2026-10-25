@@ -342,12 +342,16 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Toggle Blame", "Cmd+Shift+B", func() {
 		toggleBlame(editorTabs, designCanvas)
 	})
-	// Add Bookmark — bookmark the active editor's cursor line. Cmd+F2
-	// because plain F2 is now Rename Symbol (JetBrains muscle memory).
-	// Same helper the shortcut calls so the entry point doesn't matter.
-	add("Add Bookmark", "Cmd+F2", func() {
-		addBookmarkAtCursor(editorTabs)
-	})
+	// Add remains an idempotent alias; Action+F2 is the separate Toggle action.
+	add("Add Bookmark", "", func() { addBookmarkAtCursor(editorTabs) })
+	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand {
+		return bindBookmarkCommand(editorTabs, designCanvas, bookmarkCommand{id: "bookmark.add", label: "Add Bookmark", icon: "bookmarks"})
+	}
+	for _, spec := range bookmarkCommands() {
+		paletteCommands = append(paletteCommands, paletteCommand{Name: i18n.T(spec.label), Hint: spec.hint, Fn: func() { runBookmarkCommand(editorTabs, designCanvas, spec.id, nil) }, Available: func() bool {
+			return bookmarkCommandAvailable(bookmarkController(editorTabs), focusedClipboardEditor(editorTabs, designCanvas), spec.id)
+		}, Bind: func() paletteCommand { return bindBookmarkCommand(editorTabs, designCanvas, spec) }})
+	}
 	// Rename Symbol — pop the rename input box for the identifier under
 	// the active editor's cursor. The handler is shared with the F2
 	// shortcut so this entry doubles as keyboard documentation.

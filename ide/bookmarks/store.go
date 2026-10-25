@@ -261,3 +261,39 @@ func sorted(in []Bookmark) []Bookmark {
 	})
 	return out
 }
+
+// ReplaceFile replaces only path's entries in one UI-thread transaction. Input
+// is copied through Add, retaining validation and deduplication semantics.
+func (s *Store) ReplaceFile(path string, marks []Bookmark) {
+	out := s.marks[:0]
+	for _, m := range s.marks {
+		if m.Path != path {
+			out = append(out, m)
+		}
+	}
+	clear(s.marks[len(out):])
+	s.marks = out
+	seen := make(map[int]int, len(marks))
+	for _, m := range marks {
+		if path == "" || m.Line < 1 {
+			continue
+		}
+		m.Path = path
+		if i, ok := seen[m.Line]; ok {
+			s.marks[i] = m
+		} else {
+			seen[m.Line] = len(s.marks)
+			s.marks = append(s.marks, m)
+		}
+	}
+}
+
+// MapPaths migrates persisted and closed-file marks together during file/folder
+// rename. Collisions merge deterministically, retaining the older annotation.
+func (s *Store) MapPaths(remap func(string) string) {
+	for i := range s.marks {
+		s.marks[i].Path = remap(s.marks[i].Path)
+	}
+	s.dedupe()
+}
+func (s *Store) Count() int { return len(s.marks) }

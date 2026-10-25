@@ -142,6 +142,7 @@ func (e *CodeEditor) ConvertLineEndings(style EditorLineEnding) error {
 	return nil
 }
 func (e *CodeEditor) applyLineEndingHistory(h *editorLineEndingHistory, reverse bool) {
+	e.bookmarkState.mapped = true
 	e.preferredLineEnding = h.after
 	if reverse {
 		e.preferredLineEnding = h.before
@@ -166,6 +167,9 @@ func (e *CodeEditor) applyLineEndingHistory(h *editorLineEndingHistory, reverse 
 	e.clearTokenCache()
 }
 func (e *CodeEditor) finishLineEndingChange(h *editorLineEndingHistory) {
+	if !h.changesText {
+		e.publishBookmarks(false)
+	}
 	if h.changesText {
 		e.rebuildText()
 	} else {

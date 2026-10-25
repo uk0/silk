@@ -400,17 +400,20 @@ func registerSilkideTranslations() {
 		"Show Packages":                                         "显示包列表",
 		"Refresh Packages":                                      "刷新包列表",
 		"Add Bookmark":                                          "添加书签",
-		"Rename Symbol":                                         "重命名符号",
-		"New name:":                                             "新名称：",
-		"Renamed %s → %s (%d occurrences)":                      "已重命名 %s → %s (%d 处)",
-		"Rename failed: %v":                                     "重命名失败: %v",
-		"Rename Symbol not available":                           "暂不支持重命名符号",
-		"Configure Run...":                                      "配置运行参数...",
-		"Run Configuration":                                     "运行配置",
-		"OK":                                                    "确定",
-		"Run arguments:":                                        "运行参数:",
-		"Run args saved":                                        "运行参数已保存",
-		"Run config saved":                                      "运行配置已保存",
+		"Bookmarks":                                             "书签", "No bookmarks": "暂无书签",
+		"Toggle Bookmark": "切换书签", "Next Bookmark": "下一个书签", "Previous Bookmark": "上一个书签", "Clear File Bookmarks": "清除此文件书签", "Could not open bookmarked file": "无法打开书签文件",
+		"Bookmarks were not saved; existing data was preserved": "书签未保存，原有数据已保留",
+		"Rename Symbol":                    "重命名符号",
+		"New name:":                        "新名称：",
+		"Renamed %s → %s (%d occurrences)": "已重命名 %s → %s (%d 处)",
+		"Rename failed: %v":                "重命名失败: %v",
+		"Rename Symbol not available":      "暂不支持重命名符号",
+		"Configure Run...":                 "配置运行参数...",
+		"Run Configuration":                "运行配置",
+		"OK":                               "确定",
+		"Run arguments:":                   "运行参数:",
+		"Run args saved":                   "运行参数已保存",
+		"Run config saved":                 "运行配置已保存",
 		"silkide: %d env entries configured (not yet forwarded to go run)": "silkide: 已配置 %d 项环境变量（暂未转发给 go run）",
 		"Open File":                               "打开文件",
 		"Quick Open File":                         "快速打开文件",
@@ -761,14 +764,11 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	gui.RegisterShortcut(0, gui.KeyF2, func() {
 		renameSymbolAtActiveEditor(editorTabs)
 	})
-	// Cmd+F2 — add a bookmark on the active editor's cursor line. Qt
-	// Creator's plain-F2 convention was the original silkide binding;
-	// it stepped on the more common Rename Symbol shortcut, so the
-	// bookmark slot picks up a modifier here. The "Add Bookmark"
-	// palette command shares this handler.
-	gui.RegisterShortcut(gui.ModAction, gui.KeyF2, func() {
-		addBookmarkAtCursor(editorTabs)
-	})
+	// Action+F2 toggles a mark; Alt(+Shift)+F2 navigates across files.
+	// Plain F2 remains Rename Symbol. All routes respect focused editor identity.
+	gui.RegisterShortcut(gui.ModAction, gui.KeyF2, func() { runBookmarkCommand(editorTabs, designCanvas, "bookmark.toggle", nil) })
+	gui.RegisterShortcut(gui.ModAlt, gui.KeyF2, func() { runBookmarkCommand(editorTabs, designCanvas, "bookmark.next", nil) })
+	gui.RegisterShortcut(gui.ModAlt|gui.ModShift, gui.KeyF2, func() { runBookmarkCommand(editorTabs, designCanvas, "bookmark.previous", nil) })
 	// "Diff vs HEAD" stays palette-only. dispatchShortcut runs BEFORE
 	// focus routing and consumes the key, so a global Cmd+D here would
 	// shadow the CodeEditor's multi-cursor "select next occurrence"

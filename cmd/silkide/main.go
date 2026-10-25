@@ -656,9 +656,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// openFileInEditorAt path BuildOutput uses, so a bookmark click
 		// behaves identically to a build-error click.
 		bookmarks := ged.NewBookmarksPanel()
-		bookmarks.SigActivated(func(file string, line int) {
-			openFileInEditorAt(editorTabs, file, line, 0)
-		})
+		w.bookmarks = newEditorBookmarks(editorTabs, bookmarks, globalPrefs)
 		globalBookmarks = bookmarks
 		rightDock.AddView(bookmarks)
 
@@ -1049,6 +1047,9 @@ func detachEditorTab(tabs *gui.TabWidget, target gui.IWidget, ed *gui.CodeEditor
 		closed = editorSession{Path: path, Line: ed.CursorLine(), Column: ed.CursorCol(), ScrollY: ed.ScrollY()}
 	}
 	if ed != nil {
+		if c := bookmarkController(tabs); c != nil {
+			c.detach(ed)
+		}
 		ed.CancelCompletion()
 		ed.CancelSymbolIndex()
 		ed.CancelFind()
@@ -1260,6 +1261,9 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 			globalSearch.CloseSearch()
 		}
 		closeGitPaneRefreshers()
+		if w := globalWorkbench; w != nil && w.bookmarks != nil {
+			w.bookmarks.close()
+		}
 		for _, ed := range openEditors {
 			if ed != nil {
 				ed.CancelGitStatus()
@@ -3467,6 +3471,7 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 	openEditors[path] = ed
 	configureEditorSymbolActions(tabs, ed)
 	configureEditorNavigation(tabs, ed)
+	configureEditorBookmarks(tabs, ed)
 	// Coverage runs push into the tabs that are open at the time, so a file
 	// opened afterwards would show no stripes at all until the user ran the
 	// whole suite again. Same call, from the other side.
@@ -3637,49 +3642,34 @@ func activeEditorPath(tabs *gui.TabWidget) string {
 // empty / whitespace-only source line — the panel renders the
 // "file:line" locator without a trailing label in that case.
 func bookmarkLabelForLine(text string) string {
-	const max = 50
 	t := strings.TrimSpace(text)
-	if t == "" {
-		return ""
+	count, last := 0, 0
+	for i := range t {
+		if count == 49 {
+			last = i
+		}
+		if count == 50 {
+			return strings.Clone(t[:last]) + "…"
+		}
+		count++
 	}
-	if len([]rune(t)) <= max {
-		return t
-	}
-	r := []rune(t)
-	return string(r[:max-1]) + "…"
+	return strings.Clone(t)
 }
 
-// addBookmarkAtCursor pushes a bookmark for the active editor's cursor
-// line into the BookmarksPanel. No-op when there's no active editor,
-// no tracked file path, or no panel — the F2 shortcut and the "Add
-// Bookmark" palette command both route here so the same guard covers
-// every entry point. Uses Add (idempotent on (file, line)) rather than
-// Toggle so repeated invocations refresh the label rather than
-// silently removing the bookmark.
+// Add is retained as an idempotent palette/API alias; Toggle has its own chord.
 func addBookmarkAtCursor(tabs *gui.TabWidget) {
-	if globalBookmarks == nil {
-		return
-	}
 	ed := activeEditor(tabs)
-	if ed == nil {
+	if ed == nil || ed.FilePath() == "" {
 		return
 	}
-	path := activeEditorPath(tabs)
-	if path == "" {
+	if c := bookmarkController(tabs); c != nil {
+		ed.SetBookmark(ed.CursorLine(), true)
 		return
 	}
-	// CursorLine is 0-based; the bookmarks panel renders 1-based
-	// "basename:line" locators (Qt Creator convention), so shift by +1
-	// here. openFileInEditorAt also takes 1-based lines, so a click on
-	// the row navigates back to the same line.
-	cursor0 := ed.CursorLine()
-	line1 := cursor0 + 1
-	lines := ed.Lines()
-	src := ""
-	if cursor0 >= 0 && cursor0 < len(lines) {
-		src = lines[cursor0]
+	if globalBookmarks != nil {
+		src, _ := ed.LineText(ed.CursorLine())
+		globalBookmarks.Add(ed.FilePath(), ed.CursorLine()+1, bookmarkLabelForLine(src))
 	}
-	globalBookmarks.Add(path, line1, bookmarkLabelForLine(src))
 }
 
 // syncOutlineToActiveEditor re-points the right-dock outline panel at

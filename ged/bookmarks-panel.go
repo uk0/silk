@@ -1,7 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/i18n"
+	"math"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -43,6 +46,8 @@ type BookmarksPanel struct {
 	hoverIdx    int
 	rowHeight   float64
 	cbActivated func(file string, line int)
+	cbRemove    func(file string, line int)
+	selectedIdx int
 }
 
 // NewBookmarksPanel creates an empty bookmarks panel.
@@ -56,6 +61,8 @@ func (this *BookmarksPanel) Init(self gui.IWidget) {
 	this.Widget.Init(self)
 	this.rowHeight = 22
 	this.hoverIdx = -1
+	this.selectedIdx = -1
+	this.SetFocusPolicy(gui.TabFocus)
 }
 
 // sortBookmarks returns a stably sorted copy of the given bookmarks,
@@ -86,26 +93,50 @@ func (this *BookmarksPanel) indexOf(file string, line int) int {
 // Add inserts a bookmark at (file, line). If one already exists for that
 // location its label is updated rather than adding a duplicate.
 func (this *BookmarksPanel) Add(file string, line int, label string) {
+	rows := this.Bookmarks()
 	if idx := this.indexOf(file, line); idx >= 0 {
-		this.marks[idx].Label = label
+		rows[idx].Label = label
 	} else {
-		this.marks = append(this.marks, Bookmark{File: file, Line: line, Label: label})
+		rows = append(rows, Bookmark{file, line, label})
 	}
-	this.marks = sortBookmarks(this.marks)
-	this.Self().Update()
+	this.SetBookmarks(rows)
 }
 
-// Remove deletes the bookmark at (file, line) if present.
-func (this *BookmarksPanel) Remove(file string, line int) {
-	idx := this.indexOf(file, line)
-	if idx < 0 {
+// SetBookmarks atomically replaces the view model, merging duplicate locations
+// and preserving selection by identity. UI-thread-only. Only visible rows draw.
+func (this *BookmarksPanel) SetBookmarks(rows []Bookmark) {
+	var selected Bookmark
+	if this.selectedIdx >= 0 && this.selectedIdx < len(this.marks) {
+		selected = this.marks[this.selectedIdx]
+	}
+	next := sortBookmarks(rows)
+	out := next[:0]
+	for _, row := range next {
+		if row.File == "" || row.Line < 1 {
+			continue
+		}
+		if len(out) > 0 && out[len(out)-1].File == row.File && out[len(out)-1].Line == row.Line {
+			out[len(out)-1] = row
+		} else {
+			out = append(out, row)
+		}
+	}
+	if slices.Equal(this.marks, out) {
 		return
 	}
-	this.marks = append(this.marks[:idx], this.marks[idx+1:]...)
-	if this.hoverIdx >= len(this.marks) {
-		this.hoverIdx = -1
+	this.marks = out
+	this.selectedIdx = this.indexOf(selected.File, selected.Line)
+	this.hoverIdx = -1
+	this.clampScroll()
+	this.Update()
+}
+func (this *BookmarksPanel) Remove(file string, line int) {
+	rows := this.Bookmarks()
+	i := this.indexOf(file, line)
+	if i < 0 {
+		return
 	}
-	this.Self().Update()
+	this.SetBookmarks(slices.Delete(rows, i, i+1))
 }
 
 // Toggle adds the bookmark at (file, line) when absent and removes it
@@ -120,110 +151,139 @@ func (this *BookmarksPanel) Toggle(file string, line int, label string) {
 
 // Bookmarks returns the bookmarks, stably sorted by file then line.
 func (this *BookmarksPanel) Bookmarks() []Bookmark {
-	return sortBookmarks(this.marks)
+	return slices.Clone(this.marks)
 }
 
 // Clear removes all bookmarks.
-func (this *BookmarksPanel) Clear() {
-	this.marks = nil
-	this.scrollY = 0
-	this.hoverIdx = -1
-	this.Self().Update()
-}
+func (this *BookmarksPanel) Clear() { this.SetBookmarks(nil) }
 
 // SigActivated registers the callback invoked when a row is clicked.
 func (this *BookmarksPanel) SigActivated(fn func(file string, line int)) {
 	this.cbActivated = fn
 }
 
-// Draw renders the bookmarks panel: a count header followed by one row
-// per bookmark (a glyph, "basename:line", then the label) with an
-// alternating row tint.
+// SigRemoveRequested leaves ownership with the host, allowing the view and
+// gutter/persistent store to change together. Delete does not edit source text.
+func (this *BookmarksPanel) SigRemoveRequested(fn func(string, int)) { this.cbRemove = fn }
+func (this *BookmarksPanel) headerHeight() float64 {
+	return max(22, float64(gui.Theme().Font.Size())+8)
+}
+func (this *BookmarksPanel) clampScroll() {
+	this.rowHeight = this.headerHeight()
+	this.scrollY = max(0, min(this.scrollY, float64(len(this.marks))*this.rowHeight-max(0, this.Height()-this.headerHeight())))
+}
+func (this *BookmarksPanel) visibleRows(h float64) (int, int) {
+	first := max(0, min(len(this.marks), int(this.scrollY/this.rowHeight)))
+	last := max(first, min(len(this.marks), int(math.Ceil((this.scrollY+max(0, h-this.headerHeight()))/this.rowHeight))))
+	return first, last
+}
 func (this *BookmarksPanel) Draw(g paint.Painter) {
 	w, h := this.Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	this.clampScroll()
 	t := gui.Theme()
-
-	// Background
+	hh := this.headerHeight()
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, 0, w, h)
+	g.Clip()
 	g.SetBrush1(t.ViewBGColor)
 	g.Rectangle(0, 0, w, h)
 	g.Fill()
-
-	// Header with the bookmark count
-	headerH := 22.0
-	g.SetBrush1(paint.Color{R: 235, G: 238, B: 245, A: 255})
-	g.Rectangle(0, 0, w, headerH)
+	g.SetBrush1(t.FormColor)
+	g.Rectangle(0, 0, w, hh)
 	g.Fill()
-	g.SetPen1(paint.Color{R: 200, G: 200, B: 210, A: 255}, 1)
-	g.MoveTo(0, headerH)
-	g.LineTo(w, headerH)
+	g.SetPen1(t.BorderColor, 1)
+	g.MoveTo(0, hh-.5)
+	g.LineTo(w, hh-.5)
 	g.Stroke()
-
-	headerFont := paint.NewFont(t.Font.Family(), 12, true, false)
-	g.SetFont(headerFont)
-	g.SetBrush1(t.TextColor)
-	g.DrawText1(8, headerH-5, "书签 ("+strconv.Itoa(len(this.marks))+")")
-
-	if len(this.marks) == 0 {
-		emptyFont := paint.NewFont(t.Font.Family(), 11, false, false)
-		g.SetFont(emptyFont)
-		g.SetBrush1(paint.Color{R: 150, G: 150, B: 160, A: 200})
-		g.DrawText1(8, headerH+20, "No bookmarks")
+	drawPanelText(g, t.Font, i18n.T("Bookmarks")+" ("+strconv.Itoa(len(this.marks))+")", 8, 0, w-16, hh, t.TextColor)
+	if h <= hh {
 		return
 	}
-
-	rowFont := paint.NewFont(t.Font.Family(), 11, false, false)
-	locFont := paint.NewFont(t.Font.Family(), 11, true, false)
-	g.SetFont(rowFont)
-	fe := rowFont.FontExtents()
-	rh := this.rowHeight
-	startY := headerH - this.scrollY
-
-	for i := range this.marks {
-		rowY := startY + float64(i)*rh
-		if rowY+rh < headerH || rowY > h {
-			continue
-		}
-		bm := this.marks[i]
-
-		// Alternating row tint for readability.
-		if i%2 == 1 {
-			g.SetBrush1(paint.Color{R: 245, G: 247, B: 250, A: 255})
-			g.Rectangle(0, rowY, w, rh)
-			g.Fill()
-		}
-		// Hover highlight
-		if i == this.hoverIdx {
-			g.SetBrush1(paint.Color{R: 230, G: 235, B: 245, A: 255})
-			g.Rectangle(0, rowY, w, rh)
-			g.Fill()
-		}
-
-		textY := rowY + fe.Ascent + (rh-fe.Ascent-fe.Descent)/2
-
-		// Bookmark glyph
-		g.SetFont(rowFont)
-		g.SetBrush1(paint.Color{R: 230, G: 160, B: 40, A: 255})
-		g.DrawText1(8, textY, "⚑")
-
-		// "basename:line" location, in bold accent.
-		loc := filepath.Base(bm.File) + ":" + strconv.Itoa(bm.Line)
-		g.SetFont(locFont)
-		g.SetBrush1(t.HighLightColor)
-		g.DrawText1(24, textY, loc)
-		ext := locFont.TextExtents(loc)
-
-		// Label, in normal text colour.
-		if bm.Label != "" {
-			g.SetFont(rowFont)
-			g.SetBrush1(t.TextColor)
-			g.DrawText1(24+ext.Width+8, textY, bm.Label)
-		}
+	g.Rectangle(0, hh, w, h-hh)
+	g.Clip()
+	if len(this.marks) == 0 {
+		drawPanelText(g, t.Font, i18n.T("No bookmarks"), 8, hh, w-16, 26, t.TextColor)
+		return
 	}
+	first, last := this.visibleRows(h)
+	for i := first; i < last; i++ {
+		bm := this.marks[i]
+		y := hh - this.scrollY + float64(i)*this.rowHeight
+		color := t.TextColor
+		if i == this.selectedIdx {
+			g.SetBrush1(t.HighLightColor)
+			color = t.MenuActiveTextColor
+		} else {
+			g.SetBrush1(t.ButtonHoverBGColor)
+		}
+		if i == this.selectedIdx || i == this.hoverIdx {
+			g.Rectangle(0, y, w, this.rowHeight)
+			g.Fill()
+		}
+		g.DrawIcon1(gui.LoadIcon("bookmarks"), 6, y+(this.rowHeight-16)/2, 16, false)
+		label := filepath.Base(bm.File) + ":" + strconv.Itoa(bm.Line)
+		if bm.Label != "" {
+			label += "  " + bm.Label
+		}
+		drawPanelText(g, t.Font, label, 28, y, w-36, this.rowHeight, color)
+	}
+}
+func (this *BookmarksPanel) OnResize() { this.clampScroll() }
+func (this *BookmarksPanel) OnKeyDown(key int, repeat bool) {
+	this.clampScroll()
+	if !this.IsEnabled() || len(this.marks) == 0 {
+		return
+	}
+	i := this.selectedIdx
+	page := max(1, int((this.Height()-this.headerHeight())/this.rowHeight))
+	switch key {
+	case gui.KeyDown:
+		i = min(len(this.marks)-1, i+1)
+	case gui.KeyUp:
+		i = max(0, i-1)
+	case gui.KeyHome:
+		i = 0
+	case gui.KeyEnd:
+		i = len(this.marks) - 1
+	case gui.KeyPageDown:
+		i = min(len(this.marks)-1, max(0, i)+page)
+	case gui.KeyPageUp:
+		i = max(0, i-page)
+	case gui.KeyEnter:
+		if i >= 0 && this.cbActivated != nil {
+			m := this.marks[i]
+			this.cbActivated(m.File, m.Line)
+		}
+		return
+	case gui.KeyDelete, gui.KeyBackSpace:
+		if i >= 0 && this.cbRemove != nil {
+			m := this.marks[i]
+			this.cbRemove(m.File, m.Line)
+		}
+		return
+	default:
+		return
+	}
+	this.selectedIdx = i
+	top := float64(i) * this.rowHeight
+	if top < this.scrollY {
+		this.scrollY = top
+	}
+	if bottom := top + this.rowHeight; bottom > this.scrollY+this.Height()-this.headerHeight() {
+		this.scrollY = bottom - max(0, this.Height()-this.headerHeight())
+	}
+	this.clampScroll()
+	this.Update()
 }
 
 // hitTest returns the bookmark index for a y coordinate, or -1.
 func (this *BookmarksPanel) hitTest(y float64) int {
-	headerH := 22.0
+	this.clampScroll()
+	headerH := this.headerHeight()
 	if y < headerH {
 		return -1
 	}
@@ -241,6 +301,8 @@ func (this *BookmarksPanel) OnLeftDown(x, y float64) {
 	if idx < 0 {
 		return
 	}
+	this.selectedIdx = idx
+	this.Update()
 	bm := this.marks[idx]
 	if this.cbActivated != nil {
 		this.cbActivated(bm.File, bm.Line)
@@ -267,18 +329,7 @@ func (this *BookmarksPanel) OnMouseLeave() {
 // OnMouseWheel scrolls the bookmark list vertically.
 func (this *BookmarksPanel) OnMouseWheel(x, y, z float64) {
 	this.scrollY -= z * 3 * this.rowHeight
-	headerH := 22.0
-	_, h := this.Size()
-	maxScroll := float64(len(this.marks))*this.rowHeight - (h - headerH)
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if this.scrollY < 0 {
-		this.scrollY = 0
-	}
-	if this.scrollY > maxScroll {
-		this.scrollY = maxScroll
-	}
+	this.clampScroll()
 	this.Self().Update()
 }
 

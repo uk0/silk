@@ -40,6 +40,42 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 事件驱动书签与跨文件面板
+
+`CodeEditor.SetBookmark(line, marked)`、`HasBookmark`、`BookmarkCount` 使用零基行号。
+`BookmarkLines()` 返回排序后的独立副本；`SetBookmarkLines([]int)` 原子替换并去重，
+任何无效行拒绝整个请求；`ClearBookmarks()` 清空。所有调用在 UI 线程进行，只读
+文档仍可标记／导航，书签操作不修改正文、dirty 状态或文本撤销栈。
+
+插入／删除按字节编辑映射锚点，行移动／批量复制删除按行事务映射，删除的行移除
+书签。Undo/Redo 在注释 epoch 未被用户改变时恢复删除前的标记；用户显式增删书签
+之后，文本撤销只映射当前标记，不复活用户已经移除的书签。
+
+`NextBookmark/PrevBookmark` 在当前缓冲区循环跳转，展开目标折叠、清理额外光标和
+选区并聚焦。排序索引只在位置改变时更新。`LineCount()` 是常数时间的逻辑行数查询，
+包含末尾空行，避免调用 `Lines()` 复制整个行切片。
+
+`SubscribeBookmarksChanged(func())` 不覆盖 `SigChanged`；标记变更或有标记时的
+完整文本发布触发通知，方便宿主同步行内容。无初始通知、无空闲轮询；回调须短小，
+不得同步修改该编辑器。返回幂等退订函数，宿主拆卸时调用。
+
+`ged.BookmarksPanel.SetBookmarks` 批量更新、去重并保持所选位置身份；面板使用一基
+行号。↑↓／Home／End／PageUp／PageDown 选行，Enter 激活，Delete／Backspace
+发出 `SigRemoveRequested`，由宿主同步删除。仅绘制可见行，正文裁剪在固定表头下。
+
+SilkIDE 将缓冲区锚点投影到 `ide/bookmarks.Store`、面板和异步保存的 preferences，
+关闭文件保留书签，跨文件跳转进入 Back/Forward 历史。独立 SDK 的 F2/Shift+F2
+仍是文件内导航；IDE 覆盖为上述平台菜单快捷键，不能混用两者提示。
+
+宿主 `SetText`／全量 provider 替换用公共前后缀和附近 200 行的文本匹配回锚；
+IDE 重开文件用持久化上下文匹配，找不到时保留并夹紧到有效行。重复文本可能含糊，
+不是语义定位。单行上下文最多 1024 字节，过长则不保存上下文；偏好书签记录最多
+4 MiB，损坏／超限时保留原有磁盘记录并提示未保存，不默默覆盖。
+
+示例：`go run ./examples/editor-bookmarks`。包含 Toggle、Previous/Next、Undo/Redo、
+折叠加额外光标、书签列表与 JSON 状态快照。
+[验证记录](../EDITOR_BOOKMARKS_QA_20261025.md)。
+
 ### 经过验证的行／列导航
 
 UI 线程调用 `CodeEditor.ResolveGoToLocation("2:3")`，解析一基行号与 Unicode

@@ -1,7 +1,10 @@
 package ged
 
 import (
+	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -157,5 +160,88 @@ func TestBookmarksOnLeftDownHeaderNoop(t *testing.T) {
 	p.OnLeftDown(5, 5) // inside the 22px header
 	if fired {
 		t.Error("OnLeftDown in header region fired SigActivated")
+	}
+}
+
+func TestBookmarksBatchSelectionKeyboardAndShrink(t *testing.T) {
+	p := NewBookmarksPanel()
+	p.SetBounds(0, 0, 240, 66)
+	p.SetBookmarks([]Bookmark{{"a", 3, "last"}, {"a", 1, "first"}, {"a", 2, "second"}, {"", 0, "bad"}, {"a", 2, "updated"}})
+	if len(p.Bookmarks()) != 3 || p.Bookmarks()[1].Label != "updated" {
+		t.Fatal("batch validation")
+	}
+	p.OnKeyDown(gui.KeyEnd, false)
+	if p.selectedIdx != 2 || p.scrollY != 22 {
+		t.Fatal(p.selectedIdx, p.scrollY)
+	}
+	var activated, removed int
+	p.SigActivated(func(_ string, line int) { activated = line })
+	p.OnKeyDown(gui.KeyEnter, false)
+	p.SigRemoveRequested(func(file string, line int) { removed = line; p.Remove(file, line) })
+	p.OnKeyDown(gui.KeyDelete, false)
+	if activated != 3 || removed != 3 || p.scrollY != 0 || p.selectedIdx != -1 {
+		t.Fatal("keyboard or scroll", activated, removed, p.scrollY)
+	}
+	p.OnKeyDown(gui.KeyHome, false)
+	p.SetBookmarks([]Bookmark{{"a", 0, "bad"}, {"a", 1, "renamed"}, {"a", 2, "second"}})
+	if p.selectedIdx != 0 {
+		t.Fatal("selection identity lost")
+	}
+	first, last := p.visibleRows(44)
+	if first != 0 || last != 1 {
+		t.Fatal("visible range", first, last)
+	}
+	p.Clear()
+	p.OnKeyDown(gui.KeyDelete, false)
+	if len(p.marks) != 0 || p.scrollY != 0 {
+		t.Fatal("clear")
+	}
+}
+
+func TestBookmarksPainterThemeFontAndClipping(t *testing.T) {
+	mode, font := gui.CurrentThemeMode(), gui.Theme().Font
+	t.Cleanup(func() { gui.SetThemeMode(mode); gui.Theme().Font = font })
+	for _, theme := range []gui.ThemeMode{gui.ThemeLight, gui.ThemeDark} {
+		gui.SetThemeMode(theme)
+		for _, size := range []int{12, 24} {
+			gui.Theme().Font = paint.NewFont(font.Family(), size, false, false)
+			p := NewBookmarksPanel()
+			p.SetSize(180, 160)
+			var rows []Bookmark
+			for i := 1; i <= 5000; i++ {
+				rows = append(rows, Bookmark{"sample.txt", i, strings.Repeat("long ", 30)})
+			}
+			p.SetBookmarks(rows)
+			p.selectedIdx = 1
+			p.hoverIdx = 2
+			p.scrollY = 5
+			pix := paint.NewPixmap(180, 160)
+			r := &explorerDrawRecorder{Painter: pix.NewPainter()}
+			before := r.CurrentState()
+			p.Draw(r)
+			if r.CurrentState() != before || p.rowHeight < float64(size)+8 {
+				t.Fatal("painter state/font")
+			}
+			if len(r.texts) > 9 {
+				t.Fatal("offscreen drawing", len(r.texts))
+			}
+			for i, x := range r.texts {
+				if x.x+x.width > 180.1 || i > 0 && x.cy <= 0 {
+					t.Fatal("clipping", x)
+				}
+			}
+			for _, want := range []paint.Color{gui.Theme().FormColor, gui.Theme().ViewBGColor, gui.Theme().TextColor, gui.Theme().HighLightColor, gui.Theme().MenuActiveTextColor, gui.Theme().ButtonHoverBGColor} {
+				found := false
+				for _, got := range r.colors {
+					found = found || got == want
+				}
+				if !found {
+					t.Fatal("missing theme color", want)
+				}
+			}
+			if aboutContrast(gui.Theme().FormColor, gui.Theme().TextColor) < 4.5 || aboutContrast(gui.Theme().ButtonHoverBGColor, gui.Theme().TextColor) < 4.5 {
+				t.Fatal("low contrast")
+			}
+		}
 	}
 }

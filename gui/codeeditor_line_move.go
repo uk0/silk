@@ -133,6 +133,7 @@ func (e *CodeEditor) moveLines(down bool) {
 	e.unfoldLineMoves(moves)
 	for i := range moves {
 		moves[i].captureSeparators(e.lines)
+		e.mapMoveBookmarks(moves[i], false)
 		moves[i].apply(e.lines, false)
 	}
 	after := make([]cursorPos, len(before))

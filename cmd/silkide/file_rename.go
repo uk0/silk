@@ -198,7 +198,10 @@ func migrateRenamedMetadata(tx *editorRename, tabs *gui.TabWidget, canvas *ged.G
 		}
 		globalReferencesPanel.SetLocations(rows)
 	}
-	if globalBookmarks != nil {
+	if c := bookmarkController(tabs); c != nil {
+		c.store.MapPaths(remap)
+		c.refresh(true)
+	} else if globalBookmarks != nil {
 		for _, mark := range globalBookmarks.Bookmarks() {
 			next := remap(mark.File)
 			if next != mark.File {

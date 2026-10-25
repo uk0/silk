@@ -113,6 +113,25 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				showEditorGoToLine(tabs, canvas, gotoTarget)
 			}
 		})
+		marks, marksButton := menu.AddSubMenu(i18n.T("Bookmarks"), gui.LoadIcon("bookmarks"), gui.NewPopupMenu())
+		marksButton.Action().SetObjName("editor.bookmarks")
+		bookmarkTarget := focusedClipboardEditor(tabs, canvas)
+		for _, spec := range bookmarkCommands() {
+			button := appendFileMenuCommand(marks, fileMenuCommand{spec.id, spec.label, spec.icon, spec.hint, func() {
+				if bookmarkTarget != nil {
+					runBookmarkCommand(tabs, canvas, spec.id, bookmarkTarget)
+				}
+			}, bookmarkCommandAvailable(bookmarkController(tabs), bookmarkTarget, spec.id)})
+			if spec.id == "bookmark.toggle" && bookmarkTarget != nil {
+				button.Action().SetChecked(bookmarkTarget.HasBookmark(bookmarkTarget.CursorLine()))
+			}
+		}
+		appendFileMenuCommand(marks, fileMenuCommand{"bookmark.show", "Show Bookmarks", "bookmarks", "", func() {
+			if globalBookmarks != nil {
+				revealToolView(tabs, canvas, globalRightDock, globalBookmarks, modeEdit)
+				globalBookmarks.SetFocus()
+			}
+		}, globalBookmarks != nil})
 		history := editorNavigation(tabs)
 		add("navigate.back", "Go Back", "navigate-back", "Alt+Left", history != nil && history.CanGoBack(), func() { navigateEditorHistory(tabs, false) })
 		add("navigate.forward", "Go Forward", "navigate-forward", "Alt+Right", history != nil && history.CanGoForward(), func() { navigateEditorHistory(tabs, true) })

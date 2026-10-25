@@ -80,6 +80,7 @@ func lineSpliceSteps(changes []editorLineSplice, reverse bool) ([]editorLineSpli
 }
 func (e *CodeEditor) applyLineSplices(changes []editorLineSplice, reverse bool) {
 	steps, delta := lineSpliceSteps(changes, reverse)
+	e.mapSpliceBookmarks(steps, delta)
 	if len(e.foldedLines) > 0 {
 		folded := make(map[int]bool, len(e.foldedLines))
 		for _, r := range e.FoldRegions() {
