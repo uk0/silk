@@ -78,9 +78,7 @@ func (e *CodeEditor) prepareCaretCommand() {
 	}
 	e.snippetSess = nil
 	e.renameActive = false
-	e.gotoLineActive = false
-	e.gotoLineText = ""
-	e.gotoLineCursor = 0
+	e.hideGoToLine(false)
 	if e.findActive {
 		e.closeFindBar()
 	}

@@ -3,7 +3,6 @@ package gui
 import (
 	"fmt"
 	"github.com/uk0/silk/paint"
-	"strconv"
 	"strings"
 	"unicode"
 )
@@ -689,67 +688,6 @@ func (this *CodeEditor) drawBreadcrumb(g paint.Painter, topY, w float64) {
 // --- Go To Line Dialog ---
 
 // drawGotoLine draws the go-to-line input bar at the top.
-func (this *CodeEditor) drawGotoLine(g paint.Painter, w float64) {
-	fbH := float64(codeEditorFindRowHeight)
-	// Background
-	g.SetBrush1(paint.Color{R: 50, G: 50, B: 60, A: 255})
-	g.Rectangle(0, 0, w, fbH)
-	g.Fill()
-	// Bottom border
-	g.SetPen1(paint.Color{R: 70, G: 70, B: 85, A: 255}, 1)
-	g.Line(0, fbH, w, fbH)
-	g.Stroke()
-
-	fe := this.font.FontExtents()
-	g.SetFont(this.font)
-
-	// Label
-	label := fmt.Sprintf("Go to Line (1-%d):", len(this.lines))
-	g.SetBrush1(paint.Color{R: 180, G: 180, B: 190, A: 255})
-	g.DrawText1(10, fbH/2+fe.Ascent/2-1, label)
-
-	// Input background
-	labelExt := this.font.TextExtents(label)
-	inputX := labelExt.XAdvance + 20
-	inputW := 120.0
-	g.SetBrush1(paint.Color{R: 35, G: 35, B: 42, A: 255})
-	g.Rectangle(inputX, 4, inputW, fbH-8)
-	g.Fill()
-	g.SetPen1(paint.Color{R: 80, G: 80, B: 100, A: 255}, 1)
-	g.Rectangle(inputX, 4, inputW, fbH-8)
-	g.Stroke()
-
-	// Input text
-	g.SetBrush1(paint.Color{R: 210, G: 210, B: 220, A: 255})
-	if this.gotoLineText != "" {
-		g.DrawText1(inputX+4, fbH/2+fe.Ascent/2-1, this.gotoLineText)
-	}
-
-	// Cursor
-	prefix := this.gotoLineText
-	fcx := inputX + 4 + this.measureText(prefix)
-	g.SetBrush1(paint.Color{R: 200, G: 200, B: 230, A: 255})
-	g.Rectangle(fcx, 6, 1, fbH-12)
-	g.Fill()
-}
-
-// gotoLineAccept parses the go-to-line text and jumps to that line.
-func (this *CodeEditor) gotoLineAccept() {
-	if this.gotoLineText == "" {
-		return
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(this.gotoLineText))
-	if err != nil || n < 1 {
-		return
-	}
-	// Convert 1-based to 0-based
-	line := n - 1
-	this.gotoLineActive = false
-	this.gotoLineText = ""
-	this.gotoLineCursor = 0
-	this.goToLine(line)
-}
-
 // topOffset returns the total offset from the top of the editor
 // accounting for find bar, go-to-line bar, and breadcrumb bar.
 func (this *CodeEditor) topOffset() float64 {
@@ -758,7 +696,7 @@ func (this *CodeEditor) topOffset() float64 {
 		off += this.findBarHeight
 	}
 	if this.gotoLineActive {
-		off += codeEditorFindRowHeight
+		off += this.gotoBarHeight
 	}
 	off += this.breadcrumbHeight
 	return off

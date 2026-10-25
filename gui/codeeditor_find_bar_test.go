@@ -109,8 +109,8 @@ func TestEditorFindAndGotoReserveIndependentHeights(t *testing.T) {
 		t.Fatal("find field lost platform CJK font")
 	}
 	before := e.topOffset()
-	e.gotoLineActive = true
-	if e.topOffset() != before+codeEditorFindRowHeight {
+	e.ShowGoToLine()
+	if e.topOffset() != before+e.gotoBarHeight {
 		t.Fatal("wrapped find stretched goto-line bar")
 	}
 }

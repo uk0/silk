@@ -107,6 +107,12 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		menu.AddSeparator()
 		add("edit.palette", "Command Palette", "search", key+"+Shift+P", true, func() { showCommandPalette(canvas) })
 		menu.AddSeparator()
+		gotoTarget := focusedClipboardEditor(tabs, canvas)
+		add("navigate.line", "Go to Line / Column", "navigate-forward", gui.CodeEditorShortcuts().GoToLine, gotoTarget != nil, func() {
+			if gotoTarget != nil {
+				showEditorGoToLine(tabs, canvas, gotoTarget)
+			}
+		})
 		history := editorNavigation(tabs)
 		add("navigate.back", "Go Back", "navigate-back", "Alt+Left", history != nil && history.CanGoBack(), func() { navigateEditorHistory(tabs, false) })
 		add("navigate.forward", "Go Forward", "navigate-forward", "Alt+Right", history != nil && history.CanGoForward(), func() { navigateEditorHistory(tabs, true) })

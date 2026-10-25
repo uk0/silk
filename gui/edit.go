@@ -261,7 +261,13 @@ var errorFrameColor = paint.Color{239, 68, 68, 255} // tailwind red-500
 func (this *Edit) drawErrorFrame(g paint.Painter) {
 	radius := 4.0
 	roundedRect(g, 0, 0, this.w, this.h, radius)
-	g.SetBrush1(paint.Color{255, 255, 255, 255})
+	// Preserve the same surface as the normal frame, including read-only tint.
+	// A white fill here makes the dark theme text nearly invisible.
+	if this.IsReadOnly() {
+		g.SetBrush1(Theme().FormColor)
+	} else {
+		g.SetBrush1(Theme().ViewBGColor)
+	}
 	g.FillPreserve()
 	g.SetPen1(errorFrameColor, 2)
 	g.Stroke()

@@ -339,7 +339,8 @@ type CodeEditor struct {
 	// --- Go To Line ---
 	gotoLineActive bool
 	gotoLineText   string
-	gotoLineCursor int
+	gotoBarHeight  float64
+	gotoBar        *editorGotoBar
 
 	// --- Breadcrumb ---
 	breadcrumbHeight float64
@@ -736,6 +737,7 @@ func (this *CodeEditor) cacheText(text string) {
 	this.updateGutterWidth()
 	if changed {
 		this.notifySymbolsChanged()
+		this.syncGoToBar()
 		if this.findActive {
 			this.findUpdateMatches()
 		} else {
@@ -3062,23 +3064,13 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		this.completion.drawPopup(g, this)
 	}
 
-	// Draw goto-line bar at top (below find bar if active)
-	if this.gotoLineActive {
-		g.Save()
-		if this.findActive {
-			g.Translate(0, this.findBarHeight)
-		}
-		this.drawGotoLine(g, w)
-		g.Restore()
-	}
-
 	// Draw breadcrumb bar (below find bar and goto-line bar)
 	bcY := 0.0
 	if this.findActive {
 		bcY += this.findBarHeight
 	}
 	if this.gotoLineActive {
-		bcY += codeEditorFindRowHeight
+		bcY += this.gotoBarHeight
 	}
 	this.drawBreadcrumb(g, bcY, w)
 
@@ -3629,7 +3621,7 @@ func (this *CodeEditor) OnLeftDown(x, y float64) {
 	if this.findActive {
 		gotoBarTop = this.findBarHeight
 	}
-	if this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+codeEditorFindRowHeight {
+	if this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.gotoBarHeight {
 		return
 	}
 
@@ -4112,7 +4104,7 @@ func (this *CodeEditor) repositionCaretForRightClick(x, y float64) {
 	if this.findActive {
 		gotoBarTop = this.findBarHeight
 	}
-	inGotoBar := this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+codeEditorFindRowHeight
+	inGotoBar := this.gotoLineActive && y >= gotoBarTop && y < gotoBarTop+this.gotoBarHeight
 	if inGutter || inMinimap || inStatus || inFindBar || inGotoBar {
 		return
 	}
@@ -4231,16 +4223,10 @@ func (this *CodeEditor) OnTextInput(s string) {
 		return
 	}
 
-	// Route to goto-line bar if active
-	if this.gotoLineActive {
-		// Only accept digits
-		for _, r := range s {
-			if r >= '0' && r <= '9' {
-				this.gotoLineText += string(r)
-				this.gotoLineCursor++
-			}
-		}
-		this.Self().Update()
+	// Direct SDK dispatch follows the focused child field; clicking the body
+	// must restore normal document input even while the bar remains visible.
+	if this.gotoLineActive && this.gotoBar != nil && this.gotoBar.query.HasFocus() {
+		this.gotoBar.query.OnTextInput(s)
 		return
 	}
 
@@ -4545,29 +4531,9 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 		return // consume all other keys while symbol popup is open
 	}
 
-	// --- Go-to-line bar key routing ---
-	if this.gotoLineActive {
-		switch key {
-		case KeyEsc:
-			this.gotoLineActive = false
-			this.gotoLineText = ""
-			this.gotoLineCursor = 0
-			this.Self().Update()
-			return
-		case KeyEnter:
-			this.gotoLineAccept()
-			this.Self().Update()
-			return
-		case KeyBackSpace:
-			if len(this.gotoLineText) > 0 {
-				runes := []rune(this.gotoLineText)
-				this.gotoLineText = string(runes[:len(runes)-1])
-				this.gotoLineCursor--
-			}
-			this.Self().Update()
-			return
-		}
-		return // consume all other keys while goto-line is active
+	if this.gotoLineActive && this.gotoBar != nil && this.gotoBar.query.HasFocus() {
+		this.gotoBar.query.OnKeyDown(key, repeat)
+		return
 	}
 
 	// --- Completion popup key routing ---
@@ -5120,12 +5086,8 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 		}
 
 	case 'G':
-		if ctrl {
-			// Ctrl+G: go to line
-			this.gotoLineActive = true
-			this.gotoLineText = ""
-			this.gotoLineCursor = 0
-			this.Self().Update()
+		if ctrl || isActionModifier() {
+			this.ShowGoToLine()
 		}
 
 	case 'W':
@@ -5345,6 +5307,7 @@ func (this *CodeEditor) SizeHints() SizeHints {
 
 func (this *CodeEditor) Layout() {
 	this.layoutFindBar()
+	this.layoutGoToBar()
 	this.Self().Update()
 }
 

@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Validated Go to Line / Column
+
+- **Edit → Go to Line / Column**, the Command Palette and **Cmd/Ctrl+G** share
+  an editor-owned input with selection, clipboard, validation and Escape cancellation.
+  Enter accepts `line` or `line:column`; invalid targets no longer silently jump to EOF.
+- Columns count Unicode code points, with CRLF excluded from line content. Read-only
+  navigation is supported; editing shortcuts in the input cannot undo source text.
+- The bar stacks below Find, adapts to narrow panes and retires with its editor.
+  Invalid Edit fields preserve light/dark theme contrast instead of painting white.
+- SDK APIs and sample: `examples/editor-goto`, [SDK guide](docs/SDK_FEATURES.md)
+  and [verification / limitations](EDITOR_GOTO_QA_20261025.md).
+
 ### Explicit line endings and compact editing menus
 
 - **Edit → Line Endings** and the Command Palette convert LF/CRLF as one

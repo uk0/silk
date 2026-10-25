@@ -263,7 +263,7 @@ func (e *CodeEditor) CancelFind() {
 		}
 	}
 }
-func (e *CodeEditor) OnHide() { e.CancelFind(); e.CancelFormat() }
+func (e *CodeEditor) OnHide() { e.CancelFind(); e.CancelFormat(); e.hideGoToLine(false) }
 func (e *CodeEditor) OnShow() {
 	if e.findActive {
 		e.findUpdateMatches()
@@ -285,6 +285,7 @@ func (e *CodeEditor) closeFindBar() {
 		e.findBar.Hide()
 	}
 	e.SetFocus()
+	e.Layout()
 	e.Update()
 }
 func (e *CodeEditor) toggleReplaceRow() {

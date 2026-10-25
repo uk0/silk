@@ -97,6 +97,9 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		}
 		paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindEditorLineEndingCommand(editorTabs, designCanvas, spec) }
 	}
+	add("Go to Line / Column", gui.CodeEditorShortcuts().GoToLine, func() { showEditorGoToLine(editorTabs, designCanvas, nil) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { return focusedClipboardEditor(editorTabs, designCanvas) != nil }
+	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindEditorGoToLine(editorTabs, designCanvas) }
 	add("Expand Silk Macros", "", func() { expandActiveMacro(editorTabs, designCanvas) })
 	add("Appearance & Editor", "", func() { showAppearanceDialog(globalFrame) })
 	// File actions.

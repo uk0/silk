@@ -14,7 +14,7 @@ func TestCodeEditorShortcutHintsPlatformAndValueIsolation(t *testing.T) {
 				Cut: tc.action + "+X", Copy: tc.action + "+C", Paste: tc.action + "+V", SelectAll: tc.action + "+A",
 				AddCursorAbove: tc.caret + "+Up", AddCursorBelow: tc.caret + "+Down", KeepPrimaryCursor: "Esc",
 				MoveLinesUp: "Alt+Up", MoveLinesDown: "Alt+Down", DuplicateLines: tc.action + "+Shift+D", DeleteLines: tc.action + "+Shift+K",
-				IndentLines: "Tab", OutdentLines: "Shift+Tab",
+				IndentLines: "Tab", OutdentLines: "Shift+Tab", GoToLine: tc.action + "+G",
 			}
 			if got != want {
 				t.Fatalf("got %+v want %+v", got, want)

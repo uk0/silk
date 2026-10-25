@@ -40,6 +40,27 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 经过验证的行／列导航
+
+UI 线程调用 `CodeEditor.ResolveGoToLocation("2:3")`，解析一基行号与 Unicode
+码点列号，返回零基 `EditorTextPosition`（含 rune、byte、UTF-16 坐标）。
+省略列默认为 1；行尾位置有效，CRLF 的 CR 不算正文。只接受正整数，允许首尾
+空白，不接受内部空白、相对位置或多个冒号；输入最多 64 字节。
+
+`NavigateToLocation` 校验成功才移动光标、展开目标折叠、清理选区／多光标并聚焦；
+错误可用 `errors.Is(err, gui.ErrEditorLocation)` 判断，失败不改变文本／光标／历史。
+只读文档也可导航。有效查询只扫描目标行前缀，不复制文档、不启动后台任务。
+
+`ShowGoToLine/HideGoToLine/GoToLineVisible` 提供编辑器子控件输入条；支持粘贴、
+选区、Enter／Escape 和实时校验，首次打开填入当前坐标，再次打开选择已有查询。
+导航输入拥有焦点时消费源代码 Undo／格式化／重命名快捷键，不误改背后的文档；
+**输入框自身不提供 Undo 历史**。点击正文后可正常编辑，隐藏或拆卸编辑器时取消
+输入与待处理粘贴、移除提示。和 Find 同时显示时按实际高度堆叠，不用独立窗口。
+
+`examples/editor-goto` 演示导航、只读切换、重载及 JSON 状态快照。
+码点列不是字形簇、视觉 Tab 列或 LSP UTF-16 列；导航不写入正文撤销栈。
+[验证记录和平台边界](../EDITOR_GOTO_QA_20261025.md)。
+
 ### 行尾检测、转换与事件订阅
 
 `CodeEditor.LineEndings()` 返回 LF/CRLF 数量与 `Preferred`；混合行尾显示 `Mixed`。
