@@ -26,11 +26,12 @@ type Menu struct {
 	// 键盘导航高亮项的下标, -1 表示没有键盘高亮.
 	// 鼠标悬停仍走全局 mouseHoverWidget; 键盘高亮通过把高亮项设为
 	// 悬停项来复用既有的菜单项高亮绘制(见 setHighlight).
-	highlight  int
-	compact    bool
-	typePrefix string
-	typeAt     time.Time
-	scroll     menuScrollState
+	highlight   int
+	compact     bool
+	typePrefix  string
+	typeAt      time.Time
+	scroll      menuScrollState
+	clearOnHide bool // owned tab context popups release command captures on dismissal
 }
 
 // SetCompact opts a horizontal menu bar into dense desktop chrome. Popup menu
@@ -410,6 +411,9 @@ func (this *Menu) OnHide() {
 	}
 	if this.Window() != nil && this.Window().inModal {
 		this.Window().EndModal(nil)
+	}
+	if this.clearOnHide {
+		this.clearOwnedContextItems()
 	}
 }
 

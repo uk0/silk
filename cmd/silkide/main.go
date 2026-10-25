@@ -959,6 +959,9 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	tabs.TabBar().SetCloseCallback(func(tb *gui.TabBar, idx int) bool {
 		return closeEditorTab(tabs, idx)
 	})
+	tabs.TabBar().SetContextMenuCallback(func(_ *gui.TabBar, menu *gui.Menu, idx int) {
+		buildEditorTabContextMenu(menu, tabs, idx)
+	})
 	return tabs
 }
 

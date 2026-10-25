@@ -8,13 +8,14 @@ import (
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/paint"
 )
 
 func main() {
 	defer core.Close()
 	form := gui.NewForm()
 	form.SetTitle("Silk - Tab Navigation")
-	help := gui.NewLabel("Temporary page values. Ctrl+Tab / Ctrl+Shift+Tab; drag tabs to reorder.")
+	help := gui.NewLabel("Temporary values. Right-click / Shift+F10: page menu. Ctrl+Tab: switch.")
 	help.SetParent(form)
 	help.SetBounds(20, 15, 720, 28)
 	status := gui.NewLabel("")
@@ -54,6 +55,21 @@ func main() {
 		tabs.AddTab(page, name, nil)
 		fields = append(fields, field)
 	}
+	tabs.TabBar().SetContextMenuCallback(func(_ *gui.TabBar, menu *gui.Menu, index int) {
+		page := tabs.Stack().Page(index)
+		label := menu.AddButton1(tabs.TabTitle(index), nil)
+		label.SetEnabled(false)
+		menu.AddSeparator()
+		menu.AddButton1("Close Page", paint.LoadIcon("close")).Action().BindFunc0(func() {
+			// Resolve the original page, never a slot captured before a reorder.
+			for i := 0; i < tabs.Count(); i++ {
+				if tabs.Stack().Page(i) == page {
+					tabs.TabBar().CloseTab(i)
+					return
+				}
+			}
+		})
+	})
 	add := func(x float64, label string, run func()) *gui.Button {
 		b := gui.NewButton1(label, nil)
 		b.SetParent(form)

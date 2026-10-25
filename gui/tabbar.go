@@ -50,6 +50,9 @@ type TabBar struct {
 	scrollX       float64
 	overflowBtn   *Button
 	chooserMenu   *Menu
+	contextMenu   *Menu
+	contextDown   *_Tab
+	cbContextMenu func(*TabBar, *Menu, int)
 	firstVisible  int
 }
 

@@ -15,6 +15,7 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"cursor-add-above":   drawCaretCommand(-1),
 	"cursor-add-below":   drawCaretCommand(1),
 	"cursor-primary":     drawCaretCommand(0),
+	"edit-copy":          drawCopyPages,
 	"edit-undo":          drawUndoArrow,
 	"edit-redo":          drawRedoArrow,
 	"navigate-back":      drawNavigateBack,
@@ -1059,5 +1060,18 @@ func drawRestoreWindow(size int, cc *cairo.Context) {
 	cc.LineTo(w*.71, w*.64)
 	cc.Stroke()
 	roundedRect(cc, w*.16, w*.36, w*.48, w*.48, w*.025)
+	cc.Stroke()
+}
+
+// Offset paper outlines, drawn at physical size instead of scaling a bitmap.
+func drawCopyPages(size int, cc *cairo.Context) {
+	setIconStroke(cc, size)
+	s := float64(size)
+	cc.MoveTo(.64*s, .16*s)
+	cc.LineTo(.18*s, .16*s)
+	cc.LineTo(.18*s, .68*s)
+	cc.LineTo(.26*s, .68*s)
+	cc.Stroke()
+	cc.Rectangle(.34*s, .31*s, .48*s, .53*s)
 	cc.Stroke()
 }

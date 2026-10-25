@@ -191,7 +191,7 @@ func TestNewFallbackDrawNoPanic(t *testing.T) {
 }
 
 func TestWorkbenchIconsDoNotNeedExternalResources(t *testing.T) {
-	for _, name := range []string{"document", "folder", "run", "save", "preview", "propsheet", "outline", "tree-view", "packages", "bookmarks", "references", "log", "todo", "silkide", "design", "edit", "minimize", "maximize", "restore", "close", "handle-0-normal", "handle-0-active", "handle-1-normal", "handle-1-active", "handle-2-normal", "handle-2-active"} {
+	for _, name := range []string{"edit-copy", "document", "folder", "run", "save", "preview", "propsheet", "outline", "tree-view", "packages", "bookmarks", "references", "log", "todo", "silkide", "design", "edit", "minimize", "maximize", "restore", "close", "handle-0-normal", "handle-0-active", "handle-1-normal", "handle-1-active", "handle-2-normal", "handle-2-active"} {
 		t.Run(name, func(t *testing.T) {
 			drawer := proceduralFallbacks[name]
 			if drawer == nil {

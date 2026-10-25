@@ -137,6 +137,9 @@ func (b *TabBar) OnMouseWheel(x, y, z float64) {
 }
 
 func (b *TabBar) OnKeyDown(key int, repeat bool) {
+	if b.contextMenuKey(key, repeat) {
+		return
+	}
 	if len(b.tabs) == 0 {
 		return
 	}

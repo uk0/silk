@@ -21,6 +21,22 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Tab context menus
+
+- Right-click an editor tab for **Save**, **Close Editor**, **Reopen Closed Editor**,
+  **Copy Full Path** and **Reveal File in Explorer**; the header identifies the
+  target. Opening an inactive tab's menu does not select it.
+- **Shift+F10** opens the active tab's menu while the tab strip has keyboard focus.
+  Actions revalidate editor identity after moves/renames instead of trusting old
+  numeric positions. Close reuses Save / Discard / Cancel and reopen history.
+- SDK `TabBar.SetContextMenuCallback` owns one reusable popup and releases its
+  command captures when dismissed. Menu construction adds no document reads,
+  tree scans, timers or polling; icons use the existing resource cache, and
+  save/close retain their existing file-I/O behavior.
+- Validation: [tab context-menu QA](TAB_CONTEXT_QA_20261024.md).
+
+![Windows editor tab context menu](screenshots/windows-tab-context-20261024.png)
+
 ### Consistent tab switching
 
 - **View → Next Editor / Previous Editor** and the Command Palette switch

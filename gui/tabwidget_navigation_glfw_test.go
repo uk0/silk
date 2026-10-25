@@ -121,3 +121,30 @@ func TestWindowTabNavigationOwnershipAndModifiers(t *testing.T) {
 		t.Fatal("host shortcut or repeat priority lost")
 	}
 }
+
+func TestWindowTabContextKeyboardShortcutAndRepeat(t *testing.T) {
+	isolatePopupState(t)
+	root := NewForm()
+	b := overflowTabs(3)
+	b.SetParent(root)
+	native, win := testPopupWindow(root, WtForm, nil)
+	win.enabled = true
+	old := showTabBarPopup
+	t.Cleanup(func() { showTabBarPopup = old; b.SetContextMenuCallback(nil) })
+	count, index := 0, -1
+	showTabBarPopup = func(*Menu, float64, float64) { count++ }
+	b.SetContextMenuCallback(func(_ *TabBar, m *Menu, i int) { index = i; m.AddButton1("Action", nil) })
+	b.SetActiveTab(2)
+	b.SetFocus()
+	onKey(native, glfw.KeyF10, 0, glfw.Press, glfw.ModShift)
+	onKey(native, glfw.KeyF10, 0, glfw.Repeat, glfw.ModShift)
+	if count != 1 || index != 2 {
+		t.Fatal("keyboard context/repeat", count, index)
+	}
+	for _, mods := range []glfw.ModifierKey{0, glfw.ModShift | glfw.ModAlt, glfw.ModShift | glfw.ModControl, glfw.ModShift | glfw.ModSuper} {
+		onKey(native, glfw.KeyF10, 0, glfw.Press, mods)
+	}
+	if count != 1 {
+		t.Fatal("unowned modifiers opened context menu")
+	}
+}
