@@ -37,3 +37,29 @@ func drawCaretCommand(direction int) proceduralIconDrawer {
 		cc.Stroke()
 	}
 }
+
+// The line stack distinguishes text movement from adding an insertion point.
+func drawLineMove(direction int) proceduralIconDrawer {
+	return func(size int, cc *cairo.Context) {
+		s := float64(size)
+		setIconStroke(cc, size)
+		for _, y := range []float64{.3, .5, .7} {
+			cc.MoveTo(.12*s, y*s)
+			cc.LineTo(.46*s, y*s)
+		}
+		cc.Stroke()
+		setIconColor(cc, currentIconPalette.Accent)
+		y := func(v float64) float64 {
+			if direction > 0 {
+				return (1 - v) * s
+			}
+			return v * s
+		}
+		cc.MoveTo(.74*s, y(.8))
+		cc.LineTo(.74*s, y(.2))
+		cc.MoveTo(.58*s, y(.38))
+		cc.LineTo(.74*s, y(.2))
+		cc.LineTo(.9*s, y(.38))
+		cc.Stroke()
+	}
+}

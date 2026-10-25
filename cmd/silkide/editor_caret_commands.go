@@ -17,6 +17,8 @@ func editorCaretCommandSpecs() []editorCaretCommand {
 	return []editorCaretCommand{
 		{"editor.addCursorAbove", "Add Cursor Above", "cursor-add-above", key + "+Alt+Up", (*gui.CodeEditor).CanAddCursorAbove, func(e *gui.CodeEditor) { e.AddCursorAbove() }},
 		{"editor.addCursorBelow", "Add Cursor Below", "cursor-add-below", key + "+Alt+Down", (*gui.CodeEditor).CanAddCursorBelow, func(e *gui.CodeEditor) { e.AddCursorBelow() }},
+		{"editor.moveLinesUp", "Move Lines Up", "line-move-up", "Alt+Up", (*gui.CodeEditor).CanMoveLinesUp, (*gui.CodeEditor).MoveLinesUp},
+		{"editor.moveLinesDown", "Move Lines Down", "line-move-down", "Alt+Down", (*gui.CodeEditor).CanMoveLinesDown, (*gui.CodeEditor).MoveLinesDown},
 		{"editor.indentLines", "Indent Lines", "navigate-forward", "", func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).IndentLines},
 		{"editor.outdentLines", "Outdent Lines", "navigate-back", "Shift+Tab", func(e *gui.CodeEditor) bool { return true }, (*gui.CodeEditor).OutdentLines},
 		{"editor.clearCursors", "Keep Primary Cursor", "cursor-primary", "Esc", func(e *gui.CodeEditor) bool { return e.CursorCount() > 1 }, func(e *gui.CodeEditor) { e.KeepPrimaryCursor() }},

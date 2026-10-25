@@ -10,6 +10,10 @@ func TestEditorSystemKeyOptIn(t *testing.T) {
 				if got := editorSystemKey(key, ctrl, alt); got != want {
 					t.Fatalf("key=%d ctrl=%v alt=%v got=%v", key, ctrl, alt, got)
 				}
+				move := !ctrl && alt && (key == KeyUp || key == KeyDown)
+				if got := editorLineMoveSystemKey(key, ctrl, alt); got != move {
+					t.Fatalf("line move key=%d ctrl=%v alt=%v got=%v", key, ctrl, alt, got)
+				}
 			}
 		}
 	}

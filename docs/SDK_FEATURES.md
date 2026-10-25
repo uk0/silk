@@ -40,6 +40,24 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 行块移动
+
+`CodeEditor.MoveLinesUp/MoveLinesDown` 与 `CanMoveLinesUp/CanMoveLinesDown` 为
+UI 线程 API，菜单、命令面板与 Alt+↑/↓ 使用同一实现。有选区时移动覆盖的逻辑行块，
+终点位于下一行第 0 列不包含该行；无选区时合并各光标的相邻行，按组移动。
+到达边界的组保持不变，其余组仍可移动。文件末尾换行后的空行视为终止标记，
+不会与内容行交换；中间空白行仍是正常内容行。把空白正文行移动到原本无末尾换行
+的 EOF 时，结果可以自然以现有分隔符结尾；这不插入新分隔符，Undo 可精确恢复。
+
+一次 Undo/Redo 恢复整组文本、光标及选区方向。行分隔符留在原槽位，支持混合
+LF/CRLF、无末尾换行、非法 UTF-8 字节以及 EOF 处的字面 CR；历史只记录旋转范围和
+CRLF 位图，不保留正文副本。触及的折叠区域展开，旧片段/重命名提示失效；冻结的
+“在选区中查找”范围按其他无关编辑的规则失效，不会悄悄扩大到整篇文档。
+
+可用性查询只检查选区/光标行索引，不扫描行正文。真实修改仍需重新发布文本、更新
+布局和绘制，不能由无分配的行旋转基准推导“任意大小文件不卡顿”。示例：
+`go run ./examples/editor-lines`。
+
 ### 缩进与原始内容
 
 在 UI 线程调用 `editor.SetInsertSpaces(true)`、`editor.SetTabSize(2)`，即可配置

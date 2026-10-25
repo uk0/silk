@@ -21,6 +21,18 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Reversible line-block movement
+
+- **Edit → Move Lines Up / Down**, the Command Palette and Alt+↑/↓ share the
+  same SDK operation. Selected blocks and contiguous multi-caret groups move
+  together; one Undo restores text, caret positions and selection direction.
+- Moving lines keeps LF/CRLF separator slots and an existing final-newline sentinel.
+  The terminal empty row after a newline is not swapped into the document.
+  Groups already at a boundary stay put; other groups can still move.
+- History stores rotations and separator bits, not copies of whole documents.
+  New theme-aware vector icons remain distinct from the add-caret commands.
+  SDK example: `go run ./examples/editor-lines`; [verification details](EDITOR_LINE_MOVE_QA_20261025.md).
+
 ### Consistent indentation and reversible line edits
 
 - **Appearance & Editor → Indent using** chooses Tabs or Spaces; the existing

@@ -188,7 +188,7 @@ type cursorPos struct {
 
 // editAction records a single undoable edit operation.
 type editAction struct {
-	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=multi-caret transaction
+	kind                        int // 0=insert, 1=delete, 2=replace, 3=whole document, 4=byte transaction, 5=line rotation
 	line                        int
 	col                         int
 	text                        string // inserted text (kind 0,2) or deleted text (kind 1)
@@ -197,6 +197,7 @@ type editAction struct {
 	byteCol                     int        // pre-edit byte anchor, independent of later UTF-8 decoding
 	redoCursor                  *cursorPos // optional post-edit caret for atomic provider edits
 	group                       []editorByteEdit
+	lineMoves                   []editorLineMove
 	beforeCursors, afterCursors []cursorPos
 	findScope                   *editorFindScopeHistory
 	selection                   *editorSelectionHistory
@@ -1708,6 +1709,13 @@ func (this *CodeEditor) undo() {
 		this.cursorLine = a.line
 		this.cursorCol = a.col
 		this.redoStack = append(this.redoStack, a)
+	case 5:
+		this.unfoldLineMoves(a.lineMoves)
+		for i := len(a.lineMoves) - 1; i >= 0; i-- {
+			a.lineMoves[i].apply(this.lines, true)
+		}
+		this.restoreEditCursors(a.beforeCursors)
+		this.redoStack = append(this.redoStack, a)
 	case 4:
 		for i := len(a.group) - 1; i >= 0; i-- {
 			g := a.group[i]
@@ -1761,6 +1769,13 @@ func (this *CodeEditor) redo() {
 		if a.redoCursor != nil {
 			this.cursorLine, this.cursorCol = a.redoCursor.line, a.redoCursor.col
 		}
+		this.undoStack = append(this.undoStack, a)
+	case 5:
+		this.unfoldLineMoves(a.lineMoves)
+		for _, m := range a.lineMoves {
+			m.apply(this.lines, false)
+		}
+		this.restoreEditCursors(a.afterCursors)
 		this.undoStack = append(this.undoStack, a)
 	case 4:
 		for _, g := range a.group {
@@ -2042,31 +2057,8 @@ func (this *CodeEditor) deleteCurrentLine() {
 	this.Self().Update()
 }
 
-func (this *CodeEditor) moveLineUp() {
-	this.clampCursor()
-	if this.cursorLine <= 0 {
-		return
-	}
-	this.lines[this.cursorLine], this.lines[this.cursorLine-1] = this.lines[this.cursorLine-1], this.lines[this.cursorLine]
-	this.cursorLine--
-	this.clearSelection()
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
-
-func (this *CodeEditor) moveLineDown() {
-	this.clampCursor()
-	if this.cursorLine >= len(this.lines)-1 {
-		return
-	}
-	this.lines[this.cursorLine], this.lines[this.cursorLine+1] = this.lines[this.cursorLine+1], this.lines[this.cursorLine]
-	this.cursorLine++
-	this.clearSelection()
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
+func (this *CodeEditor) moveLineUp()   { this.MoveLinesUp() }
+func (this *CodeEditor) moveLineDown() { this.MoveLinesDown() }
 
 // --- Auto-close, Join, Trim, Duplicate line operations ---
 

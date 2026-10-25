@@ -172,3 +172,71 @@ func TestIndentMenuPaletteDocumentGuardAndUndo(t *testing.T) {
 		t.Fatal("hidden edit")
 	}
 }
+
+func TestMoveLinesMenuPaletteBoundaryAndDocumentGuard(t *testing.T) {
+	w := testWorkbench(t)
+	old := paletteCommands
+	t.Cleanup(func() { paletteCommands = old })
+	first := writeFile(t, t.TempDir(), "lines.txt", "one\ntwo\nthree\n")
+	openFileInEditor(w.tabs, first)
+	w.activate(modeEdit)
+	e := activeEditor(w.tabs)
+	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
+	defer releaseWorkbenchMenu(menu)
+	up, down := menuCommandButton(menu, "editor.moveLinesUp"), menuCommandButton(menu, "editor.moveLinesDown")
+	if up == nil || down == nil || up.Icon() == nil || down.Icon() == nil || up.IsEnabled() || !down.IsEnabled() {
+		t.Fatal("missing commands/icons/boundary state")
+	}
+	down.Action().Trigger(down)
+	if e.Text() != "two\none\nthree\n" || e.CursorLine() != 1 {
+		t.Fatal("menu move", e.Text())
+	}
+	e.Undo()
+	if e.Text() != "one\ntwo\nthree\n" || e.CursorLine() != 0 {
+		t.Fatal("menu undo")
+	}
+	registerPaletteCommands(w.tabs, w.canvas)
+	var moveUp, moveDown func()
+	for _, c := range paletteCommands {
+		if c.Name == i18n.T("Move Lines Up") {
+			moveUp = c.Fn
+		}
+		if c.Name == i18n.T("Move Lines Down") {
+			moveDown = c.Fn
+		}
+	}
+	if moveUp == nil || moveDown == nil {
+		t.Fatal("palette missing")
+	}
+	moveDown()
+	moveDown()
+	if e.CursorLine() != 2 || e.CanMoveLinesDown() {
+		t.Fatal("palette EOF")
+	}
+	moveDown()
+	if e.Text() != "two\nthree\none\n" {
+		t.Fatal("boundary modified text")
+	}
+	moveUp()
+	if e.CursorLine() != 1 {
+		t.Fatal("palette up")
+	}
+	w.activate(modeDesign)
+	before := e.Text()
+	moveDown()
+	if e.Text() != before {
+		t.Fatal("hidden editor changed")
+	}
+	w.activate(modeEdit)
+	second := writeFile(t, t.TempDir(), "other.txt", "x\ny\n")
+	openFileInEditor(w.tabs, second)
+	other := activeEditor(w.tabs)
+	down.Action().Trigger(down)
+	if e.Text() != before || other.Text() != "x\ny\n" {
+		t.Fatal("stale menu changed document")
+	}
+	moveDown()
+	if other.Text() != "y\nx\n" {
+		t.Fatal("palette captured old editor")
+	}
+}
