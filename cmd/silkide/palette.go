@@ -325,12 +325,13 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Scan TODOs", "", func() {
 		scanTodos(designCanvas)
 	})
-	// Strip trailing whitespace from every line of the active editor.
-	add("Trim Trailing Whitespace", "", func() {
-		if ed := activeEditor(editorTabs); ed != nil {
-			ed.TrimTrailingWhitespace()
+	for _, spec := range editorCleanupCommands() {
+		add(spec.label, "", func() { runEditorCleanupCommand(editorTabs, designCanvas, nil, spec) })
+		paletteCommands[len(paletteCommands)-1].Available = func() bool {
+			return spec.available(focusedClipboardEditor(editorTabs, designCanvas))
 		}
-	})
+		paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindEditorCleanupCommand(editorTabs, designCanvas, spec) }
+	}
 	// Git history — flip to the log panel + reload git log.
 	add("Show Git History", "", func() {
 		if globalGitLog != nil {

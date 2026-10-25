@@ -12,6 +12,8 @@ type proceduralIconDrawer func(size int, cc *cairo.Context)
 // glyphs instead of the red-X placeholder. Names match the strings
 // LoadIcon is called with elsewhere in the tree.
 var proceduralFallbacks = map[string]proceduralIconDrawer{
+	"whitespace-trim":    drawWhitespaceTrim,
+	"newline-insert":     drawNewlineInsert,
 	"cursor-add-above":   drawCaretCommand(-1),
 	"cursor-add-below":   drawCaretCommand(1),
 	"cursor-primary":     drawCaretCommand(0),

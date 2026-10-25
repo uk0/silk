@@ -40,6 +40,34 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 显式空白清理与文件末尾换行
+
+`CodeEditor.TrimTrailingWhitespaceChecked() error` 一次性删除各行 LF／CRLF／EOF
+前的 ASCII 空格与 Tab，保留其他字节、换行种类、反向选区、多光标与书签行号。
+Undo／Redo 恢复精确字节及光标／选区；历史只保存变化的尾部，不保存整篇正文副本。
+原 `TrimTrailingWhitespace()` 的无返回值签名保持兼容；需要显示错误的宿主请用
+Checked 版本。无变化时不增加撤销记录、revision 或文本通知。
+
+`HasFinalNewline()` 常数时间查询是否以 LF（含 CRLF）结束；空文档返回 false。
+`EnsureFinalNewline() error` 仅在非空且缺少末尾换行时追加一个当前 Enter 偏好的
+分隔符，不改变已有换行、不压缩额外空行、不跳到 EOF，也不把已有选区扩到新行。
+可通过 `LineEndings().Preferred` 读取偏好，或用 `ConvertLineEndings` 显式修改。
+
+只读返回 `ErrEditorReadOnly`。若清理会把正文中的独立 CR 变成 CRLF 的一部分，
+返回 `ErrEditorCleanupCR` 并拒绝整个事务，不部分修改：例如 `"a\r \n"` 去空格，
+或在 `"a\r"` 后追加 LF。后者可先显式选择 CRLF，再保留正文 CR 追加 CRLF。
+非 ASCII 空白（NBSP 等）、独立 CR、BOM、NUL 与无效 UTF-8 不被顺便正规化。
+这些都是 UI 线程 API；没有新增空闲轮询、文件扫描器或自动保存清理。
+
+IDE：编辑 → 文本清理；命令面板可搜索英文或中文名称。命令仅作用于打开菜单／
+面板时对应的编辑器，输入框焦点、只读或切换文档后不会误改正文。错误显示警告。
+注意清理是文本操作，会去掉原始字符串或 Markdown 中有意义的行尾空格，需用户
+显式执行；它不是语义保持格式化。
+
+示例：`go run ./examples/editor-cleanup`，包含全选／多光标、清理／末尾换行、
+Undo／Redo、只读、重置和 JSON 状态快照。
+[验证记录](../EDITOR_CLEANUP_QA_20261025.md)。
+
 ### 事件驱动书签与跨文件面板
 
 `CodeEditor.SetBookmark(line, marked)`、`HasBookmark`、`BookmarkCount` 使用零基行号。

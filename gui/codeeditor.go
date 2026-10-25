@@ -2252,43 +2252,6 @@ func (this *CodeEditor) JoinLines() {
 	this.Self().Update()
 }
 
-// trimTrailingInText removes trailing spaces and tabs from every line of text,
-// preserving interior whitespace and empty lines.
-func trimTrailingInText(text string) string {
-	lines := strings.Split(text, "\n")
-	for i, ln := range lines {
-		lines[i] = strings.TrimRight(ln, " \t")
-	}
-	return strings.Join(lines, "\n")
-}
-
-// TrimTrailingWhitespace strips trailing spaces/tabs from every line. The caret
-// column is clamped to its (possibly shorter) line. Callable by the host and
-// recorded as one undoable full-text edit routed through rebuildText.
-func (this *CodeEditor) TrimTrailingWhitespace() {
-	if this.readOnly {
-		return
-	}
-	oldFull := this.Text()
-	newFull := trimTrailingInText(oldFull)
-	if newFull == oldFull {
-		return
-	}
-	saveLine, saveCol := this.cursorLine, this.cursorCol
-	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: newFull, oldText: oldFull})
-	this.lines = strings.Split(newFull, "\n")
-	if len(this.lines) == 0 {
-		this.lines = []string{""}
-	}
-	this.clearSelection()
-	this.cursorLine = saveLine
-	this.cursorCol = saveCol
-	this.clampCursor()
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
-}
-
 // duplicateLinesInText returns lines with the inclusive block [from, to] copied
 // immediately below itself. The input slice is not mutated.
 func duplicateLinesInText(lines []string, from, to int) []string {

@@ -94,6 +94,18 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				}
 			}, endingTarget != nil && endingTarget.CanConvertLineEndings(spec.style)})
 		}
+		cleanup, cleanupButton := menu.AddSubMenu(i18n.T("Text Cleanup"), gui.LoadIcon("whitespace-trim"), gui.NewPopupMenu())
+		cleanupButton.Action().SetObjName("editor.cleanup")
+		cleanupTarget := focusedClipboardEditor(tabs, canvas)
+		cleanupButton.SetEnabled(cleanupTarget != nil && !cleanupTarget.IsReadOnly())
+		cleanupButton.Action().SetEnabled(cleanupButton.IsEnabled())
+		for _, spec := range editorCleanupCommands() {
+			appendFileMenuCommand(cleanup, fileMenuCommand{spec.id, spec.label, spec.icon, "", func() {
+				if cleanupTarget != nil {
+					runEditorCleanupCommand(tabs, canvas, cleanupTarget, spec)
+				}
+			}, spec.available(cleanupTarget)})
+		}
 		menu.AddSeparator()
 		formatOK := ed != nil && !ed.IsReadOnly() && (ed.Language() == "go" || ed.Language() == "json") && !ed.Formatting()
 		add("editor.format", "Format Document", "edit", key+"+Shift+I", formatOK, func() { formatActiveDocument(tabs, canvas, ed, false) })

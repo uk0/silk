@@ -21,6 +21,20 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Explicit text cleanup
+
+- **Edit → Text Cleanup** and the Command Palette now share **Trim Trailing
+  Whitespace** and **Ensure Final Newline**, with dedicated theme-aware vector
+  icons and document/focus/read-only guards.
+- Trimming handles spaces/tabs before CRLF as well as LF/EOF, retains directed
+  selections and multiple carets, and records only changed suffixes for Undo.
+  Bookmarks stay on their rows. Final-newline insertion uses the current Enter
+  preference, leaves existing blank lines alone and does not jump to EOF.
+- No automatic cleanup on Save. These are explicit textual operations, not
+  syntax-aware formatting. Unsafe standalone-CR ambiguity is rejected atomically.
+  See `examples/editor-cleanup`, [SDK guide](docs/SDK_FEATURES.md) and
+  [verification / limits](EDITOR_CLEANUP_QA_20261025.md).
+
 ### Unified, edit-aware bookmarks
 
 - **Edit → Bookmarks** and the Command Palette share live editor anchors:
