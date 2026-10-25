@@ -58,6 +58,7 @@ func newSymbolFinder(parent gui.IWidget, request symbolSearchRequest, post func(
 	f.list.SetFillAvailable(true)
 	f.list.SetSelectionVisible(true)
 	box.AddWidget(f.list)
+	f.input.SetNavigationList(f.list)
 	box.AddWidget(f.status)
 	f.worker = newSymbolSearchWorker(90*time.Millisecond, request, post, func(r symbolSearchResult) {
 		if f.closed {
@@ -147,5 +148,6 @@ func (f *symbolFinder) close() {
 		return
 	}
 	f.closed = true
+	f.input.SetNavigationList(nil)
 	f.worker.close()
 }

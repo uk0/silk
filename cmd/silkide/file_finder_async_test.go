@@ -61,7 +61,7 @@ func TestFileFinderVisibleLimitStaleEnterAndSelectedRow(t *testing.T) {
 		t.Fatal("old Enter stayed actionable")
 	}
 	receiveSymbolTest(t, posts)()
-	f.list.SetActiveIndex(1)
+	f.input.OnKeyDown(gui.KeyDown, false)
 	expected := f.list.Item(1).Data.(fileEntry)
 	f.input.OnKeyDown(gui.KeyEnter, false)
 	if f.selected == nil || *f.selected != expected {

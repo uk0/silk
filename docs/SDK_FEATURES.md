@@ -40,6 +40,36 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 搜索输入框与结果列表联动
+
+`Edit.SetNavigationList(list)` / `NavigationList()` 将单行输入框与同一控件树、
+同一原生窗口内的 `ListWidget` 组合。未按修饰键的 Up／Down／PageUp／PageDown
+移动高亮行并滚动可见，但焦点、查询文本、反向选区和输入框光标不变；接着打字
+仍输入查询。重复按键可连续导航。Home／End、Tab、Enter 及带修饰键操作保留
+原有输入框语义，多行输入框不会将行导航转发给结果。
+
+```go
+input, results := gui.NewEdit(), gui.NewListWidget()
+box := gui.NewVBox()
+box.AddWidget(input)
+results.SetFillAvailable(true)
+results.SetSelectionVisible(true)
+box.AddWidget(results)
+input.SetNavigationList(results)
+input.SigSubmit(func(_ interface{}, _ string) {
+    if index := results.ActiveIndex(); index >= 0 && index < results.Count() {
+        // 使用 results.Item(index).Data 执行宿主动作，并重检结果是否仍有效。
+    }
+})
+// 关闭搜索控制器或不再需要联动时解除引用。
+input.SetNavigationList(nil)
+```
+
+不接管筛选、提交或选区回调；隐藏／禁用／分离／移到其他窗口的目标不导航。
+原生对话框构成可见性边界，隐藏的逻辑宿主不会禁用已经显示的对话框输入。
+SetNavigationList 及关联控件仅限 UI 线程；新增接口无轮询、定时器、goroutine
+或静置扫描。IDE 的三个查找器共用此接口，异步查询刷新时仍立即清空过期结果。
+
 ### 可操作提示与有界通知面板
 
 `ShowToastWithOptions(parent, message, ToastOptions{...}) *Toast` 仍在宿主窗口

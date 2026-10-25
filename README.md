@@ -21,6 +21,17 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Keyboard-driven search results
+
+- Command Palette, Quick Open and Workspace Symbols now let **Up / Down /
+  PageUp / PageDown** navigate results while the query field keeps focus.
+  Continue typing to refine, then Enter accepts the highlighted result rather
+  than always executing the first command. Unavailable/stale/empty results
+  remain guarded; Home/End still edit the query.
+- SDK `Edit.SetNavigationList` composes existing input/list controls without
+  polling, background work or replacing host callbacks. See the
+  [SDK guide](docs/SDK_FEATURES.md) and [verification](FINDER_INPUT_QA_20261025.md).
+
 ### Non-blocking feedback and notification history
 
 - IDE banners now stay at the bottom-right, above the status bar, instead of

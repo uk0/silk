@@ -138,6 +138,7 @@ func newFileFinder(parent gui.IWidget, root string, service *fileSearchService) 
 	f.list.SetFillAvailable(true)
 	f.list.SetSelectionVisible(true)
 	box.AddWidget(f.list)
+	f.input.SetNavigationList(f.list)
 	box.AddWidget(f.status)
 	f.session = service.open(root, func(r fileSearchResult) {
 		if f.closed {
@@ -203,5 +204,6 @@ func (f *fileFinder) close() {
 		return
 	}
 	f.closed = true
+	f.input.SetNavigationList(nil)
 	f.service.close(f.session)
 }

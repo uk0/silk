@@ -41,7 +41,7 @@ func TestSymbolFinderClearsOldActionsAndUsesSelectedRow(t *testing.T) {
 		t.Fatal("Enter accepted a stale result")
 	}
 	receiveSymbolTest(t, posts)()
-	f.list.SetActiveIndex(1)
+	f.input.OnKeyDown(gui.KeyDown, false)
 	f.input.OnKeyDown(gui.KeyEnter, false)
 	if f.selected == nil || f.selected.Name != "latestsecond" || f.selected.Character != 20 {
 		t.Fatalf("wrong selected row/UTF16: %+v", f.selected)

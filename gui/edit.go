@@ -89,7 +89,8 @@ type Edit struct {
 	// change callback — the API call is a deliberate limit reset, not a
 	// stray keystroke, so the trim is loud (callback) but not user-
 	// visible (no toast).
-	maxLength int
+	maxLength      int
+	navigationList *ListWidget
 }
 
 func NewEdit() *Edit {
@@ -525,6 +526,9 @@ func (this *Edit) refreshCompleter() {
 
 func (this *Edit) OnKeyDown(key int, repeat bool) {
 	if !this.IsEnabled() {
+		return
+	}
+	if this.navigationList != nil && this.navigateResultList(key, currentMods() != 0 || IsKeyDown(KeyCtrl), repeat) {
 		return
 	}
 	// macOS uses Command for field editing, while Control remains accepted

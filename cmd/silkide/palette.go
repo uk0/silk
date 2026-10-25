@@ -529,6 +529,7 @@ func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
 	list.SetFillAvailable(true)
 	list.SetSelectionVisible(true)
 	box.AddWidget(list)
+	input.SetNavigationList(list)
 
 	repopulate := func(query string) {
 		cmds := filterCommands(commands, query)
@@ -542,12 +543,13 @@ func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
 
 	input.SigTextChanged(func(_ interface{}, q string) { repopulate(q) })
 
-	// Enter on input runs the first match — common power-user move.
+	// Enter accepts the highlighted match, including input-arrow navigation.
 	input.SigSubmit(func(_ interface{}, _ string) {
-		if list.Count() == 0 {
+		idx := list.ActiveIndex()
+		if idx < 0 || idx >= list.Count() {
 			return
 		}
-		if cmd, ok := list.Item(0).Data.(paletteCommand); ok {
+		if cmd, ok := list.Item(idx).Data.(paletteCommand); ok {
 			selection.choose(dlg, cmd)
 		}
 	})
