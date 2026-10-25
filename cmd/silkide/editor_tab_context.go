@@ -77,6 +77,23 @@ func buildEditorTabContextMenu(menu *gui.Menu, tabs *gui.TabWidget, index int) {
 			}
 		}
 	})
+	for _, spec := range []struct {
+		id, label string
+		mode      editorCloseMode
+	}{
+		{"tab.closeOthers", "Close Other Editors", closeOtherEditors},
+		{"tab.closeRight", "Close Editors to the Right", closeRightEditors},
+		{"tab.closeAll", "Close All Editors", closeAllEditors},
+	} {
+		add(spec.id, spec.label, "close", activeEditorClose == nil && path != "" && len(editorCloseTargets(tabs, ed, spec.mode)) > 0, func() {
+			if _, live := resolveEditorTabTarget(tabs, ed); live != "" {
+				startEditorBatchClose(tabs, ed, spec.mode)
+			}
+		})
+	}
+	if activeEditorClose != nil {
+		add("tab.cancelClose", "Cancel Closing Editors", "stop", !activeEditorClose.cancelled, cancelEditorBatchClose)
+	}
 	add("tab.reopen", "Reopen Closed Editor", "edit-undo", canReopenEditor(tabs), func() { reopenClosedEditor(tabs) })
 	menu.AddSeparator()
 	add("tab.copyPath", "Copy Full Path", "edit-copy", path != "", func() {

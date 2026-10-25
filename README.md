@@ -21,6 +21,26 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Safe background batch close
+
+- Tab menus now provide **Close Other Editors**, **Close Editors to the Right**
+  and **Close All Editors**. File menu and Command Palette include batch close
+  and **Cancel Closing Editors**.
+- Disk checks, Go formatting and conflict-checked saves run off the UI thread;
+  Save All / Discard All / Cancel is asked before removing any document. New or
+  changed buffers are not silently closed. Saved-state updates and removals yield
+  between editors instead of running one large UI loop.
+- Cancellation stops closing; an already-running disk commit may finish.
+  One worker, bounded snapshots, shared file-operation reservations and existing
+  reopen history keep the workflow controlled. Individual Save/Close still use
+  their previous synchronous I/O path.
+- Validation and limitations: [batch-close QA](EDITOR_BATCH_CLOSE_QA_20261024.md).
+  Windows Cancel and Save All were exercised with exact-byte readback; the
+  remaining native workflows and 64-tab stress run are not yet verified because
+  the test machine became unreachable. This is not a full-platform release gate.
+
+<img src="screenshots/windows-editor-batch-close-20261024.png" width="760" alt="Windows editor tab menu with background batch-close commands">
+
 ### Tab context menus
 
 - Right-click an editor tab for **Save**, **Close Editor**, **Reopen Closed Editor**,

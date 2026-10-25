@@ -978,6 +978,7 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 	if tabs == nil || idx < 0 || idx >= tabs.Count() {
 		return false
 	}
+	target := tabs.Stack().Page(idx)
 	var ed *gui.CodeEditor
 	path := ""
 	if st := tabs.Stack(); st != nil {
@@ -995,7 +996,13 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 		return false
 	}
 	if ed != nil && path != "" && editorDiffersFromDisk(ed, path) {
-		switch askDirty(func() gui.DialogResult { return askCloseDirtyEditor(ed, path) }) {
+		decision := askDirty(func() gui.DialogResult { return askCloseDirtyEditor(ed, path) })
+		// A modal dialog pumps callbacks. The original page may have been removed
+		// or replaced at the same path; never save its obsolete buffer in that case.
+		if _, current := resolveEditorTabTarget(tabs, ed); current != path {
+			return false
+		}
+		switch decision {
 		case gui.DialogOK:
 			if !saveEditorToDisk(ed, path) {
 				return false // the write failed; don't drop the buffer too
@@ -1004,6 +1011,25 @@ func closeEditorTab(tabs *gui.TabWidget, idx int) bool {
 		default:
 			return false
 		}
+	}
+	return detachEditorTab(tabs, target, ed, path)
+}
+
+// The irreversible UI cleanup is shared by individual and asynchronous batch
+// closes, after guards finish. Resolve page identity again after nested dialogs.
+func detachEditorTab(tabs *gui.TabWidget, target gui.IWidget, ed *gui.CodeEditor, path string) bool {
+	if tabs == nil || target == nil {
+		return false
+	}
+	idx := -1
+	for i := 0; i < tabs.Count(); i++ {
+		if tabs.Stack().Page(i) == target {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || path != "" && (openEditors[path] != ed || ed == nil || ed.FilePath() != path) {
+		return false
 	}
 	var closed editorSession
 	if ed != nil && path != "" {

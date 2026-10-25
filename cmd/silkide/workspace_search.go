@@ -83,7 +83,7 @@ type workspaceReservedEditor struct {
 }
 
 func prepareWorkspaceReplacement(tabs *gui.TabWidget, canvas *ged.GedView, reps []ged.FileReplacement) (func(error), error) {
-	if workspaceSearchBusy() || activeFileRename != nil || macroBusy || globalDebug != nil || globalDebugAttempt != nil {
+	if activeEditorClose != nil || workspaceSearchBusy() || activeFileRename != nil || macroBusy || globalDebug != nil || globalDebugAttempt != nil {
 		return nil, fmt.Errorf("finish the current file operation, macro expansion or debug session before replacing")
 	}
 	reserved := make(map[string]bool, len(reps))
