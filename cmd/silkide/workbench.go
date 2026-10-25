@@ -35,6 +35,7 @@ type workbench struct {
 	dockVisibility map[*gui.Dock]bool
 	navigation     gui.NavigationStack
 	bookmarks      *editorBookmarks
+	notifications  *notificationsPane
 	closedEditors  closedEditorHistory
 	toolViews      map[workspaceMode]workbenchToolViews
 }

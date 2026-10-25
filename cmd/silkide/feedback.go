@@ -9,7 +9,7 @@ import (
 )
 
 // globalFrame is the topmost silkide window. Toast notifications render
-// inside it, above document content but below the action toolbars, rather
+// inside its bottom-right content area, above the status bar, rather
 // than in independent floating native windows. Set in main()
 // after gui.NewFrameWindow returns; nil before that, and silkideToast
 // is built to no-op in the nil case so panics never reach a user.
@@ -20,7 +20,8 @@ var globalFrame *gui.Frame
 // recording hook without touching the global toast manager — see
 // TestSilkideToast* in feedback_test.go for the pattern.
 //
-// Default duration is 2.5 seconds — long enough to read a short
+// The session history retains messages after expiry; warnings/errors remain
+// for 5 seconds. Default duration is 2.5 seconds — long enough to read a short
 // message, short enough not to crowd the workspace if several toasts
 // fire in succession (e.g. Save + Build + Run all happen on F5).
 //
@@ -32,7 +33,11 @@ var silkideToast = func(msg string, level gui.ToastLevel) {
 	if globalFrame == nil {
 		return
 	}
-	gui.ShowToast(globalFrame, msg, 2500, level)
+	if p := notificationsFor(globalFrame); p != nil {
+		p.record(msg, level)
+	} else {
+		gui.ShowToastWithOptions(globalFrame, msg, gui.ToastOptions{DurationMs: 2500, Level: level, Position: gui.ToastBottomRight})
+	}
 }
 
 // saveDesignDocument is shared by explicit saves and quit/open/new guards.

@@ -234,6 +234,8 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		}
 	})
 
+	add("Show Notifications", "", func() { showNotifications(globalFrame) })
+
 	add("Show Files", "", func() {
 		if globalFileExplorer != nil {
 			revealToolView(editorTabs, designCanvas, globalLeftDock, globalFileExplorer, modeEdit)

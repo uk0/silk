@@ -24,6 +24,8 @@ type toastEntry struct {
 	timer      Timer
 	parent     IWidget
 	manager    *ToastManager
+	position   ToastPosition
+	onActivate func()
 }
 
 // Notifications belong to the owner for coordinate mapping and repainting,
@@ -58,39 +60,48 @@ func ShowToast(parent IWidget, message string, durationMs uint32, level ToastLev
 }
 
 func (mgr *ToastManager) show(parent IWidget, message string, durationMs uint32, level ToastLevel) {
+	mgr.showWithOptions(parent, message, ToastOptions{DurationMs: durationMs, Level: level})
+}
+
+func (mgr *ToastManager) showWithOptions(parent IWidget, message string, options ToastOptions) *Toast {
 	if parent == nil {
-		return
+		return nil
 	}
 	owner := parent.RootWidget()
 	if win := parent.OwnerWindow(); win != nil {
 		owner = win.Widget()
 	}
 	if owner == nil || !owner.IsVisible() {
-		return
+		return nil
 	}
-	// A widget has one overlay host; preserve that identity even if an
-	// explicitly created manager is used alongside the global convenience API.
 	if existing := owner.NakedWidget().toastManager; existing != nil && existing != mgr {
-		existing.show(parent, message, durationMs, level)
-		return
+		return existing.showWithOptions(parent, message, options)
+	}
+	// Bounded, owner-isolated expiry work even for a burst of worker completions.
+	count := 0
+	var oldest *toastEntry
+	for _, entry := range mgr.toasts {
+		if entry.parent == owner {
+			count++
+			if oldest == nil {
+				oldest = entry
+			}
+		}
+	}
+	if count >= 8 {
+		mgr.dismiss(oldest)
 	}
 	owner.NakedWidget().toastManager = mgr
 	entry := new(toastEntry)
 	entry.Init(entry)
 	entry.SetFocusPolicy(NoFocus)
-	entry.message = message
-	entry.level = level
-	entry.durationMs = durationMs
-	entry.parent = owner
-	entry.manager = mgr
+	entry.message, entry.level, entry.durationMs = message, options.Level, options.DurationMs
+	entry.position, entry.onActivate = options.Position, options.OnActivate
+	entry.parent, entry.manager = owner, mgr
 	mgr.toasts = append(mgr.toasts, entry)
 	mgr.layoutToasts(owner)
-
-	// Use a Timer to dismiss on the UI thread
-	entry.timer.Start(durationMs, func() {
-		entry.timer.Stop()
-		mgr.dismiss(entry)
-	})
+	entry.timer.Start(options.DurationMs, func() { mgr.dismiss(entry) })
+	return &Toast{entry: entry}
 }
 
 func (mgr *ToastManager) dismiss(entry *toastEntry) {
@@ -110,6 +121,8 @@ func (mgr *ToastManager) dismiss(entry *toastEntry) {
 	entry.SetVisible(false)
 	entry.parent = nil
 	entry.manager = nil
+	entry.onActivate = nil
+	entry.message = ""
 	if parent != nil {
 		mgr.layoutToasts(parent)
 	}
@@ -120,30 +133,45 @@ func (mgr *ToastManager) layoutToasts(parent IWidget) {
 		return
 	}
 	w, h := parent.Size()
-	top := 0.0
+	left, top, right, bottom := 0.0, 0.0, math.Max(0, w), math.Max(0, h)
 	if frame, ok := parent.(*Frame); ok && frame.root_ != nil {
-		// Keep the menu and action toolbars accessible while feedback is shown.
-		_, top, _, _ = frame.root_.Bounds()
+		// Exclude menu/toolbars, sidebar and status bar for both placements.
+		x, y, cw, ch := frame.root_.Bounds()
+		left, top = math.Max(0, x), math.Max(0, y)
+		right, bottom = math.Min(right, x+math.Max(0, cw)), math.Min(bottom, y+math.Max(0, ch))
 	}
-	margin := math.Min(12, math.Max(0, w*.05))
-	toastW := math.Min(320, math.Max(0, w-2*margin))
-	startY := math.Min(math.Max(0, h), top+12)
+	lowerHalf := top + (bottom-top)*.5
+	width := math.Max(0, right-left)
+	margin := math.Min(12, width*.05)
+	toastW := math.Min(320, math.Max(0, width-2*margin))
+	top, bottom = top+12, bottom-12
 	count := 0
-	// Newest first: rapid saves or a build burst must not hide the latest
-	// result below the bottom edge. Older entries remain timed but not drawn.
+	// Newest first. Opposite placements share the available strip so that
+	// mixed top/bottom stacks cannot overlap each other in a small owner.
 	for i := len(mgr.toasts) - 1; i >= 0; i-- {
 		t := mgr.toasts[i]
 		if t.parent != parent {
 			continue
 		}
 		count++
-		fits := toastW >= 24 && startY+48 <= h-12
-		t.SetVisible(fits)
-		if fits {
-			t.SetBounds((w-toastW)*.5, startY, toastW, 48)
-			startY += 56
+		fits := toastW >= 24 && top+48 <= bottom
+		if t.position == ToastBottomRight {
+			fits = fits && bottom-48 >= lowerHalf
 		}
+		t.SetVisible(fits)
+		if !fits {
+			continue
+		}
+		x, y := left+(width-toastW)*.5, top
+		if t.position == ToastBottomRight {
+			x, y = right-margin-toastW, bottom-48
+			bottom = y - 8
+		} else {
+			top += 56
+		}
+		t.SetBounds(x, y, toastW, 48)
 	}
+
 	if count == 0 {
 		parent.NakedWidget().toastManager = nil
 	}
@@ -251,7 +279,7 @@ func (this *toastEntry) Draw(g paint.Painter) {
 	if w < 76 {
 		textLeft = 10
 	}
-	msg := elideToWidth(msgFont, this.message, w-40.0-textLeft)
+	msg := elideToWidth(msgFont, notificationPreview(this.message), w-40.0-textLeft)
 	ext := msgFont.TextExtents(msg)
 	tx := textLeft - ext.XBearing
 	ty := 0.5*(h+ext.YBearing) - ext.YBearing
@@ -285,6 +313,11 @@ func (this *toastEntry) OnLeftDown(x, y float64) {
 		x >= closeX-12 && x <= closeX+12 && y >= closeY-12 && y <= closeY+12 && this.manager != nil {
 		this.manager.dismiss(this)
 		return
+	}
+	if x >= 0 && x < w && y >= 0 && y < h && this.manager != nil && this.onActivate != nil {
+		activate := this.onActivate
+		this.manager.dismiss(this)
+		activate()
 	}
 }
 

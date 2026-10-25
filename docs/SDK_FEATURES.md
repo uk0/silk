@@ -40,6 +40,38 @@
 | 缩进配置 | `CodeEditor.InsertSpaces/SetInsertSpaces`、`TabSize/SetTabSize` | 默认 Tab；空格模式 Tab 对齐下一逻辑制表位，宽度 1–16 |
 | 行缩进事务 | `IndentLines/OutdentLines`、`IndentSelection/DedentSelection` | 保留原始字节、选区方向及历史；一次 Undo 恢复整组，重复光标所在行只修改一次 |
 
+### 可操作提示与有界通知面板
+
+`ShowToastWithOptions(parent, message, ToastOptions{...}) *Toast` 仍在宿主窗口
+内部绘制，不创建独立原生窗口、不获取焦点。`ToastBottomRight` 限定在内容下半区，
+避开 Frame 工具栏／状态栏；过小空间隐藏而非挤到顶部。`ToastTopCenter` 是默认位置，
+原 `ShowToast` 签名及顶部位置保留。每个宿主最多 8 条活跃提示，超额淘汰最旧项。
+
+```go
+banner := gui.ShowToastWithOptions(frame, "请求完成，点击查看结果", gui.ToastOptions{
+    Level: gui.ToastSuccess, Position: gui.ToastBottomRight, DurationMs: 2500,
+    OnActivate: func() { /* 在提示销毁之后打开详情 */ },
+})
+// nil、到期或已销毁均安全；不会重复触发回调。
+banner.Dismiss()
+```
+
+Options 的零时长使用 2500 ms；原 ShowToast 的时长语义不变。关闭 × 只关闭，
+不执行 OnActivate；提示正文点击会被消费，不透传给下方控件。
+
+`NotificationPanel` 新增 `SetLimit/Limit`（0 为兼容的无限制，正数保留最新 N 条）、
+`SelectedIndex/SelectedItem/Select`、`UnreadCount/MarkAllRead`，以及
+`SigItemsChanged/SigSelectionChanged`。`Items()` 返回分离快照，不能通过改切片
+悄悄修改内部模型。Select 标为已读、滚动可见，但不触发 SigClick；鼠标／Enter／
+Space 激活，方向键／Home／End／PageUp／PageDown 导航。缩减容量和删除行维护选区，
+回调中清空列表不会再触发旧行。所有调用及回调均限 UI 线程；后台结果先经 `gui.Post`。
+
+显示只处理可见行，标题／时间／消息预览先限制到 256 个 rune，再按宽度省略；
+控制字符变空格，完整消息仍可通过 SelectedItem 获取。SDK 的单条消息本身不截断。
+IDE 组合此面板与只读详情框，额外施加 200 条／每条 64 KiB 上限，历史仅保留本次
+会话，不写盘。工具按钮自动换行，窄面板上下分栏。没有常驻刷新定时器或后台轮询。
+验证与未覆盖范围见 [通知 QA](../NOTIFICATIONS_QA_20261025.md)。
+
 ### 显式空白清理与文件末尾换行
 
 `CodeEditor.TrimTrailingWhitespaceChecked() error` 一次性删除各行 LF／CRLF／EOF

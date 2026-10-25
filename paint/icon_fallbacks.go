@@ -13,6 +13,7 @@ type proceduralIconDrawer func(size int, cc *cairo.Context)
 // LoadIcon is called with elsewhere in the tree.
 var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"whitespace-trim":    drawWhitespaceTrim,
+	"notifications":      drawNotificationBell,
 	"newline-insert":     drawNewlineInsert,
 	"cursor-add-above":   drawCaretCommand(-1),
 	"cursor-add-below":   drawCaretCommand(1),

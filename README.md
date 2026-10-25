@@ -21,6 +21,20 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Non-blocking feedback and notification history
+
+- IDE banners now stay at the bottom-right, above the status bar, instead of
+  covering document tabs. They never create a floating native window or steal
+  focus. Clicking a banner opens its details; the close button only dismisses it.
+- **View → Show Notifications**, the Command Palette and the status-bar bell
+  open session history with full-message copying, keyboard selection, unread
+  counts, selected-item removal and Clear All. History retains 200 messages,
+  capped at 64 KiB each with an explicit truncation marker.
+- The SDK gains actionable toast handles/placement and bounded, keyboard-accessible
+  `NotificationPanel` state. Previews are bounded before shaping and updates are
+  event-driven, with no new idle polling. See [SDK guide](docs/SDK_FEATURES.md)
+  and [verification / limits](NOTIFICATIONS_QA_20261025.md).
+
 ### Explicit text cleanup
 
 - **Edit → Text Cleanup** and the Command Palette now share **Trim Trailing

@@ -730,6 +730,9 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// Runtime log pane — sibling of BuildOutput. Records silkide's
 		// own lifecycle events (file opens, build/debug/LSP up-down) via
 		// logEvent. Distinct from BuildOutput's raw toolchain stream.
+		w.notifications = newNotificationsPane(frame, bottomDock)
+		bottomDock.AddView(w.notifications)
+
 		globalLog = ged.NewLogPanel()
 		bottomDock.AddView(globalLog)
 
@@ -1261,6 +1264,9 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 			globalSearch.CloseSearch()
 		}
 		closeGitPaneRefreshers()
+		if p := notificationsFor(frame); p != nil {
+			p.close()
+		}
 		if w := globalWorkbench; w != nil && w.bookmarks != nil {
 			w.bookmarks.close()
 		}
@@ -1553,6 +1559,7 @@ func buildStatusBar(frame *gui.Frame) *gui.StatusBar {
 	// Do not show invented branch/caret values or a hard-coded Go version.
 	// This is the IDE runtime, not a claim about the workspace toolchain.
 	sb.AddIconLabel("", "Runtime "+runtime.Version())
+	sb.AddPermanentWidget(newNotificationsStatusButton(frame))
 	statusBarLSPButton = newLSPStatusButton(frame)
 	sb.AddPermanentWidget(statusBarLSPButton)
 	refreshLSPActivity()

@@ -184,6 +184,7 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				revealToolView(tabs, canvas, panel.dock, panel.view, preferredToolMode(panel.view))
 			})
 		}
+		add("view.notifications", "Show Notifications", "notifications", "", notificationsFor(globalFrame) != nil, func() { showNotifications(globalFrame) })
 		addWorkbenchPanelsMenu(menu)
 	case "Design":
 		if design && canvas.Selection().Count() == 1 {
