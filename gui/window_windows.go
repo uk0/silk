@@ -299,19 +299,14 @@ func updateCursor() {
 //		}
 //		return p
 //	}
-var uiThread win32.HANDLE
-
 func (this *Window) create(p *Window, wt WindowType) error {
+	// GetCurrentThread is the same pseudo-handle on every thread. Reject
+	// misuse before touching owner state or calling synchronous Win32 APIs.
+	if !IsUIThread() {
+		return ErrUIThread
+	}
 	if wt == WtPopup {
 		this.popupOwner, this.popupRestoreFocus = p, focusWidget
-	}
-	ht := win32.GetCurrentThread()
-	if uiThread == 0 {
-		uiThread = ht
-	} else {
-		if uiThread != ht {
-			panic("uiThread != ht")
-		}
 	}
 	if this.hWnd != 0 {
 		return core.StrErr("win seams already inited.")

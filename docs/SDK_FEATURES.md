@@ -1512,3 +1512,50 @@ _ = selected
 - 翻译在构建／重新设置标准按钮时解析，不实时重译已经打开的全部界面。宿主可在
   导入 SDK 后覆盖默认译文，未知语言仍回退原文。验证范围见
   [弹窗细节 QA](../DIALOG_POLISH_QA_20261026.md)。
+
+## 同步 UI 调用、可取消投递与高频进度合并
+
+新增可组合的事件驱动接口（不创建轮询线程）：
+
+| API | 用途 |
+| --- | --- |
+| `gui.IsUIThread()` | 查询调用者是否是事件循环所属线程；不表示循环已经启动 |
+| `gui.Invoke(ctx, func() error)` | 工作线程同步等待一个短 UI 操作；UI 线程调用时直接执行 |
+| `gui.InvokeValue[T](ctx, func() (T, error))` | 返回类型安全的 UI 查询／操作结果，无需共享输出变量 |
+| `gui.PostContext(ctx, func())` | 投递到下一轮；执行前 context 已取消则丢弃 |
+| `gui.NewLatestUI[T](consume)` | 合并进度、预览等可替换快照，每实例最多一个待执行／执行中投递 |
+| `Widget.TryAttachWindow(wt)` | 返回原生附加错误，错误线程／无父级 child 在修改控件前被拒绝 |
+
+```go
+// 在后台 goroutine 中；窗口创建与属性访问只发生在 UI callback 中。
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+text, err := gui.InvokeValue(ctx, func() (string, error) {
+    return input.Text(), nil
+})
+_ = text
+_ = err
+
+// 在 UI 线程创建，并在接收控件销毁前 Close。
+progress, err := gui.NewLatestUI(func(percent int) {
+    label.SetText(fmt.Sprintf("%d%%", percent))
+})
+_ = err
+// 工作线程可调用 progress.Publish(percent)。
+// 关闭时：progress.Close()
+```
+
+- `Invoke`／`InvokeValue` 的队列等待可以取消；尚未开始的 callback 被退休并释放捕获引用。
+  **已开始的 callback 不能抢占**，可能在调用者返回 `ctx.Err()` 后结束。应通过返回值传递结果，
+  不要写工作线程的局部输出变量，不要在 UI 内等待正在等待 UI 的工作线程。
+- `Invoke` 的 panic 以 `*gui.UIInvocationPanicError` 返回，`errors.As` 可识别，若 panic 值是 error，
+  `errors.Is` 可追溯；禁止 callback 使用 `runtime.Goexit`。普通 `Post` 的日志行为保持不变。
+- `Invoke`／`InvokeValue`／`PostContext` 的 nil context／callback 返回 `ErrUIInvalid`；
+  `NewLatestUI` 的 nil consumer 沿用 `async.ErrInvalid`。无后端线程身份时 `Invoke` 返回 `ErrUIUnavailable`。停止的循环不会处理
+  队列，因此工作线程必须设置 deadline。`PostContext` 不返回完成通知，捕获对象保留到队列执行该槽。
+- `NewLatestUI` 复用 `async.Latest`，不会为每个进度创建 goroutine；中间值可丢弃，不替代逐条事件流。
+- 原生 Win32 创建检查改用真实线程身份，而非 `GetCurrentThread()` 伪句柄。
+  现有 `AttachWindow` 保持签名；需要错误反馈时使用 `TryAttachWindow`。
+  **其他控件方法仍是 UI-thread-only**，这些 API 并非为整个控件树加锁。
+
+运行示例：`go run ./examples/ui-dispatch`。

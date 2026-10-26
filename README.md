@@ -21,6 +21,20 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Typed UI dispatch and cancellable SDK updates
+
+- `Invoke` / `InvokeValue` marshal short worker calls to the UI and return results;
+  UI-thread calls execute inline. Cancellation retires work not yet started.
+- `PostContext` drops stale queued updates; `NewLatestUI` coalesces progress with
+  one pending delivery instead of flooding the event queue.
+- `TryAttachWindow` reports attachment errors and rejects wrong-thread calls
+  before widget mutation. Win32 creation now checks actual thread identity.
+- Caption elision tolerates floating-point layout round trips rather than
+  truncating a fully fitting label. Run `go run ./examples/ui-dispatch`; see
+  [SDK dispatch QA](SDK_DISPATCH_QA_20261026.md) for verified scope and limitations.
+
+![SDK UI dispatch on Windows](screenshots/sdk-dispatch-20261026-windows.png)
+
 ### Consistent dialog language and window identity
 
 - Standard `@ok` / `@cancel` / save-family buttons now translate their captions

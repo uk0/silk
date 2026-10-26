@@ -766,7 +766,7 @@ func (this *Widget) Hide() {
 //func (this *Widget) OnHide() {
 //}
 
-func (this *Widget) syncWindow(visible, lazy bool) {
+func (this *Widget) syncWindow(visible, lazy bool) error {
 	previous := this.win
 	defer func() {
 		if previous != this.win {
@@ -781,7 +781,7 @@ func (this *Widget) syncWindow(visible, lazy bool) {
 
 	if this.win == nil && this.wt != WtInherit {
 		if lazy && !visible {
-			return
+			return nil
 		}
 		if this.wt == WtChild && this.OwnerWindow() == nil {
 			panic("")
@@ -795,6 +795,7 @@ func (this *Widget) syncWindow(visible, lazy bool) {
 		err := this.win.create(owner, this.wt)
 		if err != nil {
 			this.win = nil
+			return err
 		} else if this.wt == WtForm {
 			// Set identity before first visibility. Popups/embedded children do
 			// not need native title/taskbar icons or their raster allocations.
@@ -805,6 +806,7 @@ func (this *Widget) syncWindow(visible, lazy bool) {
 	if this.win != nil {
 		this.win.setVisible(visible)
 	}
+	return nil
 }
 
 func (this *Widget) DetachWindow() {
@@ -820,7 +822,29 @@ func (this *Widget) LazyAttachWindow(wt WindowType) {
 
 func (this *Widget) AttachWindow(wt WindowType) {
 	this.wt = wt
-	this.syncWindow(this.IsVisible(), false)
+	_ = this.syncWindow(this.IsVisible(), false)
+}
+
+// TryAttachWindow is the error-reporting attachment API. It rejects wrong-thread
+// calls before reading or changing widget state. Other widget methods remain
+// UI-thread-only; this does not make arbitrary concurrent widget mutation safe.
+// Existing native windows may be replaced when changing type, so native creation
+// errors do not promise to restore an already-destroyed previous native window.
+func (this *Widget) TryAttachWindow(wt WindowType) error {
+	if !IsUIThread() {
+		return ErrUIThread
+	}
+	if wt < WtInherit || wt > WtChild {
+		return core.StrErr("gui: invalid window type")
+	}
+	if wt == WtChild {
+		parent := this.Parent()
+		if parent == nil || parent.OwnerWindow() == nil {
+			return core.StrErr("gui: child window requires an owner")
+		}
+	}
+	this.wt = wt
+	return this.syncWindow(this.IsVisible(), false)
 }
 
 func (this *Widget) IsPopup() bool {

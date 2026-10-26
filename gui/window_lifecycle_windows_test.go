@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/uk0/silk/win32"
@@ -8,6 +9,13 @@ import (
 
 func isolateWindowsPopupState(t *testing.T) {
 	t.Helper()
+	// Go tests run outside the package-init UI thread. Each isolated fixture
+	// owns its own locked native thread, never a migrated test goroutine.
+	runtime.LockOSThread()
+	thread := win32.GetCurrentThreadId()
+	oldOwner := uiThreadOwner
+	uiThreadOwner = func() bool { return win32.GetCurrentThreadId() == thread }
+	t.Cleanup(func() { uiThreadOwner = oldOwner; runtime.UnlockOSThread() })
 	oldMap, oldCapture, oldFocus := winMap, captureStack, focusWidget
 	oldHover, oldMouse, oldTooltip, oldActive := mouseHoverWidget, lastMouseWidget, currentTooltip, activeForm
 	winMap = make(map[win32.HWND]*Window)

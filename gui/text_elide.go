@@ -20,6 +20,9 @@ const elideMark = "…"
 // whole rather than summing per-rune advances: kerning makes the width of a
 // string more than the sum of its parts.
 func elideToWidth(f paint.Font, s string, max float64) string {
+	// Subtracting padding from a measured cell can lose a few ULPs. This
+	// sub-pixel tolerance avoids replacing a fully fitting CJK caption.
+	max += 1e-7
 	if f.TextExtents(s).Width <= max {
 		return s
 	}
