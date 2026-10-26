@@ -185,7 +185,7 @@ func (this *WidgetList) rebuildFlatList() {
 			indicator = "▶ "
 		}
 		this.Append(gui.ListItem{
-			Text: indicator + cat.name,
+			Text: indicator + paletteCategoryLabel(cat.name),
 			Data: catHeaderData{index: ci},
 		})
 		// Add widget items if expanded
@@ -303,7 +303,7 @@ func (this *WidgetList) Draw(g paint.Painter) {
 			g.SetBrush1(theme.TextColor)
 			fe := boldFont.FontExtents()
 			textY := y + fe.Ascent + (rh-fe.Height)*0.5
-			g.DrawText1(22, textY, cat.name)
+			g.DrawText1(22, textY, paletteCategoryLabel(cat.name))
 			continue
 		}
 
@@ -372,6 +372,21 @@ func drawTriangleRight(g paint.Painter, x, y, size float64) {
 
 // drawWidgetIcon renders a small recognizable icon for each widget type.
 func drawWidgetIcon(g paint.Painter, factoryName string, x, y, size float64) {
+	if size <= 0 || math.IsNaN(size) || math.IsInf(size, 0) {
+		return
+	}
+	// Every palette glyph owns one square. Normalize the legacy geometry to
+	// 18 logical pixels, and isolate clips/transforms from the row label.
+	state := g.Save()
+	defer g.RestoreTo(state)
+	g.Rectangle(x, y, size, size)
+	g.Clip()
+	g.Translate(x, y)
+	g.Scale(size/18, size/18)
+	drawWidgetIconContents(g, factoryName, 0, 0, 18)
+}
+
+func drawWidgetIconContents(g paint.Painter, factoryName string, x, y, size float64) {
 	s := size
 	shortName := factoryName
 	if idx := strings.LastIndex(factoryName, "."); idx >= 0 {
@@ -987,17 +1002,28 @@ func drawWidgetIcon(g paint.Painter, factoryName string, x, y, size float64) {
 		g.Stroke()
 
 	case "Rating":
-		// 5 stars
-		starR := s * 0.14
-		for i := 0; i < 5; i++ {
-			sx := x + 2 + float64(i)*(starR*2+1)
-			sy := y + s/2
-			if i < 3 {
-				g.SetBrush1(paint.Color{R: 245, G: 180, B: 40, A: 255})
-			} else {
-				g.SetBrush1(paint.Color{R: 200, G: 205, B: 215, A: 255})
+		// Three real stars remain recognizable at toolbar size. The previous
+		// five circles occupied 31px in an 18px slot and painted over the name.
+		for i := 0; i < 3; i++ {
+			cx, cy := x+3+float64(i)*6, y+s/2
+			color := paint.Color{R: 245, G: 180, B: 40, A: 255}
+			if i == 2 {
+				color = paint.Color{R: 150, G: 160, B: 175, A: 255}
 			}
-			g.Arc(sx+starR, sy, starR, 0, 2*math.Pi)
+			g.SetBrush1(color)
+			for point := 0; point <= 10; point++ {
+				radius := 2.9
+				if point%2 != 0 {
+					radius *= 0.45
+				}
+				angle := -math.Pi/2 + float64(point)*math.Pi/5
+				px, py := cx+math.Cos(angle)*radius, cy+math.Sin(angle)*radius
+				if point == 0 {
+					g.MoveTo(px, py)
+				} else {
+					g.LineTo(px, py)
+				}
+			}
 			g.Fill()
 		}
 

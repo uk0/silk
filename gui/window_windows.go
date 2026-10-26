@@ -24,9 +24,8 @@ const (
 	formClassName  = "SILK_GUI_FORM"
 	popupClassName = "SILK_GUI_POPUP"
 	WM_END_MODAL   = 0x8677
-	// WM_UI_WAKEUP carries no payload: it exists so a gui.Post from a worker
-	// goroutine makes GetMessage return. MainLoop and the modal loop both route
-	// it through handleNonUIMessages, which treats it as a no-op.
+	// WM_UI_WAKEUP carries no payload. Its message-only window is dispatched
+	// by both Silk's pump and native modal loops.
 	WM_UI_WAKEUP = 0x8678
 )
 
@@ -95,6 +94,7 @@ type Window struct {
 	widget                                                        IWidget
 	wt                                                            WindowType
 	title                                                         string
+	icon                                                          paint.Icon
 	// WM_SETICON does not transfer ownership to the window manager. Keep only
 	// handles created by this Window; the previous OS handle may be shared.
 	ownedIcons     [2]win32.HICON // ICON_SMALL, ICON_BIG
@@ -136,16 +136,10 @@ func init() {
 	uiThreadId = win32.GetCurrentThreadId()
 	initializeWindowsDPI()
 
-	// Let an off-thread gui.Post nudge the pump: GetMessage blocks until this
-	// thread's queue has something in it, so without a wakeup a posted task
-	// waited for the next 47ms WM_TIMER — and waited forever if that timer was
-	// ever stopped. A thread-targeted post is the only kind a worker may make:
-	// window handles belong to this thread and must not be touched from
-	// another. OS-owned modal loops (menu tracking, a move/size drag, a native
-	// file dialog) discard thread messages, so the idle timer stays as the
-	// backstop there. window_glfw.go installs glfw.PostEmptyEvent for the same
-	// reason.
-	SetUIWakeup(func() { win32.PostThreadMessage(uiThreadId, WM_UI_WAKEUP, 0, 0) })
+	// PostMessage to an HWND is safe from workers; window creation/destruction
+	// remain on the owning thread. Unlike PostThreadMessage, this reaches an
+	// actual WndProc when OLE, native menus or dialogs own the message loop.
+	startUIMessageWindow()
 
 	// Off-thread widget mutation is silent corruption in this framework;
 	// under SILK_DEBUG, name the offender (see uithread.go).
@@ -420,19 +414,13 @@ func (this *Window) destroy() {
 }
 
 func (win *Window) releaseWindowIcons() {
+	win.icon = nil
 	for i, icon := range win.ownedIcons {
 		win.ownedIcons[i] = 0
 		if icon != 0 {
 			win32.DestroyIcon(icon)
 		}
 	}
-}
-
-func (win *Window) releaseBackBuffer() {
-	paint.ClosePainter(win.backPainter)
-	paint.CloseSurface(win.backBuffer)
-	win.backPainter, win.backBuffer = nil, nil
-	win.backWidth, win.backHeight = 0, 0
 }
 
 // forgetWidgetsOfWindow drops the package-level widget pointers that belong to
@@ -483,27 +471,13 @@ func forgetWidgetsOfWindow(win *Window) {
 }
 
 func (this *Window) getBackBuffer(s0 paint.Surface, width, height int) (backPainter paint.Painter, backBuffer paint.Pixmap) {
-	width = (width + 15) / 16 * 16
-	height = (height + 15) / 16 * 16
-	if width == 0 {
-		width = 1
-	}
-	if height == 0 {
-		height = 1
-	}
-	if width != this.backWidth || height != this.backHeight {
-		this.releaseBackBuffer()
-		this.backWidth = width
-		this.backHeight = height
-		this.backBuffer = paint.NewPixmap(width, height)
-		//this.backBuffer = s0.NewSimilar(width, height, true, false)
+	// Preserve the GDI allocation granularity while sharing explicit ownership.
+	width = (max(1, width) + 15) / 16 * 16
+	height = (max(1, height) + 15) / 16 * 16
+	this.ensureBackBuffer(width, height)
+	if this.backPainter == nil {
 		this.backPainter = this.backBuffer.NewPainter()
-		//core.Debug("backBuffer.type = ", this.backBuffer.SurfaceType())
-		//if w1, h1 := this.backBuffer.Width(), this.backBuffer.Height(); w1 != width || h1 != height {
-		//	core.Debug("failed to create backbuffer: ", w1, width, h1, height)
-		//}
 	}
-
 	return this.backPainter, this.backBuffer
 }
 
@@ -832,10 +806,20 @@ func (this *Window) setIcon(icon paint.Icon, small bool) {
 	}
 }
 
+// Clear only handles owned by this window, restoring the class/default icon.
+func (this *Window) clearIcon() {
+	if this.hWnd != 0 {
+		win32.SendMessage(this.hWnd, win32.WM_SETICON, win32.ICON_SMALL, 0)
+		win32.SendMessage(this.hWnd, win32.WM_SETICON, win32.ICON_BIG, 0)
+	}
+	this.releaseWindowIcons()
+}
+
 func (this *Window) SetIcon(icon paint.Icon) {
-	if icon == nil {
+	if this.hWnd == 0 || icon == nil || icon.IsAir() {
 		return
 	}
+	this.icon = icon
 	this.setIcon(icon, true)
 	this.setIcon(icon, false)
 }
@@ -1730,10 +1714,12 @@ func handleNonUIMessages(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	}()
 	switch msg {
 	case win32.WM_TIMER:
-		if f, ok := timerMap[wParam]; ok {
-			f()
-			return 0
+		if lParam != 0 {
+			win32.DispatchMessage(&win32.MSG{Message: msg, WParam: wParam, LParam: lParam})
+		} else {
+			dispatchUITimer(wParam)
 		}
+		return 0
 	case WM_UI_WAKEUP:
 		// Nothing to do: getting here already means GetMessage returned, and
 		// the caller runs serviceUIFrame (drainUITasks) right after.
@@ -1845,6 +1831,15 @@ func markAllWindowsDirty() {
 
 func MainLoop() {
 	core.Debug("MainLoop()")
+	startUIMessageWindow()
+	if idleTimer == 0 {
+		idleTimer.Start(47, onIdleTimer)
+	}
+	defer func() {
+		idleTimer.Stop()
+		renderTimer.Stop()
+		stopUIMessageWindow()
+	}()
 	defer func() {
 		if e := recover(); e != nil {
 			core.Warn(fmt.Sprintf("Recover MainLoop() : %v ", e))
@@ -2046,9 +2041,10 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 		for pw := range enabledMap {
 			pw.SetEnabled(true)
 		}
+		this.restoreModalOwnerActivation(owner)
 		this.Close()
-		// Destruction clears the modal's logical focus. Win32 reactivates the
-		// owner HWND, but does not know which Go widget should receive text.
+		// Destruction clears the modal's logical focus. Native activation alone
+		// does not know which Go widget should receive text.
 		// Restore only when nothing else explicitly claimed focus. Do not call
 		// SetForegroundWindow: closing a modal must not steal another app's focus.
 		if owner != nil && owner.IsVisible() && owner.IsEnabled() && focusWidget == nil {

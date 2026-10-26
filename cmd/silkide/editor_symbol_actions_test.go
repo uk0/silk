@@ -82,3 +82,22 @@ func TestOpenedEditorContextCommandsReportMissingLSPWithoutLocalFallback(t *test
 		t.Fatal("F2 rename differs from context rename")
 	}
 }
+
+func TestIDEContextRenameHintMatchesRegisteredF2(t *testing.T) {
+	e := gui.NewCodeEditor()
+	defer e.CancelSymbolIndex()
+	e.SetText("package main")
+	configureEditorSymbolActions(nil, e)
+	m := gui.NewPopupMenu()
+	e.BuildContextMenu(m, 0, 0)
+	defer m.Clear()
+	for _, item := range m.Items() {
+		if b, ok := item.(*gui.Button); ok && b.ShortcutText() == "F2" {
+			if b.Icon() == nil || !b.IsEnabled() {
+				t.Fatal("IDE rename presentation unavailable")
+			}
+			return
+		}
+	}
+	t.Fatal("IDE context menu did not advertise its F2 binding")
+}

@@ -9,3 +9,5 @@ func nativeHasMarkedText(window *glfw.Window) bool { return false }
 func nativeMouseButtonEventPosition(window *glfw.Window, button glfw.MouseButton, action glfw.Action) (float64, float64, bool) {
 	return 0, 0, false
 }
+
+func nativeScrollEventPosition(window *glfw.Window) (float64, float64, bool) { return 0, 0, false }

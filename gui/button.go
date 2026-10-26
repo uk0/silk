@@ -109,7 +109,11 @@ func (this *Button) OnLeftDown(x, y float64) {
 		if bar, ok := this.Parent().(*Menu); ok && !bar.IsPopup() && !bar.IsVertical() {
 			_, menuHeader = this.subPopup.(*Menu)
 		}
-		if !menuHeader {
+		preserveFocus := menuHeader
+		if bar, ok := this.Parent().(*ToolBar); ok && bar.PreserveContentFocus() {
+			preserveFocus = true
+		}
+		if !preserveFocus {
 			this.SetFocus()
 		}
 		this.Self().Update()

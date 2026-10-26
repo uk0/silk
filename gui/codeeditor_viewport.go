@@ -91,6 +91,9 @@ func (e *CodeEditor) textColumnAtX(s string, x float64) int {
 	if x < 0 || len(s) == 0 {
 		return 0
 	}
+	if layout := e.clusterTextGeometry(s); layout != nil {
+		return clusterColumnAtX(layout, x)
+	}
 	lo, hi := 0, 1
 	width := func(c int) (EditorTextPosition, float64) {
 		p := textPositionInLine(s, c)
@@ -261,7 +264,7 @@ func (e *CodeEditor) boundedColumnX(line, col int, right float64) float64 {
 	if col < 0 || col > limit {
 		col = limit
 	}
-	return e.measureText(e.linePrefix(line, col))
+	return e.columnAdvance(line, col)
 }
 func (e *CodeEditor) fillColumnSpan(g paint.Painter, v editorInkViewport, line, a, b int, origin, y, height, minWidth, endPadding float64) {
 	guard := math.Max(1024, 2*math.Max(v.right-v.left, v.bottom-v.top))

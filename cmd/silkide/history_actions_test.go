@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
-	"strings"
+	"github.com/uk0/silk/i18n"
 	"testing"
 )
 
@@ -140,7 +140,7 @@ func TestHistoryPaletteAvailabilityAndExecutionGuards(t *testing.T) {
 	if undo.Available == nil || redo.Available == nil || undo.available() || redo.available() {
 		t.Fatal("initial palette availability")
 	}
-	if !strings.Contains(undo.displayText(), "Unavailable") {
+	if paletteRowPresentation(undo).TrailingText != i18n.T("Unavailable") {
 		t.Fatal("missing unavailable hint")
 	}
 	s := &paletteSelection{}

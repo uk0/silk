@@ -57,9 +57,6 @@ func (this *MessageBox) ShowModal() string {
 	if win == nil {
 		return ""
 	}
-	if this.Icon() != nil {
-		win.SetIcon(this.Icon())
-	}
 	win.MoveToCenter()
 	result := win.ShowModal(this.focusMessage)
 	this.lastError = win.ModalError()

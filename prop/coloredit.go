@@ -68,6 +68,11 @@ func (this *ColorEdit) UpdateValue() {
 	this.syncing = true
 	this.picker.SetColor(c)
 	this.syncing = false
+	text := this.item.MultiValueHint()
+	if text == "" {
+		text = c.String()
+	}
+	gui.SetToolTip(this.Self(), this.item.Label()+"\n"+text)
 	this.Self().Update()
 }
 
@@ -96,6 +101,7 @@ func (this *ColorEdit) onPicked(c paint.Color) {
 		return
 	}
 	this.item.SetValue(c)
+	this.UpdateValue()
 	this.HideSubPopup()
 	this.Self().Update()
 }
@@ -119,12 +125,7 @@ func (this *ColorEdit) Draw(g paint.Painter) {
 	if text == "" {
 		text = this.picker.Color().String()
 	}
-	if t.Font != nil {
-		fe := t.Font.FontExtents()
-		g.SetFont(t.Font)
-		g.SetBrush1(t.TextColor)
-		g.DrawText1(t.EditPadding.L, (h+fe.Ascent-fe.Descent)/2, text)
-	}
+	drawPropertyText(g, t.Font, t.TextColor, t.EditPadding.L, 0, w-t.EditPadding.L-t.EditPadding.R-16, h, text)
 
 	// Drop-down arrow: without it the row is indistinguishable from the text
 	// box a color used to get, and nothing says the picker is a click away.

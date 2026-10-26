@@ -78,20 +78,11 @@ func runesEqual(a, b []rune) bool {
 
 // --- Rename mode for CodeEditor ---
 
-// activateRename enters rename mode, pre-filling the word at the cursor.
+// activateRename dispatches the keyboard command through the same host-aware
+// path as the menu, never a blind textual replacement.
 func (this *CodeEditor) activateRename() {
-	if this.readOnly {
-		return
-	}
-	word := this.wordAtCursor()
-	if word == "" {
-		return
-	}
-	this.renameActive = true
-	this.renameWord = word
-	this.renameText = word
-	this.renameCursorPos = len([]rune(word))
-	this.Self().Update()
+	// Keyboard and context-menu commands share the host-aware semantic path.
+	this.RequestRenameSymbol()
 }
 
 // renameAccept performs the whole-word rename and pushes to undo stack.

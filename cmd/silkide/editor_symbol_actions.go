@@ -11,6 +11,7 @@ func configureEditorSymbolActions(tabs *gui.TabWidget, editor *gui.CodeEditor) {
 		func(t *gui.TabWidget) { requestSymbolNavigation(t, "Go to Type Definition") },
 		func(t *gui.TabWidget) { requestSymbolNavigation(t, "Go to Implementation") })
 	actions.GoToTypeDefinition, actions.GoToImplementation = extra.GoToDefinition, extra.FindReferences
+	actions.RenameShortcut = "F2"
 	editor.SetSymbolActions(actions)
 }
 

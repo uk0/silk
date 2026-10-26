@@ -5,34 +5,32 @@ package gui
 import (
 	"os"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/uk0/silk/win32"
 )
 
-// TestUIWakeupHookIsInstalled pins that init() actually reached SetUIWakeup.
-// Without the hook gui.Post enqueues silently and the task waits for the idle
-// timer, which is indistinguishable from "the IDE ignored me".
-//
-// It reads the source rather than uiWakeupFn: resetUIQueue nils that global in
-// a t.Cleanup, and on the GLFW side the nil is load-bearing — restoring the
-// real hook would have tests calling glfw.PostEmptyEvent against an
-// uninitialised GLFW. So the live value says nothing about what init did once
-// any queue test has run, and this assertion has to sit above that.
+// Verify the actual object created by package init, not os.ReadFile of source:
+// runtime file reads bypass go -overlay and can inspect a different program.
+// Other queue tests replace the wake hook, but must not retire this owner HWND.
 func TestUIWakeupHookIsInstalled(t *testing.T) {
-	raw, err := os.ReadFile("window_windows.go")
-	if err != nil {
-		t.Fatalf("cannot read the Win32 backend: %v", err)
+	if uiDispatcher == nil {
+		t.Fatal("init did not create a native UI dispatcher")
 	}
-	body := funcBodyIn(t, string(raw), "func init() {")
-	if !strings.Contains(body, "SetUIWakeup(") {
-		t.Error("init() does not install a UI wakeup hook; gui.Post waits for the idle timer instead of waking the pump")
+	uiDispatcher.mu.Lock()
+	hwnd := uiDispatcher.hwnd
+	uiDispatcher.mu.Unlock()
+	if hwnd == 0 || !win32.IsWindow(hwnd) {
+		t.Fatal("UI dispatcher has no live HWND")
+	}
+	thread, process := win32.GetWindowThreadProcessId(hwnd)
+	if uint32(thread) != uiThreadId || process != os.Getpid() {
+		t.Fatalf("dispatcher owner = %d/%d, want %d/%d", thread, process, uiThreadId, os.Getpid())
 	}
 }
 
-// TestPostThreadMessageReachesItsQueue pins the win32 wrapper the wakeup rests
-// on. A misspelled proc name or a wrong argument order fails silently here —
+// TestPostThreadMessageReachesItsQueue pins the low-level thread-message
+// wrapper (not the native-modal-safe UI wakeup). Wrong arguments fail here —
 // PostThreadMessage just returns false — and the only symptom would be a UI
 // that updates 47ms late, which reads as ordinary sluggishness rather than a
 // broken call.

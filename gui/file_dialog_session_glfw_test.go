@@ -8,11 +8,17 @@ type testNativeFileDialogSession struct {
 	path              string
 	done              bool
 	cancelled, closed int
+	onClose           func()
 }
 
 func (s *testNativeFileDialogSession) result() (string, bool) { return s.path, s.done }
 func (s *testNativeFileDialogSession) cancel()                { s.cancelled++ }
-func (s *testNativeFileDialogSession) close()                 { s.closed++ }
+func (s *testNativeFileDialogSession) close() {
+	s.closed++
+	if s.onClose != nil {
+		s.onClose()
+	}
+}
 
 func TestNativeFileDialogPumpsAndRestoresOnlyItsOwner(t *testing.T) {
 	for _, accepted := range []bool{false, true} {
@@ -24,6 +30,11 @@ func TestNativeFileDialogPumpsAndRestoresOnlyItsOwner(t *testing.T) {
 				owner := &Window{enabled: originallyEnabled}
 				other := &Window{enabled: true}
 				session := new(testNativeFileDialogSession)
+				session.onClose = func() {
+					if owner.IsEnabled() != originallyEnabled {
+						t.Error("native teardown ran before owner state restored")
+					}
+				}
 				frames := 0
 				nativeDialogFrame = func() {
 					frames++
@@ -93,4 +104,32 @@ func TestNativeFileDialogUnwindRestoresOwnerWithoutSwallowingPanic(t *testing.T)
 		}
 	}()
 	waitNativeFileDialog(owner, session, func() bool { return true })
+}
+
+func TestFileDialogFocusReturnRejectsUnavailableOwners(t *testing.T) {
+	for _, state := range []string{"ready", "nil", "detached", "replaced", "disabled", "hidden", "minimized", "quit"} {
+		t.Run(state, func(t *testing.T) {
+			isolateFocusReturns(t)
+			owner, _ := focusReturnForm(t)
+			switch state {
+			case "nil":
+				owner = nil
+			case "detached":
+				owner.widget = nil
+			case "replaced":
+				owner.widget = NewForm()
+			case "disabled":
+				owner.enabled = false
+			case "hidden":
+				owner.widget.SetVisible(false)
+			case "minimized":
+				owner.iconified = true
+			case "quit":
+				shouldQuit = true
+			}
+			if got := fileDialogOwnerCanRestoreFocus(owner); got != (state == "ready") {
+				t.Fatalf("restore=%v state=%s", got, state)
+			}
+		})
+	}
 }

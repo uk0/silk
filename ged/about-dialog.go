@@ -45,11 +45,13 @@ func showAboutDialog(parent gui.IWidget, info AboutInfo, show func(*gui.Dialog) 
 	restore := aboutFocusedWidget(parent)
 	dlg := newAboutDialog(parent, info)
 	defer func() {
-		if restore != nil && restore.IsVisible() && restore.IsEnabled() && aboutContainsWidget(parent, restore) {
+		if aboutFocusedWidget(dlg) != nil && restore != nil && restore.IsAllAncentorsVisible() && restore.IsEnabled() && aboutContainsWidget(parent, restore) {
 			restore.SetFocus()
 		}
 	}()
-	dlg.SetFocus()
+	// Let ShowModal capture the current owner focus before activating its
+	// initial button. The caller may be a hidden designer canvas while the
+	// active editor lives in a sibling panel of the same native owner.
 	return show(dlg)
 }
 

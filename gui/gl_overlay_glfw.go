@@ -35,7 +35,8 @@ func (this *Window) drawGLOverlays(fbw, fbh int32) {
 
 	gl.Disable(gl.TEXTURE_2D)
 	gl.Enable(gl.BLEND)
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	// Straight RGB needs SRC_ALPHA, but alpha itself must not be squared.
+	gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 	gl.Enable(gl.LINE_SMOOTH)
 	gl.Hint(gl.LINE_SMOOTH_HINT, gl.NICEST)
 	gl.Enable(gl.SCISSOR_TEST)

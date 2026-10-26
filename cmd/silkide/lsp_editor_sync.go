@@ -56,10 +56,13 @@ func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
 				ed.SetCompletionStatus(lspCompletionStatus(err))
 				return
 			}
-			visible := ed.CompletionVisible()
+			prefix := lspCompletionPrefixAt(ed, s)
 			out := make([]gui.ExternalCompletion, 0, min(len(items), 200))
 			for _, it := range items[:min(len(items), 200)] {
 				item := it
+				if prefix.unchanged(item) {
+					continue
+				}
 				out = append(out, gui.ExternalCompletion{Label: item.Label, Detail: item.Detail, Insert: item.InsertText, Source: "gopls", Apply: func(target *gui.CodeEditor) {
 					if target != ed || globalLSP != client || lspDocuments[path] != doc || target.Text() != s.text || target.CursorLine() != s.line || target.CursorUTF16Col() != s.col {
 						return
@@ -69,15 +72,8 @@ func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
 					}
 				}})
 			}
-			ed.SetExternalCompletions(out) // empty response MUST clear stale candidates
-			ed.SetCompletionStatus("")
-			if len(items) == 0 {
-				ed.SetCompletionStatus("gopls: no matches; local suggestions")
-			}
+			refreshLSPCompletionItems(ed, out)
 			documentHighlightViaLSP(ed, path, s.line, s.col)
-			if visible {
-				ed.TriggerCompletion()
-			}
 		})
 	})
 	lspDocuments[path] = doc

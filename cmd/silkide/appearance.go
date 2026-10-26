@@ -145,11 +145,13 @@ func appearanceLocale(p *preferences) string {
 func buildAppearanceDialog(parent gui.IWidget, a ideAppearance) (*gui.Dialog, func() (ideAppearance, error)) {
 	d := gui.NewDialog(i18n.T("Appearance & Editor"), parent)
 	form := gui.NewFormLayout()
+	form.SetSpacing(6)
 	labelWidth := math.Max(240, gui.Theme().Font.TextExtents(i18n.T("Language (restart required)")).XAdvance+16)
 	form.SetLabelWidth(labelWidth)
 	rowHeight := math.Max(32, gui.Theme().Font.FontExtents().Height+12)
 	form.SetRowHeight(rowHeight)
 	language := gui.NewComboBox()
+	language.SetEditable(false)
 	language.SetItems([]string{"English", "简体中文"})
 	if a.Locale == "zh-CN" {
 		language.SetActiveIndex(1)
@@ -158,6 +160,7 @@ func buildAppearanceDialog(parent gui.IWidget, a ideAppearance) (*gui.Dialog, fu
 	}
 	form.AddRow(i18n.T("Language (restart required)"), language)
 	theme := gui.NewComboBox()
+	theme.SetEditable(false)
 	theme.SetItems([]string{i18n.T("Dark"), i18n.T("Light")})
 	if a.Theme == "light" {
 		theme.SetActiveIndex(1)
@@ -179,6 +182,7 @@ func buildAppearanceDialog(parent gui.IWidget, a ideAppearance) (*gui.Dialog, fu
 	add("editorSize", "Editor font size", strconv.Itoa(a.EditorSize))
 	add("tabSize", "Tab width", strconv.Itoa(a.TabSize))
 	indentation := gui.NewComboBox()
+	indentation.SetEditable(false)
 	indentation.SetItems([]string{i18n.T("Tabs"), i18n.T("Spaces")})
 	if a.InsertSpaces {
 		indentation.SetActiveIndex(1)
@@ -193,7 +197,7 @@ func buildAppearanceDialog(parent gui.IWidget, a ideAppearance) (*gui.Dialog, fu
 	d.SetContent(form)
 	d.AddButton(i18n.T("Apply"), gui.DialogOK)
 	d.AddButton(i18n.T("Cancel"), gui.DialogCancel)
-	d.SetSize(math.Max(740, labelWidth+480), math.Max(600, rowHeight*15+100))
+	d.SetSize(math.Max(740, labelWidth+480), math.Max(600, rowHeight*15+form.Spacing()*14+100))
 	return d, func() (ideAppearance, error) {
 		n := a
 		n.InsertSpaces = indentation.ActiveIndex() == 1

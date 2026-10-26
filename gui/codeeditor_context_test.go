@@ -33,7 +33,7 @@ func TestContextMenuItemsLabels(t *testing.T) {
 	// The seven action labels plus one separator after Select All. We don't
 	// pin a strict ordering test beyond "the canonical entries are present"
 	// because future maintainers may insert further entries.
-	wantLabels := []string{"剪切", "复制", "粘贴", "全选", "重命名符号", "跳转定义", "查找引用"}
+	wantLabels := []string{"Cut", "Copy", "Paste", "Select All", "Rename Symbol", "Go to Definition", "Find References"}
 	for _, lbl := range wantLabels {
 		if findMenuItem(items, lbl) == nil {
 			t.Errorf("context menu missing entry %q", lbl)
@@ -63,19 +63,19 @@ func TestContextMenuItemsPrimaryLineWithoutClipboardProbe(t *testing.T) {
 	// permission to read on activation, never a native read during menu creation.
 	items := e.contextMenuItems(e.wordAtCursor())
 
-	if cut := findMenuItem(items, "剪切"); cut == nil || !cut.Enabled {
+	if cut := findMenuItem(items, "Cut"); cut == nil || !cut.Enabled {
 		t.Errorf("剪切 should be enabled on a non-empty primary line: %+v", cut)
 	}
-	if cp := findMenuItem(items, "复制"); cp == nil || !cp.Enabled {
+	if cp := findMenuItem(items, "Copy"); cp == nil || !cp.Enabled {
 		t.Errorf("复制 should be enabled on a non-empty primary line: %+v", cp)
 	}
-	if pst := findMenuItem(items, "粘贴"); pst == nil || !pst.Enabled {
+	if pst := findMenuItem(items, "Paste"); pst == nil || !pst.Enabled {
 		t.Errorf("粘贴 must be requestable without probing native content: %+v", pst)
 	}
-	if all := findMenuItem(items, "全选"); all == nil || !all.Enabled {
+	if all := findMenuItem(items, "Select All"); all == nil || !all.Enabled {
 		t.Errorf("全选 should always be enabled: %+v", all)
 	}
-	if rn := findMenuItem(items, "重命名符号"); rn == nil || !rn.Enabled {
+	if rn := findMenuItem(items, "Rename Symbol"); rn == nil || !rn.Enabled {
 		t.Errorf("重命名符号 should be enabled when a word sits at the cursor: %+v", rn)
 	}
 }
@@ -87,13 +87,13 @@ func TestContextMenuItemsEnabledWithSelection(t *testing.T) {
 	e.SelectAll()
 	items := e.contextMenuItems("Foo")
 
-	if cut := findMenuItem(items, "剪切"); cut == nil || !cut.Enabled {
+	if cut := findMenuItem(items, "Cut"); cut == nil || !cut.Enabled {
 		t.Errorf("剪切 should be enabled with a selection: %+v", cut)
 	}
-	if cp := findMenuItem(items, "复制"); cp == nil || !cp.Enabled {
+	if cp := findMenuItem(items, "Copy"); cp == nil || !cp.Enabled {
 		t.Errorf("复制 should be enabled with a selection: %+v", cp)
 	}
-	if pst := findMenuItem(items, "粘贴"); pst == nil || !pst.Enabled {
+	if pst := findMenuItem(items, "Paste"); pst == nil || !pst.Enabled {
 		t.Errorf("粘贴 should be enabled when clipboard has text: %+v", pst)
 	}
 }
@@ -104,13 +104,13 @@ func TestContextMenuItemsRenameDisabledOnEmptyWord(t *testing.T) {
 
 	items := e.contextMenuItems("")
 
-	if rn := findMenuItem(items, "重命名符号"); rn == nil || rn.Enabled {
+	if rn := findMenuItem(items, "Rename Symbol"); rn == nil || rn.Enabled {
 		t.Errorf("重命名符号 should be disabled on empty word: %+v", rn)
 	}
-	if goTo := findMenuItem(items, "跳转定义"); goTo == nil || goTo.Enabled {
+	if goTo := findMenuItem(items, "Go to Definition"); goTo == nil || goTo.Enabled {
 		t.Errorf("跳转定义 should be disabled on empty word: %+v", goTo)
 	}
-	if ref := findMenuItem(items, "查找引用"); ref == nil || ref.Enabled {
+	if ref := findMenuItem(items, "Find References"); ref == nil || ref.Enabled {
 		t.Errorf("查找引用 should be disabled on empty word: %+v", ref)
 	}
 }
@@ -124,7 +124,7 @@ func TestContextMenuActionsWire(t *testing.T) {
 	e.SetText("alpha\nbeta\ngamma")
 	items := e.contextMenuItems("")
 
-	all := findMenuItem(items, "全选")
+	all := findMenuItem(items, "Select All")
 	if all == nil || all.Action == nil {
 		t.Fatalf("全选 missing Action: %+v", all)
 	}

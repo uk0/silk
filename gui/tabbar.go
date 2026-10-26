@@ -26,34 +26,37 @@ func NewTabBar() *TabBar {
 // (注: 目前只在Dock中使用, 未准备好用在别处)
 type TabBar struct {
 	Widget
-	tabs          []*_Tab
-	activeTab     int
-	hoverTab      int
-	closeBtn      bool
-	hoverCloseBtn bool
-	cbActivate    func(tb *TabBar, idx int)
-	cbDeactivate  func(tb *TabBar, idx int)
-	cbClose       func(tb *TabBar, idx int) bool
-	downTab       int
-	downMidTab    int
-	downX         float64
-	downY         float64
-	downCloseBtn  bool
-	nextActiveId  int
-	dropPos       int
-	cbDragStart   func(tb *TabBar, idx int) interface{}
-	cbDragMove    func(tb *TabBar, dnd IDndContext)
-	cbDrop        func(tb *TabBar, idx int, dnd IDndContext)
-	cbMove        func(tb *TabBar, from, to int)
-	viewportW     float64
-	contentW      float64
-	scrollX       float64
-	overflowBtn   *Button
-	chooserMenu   *Menu
-	contextMenu   *Menu
-	contextDown   *_Tab
-	cbContextMenu func(*TabBar, *Menu, int)
-	firstVisible  int
+	tabs           []*_Tab
+	activeTab      int
+	hoverTab       int
+	closeBtn       bool
+	hoverCloseBtn  bool
+	cbActivate     func(tb *TabBar, idx int)
+	cbDeactivate   func(tb *TabBar, idx int)
+	cbClose        func(tb *TabBar, idx int) bool
+	downTab        int
+	downMidTab     int
+	downX          float64
+	downY          float64
+	downCloseBtn   bool
+	nextActiveId   int
+	dropPos        int
+	cbDragStart    func(tb *TabBar, idx int) interface{}
+	cbDragMove     func(tb *TabBar, dnd IDndContext)
+	cbDrop         func(tb *TabBar, idx int, dnd IDndContext)
+	cbMove         func(tb *TabBar, from, to int)
+	viewportW      float64
+	contentW       float64
+	scrollX        float64
+	overflowBtn    *Button
+	chooserMenu    *Menu
+	contextMenu    *Menu
+	contextDown    *_Tab
+	cbContextMenu  func(*TabBar, *Menu, int)
+	cbPointerFocus func(*TabBar)
+	pointerTab     *_Tab
+	firstVisible   int
+	lastVisible    int
 }
 
 type _Tab struct {
@@ -61,8 +64,9 @@ type _Tab struct {
 	data interface{}
 
 	// 宽度
-	width float64
-	x     float64
+	width      float64
+	paintWidth float64
+	x          float64
 
 	// 当前标签页激活的序号, 用来在关闭标签页后激活前一个标签页
 	activeId int
@@ -243,34 +247,30 @@ func (this *TabBar) Draw(g paint.Painter) {
 	g.Rectangle(0, 0, this.viewportW, this.h)
 	g.Clip()
 
-	x, y := -this.scrollX, 0.0
-	if this.firstVisible < len(this.tabs) {
-		x += this.tabs[this.firstVisible].x
-	}
-	h := this.h
-	g.Translate(x, y)
-	for i := this.firstVisible; i < len(this.tabs); i++ {
+	dropX := -1.0
+	for i := this.firstVisible; i < this.lastVisible; i++ {
 		tab := this.tabs[i]
-		if x >= this.viewportW {
-			break
-		}
-		if x+tab.width > 0 {
-			g.Save()
-			g.Rectangle(0, 0, tab.width, h)
-			g.Clip()
-			this.drawTab(tab, g, tab.width, h, this.activeTab == i, this.hoverTab == i)
-			g.Restore()
-		}
+		x := tab.x - this.scrollX
+		g.Save()
+		g.Translate(x, 0)
+		g.Rectangle(0, 0, tab.paintWidth, this.h)
+		g.Clip()
+		this.drawTab(tab, g, tab.paintWidth, this.h, this.activeTab == i, this.hoverTab == i)
+		g.Restore()
 		if this.dropPos == i {
-			g.Rectangle(-2, t.TabMargin.T, 4, h-t.TabMargin.B-t.TabMargin.T)
-			g.SetBrush1(t.HighLightColor)
-			g.Fill()
+			dropX = x
 		}
-		g.Translate(tab.width, 0)
-		x += tab.width
 	}
-	if this.dropPos == len(this.tabs) {
-		g.Rectangle(-2, t.TabMargin.T, 4, h-t.TabMargin.B-t.TabMargin.T)
+	if this.dropPos == this.lastVisible {
+		if this.lastVisible > this.firstVisible {
+			tab := this.tabs[this.lastVisible-1]
+			dropX = tab.x - this.scrollX + tab.paintWidth
+		} else if len(this.tabs) == 0 {
+			dropX = 0
+		}
+	}
+	if dropX >= 0 {
+		g.Rectangle(dropX-2, t.TabMargin.T, 4, this.h-t.TabMargin.B-t.TabMargin.T)
 		g.SetBrush1(t.HighLightColor)
 		g.Fill()
 	}
@@ -310,11 +310,13 @@ func (this *TabBar) OnLeftDown(x, y float64) {
 	this.downX = x
 	this.downY = y
 	this.downTab, this.downCloseBtn = this.HitTest(x, y)
+	this.pointerTab = nil
 	// 点在标签条的空白处不改变当前标签.
 	// SetActiveTab(-1) deactivates without firing cbActivate, so the container
 	// keeps showing a view no tab claims until the next layout — at which point
 	// Dock.Layout() hides every view and the pane goes blank.
 	if this.downTab != -1 {
+		this.pointerTab = this.tabs[this.downTab]
 		this.SetActiveTab(this.downTab)
 	}
 	this.Self().Update()
@@ -335,39 +337,59 @@ func (this *TabBar) OnMiddleUp(x, y float64) {
 	}
 	if up, _ := this.HitTest(x, y); up == idx {
 		this.CloseTab(idx)
+		this.finishPointerFocus()
 	}
 }
 
 func (this *TabBar) OnLeftUp(x, y float64) {
-	if this.downCloseBtn {
-		_, downBtn := this.HitTest(x, y)
-		if downBtn {
-			this.CloseTab(this.activeTab)
-		}
-		this.downCloseBtn = false
-		this.Self().Update()
+	pressed, closing := this.pointerTab, this.downCloseBtn
+	this.clearPointerPress()
+	up, closeButton := this.HitTest(x, y)
+	// Identity matters: a modal/worker callback may remove or replace a tab
+	// between press and release. Never close/focus a reused numeric slot.
+	if pressed == nil || up < 0 || this.tabs[up] != pressed {
+		return
 	}
-	this.downTab = -1
+	if closing {
+		if !closeButton {
+			return
+		}
+		this.CloseTab(up)
+	} else if this.activeTab != up {
+		return
+	}
+	this.finishPointerFocus()
+}
+
+func (this *TabBar) clearPointerPress() {
+	this.downTab, this.downCloseBtn, this.pointerTab = -1, false, nil
+	this.Self().Update()
+}
+
+// SetPointerFocusCallback offers an optional focus handoff after a completed
+// tab click, close or drag. It never runs for keyboard/programmatic selection,
+// and does not reclaim focus taken by another control during a native loop.
+// Internal press state is cleared before calling the host, which may reenter.
+func (this *TabBar) SetPointerFocusCallback(cb func(*TabBar)) { this.cbPointerFocus = cb }
+
+func (this *TabBar) finishPointerFocus() {
+	if this.cbPointerFocus == nil || !this.HasFocus() {
+		return
+	}
+	for p := this.Self(); p != nil; p = p.Parent() {
+		if !p.IsVisible() || !p.IsEnabled() {
+			return
+		}
+	}
+	this.cbPointerFocus(this)
 }
 
 func (this *TabBar) OnMouseMove(x, y float64) {
 	//core.Debug("(this *TabBar) OnMouseMove()")
 	if this.downTab != -1 && (math.Abs(x-this.downX) > 4 || math.Abs(y-this.downY) > 4) {
-		this.PopCapture()
-		//	core.Debug(this.downTab)
-		tb := this.tabs[this.downTab]
-		tb.sync()
-		t := Theme()
-		pixmap := paint.IconTextToPixmap(tb.icon, t.IconSize, false,
-			tb.label, t.Font, t.TextColor, false)
-		var data interface{}
-		if this.cbDragStart != nil {
-			data = this.cbDragStart(this, this.downTab)
-		} else {
-			data = tb
-		}
-		this.DoDragDrop(pixmap, DndMove, data)
-		this.downTab = -1
+		this.runPointerDrag(func(p paint.Pixmap, action DndAction, data interface{}) DndAction {
+			return this.DoDragDrop(p, action, data)
+		})
 		return
 	}
 
@@ -378,6 +400,38 @@ func (this *TabBar) OnMouseMove(x, y float64) {
 			this.hoverCloseBtn = hoverClose
 			this.Self().Update()
 		}
+	}
+}
+
+// Isolate the native wait from gesture bookkeeping so cancellation, reentry
+// and identity changes can be tested without creating a native drag loop.
+func (this *TabBar) runPointerDrag(drag func(paint.Pixmap, DndAction, interface{}) DndAction) {
+	if this.downTab < 0 || this.downTab >= len(this.tabs) || this.pointerTab == nil || this.tabs[this.downTab] != this.pointerTab {
+		this.clearPointerPress()
+		return
+	}
+	this.PopCapture()
+	tb := this.tabs[this.downTab]
+	tb.sync()
+	t := Theme()
+	pixmap := paint.IconTextToPixmap(tb.icon, t.IconSize, false,
+		tb.label, t.Font, t.TextColor, false)
+	func() {
+		defer paint.CloseSurface(pixmap)
+		defer this.clearPointerPress()
+		var data interface{}
+		if this.cbDragStart != nil {
+			data = this.cbDragStart(this, this.downTab)
+		} else {
+			data = tb
+		}
+		if this.downTab < 0 || this.downTab >= len(this.tabs) || this.tabs[this.downTab] != tb {
+			return
+		}
+		drag(pixmap, DndMove, data)
+	}()
+	if this.activeTab >= 0 && this.activeTab < len(this.tabs) && this.tabs[this.activeTab] == tb {
+		this.finishPointerFocus()
 	}
 }
 
@@ -393,12 +447,12 @@ func (this *TabBar) HitTest(x, y float64) (index int, hoverCloseBtn bool) {
 		x0 += this.tabs[this.firstVisible].x
 	}
 	//h := this.h - t.TabBarMargin.T - t.TabBarMargin.B
-	for i := this.firstVisible; i < len(this.tabs); i++ {
+	for i := this.firstVisible; i < this.lastVisible; i++ {
 		tab := this.tabs[i]
-		if x >= x0 && x < x0+tab.width {
+		if x >= x0 && x < x0+tab.paintWidth {
 			index = i
-			if index == this.activeTab && this.closeBtn {
-				xc := x0 + tab.width - t.TabCloseSize - m.R
+			if index == this.activeTab && this.closeBtn && tabCloseFits(t, tab.icon, tab.paintWidth, this.h) {
+				xc := x0 + tab.paintWidth - t.TabCloseSize - m.R
 				yc := m.T + (this.h-m.T-m.B-t.TabCloseSize)*0.5
 				hoverCloseBtn = x >= xc && x < xc+t.TabCloseSize &&
 					y >= yc && y < yc+t.TabCloseSize
@@ -412,7 +466,10 @@ func (this *TabBar) HitTest(x, y float64) (index int, hoverCloseBtn bool) {
 
 func (this *TabBar) DropIndex(x, y float64) (index int) {
 	x += this.scrollX
-	return sort.Search(len(this.tabs), func(i int) bool { return x < this.tabs[i].x+this.tabs[i].width*.5 })
+	return this.firstVisible + sort.Search(this.lastVisible-this.firstVisible, func(i int) bool {
+		tab := this.tabs[this.firstVisible+i]
+		return x < tab.x+tab.paintWidth*.5
+	})
 }
 
 func (this *TabBar) SetActivateCallback(callback func(tb *TabBar, idx int)) {
@@ -613,7 +670,7 @@ func (this *TabBar) OnDragMove(x, y float64, dnd IDndContext) {
 }
 
 func (this *TabBar) OnDrop(x, y float64, dnd IDndContext) {
-	if x < 0 || x >= this.viewportW || y < 0 || y >= this.h || (dnd.From() == this && (this.downTab < 0 || this.downTab >= len(this.tabs))) {
+	if x < 0 || x >= this.viewportW || y < 0 || y >= this.h || (dnd.From() == this && (this.downTab < 0 || this.downTab >= len(this.tabs) || this.tabs[this.downTab] != this.pointerTab)) {
 		this.OnDragLeave()
 		dnd.SetAction(DndIgnore)
 		return

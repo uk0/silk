@@ -155,7 +155,9 @@ func (w *completionIndexWorker) compute(job *completionIndexJob) {
 		}
 		w.mu.Unlock()
 	}
-	result, err := rankCompletionTop(job.ctx, items, job.request.prefix, completionCandidateLimit)
+	// Local identifiers are unique: one spare candidate replaces the exact
+	// prefix that the UI removes as a no-op, preserving the 50-row budget.
+	result, err := rankCompletionTop(job.ctx, items, job.request.prefix, completionCandidateLimit+1)
 	if err != nil || job.ctx.Err() != nil {
 		return
 	}

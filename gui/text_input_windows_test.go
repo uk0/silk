@@ -24,6 +24,8 @@ func nativeTextInputEditor(t *testing.T) *CodeEditor {
 		t.Fatal("native editor window missing")
 	}
 	t.Cleanup(e.Window().destroy)
+	// Keep the HWND off-screen, but model a visible logical input surface.
+	e.NakedWidget().hidden = false
 	e.SetFocus()
 	return e
 }
@@ -211,4 +213,42 @@ func TestWindowsTextInputFocusAndWindowIsolation(t *testing.T) {
 	if e.Text() != "" {
 		t.Fatalf("invalid/abandoned text committed: %q", e.Text())
 	}
+}
+
+func TestWindowsTextInputRejectsHiddenAndDisabledAncestors(t *testing.T) {
+	e := nativeTextInputEditor(t)
+	h := e.Window().hWnd
+	grandparent, parent := NewLabel("grandparent"), NewLabel("parent")
+	grandparent.SetParent(e)
+	parent.SetParent(grandparent)
+	field := NewSearchBox()
+	field.SetParent(parent)
+	field.SetSize(180, 30)
+	field.SetFocus()
+	for _, w := range []IWidget{field, parent, grandparent, e} {
+		w.NakedWidget().hidden = true
+		win32.SendMessage(h, win32.WM_CHAR, 'x', 1)
+		win32.SendMessage(h, win32.WM_UNICHAR, 0x1F642, 1)
+		w.NakedWidget().hidden = false
+		w.NakedWidget().disabled = true
+		win32.SendMessage(h, win32.WM_CHAR, 'y', 1)
+		win32.SendMessage(h, win32.WM_UNICHAR, 0x1F642, 1)
+		w.NakedWidget().disabled = false
+		if field.Text() != "" || e.Text() != "" {
+			t.Fatalf("hidden/disabled %T received input: %q/%q", w, field.Text(), e.Text())
+		}
+	}
+	// Valid Unicode still reaches the field once its complete chain is eligible.
+	win32.SendMessage(h, win32.WM_CHAR, 0x4E2D, 1)
+	win32.SendMessage(h, win32.WM_UNICHAR, 0x1F642, 1)
+	if field.Text() != "中🙂" {
+		t.Fatalf("eligible input lost: %q", field.Text())
+	}
+	e.SetFocus()
+	e.NakedWidget().hidden = true
+	win32.SendMessage(h, win32.WM_CHAR, 'z', 1)
+	if e.Text() != "" {
+		t.Fatal("hidden root consumed fallback character")
+	}
+	e.NakedWidget().hidden = false
 }

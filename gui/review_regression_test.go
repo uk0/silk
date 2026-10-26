@@ -93,11 +93,11 @@ func TestTextBlockLinearWrapPreservesUnicodeAndRows(t *testing.T) {
 			if row.begin != end || row.end <= row.begin {
 				t.Fatalf("gap at %d: %+v", i, row)
 			}
-			if len(row.glyphs) < len(row.text) {
-				t.Fatal("missing glyphs")
+			if len(row.carets) != len(row.text)+1 {
+				t.Fatal("missing caret boundaries")
 			}
-			if len(row.glyphs) > 0 && row.glyphs[0].X != 0 {
-				t.Fatal("glyphs not rebased")
+			if row.caretX(0) != 0 {
+				t.Fatal("carets not rebased")
 			}
 			end = row.end
 		}

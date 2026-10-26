@@ -30,6 +30,7 @@ func (this *CheckBox) UpdateValue() {
 	// A tick has no empty state, so a disagreeing selection says so in the
 	// label instead — an unticked box would read as "they are all off".
 	this.SetText(this.item.MultiValueHint())
+	gui.SetToolTip(this.Self(), this.item.Label()+"\n"+this.item.MultiValueHint())
 	this.SetChecked(this.item.GetValue().(bool))
 }
 
@@ -51,4 +52,5 @@ func (this *CheckBox) OnCheckChanged() {
 	this.item.SetValue(this.IsChecked())
 	// The whole selection now holds this tick, so the 多值 label is stale.
 	this.SetText(this.item.MultiValueHint())
+	gui.SetToolTip(this.Self(), this.item.Label()+"\n"+this.item.MultiValueHint())
 }

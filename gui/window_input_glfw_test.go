@@ -129,3 +129,45 @@ func TestCodeEditorFindUsesPlatformActionModifier(t *testing.T) {
 		t.Fatal("find did not close")
 	}
 }
+
+func TestScrollUsesNativeEventCoordinates(t *testing.T) {
+	isolatePopupState(t)
+	old := scrollEventPosition
+	defer func() { scrollEventPosition = old }()
+	root := NewForm()
+	root.SetSize(500, 300)
+	tabs := NewTabWidget()
+	tabs.SetParent(root)
+	tabs.SetBounds(20, 40, 400, 200)
+	tabs.AddTab(NewLabel("a"), "A", nil)
+	tabs.AddTab(NewLabel("b"), "B", nil)
+	tabs.Layout()
+	native, win := testPopupWindow(root, WtForm, nil)
+	win.enabled = true
+	x, y := 25.0, 45.0
+	scrollEventPosition = func(gw *glfw.Window) (float64, float64, bool) {
+		if gw != native {
+			t.Fatal("borrowed another window's event")
+		}
+		return x, y, true
+	}
+	onScroll(native, 0, -1)
+	if tabs.CurrentIndex() != 1 {
+		t.Fatal("scroll did not reach tab strip at event coordinates")
+	}
+	x, y = 25, 100 // page, not the previously targeted strip
+	onScroll(native, 0, 1)
+	if tabs.CurrentIndex() != 1 {
+		t.Fatal("scroll reused the previous event's target")
+	}
+	x, y = 25, 45
+	onScroll(native, 0, 1)
+	if tabs.CurrentIndex() != 0 {
+		t.Fatal("reverse wheel lost event coordinates")
+	}
+	win.enabled = false
+	onScroll(native, 0, -1)
+	if tabs.CurrentIndex() != 0 {
+		t.Fatal("disabled window consumed scroll")
+	}
+}

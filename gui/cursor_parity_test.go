@@ -1,8 +1,8 @@
 package gui
 
 import (
+	"errors"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/uk0/silk/core"
@@ -17,17 +17,16 @@ func noCursorResources(t *testing.T) {
 	}
 }
 
-// TestDropCursorsWithoutResourcesAreUsable pins the configuration this repo
-// actually ships: nothing installs <ResourceDir>/cursor, so every
-// LoadCursorData call inside GenerateDropCursors fails and the result is built
-// entirely from fallbacks. Both drag backends index cursors[0..3] without
-// checking — dnd_windows.go hands them to SetCursor, dnd_glfw.go to
-// SetOverrideCursor — so a short slice or a nil entry breaks every drag before
-// the first mouse move.
+// Both drag backends index all four entries. Built-in assets must work when
+// an SDK application ships no optional cursor directory; native-unavailable
+// test environments must still receive non-nil shared fallbacks.
 func TestDropCursorsWithoutResourcesAreUsable(t *testing.T) {
 	noCursorResources(t)
 
-	curs := GenerateDropCursors(paint.NewPixmap(32, 16))
+	pix := paint.NewPixmap(32, 16)
+	defer paint.CloseSurface(pix)
+	curs := GenerateDropCursors(pix)
+	defer ReleaseDropCursors(curs)
 	if len(curs) != 4 {
 		t.Fatalf("GenerateDropCursors returned %d cursors, want 4", len(curs))
 	}
@@ -73,22 +72,20 @@ func TestNewCursorFromDataReportsFailure(t *testing.T) {
 	}
 }
 
-// TestDropCursorsFallBackWhenCursorCreationFails covers the half of the empty
-// configuration that no runtime test can reach on both backends at once: even
-// with the resources installed, NewCursorFromData fails when cairo refuses the
-// composed pixmap or the platform refuses the handle, leaving a nil in the
-// slice the drag code indexes blindly. Only the GLFW backend substituted the
-// arrow; a runtime test can only ever exercise the backend it was compiled
-// for, which is why this reads both sources.
+// Exercise the actual shared generator, including a failed native allocator.
 func TestDropCursorsFallBackWhenCursorCreationFails(t *testing.T) {
-	for _, file := range []string{"cursor_windows.go", "cursor_glfw.go"} {
-		src, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("cannot read %s: %v", file, err)
+	calls := 0
+	curs := generateDropCursors(nil, func(data CursorData) (*Cursor, error) { calls++; return nil, errors.New("native allocation failed") })
+	if calls != 4 || len(curs) != 4 {
+		t.Fatal("incomplete feedback", calls, len(curs))
+	}
+	for _, cur := range curs {
+		if cur == nil {
+			t.Fatal("nil cursor escapes allocator failure")
 		}
-		body := generateDropCursorsBody(t, file, string(src))
-		if !strings.Contains(body, "cur == nil") {
-			t.Errorf("%s: GenerateDropCursors appends the result of NewCursorFromData without checking it; a failed cursor reaches SetCursor as nil", file)
-		}
+	}
+	ReleaseDropCursors(curs)
+	if DefaultCursor() == nil {
+		t.Fatal("shared fallback destroyed")
 	}
 }

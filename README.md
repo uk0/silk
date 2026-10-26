@@ -21,6 +21,458 @@ signed/notarized standalone apps.
 
 ## Editor and language-service fixes (development)
 
+### Consistent dialog language and window identity
+
+- Standard `@ok` / `@cancel` / save-family buttons now translate their captions
+  without changing command payloads. SDK rename validation includes concise
+  Chinese defaults; host-provided custom captions remain untouched.
+- Forms, input boxes and message dialogs share icon selection before their first
+  display: explicit icon, owner-window icon, then configured application icon.
+  `Form.SetIcon` updates live forms; `Window.Icon()` exposes the logical source.
+- Windows owns separate native icon handles per window and releases them on
+  replacement/close. Popups avoid this title/taskbar-icon work; macOS keeps its
+  bundle-icon boundary. See [dialog polish QA](DIALOG_POLISH_QA_20261026.md).
+
+![Windows dialog with inherited icon and Chinese validation](screenshots/dialog-polish-20261026-windows.png)
+
+### Validated rename dialogs and consistent commands
+
+- Rename starts with the current identifier selected. Invalid drafts show a
+  wrapping explanation and disable OK; Enter cannot bypass validation. Cancel
+  remains available and existing free-form input dialogs keep their behavior.
+- SDK keyboard/context-menu rename routes through the same host action. The
+  single-buffer fallback gains text Undo/Redo; SilkIDE keeps semantic gopls
+  rename and flushes all open buffers before submitting it.
+- Modal and delayed results reject changed/replaced/read-only target editors.
+  `WordAtCursor()` avoids converting an entire long line just to prefill a name.
+  See [rename dialog QA](RENAME_DIALOG_QA_20261026.md) for the tested scope and
+  remaining workspace transaction limitations.
+
+### Useful completions without redundant popups
+
+- Exact literal matches no longer consume Enter/Tab; case corrections and
+  semantic provider edits remain available. Empty lists retain request intent,
+  while Escape, navigation and focus loss retire pending completions.
+- Local acceptance preserves untouched bytes and records a small atomic splice
+  instead of full-document undo copies. Candidate substrings are detached from
+  old source allocations before entering history.
+- SDK hosts can query `CompletionActive()` separately from `CompletionVisible()`;
+  SilkIDE uses this for LSP refresh and suppresses proven no-op server edits.
+  See [completion intent QA](COMPLETION_INTENT_QA_20261026.md).
+
+### Find results you can edit directly
+
+- Find navigation selects the actual match, including multiline regular-expression
+  results. Escape returns to the document without discarding that selection.
+- Next/Previous resume from a manually moved caret; queued navigation accumulates
+  while searching, and delayed results cannot replace a newer interaction state.
+- Search-in-selection keeps the original frozen range rather than shrinking to
+  the currently selected match. See [find navigation QA](FIND_NAVIGATION_QA_20261026.md).
+
+### Reliable popup gestures and caret-anchored menus
+
+- GLFW popup and owner-window button events now share capture routing: a release
+  stays with the pressed control, and a fresh hit-test prevents stale hover from
+  activating the wrong row or losing a stationary click.
+- Shift+F10 in both editors and text fields uses the visible caret rectangle,
+  clamped to the control, and rejects unfocused field shortcuts.
+- This adds no timer or background polling. See
+  [input routing QA](INPUT_ROUTING_QA_20261026.md) for native tests, overhead and
+  remaining limits; the Windows mouse dispatcher itself is unchanged.
+
+### Complete, reusable editor context menus
+
+- Code editors now offer Undo/Redo and selection-only Delete alongside clipboard,
+  multi-caret and symbol actions. Command icons and platform shortcut hints are
+  consistent; the IDE advertises its actual F2 rename binding.
+- Context menus follow the active language, open on right-button release or
+  Shift+F10, reuse an owned popup and discard rows when dismissed. Captured
+  commands cannot retarget a replaced document, caret or editor owner.
+- Opening a menu no longer copies a whole long line just to detect a word.
+  SDK hosts can use `BuildContextMenu`, `CanDeleteSelectedText` and
+  `DeleteSelectedText`, or supply their own registered menu builder.
+  See [editor context QA](EDITOR_CONTEXT_QA_20261026.md) for tested scope.
+
+### Composed-character rendering and editor geometry
+
+- On macOS with the Cairo Quartz font backend, ZWJ emoji, flags, skin-tone
+  modifiers and combining marks now use native composed glyphs instead of
+  separate boxes. Drawing and measurement retain the actual fallback font.
+- Editor clicks, caret anchors, syntax colors and text-field wrapping share
+  cluster boundaries. Original UTF-8, line endings and Undo/Redo remain intact;
+  this does not yet change keyboard navigation/deletion to grapheme semantics.
+- Ordinary ASCII/CJK keep the existing rendering path. Bounded UI-thread caches
+  add no polling or worker; Windows/Linux retain their previous text backend.
+  See [composed text QA](COMPLEX_TEXT_QA_20261026.md) for scope and limitations.
+
+### Native Unicode character chooser on macOS
+
+- Focus an editable field and press **Control+Command+Space** to request the
+  system Emoji & Symbols panel. Character commits use normal text-input and
+  Undo/Redo handling; Silk does not emulate them with clipboard replacement.
+- Explicit application shortcuts and an active IME composition retain priority.
+  Hidden, disabled, detached and foreign-window targets are rejected.
+- SDK: `gui.CharacterPaletteAvailable()` / `gui.ShowCharacterPalette(target)`.
+  The API is UI-thread-only; Windows/Linux report unsupported, not a fake panel.
+  See [native input QA](NATIVE_INPUT_QA_20261026.md) for actual test scope.
+
+### Editable integer controls and designer round trips
+
+- `SpinBox` now supports direct signed-integer entry, selection, clipboard and
+  field-local undo. Enter or focus loss commits once; incomplete drafts restore
+  the previous value. The suffix stays outside the editable number.
+- Arrow, wheel and page steps saturate instead of wrapping at machine-integer
+  limits. Disabled/read-only controls reject changes; dark/light theme arrows
+  use contrasting colors and suffix ink remains inside its actual clip.
+- The designer saves and generates step, page-step override, suffix and read-only
+  settings without leaking the internal editor as a separate widget. Printing
+  copies and Gantt progress editors reuse the same control.
+- See `examples/spinbox-edit` and [integer control QA](SPINBOX_EDIT_QA_20261025.md)
+  for verification scope and remaining platform limitations.
+
+### Exact integer ranges across load, preview and SDK builds
+
+- Integer range properties now load as a complete range before the initial
+  value, matching the existing floating-point range handling. Negative values
+  and ranges outside factory defaults survive reload and preview.
+- Declarative `min`/`max` and `value`/`Value` support integer controls without a
+  float conversion; machine-integer endpoints remain exact. Fractions,
+  overflow and malformed persisted data are ignored, not rounded or executed.
+- Property-order, repeated serialization and both generated constructors are
+  covered by [integer-range regression QA](INTEGER_RANGE_QA_20261025.md).
+
+### Property edits with coherent designer undo
+
+- Integer, floating-point and text property rows keep updating the canvas while
+  typing, but one continuous edit produces one designer Undo/Redo record.
+- Enter, real focus loss, refresh and field retirement end the edit session;
+  save points and history branches remain separate. Mixed selections restore
+  every object's original value rather than only the first selected value.
+- No-op visits do not dirty the scene. Read-only, disabled, hidden and stale
+  property controls cannot write through delayed edit callbacks. Held arrow
+  repeats are grouped until key release; no timer or background worker is added.
+- See [property-edit session QA](PROPERTY_EDIT_SESSION_QA_20261025.md) for exact
+  native save/readback assertions and platform coverage.
+
+### Live designer geometry and coherent canvas history
+
+- The selection status shows the widget's object name and type, position and
+  fractional dimensions. Property edits, completed drags, grid snaps and history
+  changes refresh the same message instead of leaving a rounded selection snapshot.
+- Canvas Undo/Redo now follows the designer's document lifecycle: pending-edit
+  guards, property refresh and generated-code notifications are no longer bypassed
+  by the inner toolbar. Plain graph views retain their existing stack behavior.
+- Hidden/closed views stay silent, scene changes retire old listeners, and
+  unchanged notifications do not repaint or replace another tool's message.
+  No polling timer or background worker was added.
+- See [selection status and canvas history QA](SELECTION_STATUS_QA_20261025.md)
+  for native save/readback evidence and remaining limitations.
+
+### Precise designer movement and explicit snapping
+
+- Arrow-key moves preserve fractional starting coordinates and the untouched axis;
+  Shift uses the configured coarse step without rounding the starting point.
+- Alignment and equal-gap distribution keep their computed fractional targets.
+  Moving containers still carries their descendants without moving them twice.
+- `graph.MoveCommand` replays exact coordinates. Grid/guide snapping belongs to
+  the caller; disabling designer snapping no longer leaves a hidden 1 mm snap.
+  Undo/Redo preserves fractional grid results rather than rounding them again.
+- No polling timer, worker or new rendering loop is introduced. See
+  [precise geometry QA](PRECISE_GEOMETRY_QA_20261025.md) for regression, native
+  save/readback evidence. The stale-property limitation recorded in that phase
+  is addressed by the following command-sync changes.
+
+### Property panels that follow designer commands
+
+- Moving, resizing, aligning and replaying history refresh the existing property
+  rows through the scene's change notification. A common value replaces the
+  mixed-selection placeholder immediately; Undo restores the mixed state.
+- The refresh does not rebuild the inspector or reset its filter. A field's own
+  live typing keeps its partial decimal text and single-edit Undo session.
+- Shared panels check their binding owner. Hidden, closed or replaced views do
+  not refresh stale fields; showing a hidden designer catches up once.
+- There is no idle polling, new timer or background worker. See
+  [property command synchronization QA](PROPERTY_COMMAND_SYNC_QA_20261025.md)
+  for regression coverage, native UI evidence and remaining limitations.
+
+### Nested menus return keyboard focus to their owner
+
+- On the GLFW backend, closing a mouse-selected submenu now returns native
+  focus directly to the surviving owner **before** hiding the popup tree.
+  The root menu is no longer briefly activated just before it disappears.
+- macOS designer menu actions can be followed immediately by Save, Undo/Redo
+  or canvas keys without an extra click. Keyboard submenu navigation is retained.
+- Independent forms, new focus intent and background applications remain
+  protected; there is no polling or new timer. See
+  [nested menu focus QA](MENU_KEYBOARD_QA_20261025.md) for actual coverage.
+
+### Predictable editor typing and Undo boundaries
+
+- Replacing a selection and rapidly typing adjacent characters now forms one
+  Undo transaction, rather than leaving the first replacement character behind.
+  Undo/Redo retains original bytes, including Unicode and mixed line endings.
+- Paste, multi-character input commits, bracket wrapping, Save, history replay,
+  pointer/focus changes and caret navigation remain separate from later typing.
+  An empty text-input event no longer deletes the selected document text.
+- This uses UI-thread history metadata, not polling or a new timer. See
+  [editor typing QA](EDITOR_TYPING_QA_20261026.md) for native UI evidence,
+  performance samples and the remaining native Unicode-input limitation.
+
+### Modal-safe timers and reliable dialog actions
+
+- GLFW timers no longer recursively enter the same active callback when it opens
+  a modal window. Other timers keep advancing; stop, restart and panic cleanup
+  release the original arming without modifying a replacement timer.
+- Dialog buttons added **after** sizing now receive their footer layout even when
+  the footer bounds have not changed. Late-added actions no longer remain 0×0
+  and invisible; trailing padding and spacing survive repeated layout.
+- `examples/timer-lifecycle` demonstrates modal callbacks, restartable two-second
+  UI delays, cancellation and explicit state snapshots. The framework adds no
+  polling timer or background worker. UI-thread ownership remains required.
+- Before/after reproduction, Windows/macOS desktop checks and limitations are in
+  [timer and dialog QA](TIMER_LIFECYCLE_QA_20261025.md).
+
+### Pointer actions that keep editing predictable
+
+- Clicking, closing or dragging an editor tab now hands keyboard focus back to
+  its visible document, without an extra click in the text area. Window titles
+  follow committed page changes immediately instead of waiting for the title poll.
+- IDE toolbar mouse actions preserve the current content focus: Save then type,
+  Select All, Undo and Go to Line continue targeting the intended editor. A
+  navigation/property input keeps its own focus; commands do not silently fall
+  back to a different document.
+- SDK hosts can opt in with `TabBar.SetPointerFocusCallback` and
+  `ToolBar.SetPreserveContentFocus`. Default controls and keyboard tab-strip
+  navigation remain unchanged. Drag previews are explicitly retired after use.
+- Scope, exact file readback and native-platform results are recorded in
+  [pointer-focus QA](EDITOR_POINTER_FOCUS_QA_20261025.md). No new idle polling
+  or background work is introduced.
+
+### Distinct drag feedback and reliable input cleanup
+
+- SDK-only applications now have built-in move/copy/link/reject cursor artwork;
+  optional PNG overrides validate dimensions and hotspots. Drag cursors include
+  the actual, bounded content thumbnail rather than an empty preview allocation.
+- Temporary Cairo pixels and native cursor handles are retired explicitly;
+  `ReleaseDropCursors` preserves shared fallbacks. GLFW drags no longer wake
+  themselves every millisecond, and completed drags clear stale mouse capture.
+- Escape cancels GLFW drags without typing into background editors. Windows OLE
+  now honors cancellation before button release and exposes the correct
+  `IDropSource` identity. `examples/drag-feedback` demonstrates all four actions.
+- macOS ten-package race-short: **5,616 pass / 47 skip / 0 fail**, five forced
+  native cursor/GL checks, exact drag snapshots, and IDE save/undo readback passed.
+  See [drag feedback QA](CURSOR_FEEDBACK_QA_20261025.md) for Windows evidence,
+  short-interval CPU samples and explicit remaining focus/DPI/platform limits.
+- The follow-up Windows native-loop fix restores target-hover paints, SDK timers
+  and worker `gui.Post` callbacks **while the mouse remains held**. Stationary
+  drags do not continuously repaint; the existing frame scheduler remains in charge.
+  See [native-loop scheduling QA](OLE_UI_PUMP_QA_20261025.md) for real pixel,
+  callback, CPU and file-readback evidence and the remaining platform/focus limits.
+
+### Precise tab strips and native input routing
+
+- Overflow starts at a whole tab boundary; trailing titles are elided to their
+  actual visible width. Tiny remainders no longer expose clipped icons or
+  invisible close targets. Painting, hit testing and drag insertion agree.
+- `TabWidget` stays inside even a zero-height owner. The new
+  `examples/tab-overflow` demonstrates narrow strips, the full-title chooser,
+  keyboard/wheel navigation, Unicode editing, reordering and snapshots.
+- macOS Control-Tab now reaches GLFW instead of being consumed by Cocoa;
+  native dialogs and IME composition retain ownership. Wheel dispatch uses
+  the delivered event's coordinates rather than an unrelated polled pointer.
+- macOS nine-package race-short: **5,604 pass / 46 skip / 0 fail**, four forced
+  native GL probes, and actual SDK/IDE input, drag, close and save/readback
+  passed. Windows 10 six-package targeted race tests (three runs), a clean SDK
+  interaction replay and IDE save/undo/resize checks also passed. See
+  [tab geometry and native-input QA](TABSTRIP_GEOMETRY_QA_20261025.md)
+  for exact coverage, resource warnings, benchmarks and platform limitations.
+
+### Immediate resize-resource retirement
+
+- Window backbuffers now share explicit painter-before-surface retirement.
+  GLFW resizes/close no longer leave large native Cairo allocations waiting for
+  Go finalizers; unchanged frames retain their surface, painter and pixels.
+- Recursive GLFW paint requests defer to the next frame, and a Draw-triggered
+  close waits for the current frame to unwind before freeing native resources.
+  Physical framebuffer sizes and partial-update behavior remain unchanged.
+- Native GL verification covers 48 actual resizes with PBO/direct pixel readback,
+  retained-wrapper retirement assertions and safe close/reentry. macOS SDK/IDE
+  border dragging and input/save/undo checks passed; race-short is **5,591 pass /
+  46 skip / 0 fail**. Windows 10 six-package targeted race tests (three runs),
+  native SDK/IDE resize/edit checks, three About return paths and three mandatory
+  bundled-gopls integrations also passed. See [resource-lifetime QA](BACKBUFFER_LIFETIME_QA_20261025.md)
+  for exact platform coverage and performance limits.
+
+### Clean popup edges and reliable About return focus
+
+- Native GLFW popups now preserve premultiplied alpha through presentation;
+  actual framebuffer capability decides whether to use rounded transparency
+  or a fully painted opaque rectangle. Ordinary windows do not inherit the hint.
+- Inset menu borders no longer lose half their stroke. GPU chart overlays retain
+  correct alpha instead of multiplying it twice. No new polling or timers.
+- About lets the modal owner capture editor focus before activating its Close
+  button. Closing by mouse, Enter or Escape supports immediate typing and saving,
+  without clicking the editor again or overriding an explicitly changed focus.
+- Eight-package macOS race-short: **5,585 pass / 45 skip / 0 fail**; three forced
+  native GL probes and three bundled-gopls integrations passed. Native SDK pixel
+  checks and IDE save/readback passed. Windows pure-Go cross-compilation passed,
+  but that checkpoint's remote test machine was unreachable. Windows native
+  verification was subsequently completed in the resource-lifetime phase above;
+  Linux native UI remains untested. See [popup surface and focus QA](POPUP_SURFACE_QA_20261025.md).
+
+### Retained glyphs and precise input geometry
+
+- SDK `Edit` / `TextBlock` now retain each glyph's owning font, using the same
+  native fallback as ordinary text drawing. Mixed Chinese, Latin and emoji no
+  longer use a single font's missing-glyph indices in fields.
+- Fractional caret positions are shared by hit testing, selections, horizontal
+  scrolling and input-method geometry. Wrapping retains runs rather than
+  reshaping on repaint; terminal CR/CRLF preserves the final empty line.
+- Added `paint.LayoutText` without changing the `Font` / `ScaledFont` interfaces.
+  This remains simple LTR/rune layout, not full complex-script shaping.
+- macOS: **5,574 pass / 44 skip / 0 fail** in eight-package race-short regression,
+  three forced bundled-gopls integrations, and native SDK/IDE readback checks.
+  **This revision is not Windows-UI-verified:** both test-host addresses failed
+  SSH connectivity; the earlier Windows results below belong to the previous
+  revision. See [glyph/layout QA](TEXTBLOCK_FALLBACK_QA_20261025.md).
+
+<img src="screenshots/edit-fallback-20261025-mac.png" width="760" alt="Native macOS SDK field showing Chinese text and colored emoji with retained font fallback">
+
+### Field context menus and safer editing
+
+- Unicode field completion now preserves the suffix, checks edit permissions
+  and validation, and participates in local Undo/Redo. Prefix extraction avoids
+  copying the remainder of a long field. The Go-to-Line bar delegates field
+  history without allowing an empty Undo to modify the document behind it.
+- Context menus retain the target selection highlight without drawing an
+  unfocused caret. See the [completion example](examples/edit-completion) and
+  [follow-up QA](EDIT_COMPLETION_QA_20261025.md) for current verification boundaries.
+- SDK `Edit` now provides an owned, reusable right-click / Shift+F10 menu with
+  vector icons, platform shortcut hints and state-aware actions. Read-only
+  fields retain Copy; dismissed menus release their temporary callbacks.
+- Field Undo/Redo stores changed spans, bounded to 256 entries / 1 MiB of text.
+  Empty history does not undo the host document. Programmatic `SetText` resets
+  field history; derived controls may still override shortcut routing.
+- Cut deletes only after a successful clipboard write and revalidates the
+  selection after native callbacks. Failed writes preserve text and history.
+- Appearance settings have measured label gutters and row spacing, with room
+  for the final hint and action buttons.
+- macOS race-short regression: **5,342 pass / 42 skip / 0 fail** across seven
+  packages, plus three forced bundled-gopls integrations. Native menu Delete,
+  Undo/Redo, read-only behavior and settings save/readback were checked.
+  Windows repeated targeted race tests and native SDK/IDE interactions also
+  passed; these do not supersede the recorded full-suite/modal failures.
+  See [initial field menu QA](EDIT_MENU_QA_20261025.md) and
+  [current completion QA](EDIT_COMPLETION_QA_20261025.md).
+
+### Predictable ComboBox selection and popup focus
+
+- Appearance settings now use selection-only language, theme and indentation
+  fields: typed matching labels update the value that Apply actually saves.
+- SDK `ComboBox.SetEditable(false)` renders the committed label and optional
+  icon, with clipped/elided text. Free-text editing remains the default.
+- Keyboard and mouse share a visible pending selection. Enter/Space commits;
+  Escape cancels only the dropdown, and Tab cancels its preview and leaves the
+  composite field. Arrow/Page/Home/End navigation shares the list selection model.
+- Editable fields have one automatic Tab stop on their actual editor, rather
+  than trapping typing on the outer ComboBox frame.
+- Committed Unicode input is handled independently of an outer modal shortcut's
+  modifier state. Search and label caching add no polling or background worker.
+- Dropdowns now size the actual viewport before allocating the native surface,
+  with a default 10-row preference and `SetMaxVisibleItems`. Work-area limits,
+  fractional metrics and changing an open preview have regression coverage.
+- Windows modal teardown returns native activation before hiding the dialog,
+  guarded against overriding an independent foreground window.
+- macOS dropdown mouse selection restores native focus before hiding the popup,
+  so an ongoing modal settings dialog does not fall behind the main window.
+  This uses no new timer, polling loop or background worker.
+- See the [SDK example](examples/combobox), [API notes](docs/SDK_FEATURES.md#combobox-选择模式与弹窗契约),
+  [earlier interaction QA](COMBOBOX_QA_20261025.md),
+  [viewport/focus QA](POPUP_VIEWPORT_QA_20261025.md) and
+  [native mouse follow-up](POPUP_MOUSE_QA_20261025.md). These are development
+  changes, not a release: Windows full gates/native-modal tests and macOS
+  standalone SDK capture still have explicitly recorded failures or limitations.
+
+### Readable command palette and SDK list rows
+
+- Command names, descriptions and unavailable states now occupy separate,
+  measured slots instead of competing for one clipped line. Full descriptions
+  remain available in a selectable, read-only, scrollable detail pane.
+- Keyboard selection updates details, empty searches clear stale descriptions,
+  and unavailable commands remain guarded before and after modal dismissal.
+- SDK `ListWidget.SetItemPresenter` adds opt-in two-line rows without changing
+  `ListItem`. Visible-row caching is bounded to 128 entries, with no polling or
+  animation timers. Padding is shared by drawing and hit testing.
+- Verification and limitations: [command palette QA](PALETTE_DETAILS_QA_20261025.md)
+  · [macOS](screenshots/palette-details-20261025-mac.png) /
+  [Windows screenshots](screenshots/palette-details-20261025-windows.png).
+
+### Caret visibility and continuous property editing
+
+- Narrow SDK input fields now reveal the active caret horizontally, keep text
+  inside their padding and reset scrolling when values shrink or fields widen.
+  Navigation reuses shaped glyphs rather than reshaping on every arrow key.
+- Designer Undo/Redo retains a live property editor's focus, so the next input
+  edits that property instead of reaching the canvas. Removed, hidden, disabled
+  or rebound controls are not revived. Retired property rows reject late writes
+  from old blur/dialog callbacks, preventing them from undoing Undo.
+- Input validators use rune-based replacement ranges for Chinese and emoji.
+- Tests, native UI checks and limitations: [input and focus QA](EDIT_FOCUS_QA_20261025.md).
+
+### Precision-safe properties and compact input rows
+
+- Floating-point properties show compact values at rest, but preserve exact
+  editable text and saved geometry. Up/Down supports grouped changes and Undo;
+  invalid/infinite input is rejected without changing the bound property.
+- Mixed-selection hints are readable in both themes. Common property labels
+  follow the locale without changing IDs; narrow labels and hints are elided
+  and clipped, with full values available in tooltips.
+- SDK single-line inputs no longer scroll their only line out of view when
+  fractional font metrics exceed a compact row's height.
+- Verification and remaining limitations: [property UI QA](PROPERTY_POLISH_QA_20261025.md).
+
+### Native dialog focus and contextual commands
+
+- macOS file sheets restore keyboard focus to their live, enabled owner after
+  Save/Open/Cancel; they do not activate a background app or override another
+  key window or sheet. No extra timer or render loop is introduced.
+- Designer palette commands share toolbar availability checks. Unavailable
+  commands stay open on Enter, and deferred execution rechecks current state.
+  The status has a separate measured slot; full explanations remain accessible.
+- Reproduction, native UI checks and remaining gaps:
+  [shortcut and command-state QA](SHORTCUT_ROUTING_QA_20261025.md).
+
+### Designer chrome and recent-file consistency
+
+- Quick Open, file-tree/native opens and source navigation share successful-open
+  MRU tracking; restoring a session no longer rewrites recent-file order.
+- Palette icons are bounded to their own square and scale consistently. Rating's
+  compact stars no longer overlap its label; plugin drag identities are unchanged.
+- Layout actions, palette categories and property-sheet chrome now follow the
+  selected English/Chinese locale; duplicate Fit to View commands are removed.
+- Evidence and remaining gaps: [designer details QA](DESIGNER_DETAILS_QA_20261025.md).
+
+### Responsive, keyboard-accessible Welcome
+
+- Welcome now uses real SDK buttons and a virtualized recent-file list, with
+  Tab/Enter, Home/End and page navigation, disabled states and full-path hints.
+- Narrow windows stack content and scroll instead of overlapping. Unicode
+  names are measured and safely elided; light/dark themes and font scaling
+  are supported without animation timers or background polling.
+- The IDE labels its action **New Form**, with host-configured Cmd/Ctrl shortcut
+  hints. See [implementation and native UI verification](WELCOME_UI_QA_20261025.md).
+
+### Window-scoped native text input
+
+- GLFW character callbacks now use the same eligible-focus lookup as Win32
+  text input. Hidden/disabled controls and their logical ancestors, detached
+  controls and unrelated windows cannot consume characters.
+- Owned non-activating popup chains still receive their owner's input;
+  independent Forms keep their own input scope. Characters never fall back to
+  an unfocused root editor. Invalid Unicode scalars are discarded by GLFW.
+- Regression evidence and the Cocoa automation control experiment are recorded
+  in [input routing verification](INPUT_ROUTING_QA_20261025.md).
+
 ### Visible, event-driven navigation history
 
 - Toolbar Back / Forward buttons mirror the editor's location history, with

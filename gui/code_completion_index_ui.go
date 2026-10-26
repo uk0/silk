@@ -42,18 +42,9 @@ func (p *CompletionPopup) asynchronousItems(ed *CodeEditor, text string) []Compl
 		r.text = text
 		p.indexWorker.request(r)
 	}
-	items := staticCompletionItemsForLanguage(r.language)
-	// Keep the currently typed fragment available while the COMPLETE document
-	// is indexed. Do not scan a long/minified current line on the input thread.
-	if p.prefix != "" {
-		for _, item := range items {
-			if item.Text == p.prefix {
-				return items // preserve the keyword/type kind, without a duplicate row
-			}
-		}
-		items = append(items, CompletionItem{Text: p.prefix, Kind: CikVariable, Detail: "identifier"})
-	}
-	return items
+	// Do not synthesize the unchanged typed fragment as an actionable row.
+	// An empty visible list still retains open intent for local/LSP delivery.
+	return staticCompletionItemsForLanguage(r.language)
 }
 
 func (p *CompletionPopup) receiveLocalIndex(ed *CodeEditor, result completionIndexResult) {

@@ -12,6 +12,9 @@ import (
 
 var privateDndData []interface{}
 var dndActive bool // true during DoDragDrop loop, prevents re-entrant mouse handling
+var dndCancelRequested bool
+
+const dragIdleWait = time.Second / 60
 
 type dndContext struct {
 	pa      DndAction
@@ -79,6 +82,9 @@ func (this *Window) DoDragDrop(from interface{},
 	availableActions DndAction,
 	data ...interface{}) DndAction {
 
+	if dndActive {
+		return DndIgnore
+	}
 	privateDndData = nil
 
 	if len(data) == 0 {
@@ -103,14 +109,6 @@ func (this *Window) DoDragDrop(from interface{},
 		}
 	}
 
-	if content == nil {
-		content = paint.NewPixmap(32, 16)
-		g := content.NewPainter()
-		g.SetBrush1(paint.Color{0, 0, 0, 127})
-		g.Rectangle(0, 0, 32, 16)
-		g.Fill()
-	}
-
 	ctx := &dndContext{
 		pa:      availableActions,
 		action:  DndIgnore,
@@ -121,28 +119,31 @@ func (this *Window) DoDragDrop(from interface{},
 
 	// Set override cursor for drag visual feedback
 	cursors := GenerateDropCursors(content)
-	if len(cursors) > 0 {
-		SetOverrideCursor(cursors[0])
-	}
+	previousCursor := SetOverrideCursor(cursors[0])
+	defer func() { SetOverrideCursor(previousCursor); ReleaseDropCursors(cursors); privateDndData = nil }()
 
 	// Interactive drag loop: poll events and track mouse until button released
 	result := DndIgnore
 	var lastDropWidget IWidget
+	defer func() { dndDragLeave(lastDropWidget) }()
 	// Cursor position the drag was last offered to the widget tree at. OLE calls
-	// DragOver off real mouse-move messages while this loop polls every
-	// millisecond, and dndDragOver reports no holder for a target that refuses
-	// the drag, so an unconditional walk re-ran OnDragEnter on every refusing
-	// target about a thousand times a second with the cursor standing still.
+	// DragOver off real mouse-move messages, and dndDragOver reports no holder
+	// for a target that refuses
+	// the drag. Only revisit the widget tree when the pointer moves, not on
+	// every idle wakeup while a refusing target is under a stationary cursor.
 	walked := false
 	var walkX, walkY float64
 	dragging := true
-	dndActive = true
-	defer func() { dndActive = false }()
+	dndActive, dndCancelRequested = true, false
+	defer func() {
+		dndActive, dndCancelRequested = false, false
+		forgetMouseAfterModalLoop(this)
+	}()
 
 	for dragging {
 		glfw.PollEvents()
 		serviceUIFrame()
-		if shouldQuit || this.glfwWin == nil {
+		if dndCancelRequested || shouldQuit || this.glfwWin == nil {
 			break
 		}
 
@@ -198,14 +199,27 @@ func (this *Window) DoDragDrop(from interface{},
 			}
 		}
 
-		glfw.PostEmptyEvent()
-		time.Sleep(time.Millisecond)
+		// Native input/UI wakeups interrupt the wait immediately. Do not wake
+		// ourselves 1000 times/second while a stationary drag is held.
+		if dragging {
+			glfw.WaitEventsTimeout(dragIdleWait.Seconds())
+		}
 	}
 
-	// Clean up drag leave on the last target
-	dndDragLeave(lastDropWidget)
-
-	SetOverrideCursor(nil)
-	privateDndData = nil
 	return result
+}
+
+// The nested loop consumes button-up while ordinary mouse dispatch is suspended.
+// Retire both armed and active capture, or the next move captures the old source
+// and a subsequent toolbar click starts another drag instead of its own action.
+func forgetMouseAfterModalLoop(win *Window) {
+	captureStack = captureStack[:0]
+	releaseCapture()
+	setMouseHoverWidget(nil)
+	lastMouseWidget = nil
+	mouseMoving = false
+	if win != nil {
+		win.autoCaptured = false
+		win.toCapture = false
+	}
 }

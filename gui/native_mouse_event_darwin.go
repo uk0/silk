@@ -6,6 +6,7 @@ package gui
 #cgo LDFLAGS: -framework Cocoa
 int silkMouseButtonEventPosition(void *window, int button, int action, double *x, double *y);
 int silkHasMarkedText(void *window);
+int silkScrollEventPosition(void *window, double *x, double *y);
 int silkInputIsMainThread(void);
 */
 import "C"
@@ -22,5 +23,14 @@ func nativeMouseButtonEventPosition(window *glfw.Window, button glfw.MouseButton
 	}
 	var x, y C.double
 	ok := C.silkMouseButtonEventPosition(window.GetCocoaWindow(), C.int(button), C.int(action), &x, &y)
+	return float64(x), float64(y), ok != 0
+}
+
+func nativeScrollEventPosition(window *glfw.Window) (float64, float64, bool) {
+	if window == nil {
+		return 0, 0, false
+	}
+	var x, y C.double
+	ok := C.silkScrollEventPosition(window.GetCocoaWindow(), &x, &y)
 	return float64(x), float64(y), ok != 0
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/go-gl/gl/v2.1/gl"
@@ -79,20 +80,25 @@ var (
 )
 
 type Window struct {
-	glfwWin    *glfw.Window
-	backBuffer paint.Pixmap
+	glfwWin                *glfw.Window
+	nativeKeyCleanup       func()
+	transparentFramebuffer bool // actual native capability, not only a requested hint
+	backBuffer             paint.Pixmap
 	// backPainter is reused across paint cycles so we don't pay the
 	// allocation + cairo_create cost every frame. It must be invalidated
 	// whenever backBuffer is reallocated (e.g. on resize) — see paint().
-	backPainter paint.Painter
-	backWidth   int
-	backHeight  int
-	widget      IWidget
-	wt          WindowType
-	title       string
-	glTexture   uint32
-	dirty       bool
-	enabled     bool
+	backPainter       paint.Painter
+	painting          bool
+	destroyAfterPaint bool
+	backWidth         int
+	backHeight        int
+	widget            IWidget
+	wt                WindowType
+	title             string
+	icon              paint.Icon
+	glTexture         uint32
+	dirty             bool
+	enabled           bool
 
 	// Dirty region tracking. fullDirty=true (the default) means the next
 	// paint redraws the whole window. dirtyRegion accumulates partial
@@ -314,6 +320,8 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	glfw.WindowHint(glfw.ContextVersionMajor, 2)
 	glfw.WindowHint(glfw.ContextVersionMinor, 1)
 	glfw.WindowHint(glfw.Resizable, glfw.True)
+	// Hints are global: explicitly disable alpha again for forms/children.
+	glfw.WindowHint(glfw.TransparentFramebuffer, popupFramebufferHint(wt))
 
 	switch wt {
 	case WtPopup:
@@ -359,6 +367,7 @@ func (this *Window) create(p *Window, wt WindowType) error {
 
 	winMap[gw] = this
 	this.glfwWin = gw
+	this.transparentFramebuffer = wt == WtPopup && gw.GetAttrib(glfw.TransparentFramebuffer) == glfw.True
 	this.wt = wt
 	this.enabled = true
 	this.dirty = true
@@ -390,6 +399,7 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	gw.SetCharCallback(onChar)
 	gw.SetDropCallback(onDrop)
 	gw.SetCursorEnterCallback(onCursorEnter)
+	this.nativeKeyCleanup = installNativeTabNavigation(gw)
 
 	if rect.Width != 0 || rect.Height != 0 {
 		this.widget.SetSize(rect.Size())
@@ -406,6 +416,13 @@ func (this *Window) create(p *Window, wt WindowType) error {
 }
 
 func (this *Window) destroy() {
+	if this.painting {
+		// Draw callbacks may close their owner. Its current painter and GL
+		// context stay alive until the frame unwinds; never free them in Draw.
+		this.destroyAfterPaint = true
+		return
+	}
+	this.releaseNativeKeyRouting()
 	this.dismissOwnedPopups()
 	dismissOwnedToasts(this.widget)
 	if this.wt == WtPopup && this.glfwWin != nil {
@@ -438,13 +455,8 @@ func (this *Window) destroy() {
 		this.textureWidth = 0
 		this.textureHeight = 0
 	}
-	// Drop painter and back buffer in a defined order: painter first, so
-	// the cairo Context releases its surface reference before we drop the
-	// surface. Both have finalizers that handle the underlying C resources;
-	// dropping the references here just makes the destruction order
-	// deterministic instead of GC-driven.
-	this.backPainter = nil
-	this.backBuffer = nil
+	this.releaseBackBuffer()
+	this.icon = nil
 	this.widget = nil
 	if pointerWindow == this {
 		pointerWindow = nil
@@ -495,32 +507,30 @@ func (this *Window) clearWindowInput() {
 }
 
 func (this *Window) getBackBuffer(width, height int) paint.Pixmap {
-	// Use the exact framebuffer dimensions instead of aligning to multiples
-	// of 16. The old alignment caused a mismatch: TexImage2D received the
-	// real framebuffer size (fbw x fbh) while the pixel buffer was allocated
-	// at the larger aligned size, leading to row-stride / data-offset errors.
-	if width <= 0 {
-		width = 1
-	}
-	if height <= 0 {
-		height = 1
-	}
-	if width != this.backWidth || height != this.backHeight {
-		this.backWidth = width
-		this.backHeight = height
-		this.backBuffer = paint.NewPixmap(width, height)
-	}
-
+	// GLFW uses exact physical dimensions: padding would change the texture
+	// row stride and resample pixel-aligned glyphs during presentation.
+	this.ensureBackBuffer(width, height)
 	return this.backBuffer
 }
 
 func (this *Window) paint() {
+	if this.painting {
+		// A nested native paint must not reset the in-use context/clip stack.
+		this.MarkFullDirty()
+		return
+	}
 	if this.widget == nil || this.glfwWin == nil {
 		return
 	}
 
+	this.painting = true
 	started := time.Now()
 	defer func() {
+		this.painting = false
+		if this.destroyAfterPaint {
+			this.destroyAfterPaint = false
+			this.destroy()
+		}
 		now := time.Now()
 		this.framePacer.record(started, now)
 		glfwAnimationPacer.record(started, now)
@@ -554,17 +564,10 @@ func (this *Window) paint() {
 	fullDirty = fullDirty || this.glTexture == 0 || len(this.glOverlays) > 0 || GlobalPerfStats.IsVisible() ||
 		this.textureWidth != int32(fbw) || this.textureHeight != int32(fbh)
 
-	// Reuse the back buffer when dimensions haven't changed.
-	// Only allocate a new pixmap when the framebuffer size differs. A size
-	// change invalidates any partial dirty region — there's no valid prior
-	// content to preserve outside it. Also drop the cached painter, which
-	// is bound to the previous surface.
-	if this.backBuffer == nil || this.backWidth != fbw || this.backHeight != fbh {
-		this.backBuffer = paint.NewPixmap(fbw, fbh)
-		this.backWidth = fbw
-		this.backHeight = fbh
+	// A replacement invalidates all previous pixels. Explicit release occurs
+	// before allocation, keeping peak native memory bounded during resize.
+	if this.ensureBackBuffer(fbw, fbh) {
 		fullDirty = true
-		this.backPainter = nil
 	}
 	backBuffer := this.backBuffer
 	// Reuse the painter when possible. Reset its state to a known baseline:
@@ -633,6 +636,9 @@ func (this *Window) paint() {
 	}
 
 	backPainter.Restore()
+	if this.destroyAfterPaint {
+		return // teardown after the frame unwinds; do not present a closed owner
+	}
 	backBuffer.Flush()
 
 	// Get raw Cairo pixel data directly (BGRA format, no copy)
@@ -702,7 +708,7 @@ func (this *Window) paint() {
 
 	// Draw fullscreen quad at framebuffer resolution
 	gl.Viewport(0, 0, int32(fbw), int32(fbh))
-	drawFullscreenQuadUV(this.glTexture, int32(fbw), int32(fbh), texU, texV)
+	drawFullscreenQuadSurface(this.glTexture, int32(fbw), int32(fbh), texU, texV, this.transparentFramebuffer)
 
 	// GPU chart fast-path: draw queued series line strips over the blit.
 	this.drawGLOverlays(int32(fbw), int32(fbh))
@@ -757,7 +763,15 @@ func (this *Window) Native() WinId {
 	return WinId(uintptr(unsafe.Pointer(this.glfwWin)))
 }
 
+func (this *Window) releaseNativeKeyRouting() {
+	if cleanup := this.nativeKeyCleanup; cleanup != nil {
+		this.nativeKeyCleanup = nil
+		cleanup()
+	}
+}
+
 func (this *Window) OnDestroy() {
+	this.releaseNativeKeyRouting()
 	if this.glfwWin == nil {
 		core.Warn("window seems already destroyed.")
 		return
@@ -981,10 +995,19 @@ func (this *Window) SetTitle(s string) {
 	}
 }
 
-func (this *Window) SetIcon(icon paint.Icon) {
-	if this.glfwWin != nil {
-		applyGLFWWindowIcon(runtime.GOOS, icon, this.glfwWin.SetIcon)
+func (this *Window) clearIcon() {
+	this.icon = nil
+	if runtime.GOOS != "darwin" && this.glfwWin != nil {
+		this.glfwWin.SetIcon(nil)
 	}
+}
+
+func (this *Window) SetIcon(icon paint.Icon) {
+	if this.glfwWin == nil || icon == nil || icon.IsAir() {
+		return
+	}
+	this.icon = icon
+	applyGLFWWindowIcon(runtime.GOOS, icon, this.glfwWin.SetIcon)
 }
 
 func (this *Window) updateTitle() {
@@ -1194,6 +1217,12 @@ func (this *Window) setVisible(b bool) {
 			focusReturn = prepareTransientFocusReturn(this, this.popupOwner, this.popupRestoreFocus, nativeWindowFocused)
 		} else if this.wt == WtPopup {
 			debugFocusReturn("prepare-skip", "logical-focus-outside-popup", this, this.popupOwner, transientFocusGeneration, nativeWindowFocused)
+		}
+		// Return directly to the surviving owner before dismissing descendants.
+		// Otherwise a focused submenu activates this root while it is closing,
+		// then hiding the root leaves Cocoa without a key window.
+		if focusReturn.restorePopupOwnerBeforeHide(func(w *Window) bool { return w.glfwWin != nil && w.IsVisible() }, nativeWindowFocused, nativeApplicationActive, func(w *Window) { w.glfwWin.Focus() }) {
+			focusReturn = nil
 		}
 		this.dismissOwnedPopups()
 		if this.wt == WtPopup && this.widget != nil {
@@ -1886,203 +1915,109 @@ func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action,
 		deliverCapturedMouseButton(capWin, button, action, tx, ty)
 		return
 	}
-	if action == glfw.Press && capWidget == nil {
-		// Clicks can arrive without a cursor-move event after popup/modal
-		// teardown. Resolve both target and hover from this delivered event,
-		// rather than routing to a stale widget or failing Button.IsHover().
-		lastMouseWidget = win.widget.FindWidgetAt(x, y)
-		setMouseHoverWidget(lastMouseWidget)
-	}
-	if button == glfw.MouseButtonLeft && core.IsDebugOn() {
-		core.Debug("mouse left: receiver=", reflect.TypeOf(win.widget), ", action=", action,
-			", event-pos=", fromEvent, ", pos=", x, ",", y, ", target=", reflect.TypeOf(lastMouseWidget),
-			", hover=", reflect.TypeOf(mouseHoverWidget), ", capture=", reflect.TypeOf(capWidget))
-	}
+	dispatchMouseButtonAt(win, button, action, x, y)
+}
 
+// Both native-window and translated cross-window events use the same gesture
+// routing. Capture controls delivery; a fresh hit-test controls hover. A button
+// event need not have a preceding MOVE (stationary clicks, Cocoa/AX, remote UI).
+func dispatchMouseButtonAt(win *Window, button glfw.MouseButton, action glfw.Action, x, y float64) {
+	if win == nil || win.widget == nil || !win.enabled {
+		return
+	}
+	capWidget := curCapture()
+	hit := win.widget.FindWidgetAt(x, y)
 	if action == glfw.Press {
-		// Set as active form
 		if win.wt == WtForm {
 			activeForm = win
 		}
-
-		switch button {
-		case glfw.MouseButtonLeft:
-			lastMouseTime = time.Now()
-			win.toCapture = true
-			if lastMouseWidget == nil {
-				p := win.widget.FindWidgetAt(x, y)
-				lastMouseWidget = p
+		lastMouseWidget = hit
+		if capWidget != nil {
+			if capWidget.OwnerWindow() != win {
+				return
 			}
-			if lastMouseWidget != nil {
-				x1, y1 := lastMouseWidget.MapFromWindow(x, y)
-				widget := lastMouseWidget.NakedWidget()
-				if widget.child != nil && curCapture() == lastMouseWidget {
-					p1 := widget.FindWidgetAt(x1, y1)
-					if p1 != nil && p1 != widget {
-						lastMouseWidget = p1
-						x1, y1 = lastMouseWidget.MapFromWindow(x, y)
-						win.autoCaptured = pushCapture(lastMouseWidget)
-						win.toCapture = false
-					}
-				}
-				if i, ok := lastMouseWidget.(IEventLeftDown); ok {
-					i.OnLeftDown(x1, y1)
-				}
-			}
-		case glfw.MouseButtonRight:
-			lastMouseTime = time.Now()
-			win.toCapture = true
-			if lastMouseWidget == nil {
-				p := win.widget.FindWidgetAt(x, y)
-				lastMouseWidget = p
-			}
-			if lastMouseWidget != nil {
-				x1, y1 := lastMouseWidget.MapFromWindow(x, y)
-				widget := lastMouseWidget.NakedWidget()
-				if widget.child != nil && curCapture() == lastMouseWidget {
-					p1 := widget.FindWidgetAt(x1, y1)
-					if p1 != nil && p1 != widget {
-						lastMouseWidget = p1
-						x1, y1 = lastMouseWidget.MapFromWindow(x, y)
-						win.autoCaptured = pushCapture(lastMouseWidget)
-						win.toCapture = false
-					}
-				}
-				if i, ok := lastMouseWidget.(IEventRightDown); ok {
-					i.OnRightDown(x1, y1)
-				}
-			}
-		case glfw.MouseButtonMiddle:
-			// No win.toCapture here: the middle button has no drag semantics,
-			// and arming capture without a matching release path would strand
-			// it on the pressed widget. Mirrors on_WM_MBUTTONDOWN.
-			lastMouseTime = time.Now()
-			if lastMouseWidget == nil {
-				lastMouseWidget = win.widget.FindWidgetAt(x, y)
-			}
-			if lastMouseWidget != nil {
-				if i, ok := lastMouseWidget.(IEventMiddleDown); ok {
-					x1, y1 := lastMouseWidget.MapFromWindow(x, y)
-					i.OnMiddleDown(x1, y1)
-				}
-			}
+			lastMouseWidget = capWidget
 		}
-	} else if action == glfw.Release {
-		switch button {
-		case glfw.MouseButtonLeft:
-			lastMouseTime = time.Now()
-			if lastMouseWidget != nil {
-				cw := lastMouseWidget
-				if i, ok := lastMouseWidget.(IEventLeftUp); ok {
-					x1, y1 := lastMouseWidget.MapFromWindow(x, y)
-					i.OnLeftUp(x1, y1)
-				}
-				if win.autoCaptured {
-					popCapture(cw)
-				}
-			}
-			win.autoCaptured = false
-			win.toCapture = false
-		case glfw.MouseButtonRight:
-			lastMouseTime = time.Now()
-			if lastMouseWidget != nil {
-				cw := lastMouseWidget
-				if i, ok := lastMouseWidget.(IEventRightUp); ok {
-					x1, y1 := lastMouseWidget.MapFromWindow(x, y)
-					i.OnRightUp(x1, y1)
-				}
-				if win.autoCaptured {
-					popCapture(cw)
-				}
-			}
-			win.autoCaptured = false
-			win.toCapture = false
-		case glfw.MouseButtonMiddle:
-			lastMouseTime = time.Now()
-			if lastMouseWidget != nil {
-				if i, ok := lastMouseWidget.(IEventMiddleUp); ok {
-					x1, y1 := lastMouseWidget.MapFromWindow(x, y)
-					i.OnMiddleUp(x1, y1)
+		if button == glfw.MouseButtonLeft || button == glfw.MouseButtonRight {
+			win.toCapture = true
+			// Popup/container capture can choose a child on PRESS only. Once
+			// pressed, the child owns RELEASE even if it arrives over another row.
+			if capWidget != nil && capWidget.NakedWidget().child != nil {
+				x1, y1 := capWidget.MapFromWindow(x, y)
+				if child := capWidget.FindWidgetAt(x1, y1); child != nil && child != capWidget {
+					lastMouseWidget = child
+					win.autoCaptured = pushCapture(child)
+					win.toCapture = false
 				}
 			}
 		}
 	}
-}
-
-// deliverCapturedMouseButton delivers a mouse button event to the captured
-// widget's owner window, using translated coordinates.
-// For menu popups, we find the actual widget under the cursor rather than
-// relying on lastMouseWidget, which might be the menu container instead of
-// the specific button the user clicked.
-func deliverCapturedMouseButton(capWin *Window, button glfw.MouseButton, action glfw.Action, winX, winY float64) {
-	defer func() {
-		if r := recover(); r != nil {
-			core.Warn("panic in deliverCapturedMouseButton: ", r)
-		}
-	}()
-
-	if capWin == nil || capWin.widget == nil {
-		return
-	}
-
-	// Find the actual widget under the cursor in the capture window.
-	// This is critical for menus: lastMouseWidget may point to the menu
-	// container, but the user clicked a specific button inside it.
 	target := lastMouseWidget
-	if capWin.widget != nil {
-		found := capWin.widget.FindWidgetAt(winX, winY)
-		if found != nil {
-			target = found
-		}
-	}
-	if target == nil {
+	if target == nil || target.OwnerWindow() != win {
 		return
 	}
-
+	// Do not activate a captured button after release outside its hit area,
+	// and do not require stale hover state to activate a stationary menu row.
+	if hit == target {
+		setMouseHoverWidget(target)
+	} else {
+		setMouseHoverWidget(nil)
+	}
+	// Enter/leave handlers are host code and may close or reparent the target.
+	if lastMouseWidget != target || target.OwnerWindow() != win || !target.IsAllAncentorsVisible() {
+		return
+	}
+	lastMouseTime = time.Now()
+	if button == glfw.MouseButtonLeft && core.IsDebugOn() {
+		core.Debug("mouse left dispatch: receiver=", reflect.TypeOf(win.widget), ", action=", action,
+			", pos=", x, ",", y, ", target=", reflect.TypeOf(target),
+			", hover=", reflect.TypeOf(mouseHoverWidget), ", capture=", reflect.TypeOf(capWidget))
+	}
+	x1, y1 := target.MapFromWindow(x, y)
 	if action == glfw.Press {
-		lastMouseWidget = target
 		switch button {
 		case glfw.MouseButtonLeft:
-			lastMouseTime = time.Now()
-			x1, y1 := target.MapFromWindow(winX, winY)
 			if i, ok := target.(IEventLeftDown); ok {
 				i.OnLeftDown(x1, y1)
 			}
 		case glfw.MouseButtonRight:
-			lastMouseTime = time.Now()
-			x1, y1 := target.MapFromWindow(winX, winY)
 			if i, ok := target.(IEventRightDown); ok {
 				i.OnRightDown(x1, y1)
+			}
+		case glfw.MouseButtonMiddle:
+			// Middle clicks never arm automatic drag capture.
+			if i, ok := target.(IEventMiddleDown); ok {
+				i.OnMiddleDown(x1, y1)
 			}
 		}
 	} else if action == glfw.Release {
 		switch button {
 		case glfw.MouseButtonLeft:
-			lastMouseTime = time.Now()
-			cw := target
-			x1, y1 := target.MapFromWindow(winX, winY)
-			if i, ok := cw.(IEventLeftUp); ok {
+			if i, ok := target.(IEventLeftUp); ok {
 				i.OnLeftUp(x1, y1)
 			}
-			if capWin.autoCaptured {
-				popCapture(cw)
-			}
-			capWin.autoCaptured = false
-			capWin.toCapture = false
 		case glfw.MouseButtonRight:
-			lastMouseTime = time.Now()
-			cw := target
-			x1, y1 := target.MapFromWindow(winX, winY)
-			if i, ok := cw.(IEventRightUp); ok {
+			if i, ok := target.(IEventRightUp); ok {
 				i.OnRightUp(x1, y1)
 			}
-			if capWin.autoCaptured {
-				popCapture(cw)
+		case glfw.MouseButtonMiddle:
+			if i, ok := target.(IEventMiddleUp); ok {
+				i.OnMiddleUp(x1, y1)
 			}
-			capWin.autoCaptured = false
-			capWin.toCapture = false
+		}
+		if button == glfw.MouseButtonLeft || button == glfw.MouseButtonRight {
+			if win.autoCaptured {
+				popCapture(target)
+			}
+			win.autoCaptured, win.toCapture = false, false
 		}
 	}
+}
+
+// Translated coordinates stay in the capture window's client space. Never
+// re-hit-test the RELEASE target or bypass the ordinary capture/hover rules.
+func deliverCapturedMouseButton(capWin *Window, button glfw.MouseButton, action glfw.Action, winX, winY float64) {
+	dispatchMouseButtonAt(capWin, button, action, winX, winY)
 }
 
 func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
@@ -2249,7 +2184,10 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 	}
 
 	lastMouseTime = time.Now()
-	cx, cy := gw.GetCursorPos()
+	cx, cy, fromEvent := scrollEventPosition(gw)
+	if !fromEvent {
+		cx, cy = gw.GetCursorPos()
+	}
 
 	gx, gy := win.widget.MapToGlobal(cx, cy)
 	dispatchMouseWheel(win.widget, gx, gy, yoff)
@@ -2258,6 +2196,14 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 var glfwCompositionActive = nativeHasMarkedText
 
 func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
+	// Like OLE, a drag owns keyboard input until it ends. Remember Escape
+	// at event time: press and release may both arrive in one PollEvents batch.
+	if dndActive {
+		if key == glfw.KeyEscape && action == glfw.Press {
+			dndCancelRequested = true
+		}
+		return
+	}
 	// Cocoa delivers GLFW keys before interpretKeyEvents/insertText. While
 	// composing, IME owns the keystroke; do not submit/cancel/navigate the form.
 	if glfwReady && glfwCompositionActive(gw) {
@@ -2307,6 +2253,9 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 	// undo could fire. dispatchShortcut returns true when the key was
 	// consumed by a registered shortcut.
 	if action == glfw.Press && win.dispatchWindowShortcut(vk) {
+		return
+	}
+	if win.dispatchCharacterPalette(key, action, mods) {
 		return
 	}
 	if (action == glfw.Press || action == glfw.Repeat) && win.dispatchTabNavigation(vk) {
@@ -2359,6 +2308,9 @@ func onKey(gw *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods
 }
 
 func onChar(gw *glfw.Window, char rune) {
+	if dndActive {
+		return
+	}
 	noteUIInteraction(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
@@ -2373,17 +2325,9 @@ func onChar(gw *glfw.Window, char rune) {
 		return
 	}
 
-	target := focusWidget
-	if target == nil {
-		target = win.widget
-	}
-	if target == nil {
-		return
-	}
-
-	if it, ok := target.(IEventTextInput); ok {
-		if !unicode.IsControl(char) {
-			it.OnTextInput(string(char))
+	if utf8.ValidRune(char) && !unicode.IsControl(char) {
+		if input := win.textInputTarget(); input != nil {
+			input.OnTextInput(string(char))
 		}
 	}
 }

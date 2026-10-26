@@ -49,7 +49,7 @@ func (e *CodeEditor) SetFindInSelection(enabled bool) error {
 			return nil
 		}
 		s := e.captureFindSelection()
-		if !s.valid {
+		if !s.valid || e.ownsFindSelection() {
 			s = e.findState.selectionCandidate
 		}
 		if s.revision != e.textRevision {
@@ -60,7 +60,7 @@ func (e *CodeEditor) SetFindInSelection(enabled bool) error {
 		s.enabled = true
 		e.findState.scope = s
 	}
-	e.findState.jump = &cursorPos{}
+	e.queueFindJump(cursorPos{}, false)
 	e.findUpdateMatches()
 	e.syncFindBar()
 	e.Update()

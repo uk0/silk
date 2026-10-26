@@ -79,13 +79,7 @@ func (e *Edit) InputMethodCursorRect() geom.Rect {
 	}
 	x := 0.0
 	if row >= 0 && row < len(e.rows) {
-		glyphs := e.rows[row].glyphs
-		if col >= 0 && col < len(glyphs) {
-			x = glyphs[col].X
-		} else if len(glyphs) > 0 {
-			g := glyphs[len(glyphs)-1]
-			x = g.X + float64(g.A)
-		}
+		x = e.rows[row].caretX(col)
 	}
 	sx, sy := e.ScrollPos()
 	w, h := e.Size()

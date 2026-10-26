@@ -13,6 +13,9 @@ func editorLineMoveSystemKey(key int, action, alt bool) bool {
 }
 
 func (this *CodeEditor) OnSystemKeyDown(key int, repeat bool) bool {
+	if this.editorContextKey(key, repeat) {
+		return true
+	}
 	action, alt := IsKeyDown(KeyCtrl) || isActionModifier(), IsKeyDown(KeyMenu)
 	if !editorSystemKey(key, action, alt) && !editorLineMoveSystemKey(key, action, alt) {
 		return false

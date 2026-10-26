@@ -15,13 +15,14 @@ func init() {
 // and arbitrary widgets. Similar to QToolBar.
 type ToolBar struct {
 	Widget
-	items       []IWidget
-	orientation int     // 0=horizontal, 1=vertical
-	iconSize    int     // icon display size in pixels
-	spacing     float64 // gap between items
-	compact     bool    // opt-in dense desktop tool chrome; ordinary forms unchanged
-	overflow    []IWidget
-	overflowBtn *Button
+	items                []IWidget
+	orientation          int     // 0=horizontal, 1=vertical
+	iconSize             int     // icon display size in pixels
+	spacing              float64 // gap between items
+	compact              bool    // opt-in dense desktop tool chrome; ordinary forms unchanged
+	preserveContentFocus bool
+	overflow             []IWidget
+	overflowBtn          *Button
 }
 
 func NewToolBar() *ToolBar {
@@ -43,6 +44,7 @@ func (this *ToolBar) Init(self IWidget) {
 func (this *ToolBar) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("图标大小", this.IconSize, this.SetIconSize)
 	list.AddProperty("间距", this.Spacing, this.SetSpacing)
+	list.AddProperty("保留内容焦点", this.PreserveContentFocus, this.SetPreserveContentFocus)
 }
 
 // AddAction creates a tool button and appends it to the toolbar.
@@ -127,6 +129,13 @@ func (this *ToolBar) SetCompact(on bool) {
 }
 
 func (this *ToolBar) IsCompact() bool { return this.compact }
+
+// SetPreserveContentFocus keeps mouse-clicked tool buttons from taking focus
+// away from the document or field they act on. Keyboard focus and embedded
+// input widgets are unchanged; actions may still explicitly focus a new view.
+// Opt-in so existing SDK toolbars retain their ordinary button behavior.
+func (this *ToolBar) SetPreserveContentFocus(on bool) { this.preserveContentFocus = on }
+func (this *ToolBar) PreserveContentFocus() bool      { return this.preserveContentFocus }
 
 func (this *ToolBar) chromeMargin() Margin {
 	if this.compact {

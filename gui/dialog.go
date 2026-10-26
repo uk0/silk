@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 	"math"
 )
@@ -130,9 +131,6 @@ func (this *Dialog) ShowModal() DialogResult {
 	win := this.Window()
 	if win == nil {
 		return this.result
-	}
-	if this.Icon() != nil {
-		win.SetIcon(this.Icon())
 	}
 	win.MoveToCenter()
 
@@ -359,6 +357,9 @@ func (this *Dialog) Layout() {
 
 	if this.btnBox != nil {
 		this.btnBox.SetBounds(0, math.Max(0, this.h-btnBarH), math.Max(0, this.w), math.Min(this.h, btnBarH))
+		// Adding an action need not change the footer size. SetBounds then does
+		// not emit OnResize, but new buttons still need usable geometry.
+		this.btnBox.Layout()
 	}
 	if this.contentWidget != nil {
 		this.contentWidget.SetBounds(padSide, padTop, math.Max(0, this.w-padSide*2), math.Max(0, this.h-padTop-btnBarH-16))
@@ -420,7 +421,7 @@ func ShowMessageDialog(parent IWidget, title, message string) DialogResult {
 	content.AddWidget(msgLabel)
 
 	dlg.SetContent(content)
-	dlg.AddButton("OK", DialogOK)
+	dlg.AddButton(i18n.T("OK"), DialogOK)
 	return dlg.ShowModal()
 }
 
@@ -437,8 +438,8 @@ func ShowConfirmDialog(parent IWidget, title, message string) bool {
 	content.AddWidget(msgLabel)
 
 	dlg.SetContent(content)
-	dlg.AddButton("Yes", DialogYes)
-	dlg.AddButton("No", DialogNo)
+	dlg.AddButton(i18n.T("Yes"), DialogYes)
+	dlg.AddButton(i18n.T("No"), DialogNo)
 	result := dlg.ShowModal()
 	return result == DialogYes
 }

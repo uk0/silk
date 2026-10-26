@@ -1,3 +1,5 @@
+//go:build !windows
+
 package gui
 
 import (
@@ -11,11 +13,13 @@ import (
 // nudges the wakeup hook; the GLFW backend installs glfw.PostEmptyEvent, but the
 // Win32 backend installed nothing, so a task posted by a worker goroutine sat
 // there until the 47ms idle WM_TIMER happened to turn the pump — and never ran
-// at all if that timer failed to arm. The hook must be a THREAD-targeted post:
-// a worker owns no window handle it may legally touch.
+// at all if that timer failed to arm. The hook now targets a message-only HWND:
+// PostMessage is safe from workers, unlike window creation or mutation.
 //
 // Source-level, like TestWin32BackendPinsTheUIThread, because neither the
-// compiler nor a test run on macOS reaches into a windows-only file.
+// compiler nor a test run on macOS reaches into a windows-only file. This is
+// only a wiring check; TestNativeDispatchPostsWithoutIdleTimerAndJoinsShutdown
+// proves actual native dispatch and thread ownership on Windows.
 func TestWin32BackendInstallsTheUIWakeup(t *testing.T) {
 	src, err := os.ReadFile("window_windows.go")
 	if err != nil {
@@ -25,11 +29,8 @@ func TestWin32BackendInstallsTheUIWakeup(t *testing.T) {
 	if body == "" {
 		t.Fatal("window_windows.go has no init() to install the wakeup in")
 	}
-	if !strings.Contains(body, "SetUIWakeup(") {
+	if !strings.Contains(body, "startUIMessageWindow()") {
 		t.Error("init() installs no UI wakeup; an off-thread gui.Post waits for the 47ms idle timer instead of running now")
-	}
-	if !strings.Contains(body, "win32.PostThreadMessage(uiThreadId") {
-		t.Error("the wakeup does not post to the UI thread id; a window-targeted post would make a worker goroutine touch a window handle it does not own")
 	}
 	if !strings.Contains(body, "uiThreadOwner = ") {
 		t.Error("init() installs no uiThreadOwner, so the off-UI-thread mutation detector stays inert on Windows")

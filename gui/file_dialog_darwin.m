@@ -90,6 +90,25 @@ void silkCancelFileDialog(void *handle) {
     }
 }
 
+// A sheet can leave AppKit with no key window after orderOut. In that state
+// GLFW receives no key events until the user clicks its content view. Restore
+// only this live owner, without activating the app or overriding another sheet
+// or window that acquired focus while the dialog was open.
+void silkRestoreFileDialogFocus(void *handle) {
+    SilkFileDialog *session = handle;
+    if (!session || !session->done || session->cancelled || ![NSThread isMainThread]) {
+        return;
+    }
+    NSWindow *owner = session->owner;
+    NSWindow *key = [NSApp keyWindow];
+    NSWindow *sheet = [owner attachedSheet];
+    if ([NSApp isActive] && [owner isVisible] && ![owner isMiniaturized] &&
+        (!key || key == owner || key == session->panel) &&
+        (!sheet || sheet == session->panel)) {
+        [owner makeKeyWindow];
+    }
+}
+
 void silkReleaseFileDialog(void *handle) {
     SilkFileDialog *session = handle;
     if (session) {

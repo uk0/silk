@@ -173,20 +173,20 @@ func TestCaretKeepPrimaryAndEscapeRevealPrimaryWithoutEditing(t *testing.T) {
 func TestCaretContextMenuActionsAndStatus(t *testing.T) {
 	e, api := caretCommandEditor(t, "abcd\nefgh\nijkl")
 	items := e.contextMenuItems("")
-	for _, label := range []string{"向上添加光标", "向下添加光标", "仅保留主光标"} {
+	for _, label := range []string{"Add Cursor Above", "Add Cursor Below", "Keep Primary Cursor"} {
 		item := findMenuItem(items, label)
 		if item == nil || item.Icon == "" || item.Action == nil {
 			t.Fatal("missing context action/icon", label)
 		}
 	}
-	if findMenuItem(items, "向上添加光标").Enabled || findMenuItem(items, "仅保留主光标").Enabled {
+	if findMenuItem(items, "Add Cursor Above").Enabled || findMenuItem(items, "Keep Primary Cursor").Enabled {
 		t.Fatal("wrong boundary enablement")
 	}
-	findMenuItem(items, "向下添加光标").Action()
+	findMenuItem(items, "Add Cursor Below").Action()
 	if api.CursorCount() != 2 || !strings.Contains(e.cursorStatusLabel(false), "2 carets") || !strings.Contains(e.cursorStatusLabel(true), "2 carets") {
 		t.Fatal("missing count/status")
 	}
-	findMenuItem(e.contextMenuItems(""), "仅保留主光标").Action()
+	findMenuItem(e.contextMenuItems(""), "Keep Primary Cursor").Action()
 	if api.CursorCount() != 1 || strings.Contains(e.cursorStatusLabel(false), "carets") {
 		t.Fatal("clear count/status")
 	}

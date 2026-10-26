@@ -245,6 +245,32 @@ func TestGoToValidQueryAllocations(t *testing.T) {
 		t.Fatal("valid location allocates", a)
 	}
 }
+
+func TestGoToFieldHistoryDoesNotTouchDocument(t *testing.T) {
+	e := gotoTestEditor(t, "one\ntwo\nthree")
+	e.OnTextInput("X")
+	before, revision := e.Text(), e.TextRevision()
+	e.ShowGoToLine()
+	q := e.gotoBar.query
+	initial := q.Text()
+	q.SelectAll()
+	q.OnTextInput("2:2")
+	if !q.HandleShortcut('Z', ModAction) || q.Text() != initial {
+		t.Fatal("field Undo swallowed")
+	}
+	if !q.HandleShortcut('Z', ModAction|ModShift) || q.Text() != "2:2" {
+		t.Fatal("field Redo swallowed")
+	}
+	q.HandleShortcut('Z', ModAction)
+	q.HandleShortcut('Z', ModAction) // Empty field history still claims host Undo.
+	if q.Text() != initial || e.Text() != before || e.TextRevision() != revision || !e.CanUndo() {
+		t.Fatal("query history escaped to document")
+	}
+	e.gotoBar.accept.HandleShortcut('Y', ModAction)
+	if q.Text() != "2:2" {
+		t.Fatal("bar button did not share field history")
+	}
+}
 func BenchmarkEditorGoToLocation(b *testing.B) {
 	e := NewCodeEditor()
 	e.SetText(strings.Repeat("中🙂x\n", 100000))

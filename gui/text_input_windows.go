@@ -16,15 +16,6 @@ func textInputFocusChanged() {
 	}
 }
 
-func (win *Window) textInputTarget() IEventTextInput {
-	target := focusWidget
-	if target == nil || win.keyTarget() != target || !target.IsEnabled() {
-		return nil
-	}
-	input, _ := target.(IEventTextInput)
-	return input
-}
-
 func (win *Window) dispatchUTF16(unit uint16) bool {
 	// TranslateMessage emits a printable WM_CHAR for Ctrl+Space too. The
 	// keydown already requested completion; inserting that space immediately

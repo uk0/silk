@@ -144,3 +144,18 @@ func (win *Window) queuePopupFocusCheck() {
 // Explicit partial invalidation shares the same coalesced, paced damage path.
 func (win *Window) MarkDirtyRect(x, y, width, height float64) { win.UpdateRect(x, y, width, height) }
 func (win *Window) MarkFullDirty()                            { win.Update() }
+
+// Return native activation before Close hides the modal HWND. Hiding first lets
+// Windows choose an unrelated foreground window, and destroying the now-inactive
+// modal no longer restores its owner. Never override a user's app/window switch.
+func (win *Window) restoreModalOwnerActivation(owner *Window) {
+	if owner == nil || owner.hWnd == 0 || winMap[owner.hWnd] != owner ||
+		!owner.IsVisible() || !owner.IsEnabled() {
+		return
+	}
+	foreground := win32.GetForegroundWindow()
+	if foreground != win.hWnd && !popupOwnedBy(winMap[foreground], win) {
+		return
+	}
+	win32.SetActiveWindow(owner.hWnd)
+}

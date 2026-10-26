@@ -450,7 +450,7 @@ func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
 		g.Fill()
 	}
 
-	if icon != nil {
+	if icon != nil && w >= m.L+t.IconSize+m.R && h >= t.IconSize {
 		xi := m.L
 		yi := 0.5 * (h - t.IconSize)
 		g.Translate(xi, yi)
@@ -478,7 +478,7 @@ func (t *defaultTheme) DrawTab(g paint.Painter, icon paint.Icon, text string,
 		g.Translate(-xt, -yt)
 	}
 
-	if closeBtn {
+	if closeBtn && tabCloseFits(t, icon, w, h) {
 		xc := w - m.R - t.TabCloseSize
 		yc := m.T + (h-m.T-m.B-t.TabCloseSize)*0.5
 		if downCloseBtn && hoverCloseBtn {
@@ -827,17 +827,14 @@ func (t *defaultTheme) DrawSeperator(c paint.Painter, w, h float64, vertical boo
 func (t *defaultTheme) DrawMenu(g paint.Painter, m *Menu) {
 	w, h := m.Size()
 	if m.IsPopup() {
-		// Modern popup menu: rounded corners. No drop shadow here: the popup
-		// lives in a GLFW window sized exactly to the widget and all drawing
-		// is clipped to bounds, so an outset shadow would never be visible.
 		radius := 6.0
+		if win := m.Window(); win != nil && !win.hasAlphaSurface() {
+			// GDI and compositors without per-pixel alpha must paint every pixel.
+			// Do not fake transparency with a guessed parent color or clear-color box.
+			radius = 0
+		}
+		drawPopupSurface(g, w, h, t.MenuBGColor, t.MenuBorderColor, radius)
 
-		// Main background
-		roundedRect(g, 0, 0, w, h, radius)
-		g.SetBrush1(t.MenuBGColor)
-		g.FillPreserve()
-		g.SetPen1(t.MenuBorderColor, 1)
-		g.Stroke()
 	} else {
 		// Menu bar: flat background, bottom border only
 		g.Rectangle(0, 0, w, h)

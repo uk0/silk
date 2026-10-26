@@ -276,8 +276,8 @@ func (this *GraphView) SetScene(scene IScene) {
 	scene.(interface {
 		setView(IView)
 	}).setView(this.Self().(IView))
-	this.undoAction.BindAction(scene.UndoStack().UndoAction())
-	this.redoAction.BindAction(scene.UndoStack().RedoAction())
+	this.undoAction.BindAction(&viewHistoryAction{IAction: scene.UndoStack().UndoAction(), view: this, scene: scene})
+	this.redoAction.BindAction(&viewHistoryAction{IAction: scene.UndoStack().RedoAction(), view: this, scene: scene, redo: true})
 	this.Layout()
 }
 

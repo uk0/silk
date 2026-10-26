@@ -158,6 +158,7 @@ func runNativeRenderProbe() error {
 			if win.pbo != 0 {
 				gl.DeleteBuffers(1, &win.pbo)
 			}
+			win.releaseBackBuffer()
 			widget.win = nil
 		}
 		win.paint()

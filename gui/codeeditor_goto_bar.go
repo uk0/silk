@@ -37,6 +37,9 @@ func gotoOwnsDocumentShortcut(key int, mods uint8) bool {
 	return key == KeyF2 || key == KeyF12 || key == KeyEnter && mods&ModAlt != 0
 }
 func (f *editorGotoEdit) HandleShortcut(key int, mods uint8) bool {
+	if f.Edit.HandleShortcut(key, mods) {
+		return true
+	}
 	if (mods&ModAction != 0) && key == 'G' {
 		f.bar.editor.ShowGoToLine()
 		return true

@@ -33,8 +33,17 @@ func (this *Form) Title() string {
 	return this.title
 }
 
+// SetIcon selects this form's icon. Nil/air icons inherit from its owner or
+// the application when attached. Updating an attached form is UI-thread-only.
 func (this *Form) SetIcon(icon paint.Icon) {
 	this.icon = icon
+	if win := this.Window(); win != nil && win.IsValid() {
+		if selected := initialWindowIcon(this.Self(), win.ParentWindow()); selected != nil {
+			win.SetIcon(selected)
+		} else {
+			win.clearIcon()
+		}
+	}
 }
 
 func (this *Form) Icon() paint.Icon {

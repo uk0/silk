@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/i18n"
 	"strings"
 )
 
@@ -44,7 +45,7 @@ func (this *ButtonBox) Init(iw IWidget) {
 func btnDisplayName(s string) string {
 	name, ok := stdBtnMap[s]
 	if ok {
-		return name
+		return i18n.T(name)
 	}
 	return s
 }

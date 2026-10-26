@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/uk0/silk/paint"
 )
 
 func TestEditorReadOnlyBlocksDocumentMutations(t *testing.T) {
@@ -146,12 +148,12 @@ func TestEditorReadOnlyFindNavigationAndMenu(t *testing.T) {
 	}
 	e.closeFindBar()
 	e.ScrollToLineCol(0, 1)
-	for _, label := range []string{"剪切", "粘贴", "重命名符号"} {
+	for _, label := range []string{"Cut", "Paste", "Rename Symbol"} {
 		if findMenuItem(e.contextMenuItems("first"), label).Enabled {
 			t.Fatal("enabled edit", label)
 		}
 	}
-	for _, label := range []string{"复制", "全选", "跳转定义", "查找引用"} {
+	for _, label := range []string{"Copy", "Select All", "Go to Definition", "Find References"} {
 		if !findMenuItem(e.contextMenuItems("first"), label).Enabled {
 			t.Fatal("disabled reader", label)
 		}
@@ -224,8 +226,24 @@ func TestEditorReadOnlyCancelsCompletionAndRename(t *testing.T) {
 	e.cursorCol = 2
 	e.SetExternalCompletions([]ExternalCompletion{{Label: "external", Insert: "external"}})
 	e.TriggerCompletion()
+	// The shared rename command now opens a validated modal, rather than an
+	// inline editor. Simulate a permission change while its nested loop runs;
+	// never create native windows from the unit-test goroutine.
+	previousPrompt := showRenameSymbolInput
+	t.Cleanup(func() { showRenameSymbolInput = previousPrompt })
+	prompts := 0
+	showRenameSymbolInput = func(parent IWidget, icon paint.Icon, title, label, def string, validator Validator) (string, bool) {
+		prompts++
+		if parent != e || def != "first" || validator == nil {
+			t.Fatal("unexpected rename prompt")
+		}
+		e.SetReadOnly(true)
+		return "renamed", true
+	}
 	e.activateRename()
-	e.SetReadOnly(true)
+	if prompts != 1 || e.Text() != "first\nsecond" || e.CanUndo() {
+		t.Fatal("rename result escaped a read-only transition")
+	}
 	if e.CompletionVisible() || len(e.externalCompletions) != 0 || e.renameActive || e.snippetSess != nil {
 		t.Fatal("editing overlay remained active")
 	}

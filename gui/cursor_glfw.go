@@ -3,11 +3,8 @@
 package gui
 
 import (
-	"errors"
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -29,8 +26,6 @@ var (
 	cursorHelp     *Cursor
 
 	overrideCursor *Cursor
-
-	dndCursorData []CursorData
 
 	cursorCache = make(map[string]*Cursor)
 )
@@ -63,12 +58,6 @@ func initCursors() {
 	cursorCache["no"] = cursorNo
 	cursorCache["hand"] = cursorHand
 	cursorCache["help"] = cursorHelp
-}
-
-// CursorData holds cursor image data
-type CursorData struct {
-	paint.Pixmap
-	HotX, HotY int
 }
 
 // Cursor wraps a GLFW cursor
@@ -132,8 +121,8 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 	if err := nativeDesktopError("NewCursorFromData"); err != nil {
 		return nil, err
 	}
-	if data.Pixmap == nil {
-		return nil, core.StrErr("nil pixmap")
+	if err := validateCursorData(data); err != nil {
+		return nil, err
 	}
 
 	img, err := data.Pixmap.Image()
@@ -149,46 +138,6 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 	return &Cursor{glfwCursor: c}, nil
 }
 
-// LoadCursorData loads cursor data from a file
-func LoadCursorData(name string) (data CursorData, err error) {
-	dir, err := os.Open(core.ResourceDir() + "/cursor")
-	if err != nil {
-		return
-	}
-	defer dir.Close()
-
-	infos, err := dir.Readdir(-1)
-	if err != nil {
-		return
-	}
-	for _, info := range infos {
-		n := info.Name()
-		if info.IsDir() {
-			continue
-		}
-		ln := strings.ToLower(n)
-		if !strings.HasSuffix(ln, ".png") {
-			continue
-		}
-		ln = ln[:len(ln)-4]
-		parts := strings.Split(ln, "_")
-		if strings.ToLower(name) != parts[0] {
-			continue
-		}
-		data.Pixmap, err = paint.LoadPngFile(core.ResourceDir() + "/cursor/" + n)
-		if err != nil {
-			return
-		}
-		if len(parts) == 3 {
-			data.HotX, _ = strconv.Atoi(parts[1])
-			data.HotY, _ = strconv.Atoi(parts[2])
-		}
-		return
-	}
-	err = errors.New(`cursor not found: "` + name + `"`)
-	return
-}
-
 // DefaultCursor returns the default arrow cursor
 func DefaultCursor() *Cursor {
 	return cursorArrow
@@ -196,11 +145,13 @@ func DefaultCursor() *Cursor {
 
 // LoadCursor loads a named cursor, using cache
 func LoadCursor(name string) *Cursor {
+	name = strings.ToLower(name)
 	cur, ok := cursorCache[name]
 	if !ok {
 		data, err := LoadCursorData(name)
 		if err == nil {
 			cur, _ = NewCursorFromData(data)
+			paint.CloseSurface(data.Pixmap)
 		}
 		if cur == nil {
 			cur = cursorArrow
@@ -208,59 +159,4 @@ func LoadCursor(name string) *Cursor {
 		cursorCache[name] = cur
 	}
 	return cur
-}
-
-// GenerateDropCursors generates a set of DnD cursors with the given content thumbnail
-func GenerateDropCursors(content paint.Pixmap) (curs []*Cursor) {
-	if dndCursorData == nil {
-		dndCursorData = make([]CursorData, 4)
-		var err error
-		dndCursorData[0], err = LoadCursorData("arrow-no")
-		if err != nil {
-			core.Warn(err)
-		}
-		dndCursorData[1], err = LoadCursorData("arrow")
-		if err != nil {
-			core.Warn(err)
-		}
-		dndCursorData[2], err = LoadCursorData("arrow-copy")
-		if err != nil {
-			core.Warn(err)
-		}
-		dndCursorData[3], err = LoadCursorData("arrow-link")
-		if err != nil {
-			core.Warn(err)
-		}
-	}
-
-	for _, arrow := range dndCursorData {
-		if arrow.Pixmap == nil {
-			curs = append(curs, cursorArrow)
-			continue
-		}
-		w := content.Width()
-		h := content.Height()
-		hotX := w / 2
-		hotY := h / 2
-		w1 := hotX + arrow.Pixmap.Width() - arrow.HotX
-		h1 := hotY + arrow.Pixmap.Height() - arrow.HotY
-		if w1 > w {
-			w = w1
-		}
-		if h1 > h {
-			h = h1
-		}
-
-		pixmap := paint.NewPixmap(w, h)
-		g := pixmap.NewPainter()
-		g.DrawPixmap2(0, 0, arrow.Pixmap,
-			float64(hotX-arrow.HotX), float64(hotY-arrow.HotY))
-
-		cur, _ := NewCursorFromData(CursorData{pixmap, hotX, hotY})
-		if cur == nil {
-			cur = cursorArrow
-		}
-		curs = append(curs, cur)
-	}
-	return
 }

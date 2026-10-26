@@ -6,11 +6,13 @@ import "runtime"
 // It is presentation metadata, not a keybinding registry. A host that overrides
 // a binding must show its own hint. Each call returns an independent value.
 type CodeEditorShortcutHints struct {
-	Cut, Copy, Paste, SelectAll                             string
-	AddCursorAbove, AddCursorBelow, KeepPrimaryCursor       string
-	MoveLinesUp, MoveLinesDown, DuplicateLines, DeleteLines string
-	IndentLines, OutdentLines                               string
-	GoToLine, GoBack, GoForward                             string
+	Undo, Redo                                                                           string
+	RenameSymbol, GoToDefinition, FindReferences, GoToTypeDefinition, GoToImplementation string
+	Cut, Copy, Paste, SelectAll                                                          string
+	AddCursorAbove, AddCursorBelow, KeepPrimaryCursor                                    string
+	MoveLinesUp, MoveLinesDown, DuplicateLines, DeleteLines                              string
+	IndentLines, OutdentLines                                                            string
+	GoToLine, GoBack, GoForward                                                          string
 }
 
 // CodeEditorShortcuts returns platform-aware built-in shortcuts. On Windows the
@@ -31,6 +33,8 @@ func codeEditorShortcutsForOS(goos string) CodeEditorShortcutHints {
 		caret = key + "+Shift+Alt"
 	}
 	return CodeEditorShortcutHints{
+		Undo: key + "+Z", Redo: key + "+Shift+Z",
+		RenameSymbol: key + "+F2", GoToDefinition: "F12", FindReferences: "Shift+F12", GoToTypeDefinition: key + "+F12", GoToImplementation: "Alt+F12",
 		Cut: key + "+X", Copy: key + "+C", Paste: key + "+V", SelectAll: key + "+A",
 		AddCursorAbove: caret + "+Up", AddCursorBelow: caret + "+Down", KeepPrimaryCursor: "Esc",
 		MoveLinesUp: "Alt+Up", MoveLinesDown: "Alt+Down", DuplicateLines: key + "+Shift+D", DeleteLines: key + "+Shift+K",

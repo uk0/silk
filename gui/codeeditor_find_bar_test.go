@@ -68,6 +68,7 @@ func TestEditorFindInputSelectionPasteAndDocumentFocus(t *testing.T) {
 	}
 	// Clicking into the document must not keep hijacking input for the query.
 	e.SetFocus()
+	e.clearSelection() // a document click clears the selected search hit
 	e.cursorLine = 0
 	e.cursorCol = 0
 	e.OnTextInput("x")

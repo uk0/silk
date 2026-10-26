@@ -18,7 +18,7 @@ func initGL() {
 	gl.Disable(gl.STENCIL_TEST)
 	gl.Disable(gl.CULL_FACE)
 	gl.Enable(gl.BLEND)
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 	gl.PixelStorei(gl.UNPACK_ROW_LENGTH, 0)
 }
@@ -111,12 +111,22 @@ func drawFullscreenQuad(texture uint32, fbWidth, fbHeight int32) {
 // caller to display only a sub-region of a texture that is larger than
 // the viewport (e.g. when the backbuffer was allocated with padding).
 func drawFullscreenQuadUV(texture uint32, fbWidth, fbHeight int32, texU, texV float32) {
+	drawFullscreenQuadSurface(texture, fbWidth, fbHeight, texU, texV, false)
+}
+
+// Transparent native surfaces preserve Cairo premultiplied RGBA all the way
+// through presentation. Ordinary opaque forms keep their previous clear color.
+func drawFullscreenQuadSurface(texture uint32, fbWidth, fbHeight int32, texU, texV float32, transparent bool) {
 	// Cairo ARGB32 already contains RGB multiplied by alpha. Multiplying
 	// again (SRC_ALPHA) darkens anti-aliased edges and translucent UI surfaces.
 	// GPU chart vertices use straight alpha, so restore their blend convention.
 	gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-	defer gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-	gl.ClearColor(0.2, 0.2, 0.2, 1)
+	defer gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+	if transparent {
+		gl.ClearColor(0, 0, 0, 0)
+	} else {
+		gl.ClearColor(0.2, 0.2, 0.2, 1)
+	}
 	gl.Clear(gl.COLOR_BUFFER_BIT)
 
 	gl.MatrixMode(gl.PROJECTION)

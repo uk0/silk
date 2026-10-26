@@ -132,7 +132,7 @@ func TestRegisterWidgetJoinsExistingCategory(t *testing.T) {
 		if isHeader, _ := list.isCategoryHeader(i); isHeader {
 			header = i
 			// The row carries the collapse indicator; the category name is the rest.
-			if strings.TrimSpace(strings.TrimPrefix(item.Text, "▼")) == existing {
+			if strings.TrimSpace(strings.TrimPrefix(item.Text, "▼")) == paletteCategoryLabel(existing) {
 				headers++
 			}
 			continue

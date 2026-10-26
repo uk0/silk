@@ -278,12 +278,17 @@ func undoCurrentDocument(tabs *gui.TabWidget, canvas *ged.GedView, redo bool) {
 		}
 		target.editor.SetFocus()
 	} else if target.scene != nil {
+		focus := focusedPropertyControl(canvas)
 		if redo {
 			canvas.Redo()
 		} else {
 			canvas.Undo()
 		}
-		canvas.SetFocus()
+		// RefreshValues keeps the property controls alive. Do not steal
+		// their input focus; but never revive a removed/hidden/rebound one.
+		if focus == nil || focusedPropertyControl(canvas) != focus {
+			canvas.SetFocus()
+		}
 	}
 	if w := globalWorkbench; w != nil {
 		w.syncHistoryActions()

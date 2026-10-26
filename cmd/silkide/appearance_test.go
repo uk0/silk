@@ -85,3 +85,81 @@ func TestAppearanceIndentControlRoundTrip(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+func TestAppearanceEnumeratedFieldsAreSelectionOnly(t *testing.T) {
+	d, _ := buildAppearanceDialog(nil, defaultIDEAppearance())
+	n := 0
+	var walk func(gui.IWidget)
+	walk = func(w gui.IWidget) {
+		if c, ok := w.(*gui.ComboBox); ok {
+			n++
+			if c.IsEditable() {
+				t.Error("enumerated field accepts text that Apply ignores")
+			}
+		}
+		for _, child := range w.Children() {
+			walk(child)
+		}
+	}
+	walk(d)
+	if n != 3 {
+		t.Fatalf("expected three enumerated fields, got %d", n)
+	}
+}
+
+func TestAppearanceSelectionTypingCommitsDisplayedEnums(t *testing.T) {
+	d, read := buildAppearanceDialog(nil, defaultIDEAppearance())
+	var boxes []*gui.ComboBox
+	var walk func(gui.IWidget)
+	walk = func(w gui.IWidget) {
+		if c, ok := w.(*gui.ComboBox); ok {
+			boxes = append(boxes, c)
+		}
+		for _, child := range w.Children() {
+			walk(child)
+		}
+	}
+	walk(d)
+	boxes[0].OnTextInput("简体")
+	boxes[1].OnTextInput("Light")
+	boxes[2].OnTextInput("Spaces")
+	got, err := read()
+	if err != nil || got.Locale != "zh-CN" || got.Theme != "light" || !got.InsertSpaces {
+		t.Fatalf("displayed enums not committed: %+v %v", got, err)
+	}
+	p := &preferences{store: settings.New(filepath.Join(t.TempDir(), "prefs.silkui"))}
+	if err := p.SetAppearance(got); err != nil {
+		t.Fatal(err)
+	}
+	flushTestPreferences(t, p)
+	q := &preferences{store: settings.New(p.store.Path())}
+	if q.Appearance() != got {
+		t.Fatal("enum changes not persisted")
+	}
+}
+
+func TestAppearanceRowsHaveBreathingRoom(t *testing.T) {
+	d, _ := buildAppearanceDialog(nil, defaultIDEAppearance())
+	d.Layout()
+	form, ok := d.Content().(*gui.FormLayout)
+	if !ok {
+		t.Fatal("missing form")
+	}
+	form.Layout()
+	if form.Spacing() < 6 {
+		t.Fatal("fields touch labels or adjacent rows")
+	}
+	children := form.Children()
+	for i := 0; i+1 < len(children); i += 2 {
+		label, field := children[i], children[i+1]
+		if field.X()-(label.X()+label.Width()) < 6 {
+			t.Fatal("missing label gutter", i)
+		}
+		if i+2 < len(children) && children[i+2].Y()-(field.Y()+field.Height()) < 6 {
+			t.Fatal("rows overlap", i)
+		}
+	}
+	if hint := form.SizeHints(); hint.Height > form.Height() {
+		t.Fatalf("form content clipped: %g > %g", hint.Height, form.Height())
+	}
+}

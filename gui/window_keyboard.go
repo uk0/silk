@@ -3,14 +3,40 @@ package gui
 // Keyboard focus is logical and global: non-activating popups intentionally
 // keep receiving their owner's native keys. A stale focus in another Form,
 // however, must not consume this window's input.
-func (win *Window) keyTarget() IWidget {
-	if focusWidget != nil && focusWidget.IsAllAncentorsVisible() {
-		owner := focusWidget.OwnerWindow()
-		if owner == win || popupOwnedBy(owner, win) {
-			return focusWidget
+func (win *Window) focusedInputTarget() IWidget {
+	if win == nil || win.widget == nil {
+		return nil
+	}
+	// Check every logical ancestor, including the focused widget itself. Stop
+	// at its native surface: an independent Form may be parented to another
+	// Form without sharing its visibility or disabled state.
+	for w := focusWidget; w != nil; w = w.Parent() {
+		if !w.IsVisible() || !w.IsEnabled() {
+			return nil
+		}
+		if owner := w.Window(); owner != nil {
+			if owner == win || popupOwnedBy(owner, win) {
+				return focusWidget
+			}
+			return nil
 		}
 	}
+	return nil // Detached controls cannot receive native input.
+}
+
+func (win *Window) keyTarget() IWidget {
+	if target := win.focusedInputTarget(); target != nil {
+		return target
+	}
 	return win.widget
+}
+
+// Characters require actual eligible focus. Unlike key routing, do not fall
+// back to the window root: that could type into an unfocused root editor.
+// Shared by GLFW character callbacks and Win32 UTF-16/Unicode/IME dispatch.
+func (win *Window) textInputTarget() IEventTextInput {
+	input, _ := win.focusedInputTarget().(IEventTextInput)
+	return input
 }
 
 // Escape belongs to the receiving popup/dialog, not to whichever child the

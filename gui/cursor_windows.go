@@ -3,13 +3,9 @@ package gui
 import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
-	//	"github.com/uk0/silk/core"
-	"errors"
 	"github.com/uk0/silk/win32"
 	"image"
-	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"unsafe"
 )
@@ -34,8 +30,6 @@ var (
 
 	overrideCursor *Cursor
 
-	dndCursorData []CursorData
-
 	cursorCache = make(map[string]*Cursor)
 )
 
@@ -53,14 +47,6 @@ func init() {
 	cursorCache["no"] = cursorNo
 	cursorCache["hand"] = cursorHand
 	cursorCache["help"] = cursorHelp
-}
-
-// 光标数据
-type CursorData struct {
-	// 图标
-	paint.Pixmap
-	// 热点
-	HotX, HotY int
 }
 
 // 光标的引用
@@ -125,8 +111,8 @@ func NewCursorFromIcon(icon paint.Icon, sz, hotX, hotY int) (*Cursor, error) {
 
 // 从光标数据生成光标
 func NewCursorFromData(data CursorData) (*Cursor, error) {
-	if data.Pixmap == nil {
-		return nil, core.StrErr("nil pixmap")
+	if err := validateCursorData(data); err != nil {
+		return nil, err
 	}
 
 	if data.Pixmap.Format() != paint.FormatARGB32 {
@@ -162,7 +148,16 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 	win32.ReleaseDC(0, hdc)
 
 	//win32.DeleteDC(hMemDC)
-	srcImg := img.(*image.RGBA)
+	if hBitmap != 0 {
+		defer win32.DeleteObject(win32.HGDIOBJ(hBitmap))
+	}
+	if hBitmap == 0 || lpBits == nil {
+		return nil, core.StrErr("failed to allocate cursor bitmap")
+	}
+	srcImg, ok := img.(*image.RGBA)
+	if !ok {
+		return nil, core.StrErr("unsupported cursor image")
+	}
 	length := width * height * 4
 	//pData.Pix
 	src := srcImg.Pix
@@ -181,6 +176,10 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 	}
 
 	hMonoBitmap := win32.CreateBitmap(int32(width), int32(height), 1, 1, nil)
+	if hMonoBitmap == 0 {
+		return nil, core.StrErr("failed to allocate cursor mask")
+	}
+	defer win32.DeleteObject(win32.HGDIOBJ(hMonoBitmap))
 
 	var ii win32.ICONINFO
 	ii.Icon = 0
@@ -190,9 +189,6 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 	ii.HbmColor = hBitmap
 
 	hCursor := win32.CreateIconIndirect(&ii)
-
-	win32.DeleteObject(win32.HGDIOBJ(hBitmap))
-	win32.DeleteObject(win32.HGDIOBJ(hMonoBitmap))
 
 	// A null handle wrapped in a Cursor is worse than an error: SetCursor(0)
 	// hides the pointer outright. Report the failure the way the GLFW backend
@@ -209,49 +205,6 @@ func NewCursorFromData(data CursorData) (*Cursor, error) {
 
 }
 
-// 从文件加载光标数据
-func LoadCursorData(name string) (data CursorData, err error) {
-	dir, err := os.Open(core.ResourceDir() + "/cursor")
-	if err != nil {
-		return
-	}
-	defer dir.Close()
-
-	infos, err := dir.Readdir(-1)
-	if err != nil {
-		return
-	}
-	for _, info := range infos {
-		n := info.Name()
-		if info.IsDir() {
-			continue
-		}
-		ln := strings.ToLower(n)
-		if !strings.HasSuffix(ln, ".png") {
-			continue
-		}
-		//strings.Split(ln, "-")
-		ln = ln[:len(ln)-4]
-		parts := strings.Split(ln, "_")
-		if strings.ToLower(name) != parts[0] {
-			continue
-		}
-		data.Pixmap, err = paint.LoadPngFile(core.ResourceDir() + "/cursor/" + n)
-		if err != nil {
-			return
-		}
-
-		if len(parts) == 3 {
-			data.HotX, _ = strconv.Atoi(parts[1])
-			data.HotY, _ = strconv.Atoi(parts[2])
-		}
-		return
-	}
-
-	err = errors.New(`cursor not found: "` + name + `"`)
-	return
-}
-
 // 默认的箭头光标
 func DefaultCursor() *Cursor {
 	return cursorArrow
@@ -259,11 +212,13 @@ func DefaultCursor() *Cursor {
 
 // 加载光标
 func LoadCursor(name string) *Cursor {
+	name = strings.ToLower(name)
 	cur, ok := cursorCache[name]
 	if !ok {
 		data, err := LoadCursorData(name)
 		if err == nil {
 			cur, _ = NewCursorFromData(data)
+			paint.CloseSurface(data.Pixmap)
 		}
 		if cur == nil {
 			cur = cursorArrow
@@ -271,76 +226,4 @@ func LoadCursor(name string) *Cursor {
 		cursorCache[name] = cur
 	}
 	return cur
-}
-
-// 生成一组表示拖放的光标, content是拖放内容的缩略图
-func GenerateDropCursors(content paint.Pixmap) (curs []*Cursor) {
-	if dndCursorData == nil {
-		dndCursorData = make([]CursorData, 4)
-		var err error
-		dndCursorData[0], err = LoadCursorData("arrow-no")
-		if err != nil {
-			core.Warn(err)
-		}
-		dndCursorData[1], err = LoadCursorData("arrow")
-		if err != nil {
-			core.Warn(err)
-		}
-		dndCursorData[2], err = LoadCursorData("arrow-copy")
-		if err != nil {
-			core.Warn(err)
-		}
-		dndCursorData[3], err = LoadCursorData("arrow-link")
-		if err != nil {
-			core.Warn(err)
-		}
-	}
-
-	for _, arrow := range dndCursorData {
-		// LoadCursorData above leaves a zero CursorData behind whenever the
-		// cursor resources are missing — which is every install that does not
-		// ship a "cursor" directory next to the binary. Dereferencing that nil
-		// Pixmap panicked inside the WM_MOUSEMOVE handler, and since wndProcFunc
-		// recovers, the only visible symptom was that nothing in the widget
-		// palette could be dragged. Fall back to the plain arrow, exactly as
-		// the GLFW backend already did.
-		if arrow.Pixmap == nil {
-			curs = append(curs, cursorArrow)
-			continue
-		}
-		w := content.Width()
-		h := content.Height()
-		hotX := w / 2
-		hotY := h / 2
-		w1 := hotX + arrow.Pixmap.Width() - arrow.HotX
-		h1 := hotY + arrow.Pixmap.Height() - arrow.HotY
-		if w1 > w {
-			w = w1
-		}
-		if h1 > h {
-			h = h1
-		}
-
-		pixmap := paint.NewPixmap(w, h)
-		g := pixmap.NewPainter()
-		g.DrawPixmap2(0, 0, arrow.Pixmap,
-			float64(hotX-arrow.HotX), float64(hotY-arrow.HotY))
-		/*
-			g.SetSourceSurface(content, 0, 0)
-			g.PaintWithAlpha(160)
-			g.SetSourceSurface(arrow.Pixmap,
-				float64(hotX-arrow.HotX), float64(hotY-arrow.HotY))
-			g.Paint()
-		*/
-		// The composed pixmap can still be refused (cairo rejects an oversized
-		// surface, CreateIconIndirect runs out of handles). dnd_windows.go
-		// feeds this slice straight to SetCursor from inside the DoDragDrop
-		// callback, where Native() would dereference the nil.
-		cur, _ := NewCursorFromData(CursorData{pixmap, hotX, hotY})
-		if cur == nil {
-			cur = cursorArrow
-		}
-		curs = append(curs, cur)
-	}
-	return
 }

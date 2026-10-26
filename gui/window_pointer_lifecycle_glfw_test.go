@@ -75,21 +75,20 @@ func TestClickRetargetingPreservesAnActiveCapture(t *testing.T) {
 	native, win := testPopupWindow(root, WtForm, nil)
 	win.enabled = true
 	win.pointer = pointerEventState{x: 55, y: 20, valid: true}
-	captured := NewButton1("captured", nil)
+	captured := newCapturedButtonProbe(root, "captured")
 	captured.SetBounds(0, 0, 20, 20)
 	captured.SetParent(root)
 	underPointer := NewButton1("under pointer", nil)
 	underPointer.SetBounds(40, 10, 40, 25)
 	underPointer.SetParent(root)
-	capturedClicks, otherClicks := 0, 0
-	captured.Action().BindFunc0(func() { capturedClicks++ })
+	otherClicks := 0
 	underPointer.Action().BindFunc0(func() { otherClicks++ })
 	captureStack = []IWidget{captured}
 	lastMouseWidget, mouseHoverWidget = captured, captured
 	onMouseButton(native, glfw.MouseButtonLeft, glfw.Press, 0)
 	onMouseButton(native, glfw.MouseButtonLeft, glfw.Release, 0)
-	if capturedClicks != 1 || otherClicks != 0 {
-		t.Fatal("fresh click targeting overrode the existing capture route")
+	if captured.downs != 1 || captured.ups != 1 || captured.clicks != 0 || otherClicks != 0 {
+		t.Fatal("capture must retain event delivery without activating outside its bounds")
 	}
 }
 

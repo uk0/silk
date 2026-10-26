@@ -21,10 +21,14 @@ type TextBlock struct {
 }
 
 type sRow struct {
-	text   []rune
-	begin  int
-	end    int
-	glyphs []paint.Glyph
+	text       []rune
+	begin, end int
+	// Positions share the logical line origin; slices survive wrapping without
+	// copies. Native glyph padding must never carry GUI advance metadata.
+	carets   []float64
+	runs     []paint.GlyphRun
+	origin   float64
+	clusters []paint.TextCluster
 }
 
 func (this *TextBlock) RunesCount() int {
@@ -171,9 +175,9 @@ func findLineEnd(s []rune) int {
 	return -1
 }
 
-// Layout shapes each logical line once, then slices/rebases its glyphs into
-// visual rows. Never reshape the remaining suffix at every wrap (quadratic for
-// long lines in narrow dialogs). The glyph/rune contract matches paint.Font.
+// Layout shapes each logical line once, retaining each glyph's owning font.
+// Wrapping walks the retained runs monotonically: neither suffix shaping nor
+// a full run scan is repeated for every visual row.
 func (this *TextBlock) Layout(w float64) {
 	this.rows = nil
 	this.pw = w
@@ -181,12 +185,7 @@ func (this *TextBlock) Layout(w float64) {
 		return
 	}
 	wrap := this.wrap && this.ml && w > 0
-	sf, fe := this.Font().ScaledFont(nil), this.fontExtents()
-	blankGlyphs := sf.TextToGlyphs(0, 0, " ")
-	if len(blankGlyphs) == 0 {
-		return
-	}
-	blank := blankGlyphs[0]
+	sf := this.Font().ScaledFont(nil)
 	for begin := 0; begin < len(this.text); {
 		pos := len(this.text) - begin - 1
 		if this.ml {
@@ -197,24 +196,19 @@ func (this *TextBlock) Layout(w float64) {
 		}
 		end := begin + pos
 		next := end + 1
-		if next < len(this.text) && ((this.text[end] == '\r' && this.text[next] == '\n') || (this.text[end] == '\n' && this.text[next] == '\r')) {
+		if next < len(this.text)-1 && ((this.text[end] == '\r' && this.text[next] == '\n') || (this.text[end] == '\n' && this.text[next] == '\r')) {
 			next++
 		}
-		text := this.text[begin : end+1]
-		glyphs := sf.TextToGlyphs(0, 0, string(text))
-		if len(glyphs) < len(text) {
-			return
-		}
+		text := this.text[begin:end]
+		layout := paint.LayoutText(sf, string(text))
+		runIndex, clusterIndex := 0, 0
 		for start := 0; ; {
 			stop := pos
-			origin := glyphs[start].X
-			if wrap {
+			origin := layout.Carets[start]
+			if wrap && start < pos {
 				stop = start + 1
-				for stop < pos && glyphs[stop+1].X-origin <= w {
+				for stop < pos && layout.Carets[stop+1]-origin <= w {
 					stop++
-				}
-				if stop > pos {
-					stop = pos
 				}
 				if stop < pos {
 					j := stop
@@ -226,23 +220,28 @@ func (this *TextBlock) Layout(w float64) {
 					}
 				}
 			}
-			row := sRow{text: this.text[begin+start : begin+stop], begin: begin + start, end: begin + stop}
-			y := float64(len(this.rows))*fe.Height + fe.Ascent
-			row.glyphs = make([]paint.Glyph, 0, stop-start+1)
-			for j := start; j < stop; j++ {
-				g := glyphs[j]
-				g.A = uint32(glyphs[j+1].X - g.X)
-				g.X -= origin
-				g.Y = y
-				row.glyphs = append(row.glyphs, g)
+			stop = layout.WrapEnd(start, stop)
+			row := sRow{text: text[start:stop], begin: begin + start, end: begin + stop,
+				carets: layout.Carets[start : stop+1], origin: origin}
+			for clusterIndex < len(layout.Clusters) && layout.Clusters[clusterIndex].End <= start {
+				clusterIndex++
+			}
+			for j := clusterIndex; j < len(layout.Clusters) && layout.Clusters[j].Begin < stop; j++ {
+				c := layout.Clusters[j]
+				row.clusters = append(row.clusters, paint.TextCluster{Begin: c.Begin - start, End: c.End - start})
+			}
+			for runIndex < len(layout.Runs) && layout.Runs[runIndex].End <= start {
+				runIndex++
+			}
+			for j := runIndex; j < len(layout.Runs) && layout.Runs[j].Begin < stop; j++ {
+				run := layout.Runs[j]
+				if len(run.Glyphs) == run.End-run.Begin {
+					run.Glyphs = run.Glyphs[max(start-run.Begin, 0):min(stop-run.Begin, len(run.Glyphs))]
+				}
+				row.runs = append(row.runs, run)
 			}
 			if stop == pos {
 				row.end = next
-				g := blank
-				g.X = glyphs[pos].X - origin
-				g.Y = y
-				g.A = 165536
-				row.glyphs = append(row.glyphs, g)
 			}
 			this.rows = append(this.rows, row)
 			if stop == pos {
@@ -251,6 +250,23 @@ func (this *TextBlock) Layout(w float64) {
 			start = stop
 		}
 		begin = next
+	}
+}
+
+func (row *sRow) caretX(col int) float64 {
+	if len(row.carets) == 0 {
+		return 0
+	}
+	return row.carets[max(0, min(col, len(row.carets)-1))] - row.origin
+}
+
+func (row *sRow) draw(g paint.Painter, baseline float64) {
+	g.Save()
+	defer g.Restore()
+	g.Translate(-row.origin, baseline)
+	for _, run := range row.runs {
+		g.SetFont(run.Font)
+		g.DrawGlyphs(run.Glyphs)
 	}
 }
 
@@ -271,64 +287,41 @@ func (this *TextBlock) SoftRowsCount() int {
 }
 
 func (this *TextBlock) PosToPoint(pos int) (x, y float64) {
-	if this.text == nil || pos <= 0 {
+	if len(this.rows) == 0 || pos <= 0 {
 		return 0, 0
 	}
-	rh := this.RowHeight()
-	rc := this.SoftRowsCount()
-	for r, row := range this.rows {
-		if pos >= row.begin && pos < row.end {
-			y = float64(r)*rh + rh*0.5
-			c := pos - row.begin
-			if c >= len(row.glyphs) {
-				c = len(row.glyphs) - 1
-				x = row.glyphs[c].X + float64(row.glyphs[c].A)
-			} else {
-				x = row.glyphs[c].X
-			}
-
-			return
-		}
-	}
-	r := rc - 1
-	y = float64(r)*rh + rh*0.5
-	row := this.rows[r]
-	c := row.end - row.begin
-	if c >= len(row.glyphs) {
-		c = len(row.glyphs) - 1
-		x = row.glyphs[c].X + float64(row.glyphs[c].A)
-	} else {
-		x = row.glyphs[c].X
-	}
-	return
-
+	pos = min(pos, this.RunesCount())
+	r, c := this.PosToRowCol(pos)
+	return this.rows[r].caretX(c), (float64(r) + .5) * this.RowHeight()
 }
 
 func (this *TextBlock) PointToPos(x, y float64) int {
-	if this.text == nil || y < 0 {
+	if len(this.rows) == 0 || y < 0 {
 		return 0
 	}
-
-	rh := this.RowHeight()
-	var r int
-	if this.ml {
-		r = int(y / rh)
-	} else {
-		r = 0
+	r := 0
+	if this.ml && this.RowHeight() > 0 {
+		r = int(y / this.RowHeight())
 	}
-	rc := this.SoftRowsCount()
-	if r >= rc {
+	if r >= len(this.rows) {
 		return this.RunesCount()
 	}
-	row := this.rows[r]
-	x1 := 0.0
-	for i, g := range row.glyphs {
-		if x < x1+float64(g.A)*0.5 {
+	row := &this.rows[r]
+	cluster := 0
+	for i := 0; i < len(row.text); {
+		next := i + 1
+		if cluster < len(row.clusters) && row.clusters[cluster].Begin == i {
+			next = row.clusters[cluster].End
+			cluster++
+		}
+		if x < (row.caretX(i)+row.caretX(next))*.5 {
 			return row.begin + i
 		}
-		x1 += float64(g.A)
+		i = next
 	}
-	return row.end
+	// Newline/CRLF and the final sentinel have zero visible width. Clicking
+	// beyond the ink belongs to this line, never to an invisible giant glyph.
+	return min(row.begin+len(row.text), this.RunesCount())
 }
 
 func (this *TextBlock) RowColToPos(r, c int) (pos int) {
@@ -356,7 +349,7 @@ func (this *TextBlock) RowColToPos(r, c int) (pos int) {
 }
 
 func (this *TextBlock) PosToRowCol(pos int) (r, c int) {
-	if this.text == nil || pos <= 0 {
+	if len(this.rows) == 0 || pos <= 0 {
 		return 0, 0
 	}
 	rc := this.SoftRowsCount()

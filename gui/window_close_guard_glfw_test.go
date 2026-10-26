@@ -36,6 +36,15 @@ func TestMain(m *testing.M) {
 		// are reported by TestGLFWNativeRenderTransfers in the usual test run.
 		nativeRenderErr = runNativeRenderProbe()
 	}
+	if os.Getenv("SILK_TEST_NATIVE_POPUP_ALPHA") == "1" {
+		nativePopupSurfaceErr = runNativePopupSurfaceProbe()
+	}
+	if os.Getenv("SILK_TEST_NATIVE_BACKBUFFER") == "1" {
+		nativeBackbufferErr = runNativeBackbufferProbe()
+	}
+	if os.Getenv("SILK_TEST_NATIVE_CURSORS") == "1" {
+		nativeCursorProbeErr = runNativeCursorProbe()
+	}
 	code := m.Run()
 	// Destroying is main-thread-only for the same reason, so it happens here
 	// rather than in a t.Cleanup.

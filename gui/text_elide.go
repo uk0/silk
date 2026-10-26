@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/paint"
+	"math"
 )
 
 // elideMark is the tail a cut string ends with — the same single-rune ellipsis
@@ -39,4 +40,15 @@ func elideToWidth(f paint.Font, s string, max float64) string {
 		fit = cand
 	}
 	return fit
+}
+
+// ElideText fits text to a logical-pixel width in font, using a Unicode ellipsis
+// when needed. The input is never changed; callers may expose it in a tooltip.
+// Nil fonts and nonpositive/NaN widths produce no text. Paint operations should
+// still clip their allocated rectangle to contain glyph overhangs.
+func ElideText(font paint.Font, text string, width float64) string {
+	if font == nil || width <= 0 || math.IsNaN(width) {
+		return ""
+	}
+	return elideToWidth(font, text, width)
 }

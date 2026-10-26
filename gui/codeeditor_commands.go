@@ -8,6 +8,7 @@ func (this *CodeEditor) Redo() { this.redo() }
 // MarkSaved establishes the buffer snapshot used for tab dirty indicators.
 // Hosts call it only after loading or successfully writing the document.
 func (this *CodeEditor) MarkSaved() {
+	this.breakTypingUndoGroup()
 	this.savedText = this.Text()
 	this.modifiedRevision = this.textRevision
 	this.modified = false

@@ -34,6 +34,10 @@ type ListWidget struct {
 
 	items []ListItem
 
+	itemPresenter    func(int, ListItem) ListItemPresentation
+	presentationKey  listPresentationKey
+	presentationRows map[int]listPresentationRow
+
 	iconVisible  bool
 	checkVisible bool
 	rowHeight    float64
@@ -123,15 +127,20 @@ func (this *ListWidget) SetCheckBoxVisible(b bool) {
 }
 
 func (this *ListWidget) RowHeight() float64 {
-	if this.rowHeight <= 0 {
-		return Theme().ItemHeight
+	rh := this.rowHeight
+	if rh <= 0 {
+		rh = Theme().ItemHeight
 	}
-	return this.rowHeight
+	if this.itemPresenter != nil {
+		rh = math.Max(rh, 2*math.Max(1, this.Font().FontExtents().Height)+8)
+	}
+	return rh
 }
 
 func (this *ListWidget) SetRowHeight(rh float64) {
 	this.rowHeight = rh
 	this.Layout()
+	this.InvalidateParentLayout()
 }
 
 func (this *ListWidget) Font() paint.Font {
@@ -144,6 +153,7 @@ func (this *ListWidget) Font() paint.Font {
 func (this *ListWidget) SetFont(font paint.Font) {
 	this.font = font
 	this.Layout()
+	this.InvalidateParentLayout()
 }
 
 func (this *ListWidget) IconSize() float64 {
@@ -177,10 +187,7 @@ func (this *ListWidget) Padding() (left, right, top, bottom float64) {
 
 func (this *ListWidget) Draw(g paint.Painter) {
 	g.Save()
-	defer func() {
-		Theme().DrawViewFrame(g, 0, 0, this.w, this.h)
-		g.Restore()
-	}()
+	defer g.Restore()
 
 	g.Rectangle(0, 0, this.w, this.h)
 	g.SetBrush1(Theme().ViewBGColor)
@@ -188,6 +195,12 @@ func (this *ListWidget) Draw(g paint.Painter) {
 
 	//	t := Theme()
 	m := this.padding
+	vw, vh := this.ViewportSizePx()
+	wc, hc := math.Max(0, vw-m.L-m.R), math.Max(0, vh-m.T-m.B)
+	g.Save()
+	defer func() { g.Restore(); Theme().DrawViewFrame(g, 0, 0, this.w, this.h) }()
+	g.Rectangle(m.L, m.T, wc, hc)
+	g.Clip()
 	g.Translate(m.L, m.T)
 	//	core.Debug("m=", m)
 
@@ -212,9 +225,7 @@ func (this *ListWidget) Draw(g paint.Painter) {
 		xText = xCheck + Theme().CheckBoxSize + 3
 	}
 
-	r0 := int(sy)
-
-	_, _, wc, hc := m.Apply(0, 0, this.w, this.h)
+	r0 := max(0, int(sy))
 
 	//	core.Debug("hc=", hc)
 	//	core.Debug("rh=", rh)
@@ -283,26 +294,26 @@ func (this *ListWidget) Draw(g paint.Painter) {
 			g.Stroke()
 		}
 		//core.Debug("xt yt = ", xt, yt)
-		g.SetBrush1(selectionTextColor(Theme(), selected))
-		g.DrawText1(xt, yt, this.items[r].Text)
+		if this.itemPresenter != nil {
+			this.drawPresentedRow(g, r, xt, y, wc-xt, rh, selected)
+		} else {
+			g.SetBrush1(selectionTextColor(Theme(), selected))
+			g.DrawText1(xt, yt, this.items[r].Text)
+		}
 
 		y += rh
 	}
 
-	if sx > 0 || sy > 0 {
-		g.Translate(sx, sy*rh)
-	}
-
-	g.Translate(-m.L, -m.T)
-
 }
 
 func (this *ListWidget) Append(a ListItem) {
+	this.InvalidateItemPresentation()
 	this.items = append(this.items, a)
 	this.Layout()
 }
 
 func (this *ListWidget) Insert(idx int, a ListItem) {
+	this.InvalidateItemPresentation()
 	// 先整体扩一位再右移, 不能写成append(append(this.items[:idx], a), this.items[idx:]...):
 	// 内层append直接写进了共享的底层数组, 把第idx项覆盖成a, 外层再把已被污染的
 	// 尾部接回来, 结果是丢一项、插入项重复一份.
@@ -315,6 +326,7 @@ func (this *ListWidget) Insert(idx int, a ListItem) {
 }
 
 func (this *ListWidget) Remove(idx int) ListItem {
+	this.InvalidateItemPresentation()
 	ret := this.items[idx]
 	this.items[idx] = ListItem{}
 	v := append(this.items[:idx], this.items[idx+1:]...)
@@ -334,6 +346,7 @@ func (this *ListWidget) RemoveLast() ListItem {
 // repopulates the list right after has to re-select (SetActiveIndex) or the
 // list comes back with nothing highlighted.
 func (this *ListWidget) Clear() {
+	this.InvalidateItemPresentation()
 	this.items = nil
 	this.activeIndex = -1
 	this.hoverIndex = -1
@@ -351,6 +364,7 @@ func (this *ListWidget) Item(idx int) ListItem {
 }
 
 func (this *ListWidget) SetItem(idx int, item ListItem) {
+	this.InvalidateItemPresentation()
 	this.items[idx] = item
 	this.Layout()
 }
@@ -360,6 +374,11 @@ func (this *ListWidget) Count() int {
 }
 
 func (this *ListWidget) HitTest(x, y float64) (row, col int) {
+	// Match the painted content viewport, excluding padding and scrollbars.
+	vw, vh := this.ViewportSizePx()
+	if x < this.padding.L || x >= vw-this.padding.R || y < this.padding.T || y >= vh-this.padding.B {
+		return -1, -1
+	}
 	sx, sy := this.ScrollPos()
 	rh := this.RowHeight()
 	// Draw先平移padding.T再画第0行, 所以padding.T以上是边框而不是行.
@@ -385,7 +404,7 @@ func (this *ListWidget) HitTest(x, y float64) (row, col int) {
 		xText = xCheck + Theme().CheckBoxSize + 3
 	}
 
-	x += sx
+	x += sx - this.padding.L
 
 	if x >= xText {
 		col = 2

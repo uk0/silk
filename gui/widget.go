@@ -795,6 +795,10 @@ func (this *Widget) syncWindow(visible, lazy bool) {
 		err := this.win.create(owner, this.wt)
 		if err != nil {
 			this.win = nil
+		} else if this.wt == WtForm {
+			// Set identity before first visibility. Popups/embedded children do
+			// not need native title/taskbar icons or their raster allocations.
+			this.win.SetIcon(initialWindowIcon(this.Self(), owner))
 		}
 	}
 

@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // defaultWheelScrollLines is the number of lines to scroll per wheel notch.
@@ -91,6 +92,10 @@ type Edit struct {
 	// visible (no toast).
 	maxLength      int
 	navigationList *ListWidget
+	history        editHistory
+	editRevision   uint64
+	contextMenu    *Menu
+	contextDown    bool
 }
 
 func NewEdit() *Edit {
@@ -137,6 +142,11 @@ func (this *Edit) Draw(g paint.Painter) {
 
 	t := Theme()
 	m := this.padding
+	vw, vh := this.ViewportSize()
+	// Clip after painting the frame: scrolled glyphs and selection must not
+	// cover its padding, borders or the neighbouring property label.
+	g.Rectangle(m.L, m.T, math.Max(0, vw), math.Max(0, vh))
+	g.Clip()
 	g.Translate(m.L, m.T)
 
 	sel0 := this.sel0
@@ -154,8 +164,9 @@ func (this *Edit) Draw(g paint.Painter) {
 		g.Translate(-sx, -sy*this.RowHeight())
 	}
 	focus := this.HasFocus()
+	selectionFocus := focus || this.ownsVisibleContextMenu()
 	var selColor paint.Color
-	if focus {
+	if selectionFocus {
 		selColor = t.HighLightColor
 	} else {
 		ihsl := paint.HSLModel.Convert(t.HighLightColor)
@@ -166,7 +177,6 @@ func (this *Edit) Draw(g paint.Painter) {
 	g.SetFont(this.Font())
 	g.SetBrush1(Theme().TextColor)
 
-	_, vh := this.ViewportSize()
 	rh := this.RowHeight()
 	vrs := math.Floor(vh / rh)
 
@@ -188,65 +198,31 @@ func (this *Edit) Draw(g paint.Painter) {
 		return
 	}
 
+	if ln < 0 {
+		ln = 0
+	}
 	for ; ln < end; ln++ {
-		//	core.Debug(ln, len(this.rows))
-		row := this.rows[ln]
-
-		gs := row.glyphs
-		if sel0 < row.end && sel1 >= row.begin {
-			a := sel0 - row.begin
-			a1 := a
-			if a < 0 {
-				a = 0
+		row := &this.rows[ln]
+		if sel0 < sel1 && sel0 < row.end && sel1 > row.begin && (selectionFocus || this.alwaysDrawSel) {
+			a := max(0, sel0-row.begin)
+			b := min(len(row.text), sel1-row.begin)
+			x1, x2 := row.caretX(a), row.caretX(b)
+			if sel1 > row.begin+len(row.text) {
+				// Highlight the newline up to the visible edge, without pretending it
+				// is a huge native glyph or polluting horizontal scroll measurements.
+				x2 = math.Max(x2, sx+vw)
 			}
-			b := sel1 - row.begin
-			gl := len(gs)
-			b1 := b
-			if b > gl {
-				b = gl
-			}
-			if b > a {
-				// 正向选择
-				if focus || this.alwaysDrawSel {
-					// 选择范围背景
-					g.SetBrush1(selColor)
-					x1 := gs[a].X
-					y1 := float64(ln) * fe.Height
-					var w1 float64
-					if b1 > gl {
-						w1 = this.w - m.R - m.L - x1
-					} else {
-						w1 = gs[b-1].X + float64(gs[b-1].A) - gs[a].X
-					}
-					h1 := fe.Height
-					g.Rectangle(x1, y1, w1, h1)
-					g.Fill()
-				}
-				g.SetBrush1(t.TextColor)
-				g.DrawGlyphs(gs[a:b])
-			}
-			if a1 >= 0 {
-				// 反向选择
-				if focus && !this.readonly && this.sel0 == sel1 {
-					// caret画在前面
-					t.DrawCaret(g, gs[a1].X, float64(ln)*fe.Height, 2.0, fe.Height)
-				}
-				g.SetBrush1(t.TextColor)
-				g.DrawGlyphs(gs[:a1])
-			}
-			if b1 < gl {
-				// 正向选择
-				if focus && !this.readonly && this.sel0 == sel0 {
-					// caret画在后面
-					t.DrawCaret(g, gs[b1].X, float64(ln)*fe.Height, 2.0, fe.Height)
-				}
-				g.SetBrush1(t.TextColor)
-				g.DrawGlyphs(gs[b1:gl])
-			}
-		} else {
-			g.DrawGlyphs(gs)
+			g.SetBrush1(selColor)
+			g.Rectangle(x1, float64(ln)*fe.Height, math.Max(0, x2-x1), fe.Height)
+			g.Fill()
+		}
+		g.SetBrush1(t.TextColor)
+		row.draw(g, float64(ln)*fe.Height+fe.Ascent)
+		if focus && !this.readonly && this.sel1 >= row.begin && this.sel1 < row.end {
+			t.DrawCaret(g, row.caretX(this.sel1-row.begin), float64(ln)*fe.Height, 2.0, fe.Height)
 		}
 	}
+
 }
 
 // errorFrameColor is the border colour drawn around an Edit whose text
@@ -417,14 +393,12 @@ func (this *Edit) OnTextInput(s string) {
 		if begin > end {
 			begin, end = end, begin
 		}
-		text := this.Text()
-		if begin > len(text) {
-			begin = len(text)
-		}
-		if end > len(text) {
-			end = len(text)
-		}
-		candidate := text[:begin] + s + text[end:]
+		// Selection offsets are runes, not UTF-8 byte offsets (also used
+		// by pasteString). Validate exactly the replacement we will commit.
+		text := this.runesNoSentinel()
+		begin = max(0, min(begin, len(text)))
+		end = max(begin, min(end, len(text)))
+		candidate := string(text[:begin]) + s + string(text[end:])
 		if this.validator.Validate(candidate) == Invalid {
 			return
 		}
@@ -455,23 +429,34 @@ func (this *Edit) Completer() *Completer { return this.completer }
 // from completionPrefixStart to the caret position. Hosts call this to
 // highlight the prefix in their popup or to compute completion bounds.
 func (this *Edit) CompletionPrefix() string {
-	text := this.Text()
-	caret := this.sel0
-	if caret > len(text) {
-		caret = len(text)
+	start, caret, _ := this.completionRange()
+	return string(this.runesNoSentinel()[start:caret])
+}
+
+// Translate the public byte-based prefix anchor to rune-based Edit positions.
+// Clamp an interior UTF-8 byte to its rune start; an out-of-range anchor means
+// an empty prefix at the active caret. Never copy/scan the suffix after it.
+func (this *Edit) completionRange() (start, caret, byteStart int) {
+	runes := this.runesNoSentinel()
+	caret = max(0, min(this.sel1, len(runes)))
+	anchor := this.completionPrefixStart
+	for start < caret {
+		n := utf8.RuneLen(runes[start])
+		if anchor >= byteStart && anchor < byteStart+n {
+			return
+		}
+		byteStart += n
+		start++
 	}
-	start := this.completionPrefixStart
-	if start < 0 || start > caret {
-		start = caret
-	}
-	return text[start:caret]
+	return
 }
 
 // SetCompletionPrefixStart pins the byte offset where the active
 // completion prefix begins. Defaults to 0 (whole text). Hosts that
 // implement word-by-word completion (e.g. a code editor where each
 // new identifier resets the prefix start) call this on whitespace /
-// boundary keystrokes.
+// boundary keystrokes. Interior UTF-8 offsets snap to the rune start; negative
+// offsets or positions after the active caret resolve to an empty prefix.
 func (this *Edit) SetCompletionPrefixStart(start int) {
 	this.completionPrefixStart = start
 }
@@ -484,7 +469,7 @@ func (this *Edit) SetCompletionPrefixStart(start int) {
 // immediately after the inserted candidate, so a subsequent keystroke
 // starts a fresh completion against whatever the user types next.
 func (this *Edit) AcceptCompletion(idx int) bool {
-	if this.completer == nil {
+	if this.completer == nil || this.readonly || !this.IsEnabled() {
 		return false
 	}
 	suggestions := this.completer.Suggestions()
@@ -492,26 +477,25 @@ func (this *Edit) AcceptCompletion(idx int) bool {
 		return false
 	}
 	pick := suggestions[idx]
-	caret := this.sel0
-	text := this.Text()
-	if caret > len(text) {
-		caret = len(text)
+	if !utf8.ValidString(pick) {
+		return false
 	}
-	start := this.completionPrefixStart
-	if start < 0 || start > caret {
-		start = caret
+	start, caret, byteStart := this.completionRange()
+	if this.maxLength > 0 && this.RunesCount()-(caret-start)+utf8.RuneCountInString(pick) > this.maxLength {
+		return false
 	}
-	// Replace [start:caret] with pick; leave any text past the caret
-	// (unusual but possible if the user moved the caret mid-typing)
-	// untouched so we don't surprise-clobber it.
-	newText := text[:start] + pick + text[caret:]
-	this.TextBlock.SetText(newText)
-	newCaret := start + len(pick)
-	this.sel0 = newCaret
-	this.sel1 = newCaret
-	this.completionPrefixStart = newCaret
-	this.emitChanged()
-	this.Layout()
+	if this.validator != nil {
+		runes := this.runesNoSentinel()
+		candidate := string(runes[:start]) + pick + string(runes[caret:])
+		if this.validator.Validate(candidate) == Invalid {
+			return false
+		}
+	}
+	// Use the ordinary edit transaction so constraints, history, scroll and
+	// pending paste follow the same contract as typing. Preserve the suffix.
+	this.replaceWithCompletionPrefix(start, caret, pick, byteStart+len(pick))
+	this.caretXSaved = false
+	this.emitEdited()
 	return true
 }
 
@@ -526,6 +510,13 @@ func (this *Edit) refreshCompleter() {
 
 func (this *Edit) OnKeyDown(key int, repeat bool) {
 	if !this.IsEnabled() {
+		return
+	}
+	historyMods := currentMods()
+	if IsKeyDown(KeyCtrl) {
+		historyMods |= ModAction
+	}
+	if this.HandleShortcut(key, historyMods) || this.editContextKey(key, repeat) {
 		return
 	}
 	if this.navigationList != nil && this.navigateResultList(key, currentMods() != 0 || IsKeyDown(KeyCtrl), repeat) {
@@ -548,10 +539,11 @@ func (this *Edit) OnKeyDown(key int, repeat bool) {
 			this.deleteWordBefore()
 			return
 		}
+		begin := this.sel0
 		if this.sel0 == this.sel1 {
-			this.sel0 = this.sel1 - 1
+			begin--
 		}
-		this.replace(this.sel0, this.sel1, "")
+		this.replace(begin, this.sel1, "")
 		this.emitEdited()
 	case KeyDelete:
 		if this.readonly {
@@ -830,6 +822,9 @@ func nextWordBoundary(runes []rune, caret int) int {
 }
 
 func (this *Edit) paste() {
+	if !this.CanPaste() {
+		return
+	}
 	text, a, b := this.Text(), this.sel0, this.sel1
 	if this.tryAsyncPaste(func() bool { return !this.readonly && this.Text() == text && this.sel0 == a && this.sel1 == b }, this.pasteString) {
 		return
@@ -900,6 +895,10 @@ func (this *Edit) SetMaxLength(n int) {
 	if n < 0 {
 		n = 0
 	}
+	if this.maxLength != n {
+		this.CancelPendingPaste()
+		this.ClearUndoHistory()
+	}
 	this.maxLength = n
 	if n == 0 {
 		return
@@ -909,6 +908,9 @@ func (this *Edit) SetMaxLength(n int) {
 	}
 	// Truncate via TextBlock so the trailing-"\n" sentinel is preserved.
 	rs := []rune(this.Text())
+	this.CancelPendingPaste()
+	this.ClearUndoHistory()
+	this.editRevision++
 	this.TextBlock.SetText(string(rs[:n]))
 	if this.sel0 > n {
 		this.sel0 = n
@@ -921,26 +923,9 @@ func (this *Edit) SetMaxLength(n int) {
 }
 
 func (this *Edit) Copy() {
-	s := this.SelectionText()
-	if s != "" {
-		Clipboard.Clear()
-		Clipboard.SetData(s)
-	}
+	this.editClipboardFailed(this.copyEditSelection(false, writeEditorClipboard))
 }
-
-func (this *Edit) cut() {
-	if this.sel0 == this.sel1 {
-		return
-	}
-	caret, s := this.replace(this.sel0, this.sel1, "")
-	if s != "" {
-		Clipboard.Clear()
-		Clipboard.SetData(s)
-		this.sel0, this.sel1 = caret, caret
-		this.caretXSaved = false
-	}
-	this.emitEdited()
-}
+func (this *Edit) cut() { this.editClipboardFailed(this.copyEditSelection(true, writeEditorClipboard)) }
 
 func (this *Edit) SelectAll() {
 	this.SetSelection(0, this.RunesCount())
@@ -985,8 +970,7 @@ func (this *Edit) SetSelection(begin, end int) {
 	this.sel0 = begin
 	this.sel1 = end
 	this.caretXSaved = false
-	//	this.needPrepare()
-	this.Self().Update()
+	this.ScrollToCaret()
 }
 
 func (this *Edit) CaretPos() (pos int) {
@@ -994,12 +978,35 @@ func (this *Edit) CaretPos() (pos int) {
 }
 
 func (this *Edit) ScrollToCaret() {
+	// Layout configures a hidden horizontal range from already-shaped rows.
+	// Caret movement only looks up glyph coordinates; no reshaping or timer.
+	if len(this.rows) > 0 {
+		x, _ := this.PosToPoint(this.sel1)
+		w, _ := this.ViewportSize()
+		w = math.Max(2, w)
+		sx := this.ScrollX()
+		if x < sx {
+			this.SetScrollX(x)
+		} else if x+2 > sx+w {
+			this.SetScrollX(x + 2 - w)
+		}
+	}
+	// A single-line editor never scrolls vertically, even when a compact
+	// property row is fractionally shorter than font height plus padding.
+	// Treating that viewport as zero rows hid its text on every other click.
+	if !this.ml {
+		if this.ScrollY() != 0 {
+			this.SetScrollY(0)
+		}
+		this.Self().Update()
+		return
+	}
 	r, _ := this.CaretRowCol()
 	_, sy := this.ScrollPos()
 	_, vh := this.ViewportSize()
 
 	rh := this.RowHeight()
-	vrs := math.Floor(vh / rh)
+	vrs := math.Max(1, math.Floor(vh/rh))
 	//core.Debug(r, sy, vrs)
 	if float64(r) > sy+vrs-1 {
 		this.SetScrollY(float64(r) - vrs + 1)
@@ -1074,7 +1081,8 @@ func (this *Edit) Layout() {
 			this.vs.Detach()
 			this.vs = nil
 		}
-		this.HorzScrollBar().SetVisible(false)
+		this.layoutHorizontalScroll()
+		this.ScrollToCaret()
 		return
 	}
 	rh := this.RowHeight()
@@ -1100,8 +1108,23 @@ func (this *Edit) Layout() {
 	//if this.view != nil {
 	//	this.view.SetRect(0, 0, width-sw, height-sw)
 	//}
+	this.layoutHorizontalScroll()
 	this.ScrollArea.Layout()
+	this.ScrollToCaret()
+}
 
+// Keep the horizontal bar hidden (single-line fields have no spare row),
+// while retaining a bounded pixel range for caret and mouse navigation.
+func (this *Edit) layoutHorizontalScroll() {
+	width := 0.0
+	for i := range this.rows {
+		row := &this.rows[i]
+		width = math.Max(width, row.caretX(len(row.text)))
+	}
+	hs := this.HorzScrollBar()
+	hs.SetVisible(false)
+	w, _ := this.ViewportSize()
+	hs.SetRange(0, math.Max(0, width+2-math.Max(2, w)))
 }
 
 func (this *Edit) Cursor() *Cursor {
@@ -1159,7 +1182,22 @@ func (this *Edit) Replace(begin, end int, s string) (caret int, old string) {
 }
 
 func (this *Edit) replace(begin, end int, s string) (caret int, old string) {
+	return this.replaceWithCompletionPrefix(begin, end, s, this.completionPrefixStart)
+}
+
+func (this *Edit) replaceWithCompletionPrefix(begin, end int, s string, prefixAfter int) (caret int, old string) {
+	if end < begin {
+		begin, end = end, begin
+	}
+	begin = max(0, min(begin, this.RunesCount()))
+	end = max(begin, min(end, this.RunesCount()))
+	this.CancelPendingPaste()
+	anchor, cursor, count := this.sel0, this.sel1, this.RunesCount()
 	caret, old = this.TextBlock.Replace(begin, end, s)
+	this.recordEdit(editDelta{start: begin, before: old, after: string(this.text[begin:caret]), anchor: max(0, min(anchor, count)), caret: max(0, min(cursor, count)), end: caret,
+		prefixBefore: this.completionPrefixStart, prefixAfter: prefixAfter})
+	this.completionPrefixStart = prefixAfter
+	this.editRevision++
 	this.sel0, this.sel1 = caret, caret
 	this.Layout()
 	this.ScrollToCaret()
@@ -1174,7 +1212,16 @@ func (this *Edit) SetText(s string) {
 		// text through, clear the validator first or call ValidatorFixup.
 		return
 	}
+	this.CancelPendingPaste()
+	this.ClearUndoHistory()
+	this.editRevision++
 	this.TextBlock.SetText(s)
+	this.completionPrefixStart = 0
+	// Property refresh/undo can replace a long value with a shorter one.
+	// Keep the active selection valid before callbacks observe the buffer.
+	this.sel0 = max(0, min(this.sel0, this.RunesCount()))
+	this.sel1 = max(0, min(this.sel1, this.RunesCount()))
+	this.caretXSaved = false
 	this.emitChanged()
 	this.Layout()
 	this.revalidate()
@@ -1185,6 +1232,8 @@ func (this *Edit) SetText(s string) {
 // called explicitly — switching validators mid-flight does not
 // retroactively reject the current value, matching Qt's behaviour.
 func (this *Edit) SetValidator(v Validator) {
+	this.CancelPendingPaste()
+	this.ClearUndoHistory()
 	this.validator = v
 	// Reclassify the current text against the new validator so IsValid() /
 	// the error border reflect it immediately, before any further edit.
@@ -1226,6 +1275,9 @@ func (this *Edit) ValidatorFixup() {
 	if fixed == this.Text() {
 		return
 	}
+	this.CancelPendingPaste()
+	this.ClearUndoHistory()
+	this.editRevision++
 	this.TextBlock.SetText(fixed)
 	this.emitChanged()
 	this.Layout()
@@ -1313,10 +1365,14 @@ func (this *Edit) SetWrap(b bool) {
 }
 
 func (this *Edit) DeleteSelection() {
-	if this.sel0 == this.sel1 {
-		this.sel1 = this.sel0 + 1
+	if this.readonly || !this.IsEnabled() {
+		return
 	}
-	this.replace(this.sel0, this.sel1, "")
+	end := this.sel1
+	if this.sel0 == this.sel1 {
+		end++
+	}
+	this.replace(this.sel0, end, "")
 }
 
 func (this *Edit) OnDragEnter(x, y float64, dnd IDndContext) {

@@ -227,13 +227,13 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	// Design actions share guards and handlers with the context toolbar.
 	for _, action := range designerActionSpecs(designCanvas) {
 		add(action.label, action.hint, action.run)
+		paletteCommands[len(paletteCommands)-1].Available = action.enabled
 	}
 	add("Refresh", "Cmd+R", func() {
 		if designCanvas != nil {
 			designCanvas.Update()
 		}
 	})
-	add("Fit to View", actionKeyHint()+"+Shift+0", func() { fitCanvasToView(designCanvas) })
 
 	add("Refresh Editor Git Markers", "", func() { refreshActiveEditorGit(editorTabs) })
 	// Navigation.
@@ -496,16 +496,6 @@ func showCommandPalette(parent gui.IWidget) {
 }
 
 func (c paletteCommand) available() bool { return c.Available == nil || c.Available() }
-func (c paletteCommand) displayText() string {
-	label := c.Name
-	if c.Hint != "" {
-		label += "    " + c.Hint
-	}
-	if !c.available() {
-		label += "    (" + i18n.T("Unavailable") + ")"
-	}
-	return label
-}
 
 type paletteSelection struct{ command *paletteCommand }
 
@@ -533,50 +523,61 @@ func newCommandPalette(parent gui.IWidget) (*gui.Dialog, *paletteSelection) {
 
 	input := gui.NewEdit()
 	box.AddWidget(input)
+	gui.SetToolTip(input, i18n.T("Search commands. Up/Down selects, Enter runs, Escape closes."))
 
 	list := gui.NewListWidget()
 	list.SetFillAvailable(true)
 	list.SetSelectionVisible(true)
 	box.AddWidget(list)
 	input.SetNavigationList(list)
+	list.SetItemPresenter(func(_ int, item gui.ListItem) gui.ListItemPresentation {
+		c, ok := item.Data.(paletteCommand)
+		if !ok {
+			return gui.ListItemPresentation{}
+		}
+		return paletteRowPresentation(c)
+	})
+	count := gui.NewLabel("")
+	box.AddWidget(count)
+	details := newPaletteDetails()
+	box.AddWidget(details)
+	list.SigSelectionChanged(func(_ interface{}, _ []int) {
+		list.InvalidateItemPresentation()
+		updatePaletteDetails(list, details, count)
+	})
 
 	repopulate := func(query string) {
 		cmds := filterCommands(commands, query)
 		items := make([]gui.ListItem, 0, len(cmds))
 		for _, c := range cmds {
-			items = append(items, gui.ListItem{Text: c.displayText(), Data: c})
+			items = append(items, gui.ListItem{Text: c.Name, Data: c})
 		}
 		fillFinderList(list, items)
+		updatePaletteDetails(list, details, count)
 	}
 	repopulate("")
 
 	input.SigTextChanged(func(_ interface{}, q string) { repopulate(q) })
 
-	// Enter accepts the highlighted match, including input-arrow navigation.
-	input.SigSubmit(func(_ interface{}, _ string) {
+	// Refresh context feedback when navigation or submission occurs, not on
+	// a timer. Execution still checks availability after modal teardown.
+	chooseActive := func() {
 		idx := list.ActiveIndex()
 		if idx < 0 || idx >= list.Count() {
 			return
 		}
 		if cmd, ok := list.Item(idx).Data.(paletteCommand); ok {
+			list.InvalidateItemPresentation()
+			updatePaletteDetails(list, details, count)
 			selection.choose(dlg, cmd)
 		}
-	})
-
-	// Enter / double-click on the list runs whatever is selected.
-	list.SigSubmit(func(o interface{}) {
-		idx := list.ActiveIndex()
-		if idx < 0 || idx >= list.Count() {
-			return
-		}
-		if cmd, ok := list.Item(idx).Data.(paletteCommand); ok {
-			selection.choose(dlg, cmd)
-		}
-	})
+	}
+	input.SigSubmit(func(_ interface{}, _ string) { chooseActive() })
+	list.SigSubmit(func(_ interface{}) { chooseActive() })
 
 	dlg.SetContent(box)
 	dlg.AddButton(i18n.T("Cancel"), gui.DialogCancel)
-	dlg.SetSize(520, 420)
+	dlg.SetSize(620, 520)
 	dlg.SetInitialFocus(input)
 	return dlg, selection
 }

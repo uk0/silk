@@ -74,9 +74,8 @@ func NewFrame() *Frame {
 func NewFrameWindow() *Frame {
 	frame := NewFrame()
 	frame.SetVisible(false)
+	_ = AppIcon() // Preserve the frame's legacy default before shared icon selection.
 	frame.AttachWindow(WtForm)
-	win := frame.Window()
-	win.SetIcon(AppIcon())
 	return frame
 }
 

@@ -215,18 +215,9 @@ func (this *Window) DoDragDrop(from interface{},
 		f = append(f, CF_UNUSED)
 	}
 
-	// 如果没有提供缩略图, 则用一个灰色矩形代替
-	if content == nil {
-		content = paint.NewPixmap(32, 16)
-		g := content.NewPainter()
-		g.SetBrush1(paint.Color{0, 0, 0, 127})
-		g.Rectangle(0, 0, 32, 16)
-		g.Fill()
-	}
-
-	// 把缩略图附加到光标上
-	// TODO: Windows XP 不支持大图片
 	cursors := GenerateDropCursors(content)
+	previousCursor := SetOverrideCursor(cursors[0])
+	defer func() { SetOverrideCursor(previousCursor); ReleaseDropCursors(cursors); privateDndData = nil }()
 
 	do := win32.NewDataObject(f, v, from)
 	ds := win32.NewDropSource(
@@ -235,13 +226,13 @@ func (this *Window) DoDragDrop(from interface{},
 			default:
 				fallthrough
 			case DndIgnore:
-				SetCursor(cursors[0])
+				SetOverrideCursor(cursors[0])
 			case DndMove:
-				SetCursor(cursors[1])
+				SetOverrideCursor(cursors[1])
 			case DndCopy:
-				SetCursor(cursors[2])
+				SetOverrideCursor(cursors[2])
 			case DndLink:
-				SetCursor(cursors[3])
+				SetOverrideCursor(cursors[3])
 			}
 		})
 	// DndLink belongs in the mask: DROPEFFECT_* and DndAction share their values,

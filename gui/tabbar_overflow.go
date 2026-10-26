@@ -6,8 +6,9 @@ import (
 )
 
 // updateViewport uses the same coordinates for painting, hit-testing and DND.
-// Only the active cell must be wholly visible; every tab remains available in
-// the chooser, including a single long title in an extremely narrow strip.
+// The leading cell starts on a tab boundary. A trailing cell is measured for
+// its visible width, never painted as a clipped title/icon fragment. All tabs
+// remain available in the chooser, including strips too narrow for a label.
 func (b *TabBar) updateViewport() {
 	w, h := b.Size()
 	w, h = max(0, w), max(0, h)
@@ -30,6 +31,7 @@ func (b *TabBar) updateViewport() {
 	for _, tab := range b.tabs {
 		tab.x = b.contentW
 		tab.width = min(tab.SizeHints().Width, b.viewportW)
+		tab.paintWidth = tab.width
 		textW := tab.width - t.TabMargin.L - t.TabMargin.R - t.TabCloseSize
 		if tab.icon != nil {
 			textW -= t.TabMargin.L + t.IconSize
@@ -42,22 +44,70 @@ func (b *TabBar) updateViewport() {
 
 func (b *TabBar) ensureActiveVisible() {
 	old := b.scrollX
-	b.scrollX = max(0, min(b.scrollX, b.contentW-b.viewportW))
-	if b.activeTab >= 0 && b.activeTab < len(b.tabs) && b.viewportW > 0 {
-		x := b.tabs[b.activeTab].x
-		if x < b.scrollX {
-			b.scrollX = x
-		}
-		if end := x + b.tabs[b.activeTab].width; end > b.scrollX+b.viewportW {
-			b.scrollX = end - b.viewportW
+	b.firstVisible, b.lastVisible = 0, 0
+	if len(b.tabs) == 0 || b.viewportW <= 0 {
+		b.scrollX = 0
+		return
+	}
+	// Round the scroll origin up to an actual cell boundary, rather than
+	// exposing the suffix of the preceding title when revealing a later tab.
+	start := max(0, min(b.scrollX, b.contentW-b.viewportW))
+	first := sort.Search(len(b.tabs), func(i int) bool { return b.tabs[i].x >= start })
+	first = min(first, len(b.tabs)-1)
+	if b.activeTab >= 0 && b.activeTab < len(b.tabs) {
+		active := b.tabs[b.activeTab]
+		if b.activeTab < first {
+			first = b.activeTab
+		} else if active.x+active.width > b.tabs[first].x+b.viewportW {
+			start = active.x + active.width - b.viewportW
+			first = sort.Search(len(b.tabs), func(i int) bool { return b.tabs[i].x >= start })
+			first = min(first, b.activeTab)
 		}
 	}
-	b.firstVisible = sort.Search(len(b.tabs), func(i int) bool { return b.tabs[i].x+b.tabs[i].width > b.scrollX })
+	b.firstVisible, b.scrollX = first, b.tabs[first].x
+	b.updateVisibleTabs()
 	if b.scrollX != old {
 		b.hoverTab = -1
 		b.hoverCloseBtn = false
 		b.Update()
 	}
+}
+
+// Only visible cells are revisited when selection scrolls. Font measurements
+// are cached until a cell's presentation width changes; Draw never elides.
+func (b *TabBar) updateVisibleTabs() {
+	b.lastVisible = b.firstVisible
+	t := Theme()
+	for i := b.firstVisible; i < len(b.tabs); i++ {
+		tab := b.tabs[i]
+		width := min(tab.width, b.viewportW-(tab.x-b.scrollX))
+		if width <= 0 {
+			break
+		}
+		padding := t.TabMargin.L + t.TabMargin.R + t.TabCloseSize
+		if tab.icon != nil {
+			padding += t.TabMargin.L + t.IconSize
+		}
+		// A tiny remainder is blank, not an anonymous fragment with a hit target.
+		if width < tab.width && width < padding+t.Font.TextExtents(elideMark).Width {
+			break
+		}
+		if tab.paintWidth != width {
+			tab.paintWidth = width
+			tab.paintLabel = elideToWidth(t.Font, tab.label, max(0, width-padding))
+		}
+		b.lastVisible = i + 1
+	}
+}
+
+// Close painting and hit-testing share this guard. A close glyph must fit in
+// full, without colliding with the tab icon, even in a one-pixel viewport.
+func tabCloseFits(t *defaultTheme, icon paint.Icon, width, height float64) bool {
+	left := t.TabMargin.L
+	if icon != nil {
+		left += t.IconSize + t.TabMargin.L
+	}
+	return width >= left+t.TabCloseSize+t.TabMargin.R && height >= t.TabMargin.T+t.TabCloseSize+t.TabMargin.B
 }
 
 func (b *TabBar) allTabsButton() *Button {

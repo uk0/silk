@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/uk0/silk/paint"
 	"strings"
-	"unicode"
 )
 
 // --- Symbol Types ---
@@ -286,40 +285,19 @@ func parseConstLine(line string, lineIdx int) *CodeSymbol {
 
 // wordAtPosition extracts the Go identifier at the given line and column.
 func (this *CodeEditor) wordAtPosition(line, col int) string {
-	if line < 0 || line >= len(this.lines) {
+	text, ok := this.LineText(line)
+	if !ok || col < 0 {
 		return ""
 	}
-	runes := []rune(this.lines[line])
-	if col < 0 || col >= len(runes) {
+	p := textPositionInLine(text, col)
+	if p.RuneColumn != col {
 		return ""
 	}
-	if !isIdentStart(runes[col]) && !unicode.IsDigit(runes[col]) {
-		return ""
-	}
-	start := col
-	for start > 0 && isIdentPart(runes[start-1]) {
-		start--
-	}
-	end := col
-	for end < len(runes) && isIdentPart(runes[end]) {
-		end++
-	}
-	return string(runes[start:end])
+	return wordAtBytePosition(text, p.ByteColumn)
 }
 
 // wordAtCursor extracts the Go identifier at the current cursor position.
-func (this *CodeEditor) wordAtCursor() string {
-	this.clampCursor()
-	col := this.cursorCol
-	if col > 0 {
-		// If cursor is right after a word, look at previous char
-		runes := []rune(this.lines[this.cursorLine])
-		if col >= len(runes) || !isIdentPart(runes[col]) {
-			col--
-		}
-	}
-	return this.wordAtPosition(this.cursorLine, col)
-}
+func (this *CodeEditor) wordAtCursor() string { return this.WordAtCursor() }
 
 // --- Go To Definition ---
 

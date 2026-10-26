@@ -22,6 +22,7 @@ type timerEntry struct {
 	interval time.Duration
 	callback func()
 	lastFire time.Time
+	running  bool // one arming must not recursively enter itself through a modal loop
 }
 
 // Timer is a low-precision timer for the UI thread
@@ -58,7 +59,7 @@ func processTimers() {
 	var due []uintptr
 	now := time.Now()
 	for id, entry := range timerMap {
-		if now.Sub(entry.lastFire) >= entry.interval {
+		if !entry.running && now.Sub(entry.lastFire) >= entry.interval {
 			entry.lastFire = now
 			due = append(due, id)
 		}
@@ -80,13 +81,21 @@ func processTimers() {
 	for _, id := range due {
 		timerMu.Lock()
 		entry := timerMap[id]
-		stale := entry == nil || entry.lastFire != now
+		stale := entry == nil || entry.running || entry.lastFire != now
+		if !stale {
+			entry.running = true
+		}
 		timerMu.Unlock()
 		if stale {
 			continue
 		}
 		func() {
 			defer func() {
+				// Retire this entry, not whichever arming the Timer now names:
+				// callbacks may Stop/Start themselves before returning.
+				timerMu.Lock()
+				entry.running = false
+				timerMu.Unlock()
 				recover()
 			}()
 			entry.callback()

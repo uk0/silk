@@ -1,12 +1,12 @@
 package gui
 
 import (
+	"math"
+	"strings"
+
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
-	"strings"
-	//"math"
-	//"time"
 )
 
 func init() {
@@ -15,6 +15,7 @@ func init() {
 
 type comboPopup struct {
 	ListWidget
+	combo *ComboBox
 }
 
 // Draw renders the combo popup with shadow and rounded border overlay.
@@ -35,6 +36,9 @@ func (this *comboPopup) Draw(g paint.Painter) {
 }
 
 func (this *comboPopup) OnLeftDown(x, y float64) {
+	if this.combo != nil && (!this.combo.IsEnabled() || !this.combo.IsVisible()) {
+		return
+	}
 	// 如果在列表框内部, 或者不是弹出模式, 则不需做特殊处理
 	if x >= 0 && y >= 0 && x < this.w && y < this.h || !this.IsPopup() {
 		this.ListWidget.OnLeftDown(x, y)
@@ -62,37 +66,15 @@ func (this *comboPopup) OnLeftDown(x, y float64) {
 	emulateMouseDown(true)
 }
 
-//func (this *comboPopup) OnLeftDown(x, y float64) {
-//	this.ListWidget.OnLeftUp(x, y)
-
-//	this.PopCapture()
-//	cb := this.Parent()
-//	if cb != nil {
-//		xg, yg := this.MapToGlobal(x, y)
-//		x1, y1 := cb.MapFromGlobal(xg, yg)
-//		if x1 >= 0 && x1 < cb.Width() && y1 >= 0 && y1 < cb.Height() {
-//			// 在ComboBox范围内, 还要先排除子控件
-//			edit := cb.FindWidgetAt(x1, y1)
-//			if edit == nil || edit == cb {
-//				// 点击的是组合框的空白和按钮处, 只需模拟鼠标消息, 让ComboBox负责隐藏列表
-//				// 这里不能调用this.Hide(), 否则Combox会再把列表显示出来
-//				emulateMouseDown(true)
-//				return
-//			}
-//		}
-//	}
-//	// 点击其他位置均需隐藏下拉框
-//	this.Hide()
-//	emulateMouseDown(true)
-//}
-
 // 组合下拉框
 type ComboBox struct {
 	Widget
-	sub     *comboPopup
-	edit    IEdit
-	btnSize float64
-	pushed  bool
+	sub             *comboPopup
+	edit            IEdit
+	btnSize         float64
+	pushed          bool
+	labelCache      comboLabelCache
+	maxVisibleItems int
 
 	activeIndex         int
 	sigSelectionChanged func(o interface{}, idx int)
@@ -110,32 +92,31 @@ func (this *ComboBox) Init(iw IWidget) {
 
 	this.activeIndex = -1
 
-	edit := NewEdit()
-	edit.SetPadding(Padding{})
-	edit.SetNoFrame(true)
+	edit := newComboEdit(this)
 	this.SetEditWidget(edit)
 
 	list := new(comboPopup)
 	list.Init(list)
+	list.combo = this
 	list.SetParent(iw)
 	list.SetVisible(false)
 	core.Connect(list.SigSubmit, this.onListSubmit)
-	list.SetSelectionVisible(false)
-	list.SetHoverVisible(true)
+	list.SetSelectionVisible(true)
+	list.SetHoverVisible(false)
 	list.SetIconVisible(true)
 	this.sub = list
 
 }
 
 func (this *ComboBox) SetEditWidget(edit IEdit) {
-	if this.edit != nil && this.edit != edit && this.edit.Parent() == this {
+	if this.edit != nil && this.edit != edit && this.edit.Parent() == this.Self() {
 		// Replacing the editor must detach the old child, otherwise both
 		// editors keep rendering/hit-testing over the same field.
 		this.edit.SetParent(nil)
 	}
 	this.edit = edit
 	if edit != nil {
-		edit.SetParent(this)
+		edit.SetParent(this.Self())
 		edit.SetRedrawParent(true)
 	}
 	this.Layout()
@@ -165,7 +146,8 @@ func (this *ComboBox) ClientRect() geom.Rect {
 	x, y, w, h := 0.0, 0.0, this.w, this.h
 	m := Theme().EditPadding
 	x, y, w, h = m.Apply(x, y, w, h)
-	w -= 22
+	w = math.Max(0, w-22)
+	h = math.Max(0, h)
 	return geom.Rect{x, y, w, h}
 }
 
@@ -186,6 +168,9 @@ func (this *ComboBox) Draw(g paint.Painter) {
 	g.Fill()
 
 	theme.DrawEditFrame(g, 0, 0, this.w, this.h, this.HasFocus(), this.IsHover(), false)
+	if this.edit == nil {
+		this.drawSelectionLabel(g)
+	}
 	// ClientRect reserves 22px for the dropdown affordance. Draw in that
 	// region rather than relying on an external bitmap that may be absent or
 	// unreadable in dark mode; the editable child never covers this path.
@@ -244,18 +229,21 @@ func (this *ComboBox) IsSubPopupVisible() bool {
 }
 
 func (this *ComboBox) ShowSubPopup() {
-	if this.sub == nil || this.IsSubPopupVisible() {
+	if this.sub == nil || this.IsSubPopupVisible() || !this.IsEnabled() || !this.IsVisible() || this.Count() == 0 {
 		return
 	}
 
-	this.sub.SetParent(this)
-	this.sub.AttachWindow(WtPopup)
-	hints := this.sub.SizeHints()
-	this.sub.SetSize(hints.Width, hints.Height)
+	this.preparePopup()
+	this.sub.SetParent(this.Self())
 	x, y := this.MapToGlobal(0, 0)
 	w, h := this.Size()
-	this.sub.SetWidth(w)
+	// Bound the actual list before attaching/resizing a native surface. Never
+	// allocate a backing buffer at the unbounded natural height of all items.
+	area := comboPopupWorkArea(popupWorkAreaAt(x, y))
+	this.sub.fitPopupWorkArea(area, geom.Rect{X: x, Y: y, Width: w, Height: h})
+	this.sub.AttachWindow(WtPopup)
 	LayoutPopup(this.sub, x, y, w, h, true, 1)
+	this.sub.scrollRowIntoView(this.sub.activeIndex)
 
 	this.sub.Show()
 	this.sub.PushCapture()
@@ -350,12 +338,19 @@ func (this *ComboBox) ActiveItem() ListItem {
 }
 
 func (this *ComboBox) onListSubmit() {
-	this.SetActiveIndex(this.sub.ActiveIndex())
+	idx := this.sub.ActiveIndex()
+	if !this.IsEnabled() || !this.IsVisible() || idx < 0 || idx >= this.Count() {
+		return
+	}
+	// Retire this popup before callbacks; a callback may open a new popup/dialog.
+	this.HideSubPopup()
+	this.SetActiveIndex(idx)
+	if this.edit != nil && this.edit.HasFocus() {
+		this.edit.SelectAll()
+	}
 	if this.sigSubmit != nil {
 		this.sigSubmit(this.Self())
 	}
-
-	this.HideSubPopup()
 }
 
 // setActiveIndex commits idx as the current selection (the "closed dropdown"
@@ -418,84 +413,27 @@ func (this *ComboBox) Text() string {
 func (this *ComboBox) SetText(text string) {
 	if this.edit != nil {
 		this.edit.SetText(text)
+	} else {
+		for i := 0; i < this.Count(); i++ {
+			if this.Item(i).Text == text {
+				this.SetActiveIndex(i)
+				return
+			}
+		}
 	}
 }
 
-// OnKeyDown implements Qt QComboBox keyboard navigation. When the dropdown is
-// open Up/Down move the highlighted row and Enter commits it; when closed they
-// change the current selection directly. Esc closes without changing selection,
-// Home/End jump to the first/last item, and a printable character performs a
-// single-character type-ahead jump to the next matching item.
+// OnKeyDown owns navigation, not native text. Selection-only controls and
+// popups search via OnTextInput, preserving Unicode and avoiding double jumps
+// from a key-down followed by its character event.
 func (this *ComboBox) OnKeyDown(key int, repeat bool) {
-	if !this.IsEnabled() {
+	if this.handleComboKey(key, repeat) {
 		return
 	}
-	n := this.Count()
-	open := this.IsSubPopupVisible()
-
-	switch key {
-	case KeyDown:
-		if open {
-			this.sub.activeIndex = clampIndex(this.sub.activeIndex+1, n)
-			this.sub.Update()
-		} else {
-			this.setActiveIndex(this.activeIndex + 1)
-		}
-		return
-	case KeyUp:
-		if open {
-			this.sub.activeIndex = clampIndex(this.sub.activeIndex-1, n)
-			this.sub.Update()
-		} else {
-			this.setActiveIndex(this.activeIndex - 1)
-		}
-		return
-	case KeyHome:
-		if open {
-			this.sub.activeIndex = clampIndex(0, n)
-			this.sub.Update()
-		} else {
-			this.setActiveIndex(0)
-		}
-		return
-	case KeyEnd:
-		if open {
-			this.sub.activeIndex = clampIndex(n-1, n)
-			this.sub.Update()
-		} else {
-			this.setActiveIndex(n - 1)
-		}
-		return
-	case KeyEnter:
-		if open {
-			// Commit the highlighted row through the normal submit path,
-			// which updates the edit text, fires the callbacks and hides.
-			this.onListSubmit()
-		}
-		return
-	case KeyEsc:
-		if open {
-			this.HideSubPopup()
-		}
-		return
-	}
-
-	// Type-ahead: printable A-Z / 0-9 arrive as their ASCII code (see
-	// keyboard_glfw.go). Jump to the next item whose text starts with it.
-	if key >= 0x20 && key <= 0x7E {
-		start := this.activeIndex
-		if open {
-			start = this.sub.activeIndex
-		}
-		idx := nextMatchIndex(this.itemTexts(), start, rune(key))
-		if idx >= 0 {
-			if open {
-				this.sub.activeIndex = idx
-				this.sub.Update()
-			} else {
-				this.setActiveIndex(idx)
-			}
-		}
+	// Preserve the legacy direct-key path when the editable combo frame itself
+	// (rather than its editor) owns focus. Its text-input path is deliberately inert.
+	if this.IsEnabled() && this.IsEditable() && currentMods() == 0 && (key >= 'A' && key <= 'Z' || key >= '0' && key <= '9') {
+		this.searchPrefix(string(rune(key)))
 	}
 }
 
@@ -516,6 +454,8 @@ func (this *ComboBox) SigSelectionChanged(fn func(o interface{}, idx int)) {
 func (this *ComboBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
 	list.AddProperty("可见", this.IsVisible, this.SetVisible)
+	list.AddProperty("editable", this.IsEditable, this.SetEditable)
+	list.AddProperty("max_visible_items", this.MaxVisibleItems, this.SetMaxVisibleItems)
 	list.AddProperty("items", this.Items, this.SetItems)
 	list.AddProperty("selectedIndex", this.ActiveIndex, this.SetActiveIndex)
 	list.AddProperty("text", this.Text, this.SetText)

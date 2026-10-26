@@ -77,7 +77,7 @@ func TestHostBrandingDrawsLogoWithoutOverlappingAboutText(t *testing.T) {
 	standalone.SetSize(900, 600)
 	rec := &brandTextRecorder{Painter: paint.NewPixmap(900, 600).NewPainter()}
 	standalone.Draw(rec)
-	for _, text := range []string{"Silk Designer", "Cross-platform GUI designer with 62+ widgets,", "Silk UI Framework  \u00b7  " + aboutAppVersion + "  \u00b7  " + aboutCopyright} {
+	for _, text := range []string{"Silk Designer", "A visual designer for Go interfaces.", "Silk UI Framework  \u00b7  " + aboutAppVersion + "  \u00b7  " + aboutCopyright} {
 		if !slices.Contains(rec.text, text) {
 			t.Fatalf("SDK default text changed: %q", text)
 		}

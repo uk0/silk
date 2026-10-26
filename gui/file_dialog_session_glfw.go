@@ -22,8 +22,9 @@ type nativeFileDialogSession interface {
 func waitNativeFileDialog(owner *Window, session nativeFileDialogSession, ownerAlive func() bool) string {
 	wasEnabled := owner.IsEnabled()
 	owner.SetEnabled(false)
-	defer owner.SetEnabled(wasEnabled)
+	// Native teardown may restore focus: re-enable the owner first.
 	defer session.close()
+	defer owner.SetEnabled(wasEnabled)
 	for {
 		if shouldQuit || !ownerAlive() {
 			session.cancel()
@@ -34,4 +35,11 @@ func waitNativeFileDialog(owner *Window, session nativeFileDialogSession, ownerA
 		}
 		nativeDialogFrame()
 	}
+}
+
+// The native half additionally checks completion, app activation, visibility,
+// and foreign key windows/sheets. Never resurrect a detached or disabled owner.
+func fileDialogOwnerCanRestoreFocus(owner *Window) bool {
+	return !shouldQuit && owner != nil && owner.widget != nil &&
+		owner.widget.Window() == owner && owner.enabled && !owner.iconified && owner.widget.IsVisible()
 }

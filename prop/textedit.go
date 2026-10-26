@@ -13,7 +13,8 @@ func init() {
 
 type TextEdit struct {
 	gui.Edit
-	item *PropertyItem1
+	item        *PropertyItem1
+	editSession *propertyEditSession
 }
 
 func NewTextEdit() *TextEdit {
@@ -29,20 +30,30 @@ func (this *TextEdit) Init(self gui.IWidget) {
 }
 
 func (this *TextEdit) OnEdited(s string) {
-	this.submit()
+	this.submitText(s)
 }
 
 func (this *TextEdit) OnSubmit(s string) {
-	this.submit()
+	this.Deactivate()
 }
 
 func (this *TextEdit) BindProperty(item *PropertyItem1) {
+	this.finishEdit()
 	this.item = item
 }
 
 func (this *TextEdit) UpdateValue() {
+	this.finishEdit()
+	this.updateValueText()
+}
+
+func (this *TextEdit) updateValueText() {
+	if this.item == nil {
+		return
+	}
 	s := this.item.GetValueStr()
 	this.SetText(s)
+	this.updateHintTooltip()
 }
 
 func (this *TextEdit) UpdateConfig() {
@@ -55,15 +66,15 @@ func (this *TextEdit) UpdateConfig() {
 func (this *TextEdit) Draw(g paint.Painter) {
 	this.Edit.Draw(g)
 
+	if this.item == nil {
+		return
+	}
 	hint := this.item.MultiValueHint()
 	if hint == "" || this.String() != "" {
 		return
 	}
 	t := gui.Theme()
-	fe := t.Font.FontExtents()
-	g.SetFont(t.Font)
-	g.SetBrush1(t.FormDarkColor)
-	g.DrawText1(t.EditPadding.L, (this.Height()+fe.Ascent-fe.Descent)/2, hint)
+	drawPropertyText(g, t.Font, t.TextColor, t.EditPadding.L, 0, this.Width()-t.EditPadding.L-t.EditPadding.R, this.Height(), hint)
 }
 
 func (this *TextEdit) Activate() {
@@ -71,14 +82,31 @@ func (this *TextEdit) Activate() {
 
 func (this *TextEdit) Deactivate() {
 	this.submit()
+	this.finishEdit()
 }
 
-func (this *TextEdit) submit() {
+func (this *TextEdit) submit() { this.submitText(this.String()) }
+
+func (this *TextEdit) submitText(text string) {
+	if !this.canEditProperty() {
+		return
+	}
 	// A 多值 row starts empty on purpose, and Deactivate submits whatever the
 	// box holds: committing that emptiness would blank the property on every
 	// selected object just for visiting the row. Only typed text is written.
-	if this.String() == "" && this.item.IsMultiValue() {
+	if text == "" && this.item.IsMultiValue() {
 		return
 	}
-	this.item.SetValueStr(this.String())
+	value, err := parsePropertyValue(this.item.Type(), text)
+	if err != nil {
+		return
+	}
+	this.setEditedValue(value)
+	this.updateHintTooltip()
+}
+
+func (this *TextEdit) updateHintTooltip() {
+	if this.item != nil {
+		gui.SetToolTip(this.Self(), this.item.Label()+"\n"+this.item.MultiValueHint())
+	}
 }

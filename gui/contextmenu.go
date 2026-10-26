@@ -84,3 +84,17 @@ func ShowContextMenu(widget IWidget, x, y float64, builder func(menu *Menu)) {
 	gx, gy := widget.MapToGlobal(x, y)
 	menu.ShowAsPopup(gx, gy, true)
 }
+
+// Text context actions require a live, enabled ancestry. A popup can temporarily
+// own focus without changing the command's document or field target.
+func textContextAvailable(widget IWidget) bool {
+	for p := widget; p != nil; p = p.Parent() {
+		if !p.IsVisible() || !p.IsEnabled() {
+			return false
+		}
+		if w := p.Window(); w != nil {
+			return w.IsEnabled()
+		}
+	}
+	return widget != nil
+}

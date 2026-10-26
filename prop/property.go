@@ -4,6 +4,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 	//	"github.com/uk0/silk/core"
 	//	"encoding/json"
@@ -21,6 +22,10 @@ import (
 )
 
 func init() {
+	i18n.AddMany("zh-CN", map[string]string{
+		"Layout": "布局", "Appearance": "外观", "Behavior": "行为", "Data Binding": "数据绑定",
+		"Events": "事件", "General": "常规", "Filter properties...": "过滤属性...",
+	})
 	core.RegisterFactory("prop.PropertySheet", core.TypeOf((*PropertySheet)(nil)))
 	gui.RegisterToolView(gui.ToolViewDef{
 		Id:   "prop.PropertySheet",
@@ -191,7 +196,7 @@ func (prop Property) restoreValues(vals []interface{}) {
 
 // multiValueText is the placeholder shown for a row whose bound objects hold
 // different values.
-const multiValueText = "多值"
+const multiValueText = "Multiple values"
 
 // rowState is what a property id merged across a selection may do.
 type rowState int
@@ -278,8 +283,11 @@ type PropertyCommand struct {
 	// old holds one previous value per setter, captured on Redo. A merged
 	// property covers a whole selection whose objects may each hold a
 	// different value, so a single old value is not enough to undo the edit.
-	old    []interface{}
-	isUndo bool
+	old        []interface{}
+	isUndo     bool
+	after      []interface{}
+	session    *propertyEditSession
+	mergedInto *PropertyCommand
 }
 
 //func NewPropertyCommand(prop *Property, newVal interface{}) *PropertyCommand {
@@ -293,14 +301,27 @@ func (cmd *PropertyCommand) Redo() {
 	if cmd.isUndo {
 		panic("irregal Redo()")
 	}
+	if cmd.old != nil && cmd.session != nil {
+		cmd.session.closed = true // Replaying history is a new editing boundary.
+	}
 	cmd.old = cmd.prop.setValues()
 	cmd.prop.SetValue(cmd.val)
+	if cmd.session != nil {
+		cmd.after = cmd.prop.setValues()
+	}
+	if cmd.mergedInto != nil {
+		cmd.mergedInto.after = cmd.after
+		cmd.mergedInto = nil
+	}
 	cmd.isUndo = true
 }
 
 func (cmd *PropertyCommand) Undo() {
 	if !cmd.isUndo {
 		panic("irregal Undo()")
+	}
+	if cmd.session != nil {
+		cmd.session.closed = true
 	}
 	cmd.prop.restoreValues(cmd.old)
 	cmd.isUndo = false
@@ -490,6 +511,9 @@ type PropertyItem struct {
 	multiValue bool
 
 	updatingControl bool
+	// Cleared rows can still receive delayed blur/dialog callbacks. Retire
+	// their write capability before detaching controls or changing owners.
+	retired bool
 }
 
 // IsMultiValue reports whether the bound objects hold different values for this
@@ -502,7 +526,7 @@ func (this *PropertyItem) IsMultiValue() bool {
 // bound objects disagree, and "" when they agree.
 func (this *PropertyItem) MultiValueHint() string {
 	if this.multiValue {
-		return multiValueText
+		return i18n.T(multiValueText)
 	}
 	return ""
 }
@@ -525,7 +549,11 @@ func (this *PropertyItem) GetValueStr() string {
 }
 
 func (this *PropertyItem) SetValue(a interface{}) {
-	if this.IsReadOnly() {
+	this.setValue(a, nil)
+}
+
+func (this *PropertyItem) setValue(a interface{}, session *propertyEditSession) {
+	if this.retired || this.IsReadOnly() {
 		return
 	}
 	// Every object just took a, so the row is no longer 多值.
@@ -536,6 +564,7 @@ func (this *PropertyItem) SetValue(a interface{}) {
 		cmd := new(PropertyCommand)
 		cmd.prop = this.prop
 		cmd.val = a
+		cmd.session = session
 		ii.PushCommand(cmd)
 	} else {
 		this.prop.SetValue(a)
@@ -545,6 +574,9 @@ func (this *PropertyItem) SetValue(a interface{}) {
 // 设置字符串形式的属性的值, 如果设置失败, 此函数返回错误信息
 // 如果是合并后的属性, 此方法会为所有对象设置新值
 func (this *PropertyItem) SetValueStr(s string) error {
+	if this.retired {
+		return errors.New("property binding has been retired")
+	}
 	val, err := parsePropertyValue(this.prop.Type(), s)
 	if err != nil {
 		return err
@@ -669,7 +701,7 @@ func (this *PropertyItem) Type() reflect.Type {
 func (this *PropertyItem) Label() string {
 	label := this.CfgLabel()
 	if label == "" {
-		label = this.Id()
+		label = propertyDisplayName(this.Id())
 	}
 	return label
 }
@@ -709,6 +741,8 @@ func (this *PropertyItem) defaultControlType() string {
 	switch this.Type().Kind() {
 	case reflect.Bool:
 		return "CheckBox"
+	case reflect.Float32, reflect.Float64:
+		return "FloatEdit"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return "IntEdit"
@@ -827,12 +861,8 @@ var categoryOrder = []string{"layout", "appearance", "behavior", "binding", "eve
 
 // categoryNames maps internal keys to display names.
 var categoryNames = map[string]string{
-	"layout":     "\u5e03\u5c40",             // 布局
-	"appearance": "\u5916\u89c2",             // 外观
-	"behavior":   "\u884c\u4e3a",             // 行为
-	"binding":    "\u6570\u636e\u7ed1\u5b9a", // 数据绑定
-	"events":     "\u4e8b\u4ef6",             // 事件
-	"general":    "\u5e38\u89c4",             // 常规
+	"layout": "Layout", "appearance": "Appearance", "behavior": "Behavior",
+	"binding": "Data Binding", "events": "Events", "general": "General",
 }
 
 // TagBindingID is the property id an industrial widget registers for the
@@ -995,7 +1025,7 @@ func (this *PropertySheet) Init(iw gui.IWidget) {
 
 	this.searchBox = gui.NewSearchBox()
 	this.searchBox.SetParent(iw)
-	this.searchBox.SetPlaceholder("过滤属性...")
+	this.searchBox.SetPlaceholder(i18n.T("Filter properties..."))
 	this.searchBox.SigTextChanged(func(s string) {
 		this.SetFilter(s)
 	})
@@ -1059,6 +1089,15 @@ func (this *PropertySheet) Clear(owner interface{}) {
 		return
 	}
 
+	// Stop owner-scoped notifications before detaching controls can dispatch
+	// reentrant focus/scene callbacks for this retired binding.
+	this.objOwner = nil
+
+	// Invalidate ALL rows first: losing focus while detaching one control
+	// may invoke callbacks that still hold another row from this binding.
+	for _, p := range this.propMap {
+		p.retired = true
+	}
 	for _, p := range this.propMap {
 		if p.control != nil {
 			p.control.SetParent(nil)
@@ -1173,6 +1212,14 @@ func (s sortProps) Less(i, j int) bool {
 
 func (s sortProps) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
+}
+
+// RefreshValuesForOwner updates a shared inspector only while it still shows
+// this owner's binding. nil is not a wildcard. UI-thread-only, like Bind/Clear.
+func (this *PropertySheet) RefreshValuesForOwner(owner interface{}) {
+	if owner != nil && owner == this.objOwner {
+		this.RefreshValues()
+	}
 }
 
 // RefreshValues updates existing controls after a canvas move/resize or undo.
@@ -1470,12 +1517,7 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 			this.drawCategoryHeader(g, entry.category, entry.ypos, w, fe)
 		} else if entry.item != nil {
 			p := entry.item
-			labelRect := this.getItemRect(p, pitemLabel)
-			yt := labelRect.Y + fe.Ascent + (p.ItemHeight()-fe.Height)*0.5
-			xt := labelRect.X
-			g.SetBrush1(gui.Theme().TextColor)
-			g.SetFont(font)
-			g.DrawText1(xt, yt, p.Label())
+			this.drawPropertyLabel(g, p)
 
 			if isColorProperty(p) {
 				this.drawColorSwatch(g, p, p.ItemHeight())
@@ -1494,10 +1536,7 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 			if !p.IsVisible() {
 				continue
 			}
-			labelRect := this.getItemRect(p, pitemLabel)
-			yt := labelRect.Y + fe.Ascent + (p.ItemHeight()-fe.Height)*0.5
-			xt := labelRect.X
-			g.DrawText1(xt, yt, p.Label())
+			this.drawPropertyLabel(g, p)
 			if isColorProperty(p) {
 				this.drawColorSwatch(g, p, p.ItemHeight())
 			}
@@ -1567,8 +1606,8 @@ func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, yp
 	// Category name (bold-style: draw twice with slight offset for fake bold)
 	g.SetBrush1(textColor)
 	yt := ypos + fe.Ascent + (categoryHeaderHeight-fe.Height)*0.5
-	g.DrawText1(20, yt, cat.name)
-	g.DrawText1(20.5, yt, cat.name) // fake bold offset
+	g.DrawText1(20, yt, i18n.T(cat.name))
+	g.DrawText1(20.5, yt, i18n.T(cat.name)) // fake bold offset
 }
 
 // OnLeftDown handles mouse clicks on category headers to toggle collapse.

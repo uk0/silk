@@ -750,7 +750,7 @@ func (this *DropSource) queryInterface(riid *GUID, ppvObject *unsafe.Pointer) HR
 		*ppvObject = unsafe.Pointer(this)
 		return S_OK
 	}
-	if IsEqualGUID(riid, IID_IDropTarget) {
+	if IsEqualGUID(riid, IID_IDropSource) {
 		this.addRef()
 		*ppvObject = unsafe.Pointer(this)
 		return S_OK
@@ -767,6 +767,10 @@ func (this *DropSource) release() HRESULT {
 }
 
 func (this *DropSource) queryContinueDrag(fEscapePressed int32, grfKeyState uint32) HRESULT {
+	// Cancellation wins even when Escape and button release arrive together.
+	if fEscapePressed != 0 {
+		return DRAGDROP_S_CANCEL
+	}
 	if grfKeyState&MK_LBUTTON == 0 {
 		return DRAGDROP_S_DROP
 	}

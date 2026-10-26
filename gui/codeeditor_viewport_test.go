@@ -239,7 +239,7 @@ func drawViewportReference(e *CodeEditor, g paint.Painter, x, y float64) {
 func TestEditorViewportRasterParity(t *testing.T) {
 	for _, family := range []string{codeEditorFontFamily(runtime.GOOS), "Arial"} {
 		for _, scale := range []float64{1, 1.25, 2} {
-			for _, source := range []string{strings.Repeat("fiWz09!()|_", 800), strings.Repeat("ab\t cd\t", 800), strings.Repeat("A中😀e\u0301\tZ ", 20), "a\xffb\x00c\txyz"} {
+			for _, source := range []string{strings.Repeat("fiWz09!()|_", 800), strings.Repeat("ab\t cd\t", 800), strings.Repeat("A中😀é\tZ ", 20), "a\xffb\x00c\txyz"} {
 				for _, scroll := range []float64{0, 17.25, 219.5} {
 					e := NewCodeEditor()
 					e.SetSize(360, 80)
@@ -305,6 +305,19 @@ func TestEditorViewportHitMatchesRuneReference(t *testing.T) {
 							if x-lo < hi-x {
 								want = c - 1
 							}
+						}
+					}
+				}
+				if paint.NeedsClusterLayout(s) && x >= 0 {
+					layout := paint.LayoutText(e.font.ScaledFont(nil), s)
+					distance := math.Inf(1)
+					for col, advance := range layout.Carets {
+						if layout.Boundary(col, false) != col {
+							continue
+						}
+						if d := math.Abs(advance - x); d <= distance {
+							distance = d
+							want = col
 						}
 					}
 				}

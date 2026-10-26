@@ -448,6 +448,20 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 func (this *cairoPainter) DrawText(text string) {
 	text = displayText(text)
 	sf := this.applyFont()
+	if shaped := sf.complexLayout(text); shaped != nil {
+		this.applyBrush()
+		this.cairo.Save()
+		for _, run := range shaped.layout.Runs {
+			font := run.Font.(*font).scaledFont(&sf.ctm)
+			this.cairo.SetScaledFont(font.ScaledFont)
+			if len(run.Glyphs) > 0 {
+				this.cairo.ShowGlyphs_hack(unsafe.Pointer(&run.Glyphs[0]), len(run.Glyphs))
+			}
+		}
+		this.cairo.Restore()
+		runtime.KeepAlive(shaped)
+		return
+	}
 	this.glyphBuf = sf.validTextToGlyphsInto(0, 0, text, this.glyphBuf[:0])
 	// Most native UI/icon fonts already cover their text. Inspect the glyphs
 	// we needed to shape anyway, rather than resolving/measuring extra runs

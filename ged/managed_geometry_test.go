@@ -72,7 +72,9 @@ func TestManagedLayoutContainerStillMovesAndResizes(t *testing.T) {
 		t.Fatal("selected container cannot carry its managed child")
 	}
 	dragOnCanvas(view, 65, 65, 75, 70)
-	if box.X() != 20 || box.Y() != 15 || !view.Scene().UndoStack().CanUndo() {
+	// Screen/scene transforms may leave sub-ulp noise when snapping is off.
+	requirePrecisePosition(t, box, 20, 15)
+	if !view.Scene().UndoStack().CanUndo() {
 		t.Fatalf("layout container itself was incorrectly locked: %v", box.Bounds1())
 	}
 	view.Selection().Clear()

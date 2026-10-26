@@ -1107,7 +1107,7 @@ var industrialDesignProps = map[string][]designProp{
 	// initial value/state.
 	"gui.Slider":      {{"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"Value", "SetValue", dpFloat}},
 	"gui.ProgressBar": {{"Value", "SetValue", dpFloat}},
-	"gui.SpinBox":     {{"Min", "SetMin", dpInt}, {"Max", "SetMax", dpInt}, {"Value", "SetValue", dpInt}},
+	"gui.SpinBox":     {{"Min", "SetMin", dpInt}, {"Max", "SetMax", dpInt}, {"Value", "SetValue", dpInt}, {"Step", "SetStep", dpInt}, {"PageStepOverride", "SetPageStep", dpInt}, {"Suffix", "SetSuffix", dpString}, {"IsReadOnly", "SetReadOnly", dpBool}},
 	"gui.CheckBox":    {{"IsChecked", "SetChecked", dpBool}},
 	// Widgets whose entire designed content is a property: a Space is its axis
 	// and stretch, a ButtonBox is its button list. Without these rows a dropped

@@ -177,6 +177,12 @@ func applyProp(obj interface{}, p Prop) {
 			}
 		}
 	case "value", "Value":
+		if setter, ok := obj.(interface{ SetValue(int) }); ok {
+			if value, valid := propertyInteger(lit); valid {
+				setter.SetValue(value)
+				return
+			}
+		}
 		if f, ok := asFloat(lit.V); ok {
 			if vw, ok := obj.(valueSetter); ok {
 				vw.SetValue(f)

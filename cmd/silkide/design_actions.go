@@ -4,6 +4,7 @@ import (
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 )
 
@@ -28,15 +29,15 @@ func designerActionSpecs(canvas *ged.GedView) []designActionSpec {
 		label, icon string
 		kind        ged.LayoutKind
 	}{
-		{"水平布局", "layout-horizontal", ged.LayoutHorizontal},
-		{"垂直布局", "layout-vertical", ged.LayoutVertical},
-		{"网格布局", "layout-grid", ged.LayoutGrid},
-		{"表单布局", "layout-form", ged.LayoutForm},
+		{i18n.T("Lay Out Horizontally"), "layout-horizontal", ged.LayoutHorizontal},
+		{i18n.T("Lay Out Vertically"), "layout-vertical", ged.LayoutVertical},
+		{i18n.T("Lay Out in a Grid"), "layout-grid", ged.LayoutGrid},
+		{i18n.T("Lay Out in a Form"), "layout-form", ged.LayoutForm},
 	} {
 		kind := layout.kind
 		enabled := func() bool { return active() && canvas.CanLayoutSelection(kind) }
 		specs = append(specs, designActionSpec{layout.label, layout.icon,
-			"多选同父的至少两个未锁定控件，或选中同类型自由布局容器直接启用；表单布局左右配对", enabled,
+			i18n.T("Select two or more unlocked siblings, or a matching free-layout container. Form layout pairs labels and fields."), enabled,
 			func() {
 				if enabled() {
 					canvas.LayoutSelection(kind)
@@ -45,13 +46,13 @@ func designerActionSpecs(canvas *ged.GedView) []designActionSpec {
 		})
 	}
 	canBreak := func() bool { return active() && canvas.CanBreakLayout() }
-	specs = append(specs, designActionSpec{"解除布局", "layout-break", "选择未锁定的布局容器，保留子控件并解除排列", canBreak,
+	specs = append(specs, designActionSpec{i18n.T("Break Layout"), "layout-break", i18n.T("Select an unlocked layout container; keep its children and remove the layout."), canBreak,
 		func() {
 			if canBreak() {
 				canvas.BreakLayoutSelection()
 			}
 		}})
-	specs = append(specs, designActionSpec{"适应视口", "layout-adjust", "缩放画布以显示完整表单 (" + actionKeyHint() + "+Shift+0)", active,
+	specs = append(specs, designActionSpec{i18n.T("Fit to View"), "layout-adjust", i18n.Tf("Show the complete form (%s+Shift+0)", actionKeyHint()), active,
 		func() {
 			if active() {
 				fitCanvasToView(canvas)
@@ -66,6 +67,7 @@ func buildDesignToolBar(frame *gui.Frame, canvas *ged.GedView) {
 	}
 	bar := gui.NewToolBar()
 	bar.SetCompact(true)
+	bar.SetPreserveContentFocus(true)
 	bar.SetSpacing(2)
 	var actions []designActionButton
 	for i, spec := range designerActionSpecs(canvas) {
@@ -79,7 +81,7 @@ func buildDesignToolBar(frame *gui.Frame, canvas *ged.GedView) {
 			}
 		})
 		button.SetTextVisible(true)
-		gui.SetToolTip(button, spec.label+"："+spec.hint)
+		gui.SetToolTip(button, spec.label+" — "+spec.hint)
 		actions = append(actions, designActionButton{button, spec})
 	}
 	frame.SetContextToolBar(bar)

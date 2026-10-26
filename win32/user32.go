@@ -128,6 +128,8 @@ var (
 	procKillTimer                     = moduser32.NewProc("KillTimer")
 	procGetQueueStatus                = moduser32.NewProc("GetQueueStatus")
 	procGetActiveWindow               = moduser32.NewProc("GetActiveWindow")
+	procGetForegroundWindow           = moduser32.NewProc("GetForegroundWindow")
+	procSetActiveWindow               = moduser32.NewProc("SetActiveWindow")
 	procSystemParametersInfo          = moduser32.NewProc("SystemParametersInfoW")
 	procWindowFromPoint               = moduser32.NewProc("WindowFromPoint")
 	procGetParent                     = moduser32.NewProc("GetParent")
@@ -1043,11 +1045,18 @@ func SendInput(inputs []INPUT) uint32 {
 }
 
 func SetTimer(uElapse uint32) (timerId uintptr) {
+	return SetTimerCallback(uElapse, 0)
+}
+
+// SetTimerCallback creates a thread timer dispatched through TIMERPROC, even
+// when a native modal loop (such as DoDragDrop) owns DispatchMessage.
+// callback must remain valid until all queued messages have been dispatched.
+func SetTimerCallback(uElapse uint32, callback uintptr) (timerId uintptr) {
 	timerId, _, _ = procSetTimer.Call(
 		0,
 		0,
 		uintptr(uElapse),
-		0)
+		callback)
 	return
 }
 
@@ -1063,6 +1072,19 @@ func GetQueueStatus(flags uint32) uint32 {
 
 func GetActiveWindow() HWND {
 	ret, _, _ := procGetActiveWindow.Call()
+	return HWND(ret)
+}
+
+// GetForegroundWindow returns the window currently receiving user input.
+func GetForegroundWindow() HWND {
+	ret, _, _ := procGetForegroundWindow.Call()
+	return HWND(ret)
+}
+
+// SetActiveWindow activates a window attached to the calling thread's queue.
+// Unlike SetForegroundWindow, it does not bring a background application forward.
+func SetActiveWindow(hWnd HWND) HWND {
+	ret, _, _ := procSetActiveWindow.Call(uintptr(hWnd))
 	return HWND(ret)
 }
 

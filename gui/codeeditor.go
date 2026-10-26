@@ -194,6 +194,7 @@ type editAction struct {
 	text                        string // inserted text (kind 0,2) or deleted text (kind 1)
 	oldText                     string // original text before replace (kind 2)
 	stamp                       time.Time
+	typing                      bool       // only direct single-rune input may join a typing run
 	byteCol                     int        // pre-edit byte anchor, independent of later UTF-8 decoding
 	redoCursor                  *cursorPos // optional post-edit caret for atomic provider edits
 	group                       []editorByteEdit
@@ -222,6 +223,10 @@ const codeEditorFindRowHeight = 30
 // CodeEditor is a syntax-highlighted code editing widget with line numbers,
 // cursor, and basic editing support, designed for Go source code.
 type CodeEditor struct {
+	contextMenu                  *Menu
+	contextDown                  bool
+	contextGeneration            uint64
+	clusterGeometry              editorClusterGeometry
 	syntaxHighlights             map[int][]SyntaxHighlight
 	syntaxRevision               uint64
 	additionalSymbols            []CodeSymbol
@@ -935,8 +940,7 @@ func (this *CodeEditor) caretLocalXY() (float64, float64) {
 	if line >= len(this.lines) {
 		line = len(this.lines) - 1
 	}
-	prefix := this.linePrefix(line, this.cursorCol)
-	x := this.gutterW + 10 - this.scrollX + this.measureText(prefix)
+	x := this.gutterW + 10 - this.scrollX + this.columnAdvance(line, this.cursorCol)
 	y := float64(this.lineToVisualRow(line))*lh - this.scrollY + topOff + lh // line bottom
 
 	// Viewport clamp: upper bound first so the lower bound wins on
@@ -1084,6 +1088,10 @@ func (this *CodeEditor) minimapWidth() float64 {
 
 // ScrollToLine scrolls the editor so that the given line is visible.
 func (this *CodeEditor) ScrollToLine(line int) {
+	if this.completion != nil {
+		this.completion.Dismiss()
+	}
+	this.breakTypingUndoGroup()
 	if line < 0 {
 		line = 0
 	}
@@ -1131,11 +1139,16 @@ func (this *CodeEditor) ScrollToLineCol(line, col int) {
 }
 
 // CompletionVisible reports whether the completion popup is currently shown.
-// The LSP host uses it to decide whether to REFRESH an open popup with server
-// items vs. force-open one (which would hijack Enter/arrows after a newline,
-// paste, or programmatic edit).
 func (this *CodeEditor) CompletionVisible() bool {
 	return this.completion != nil && this.completion.visible
+}
+
+// CompletionActive reports outstanding user intent, including a temporarily
+// empty list waiting for local/provider candidates. UI-thread only. Hosts may
+// refresh such a request after rejecting stale document/caret responses, but
+// must not force-open one after Escape, navigation, focus loss or an edit.
+func (this *CodeEditor) CompletionActive() bool {
+	return this.completion != nil && this.completion.open
 }
 
 // FindLineContaining returns the first line number containing substr, or -1.
@@ -1692,13 +1705,13 @@ func (this *CodeEditor) pushUndo(a editAction) {
 	if a.kind == 2 {
 		a.oldText = strings.Clone(a.oldText)
 	}
-	// Group rapid single-char inserts
-	if a.kind == 0 && len(this.undoStack) > 0 && len(this.redoStack) == 0 {
+	// Only direct typing joins a run. Paste, IME commits and provider edits
+	// remain atomic, even when their resulting caret happens to be adjacent.
+	if a.kind == 0 && a.typing && len(this.undoStack) > 0 && len(this.redoStack) == 0 {
 		last := &this.undoStack[len(this.undoStack)-1]
-		if last.kind == 0 && a.stamp.Sub(last.stamp) < 500*time.Millisecond &&
+		if last.typing && (last.kind == 0 || last.kind == 2) && a.stamp.Sub(last.stamp) < 500*time.Millisecond &&
 			a.line == last.line && a.byteCol == last.byteCol+len(last.text) &&
-			a.col == last.col+utf8.RuneCountInString(last.text) &&
-			utf8.RuneCountInString(a.text) == 1 && a.text != "\n" {
+			a.col == last.col+utf8.RuneCountInString(last.text) {
 			last.text += a.text
 			last.stamp = a.stamp
 			this.redoStack = nil
@@ -1719,6 +1732,7 @@ func (this *CodeEditor) undo() {
 	if len(this.undoStack) == 0 {
 		return
 	}
+	this.breakTypingUndoGroup()
 	this.snippetSess = nil // stored byte ranges belong to the pre-undo buffer
 	a := this.undoStack[len(this.undoStack)-1]
 	this.undoStack = this.undoStack[:len(this.undoStack)-1]
@@ -1800,6 +1814,7 @@ func (this *CodeEditor) redo() {
 	}
 	this.snippetSess = nil
 	a := this.redoStack[len(this.redoStack)-1]
+	a.typing = false
 	this.redoStack = this.redoStack[:len(this.redoStack)-1]
 	this.bookmarkState.pending = false
 	this.restoreFindScopeHistory(a.findScope, true)
@@ -2011,21 +2026,14 @@ func (this *CodeEditor) selectFindMatch(line, col int, strict bool) {
 	if len(this.findMatches) == 0 {
 		return
 	}
-	target := 0
-	for i, m := range this.findMatches {
-		if m.line > line || (m.line == line && (m.col > col || (!strict && m.col == col))) {
-			target = i
-			break
-		}
+	target := sort.Search(len(this.findMatches), func(i int) bool {
+		m := this.findMatches[i]
+		return m.line > line || (m.line == line && (m.col > col || (!strict && m.col == col)))
+	})
+	if target == len(this.findMatches) {
+		target = 0
 	}
-	this.findCurrentIdx = target
-	m := this.findMatches[target]
-	this.cursorLine = m.line
-	this.cursorCol = m.col
-	this.clearSelection()
-	this.ensureCursorVisible()
-	this.syncFindBar()
-	this.Self().Update()
+	this.activateFindMatch(target)
 }
 
 // replaceCurrent replaces the current match with replaceText, routes the edit
@@ -2072,7 +2080,7 @@ func (this *CodeEditor) replaceCurrent() {
 	this.pushUndo(editAction{kind: 2, line: m.line, col: m.col, text: this.replaceText, oldText: line[start:end]})
 	p := this.replaceByteRange(m.line, start, end-start, this.replaceText)
 	this.cursorLine, this.cursorCol = p.line, p.col
-	this.findState.jump = &cursorPos{line: p.line, col: p.col}
+	this.queueFindJump(cursorPos{line: p.line, col: p.col}, false)
 	this.rebuildText()
 	if !this.findActive {
 		this.findUpdateMatches()
@@ -2398,7 +2406,7 @@ func (this *CodeEditor) ToggleLineComment() {
 //
 // RenameSymbolAtCursor renames the Go identifier under the cursor across the
 // current buffer using code_refactor.go::RenameSymbolCount. The host (silkide)
-// wires F2 to this method via an input dialog — the editor itself does NOT
+// uses gopls instead; standalone SDK callers can use this local operation. It does NOT
 // bind a key; this matches the existing host-driven design of go-to-definition
 // and find-references.
 //
@@ -2430,21 +2438,10 @@ func (this *CodeEditor) RenameSymbolAtCursor(newName string) (string, int, error
 		return oldName, 0, nil
 	}
 
-	this.lines = strings.Split(newSrc, "\n")
-	if len(this.lines) == 0 {
-		this.lines = []string{""}
-	}
-	// Map the old byte offset back to (line, col) in the new source. If the
-	// offset overshoots the new buffer, clamp to end of file.
-	newLine, newCol := cursorForByteOffset(this.lines, oldOffset)
-	this.cursorLine = newLine
-	this.cursorCol = newCol
-	this.clampCursor()
-	this.clearSelection()
-
-	this.rebuildText()
-	this.ensureCursorVisible()
-	this.Self().Update()
+	// The same atomic history path used for LSP edits preserves source bytes and
+	// publishes only the final caret. A local SDK rename must be undoable too.
+	newLine, newCol := cursorForByteOffset(strings.Split(newSrc, "\n"), oldOffset)
+	this.ReplaceAllTextAt(newSrc, newLine, newCol)
 	return oldName, count, nil
 }
 
@@ -2564,8 +2561,7 @@ func (this *CodeEditor) ensureTextPositionVisible(p EditorTextPosition) {
 	if textAreaW < 20 {
 		textAreaW = 20
 	}
-	cursorPrefix := this.lines[p.Line][:p.ByteColumn]
-	cursorPxX := this.measureText(cursorPrefix)
+	cursorPxX := this.columnAdvance(p.Line, p.RuneColumn)
 	hMargin := 20.0
 	if cursorPxX-this.scrollX < 0 {
 		this.scrollX = cursorPxX - hMargin
@@ -2854,8 +2850,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		this.clampCursor()
 		// Primary cursor
 		{
-			prefix := this.linePrefix(this.cursorLine, this.cursorCol)
-			cx := textOffX + this.measureText(prefix)
+			cx := textOffX + this.columnAdvance(this.cursorLine, this.cursorCol)
 			cy := float64(this.lineToVisualRow(this.cursorLine))*lh - this.scrollY + topOff
 			g.SetBrush1(pal.caret)
 			textView.fillRect(g, cx, cy, 1.5, lh)
@@ -2863,8 +2858,7 @@ func (this *CodeEditor) Draw(g paint.Painter) {
 		// Additional cursors
 		for _, c := range this.additionalCursors {
 			cc := this.clampCursorPos(c)
-			prefix := this.linePrefix(cc.line, cc.col)
-			cx := textOffX + this.measureText(prefix)
+			cx := textOffX + this.columnAdvance(cc.line, cc.col)
 			cy := float64(this.lineToVisualRow(cc.line))*lh - this.scrollY + topOff
 			// Dim color: same hue, half alpha.
 			g.SetBrush1(paint.Color{R: pal.caret.R, G: pal.caret.G, B: pal.caret.B, A: 160})
@@ -3095,6 +3089,9 @@ func (this *CodeEditor) drawIndentGuides(g paint.Painter, lineIdx int, y, lh flo
 // drawHighlightedLine renders one source line using its cached incoming state.
 func (this *CodeEditor) drawHighlightedLine(g paint.Painter, idx int, x, y float64) {
 	tokens := this.tokensForLine(idx)
+	if !this.tokenCache[idx].fixedCells {
+		tokens = this.clusterSafeTokens(this.lines[idx], tokens)
+	}
 	this.ensureFontMetrics()
 	fixed := this.fixedCellLine(idx)
 	hasTabs := !fixed || this.tokenCache[idx].asciiMask[0]&(1<<9) != 0
@@ -3559,6 +3556,7 @@ func (this *CodeEditor) posFromXY(x, y float64) (int, int) {
 }
 
 func (this *CodeEditor) OnLeftDown(x, y float64) {
+	this.breakTypingUndoGroup()
 	this.minimapDragging = false
 	this.DismissLanguageHints()
 	this.SetFocus()
@@ -3916,6 +3914,9 @@ type editorContextMenuItem struct {
 // unavailable-service feedback; failure never silently falls back to a local
 // text operation. Callbacks receive the editor whose menu requested the action.
 type CodeEditorSymbolActions struct {
+	// RenameShortcut describes a host override; it never installs a binding.
+	// A host rename callback without a hint leaves the menu hint empty.
+	RenameShortcut     string
 	RenameSymbol       func(*CodeEditor)
 	GoToDefinition     func(*CodeEditor)
 	FindReferences     func(*CodeEditor)
@@ -3927,12 +3928,13 @@ type CodeEditorSymbolActions struct {
 // an empty value restores all standalone SDK behaviors.
 func (this *CodeEditor) SetSymbolActions(actions CodeEditorSymbolActions) {
 	this.symbolActions = actions
+	this.contextGeneration++
 }
 
 // RequestRenameSymbol dispatches the user command to the host, or opens the
 // SDK's local single-buffer rename dialog when no host has registered it.
 func (this *CodeEditor) RequestRenameSymbol() {
-	if this.readOnly {
+	if this.readOnly || !this.IsEnabled() {
 		return
 	}
 	word := this.wordAtCursor()
@@ -3986,83 +3988,6 @@ func (this *CodeEditor) RequestGoToImplementation() {
 	}
 }
 
-// contextMenuItems builds the right-click menu for the editor at the
-// current cursor / selection state. Clipboard actions share the keyboard/SDK
-// policy, including primary-line Copy/Cut. Opening the menu never reads native
-// clipboard content; Paste checks its content only when invoked. Rename Symbol
-// is disabled when the cursor sits on whitespace / punctuation (empty
-// word). Go to Definition and Find References require a word at
-// cursor, mirroring the underlying methods which silently no-op on an
-// empty word — disabling here just makes that visible to the user.
-func (this *CodeEditor) contextMenuItems(word string) []editorContextMenuItem {
-	hasWord := word != ""
-	keys := CodeEditorShortcuts()
-	return []editorContextMenuItem{
-		{
-			Label:    "剪切",
-			Icon:     "edit-cut",
-			Shortcut: keys.Cut,
-			Enabled:  this.CanCut(),
-			Action:   func() { this.editorCut() },
-		},
-		{
-			Label:    "复制",
-			Icon:     "edit-copy",
-			Shortcut: keys.Copy,
-			Enabled:  this.CanCopy(),
-			Action:   func() { this.editorCopy() },
-		},
-		{
-			Label:    "粘贴",
-			Icon:     "edit-paste",
-			Shortcut: keys.Paste,
-			Enabled:  this.CanPaste(),
-			Action:   this.Paste,
-		},
-		{
-			Label:    "全选",
-			Icon:     "edit-select-all",
-			Shortcut: keys.SelectAll,
-			Enabled:  this.CanSelectAll(),
-			Action:   func() { this.editorSelectAll() },
-		},
-		{Separator: true},
-		{Label: "向上添加光标", Icon: "cursor-add-above", Shortcut: keys.AddCursorAbove, Enabled: this.CanAddCursorAbove(), Action: func() { this.AddCursorAbove() }},
-		{Label: "向下添加光标", Icon: "cursor-add-below", Shortcut: keys.AddCursorBelow, Enabled: this.CanAddCursorBelow(), Action: func() { this.AddCursorBelow() }},
-		{Label: "仅保留主光标", Icon: "cursor-primary", Shortcut: keys.KeepPrimaryCursor, Enabled: this.CursorCount() > 1, Action: func() { this.KeepPrimaryCursor() }},
-		{Separator: true},
-		{
-			Label:   "重命名符号",
-			Enabled: hasWord && !this.readOnly,
-			Action:  this.RequestRenameSymbol,
-		},
-		{
-			Label:   "跳转定义",
-			Enabled: hasWord,
-			Action:  this.RequestGoToDefinition,
-		},
-		{
-			Label:   "查找引用",
-			Enabled: hasWord,
-			Action:  this.RequestFindReferences,
-		},
-		{Label: "跳转类型定义", Enabled: hasWord && this.symbolActions.GoToTypeDefinition != nil, Action: this.RequestGoToTypeDefinition},
-		{Label: "跳转实现", Enabled: hasWord && this.symbolActions.GoToImplementation != nil, Action: this.RequestGoToImplementation},
-	}
-}
-
-// promptRenameSymbol pops an input dialog seeded with the identifier
-// under the cursor and, on submit, delegates to RenameSymbolAtCursor.
-// Errors are swallowed silently — the editor has no toast surface of
-// its own, and a failed rename leaves the buffer untouched anyway.
-func (this *CodeEditor) promptRenameSymbol(word string) {
-	newName, ok := ShowInputBox(this.Self(), nil, "重命名符号", "新名称:", word)
-	if !ok {
-		return
-	}
-	_, _, _ = this.RenameSymbolAtCursor(newName)
-}
-
 // repositionCaretForRightClick mirrors Qt Creator's right-click caret
 // rule and is the GL-free part of OnRightDown: clicks inside the text
 // area move the caret to the click point, EXCEPT when the click lands
@@ -4102,38 +4027,6 @@ func (this *CodeEditor) repositionCaretForRightClick(x, y float64) {
 	this.Self().Update()
 }
 
-// OnRightDown opens the editor's context menu at the click point.
-// Following Qt Creator, the caret is first moved to the click position
-// so the subsequent Rename / Go to Definition / Find References act on
-// the word the user actually right-clicked, not wherever the caret
-// happened to be.
-func (this *CodeEditor) OnRightDown(x, y float64) {
-	this.DismissLanguageHints()
-	this.SetFocus()
-	this.repositionCaretForRightClick(x, y)
-
-	items := this.contextMenuItems(this.wordAtCursor())
-	ShowContextMenu(this.Self(), x, y, func(m *Menu) {
-		for _, it := range items {
-			if it.Separator {
-				m.AddSeparator()
-				continue
-			}
-			btn := m.AddButton1(it.Label, paint.LoadIcon(it.Icon))
-			btn.SetShortcutText(it.Shortcut)
-			if !it.Enabled {
-				btn.SetEnabled(false)
-				continue
-			}
-			action := it.Action
-			btn.Action().BindFunc0(func() {
-				this.SetFocus()
-				action()
-			})
-		}
-	})
-}
-
 // posInSelection reports whether (line, col) lies inside the current
 // selection range. Used by OnRightDown to decide whether the right-
 // click should keep or collapse the existing selection.
@@ -4169,6 +4062,9 @@ func (this *CodeEditor) OnMouseLeave() {
 }
 
 func (this *CodeEditor) OnTextInput(s string) {
+	if s == "" {
+		return
+	}
 	if strings.ContainsAny(s, ")\r\n") {
 		this.DismissLanguageHints()
 	} else {
@@ -4246,7 +4142,7 @@ func (this *CodeEditor) OnTextInput(s string) {
 			this.Self().Update()
 			return
 		}
-		this.replaceSelectionRecorded(s)
+		this.replaceSelectionEdit(s, true)
 		this.rebuildText()
 		this.ensureCursorVisible()
 		this.Self().Update()
@@ -4285,7 +4181,7 @@ func (this *CodeEditor) OnTextInput(s string) {
 		return
 	}
 
-	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: s})
+	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: s, typing: editorTypingInput(s)})
 
 	this.insertRawText(s)
 
@@ -4334,7 +4230,7 @@ func (this *CodeEditor) tryTriggerCompletion(typed string) {
 		this.showCompletion("")
 		return
 	}
-	if unicode.IsLetter(lastRune) || lastRune == '_' {
+	if unicode.IsLetter(lastRune) || unicode.IsDigit(lastRune) || lastRune == '_' {
 		// Build prefix from current word
 		prefix := this.currentWordPrefix()
 		if len(prefix) >= 1 {
@@ -4415,10 +4311,17 @@ func (this *CodeEditor) WantsTab(shift bool) bool {
 }
 
 func (this *CodeEditor) OnKeyDown(key int, repeat bool) {
+	if this.editorContextKey(key, repeat) {
+		return
+	}
 	this.onKeyDownWithShift(key, repeat, IsKeyDown(KeyShift))
 }
 
 func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
+	switch key {
+	case KeyEsc, KeyLeft, KeyRight, KeyUp, KeyDown, KeyHome, KeyEnd, KeyPageUp, KeyPageDown, KeyEnter, KeyTab, KeyBackSpace, KeyDelete:
+		this.breakTypingUndoGroup()
+	}
 	if editorSystemKey(key, IsKeyDown(KeyCtrl) || isActionModifier(), IsKeyDown(KeyMenu)) {
 		if key == KeyUp {
 			this.AddCursorAbove()
@@ -4612,10 +4515,11 @@ func (this *CodeEditor) onKeyDownWithShift(key int, repeat, shift bool) {
 		return
 	}
 
-	// Dismiss completion on other keys
-	if this.completion != nil && this.completion.visible {
+	// Retire pending invisible requests as well as visible rows. Otherwise an
+	// Escape or navigation while indexing could reopen a popup later.
+	if this.completion != nil && (this.completion.visible || this.completion.open) {
 		switch key {
-		case KeyLeft, KeyRight, KeyHome, KeyEnd:
+		case KeyLeft, KeyRight, KeyHome, KeyEnd, KeyUp, KeyDown, KeyPageUp, KeyPageDown, KeyEsc:
 			this.completion.Dismiss()
 		case KeyBackSpace:
 			// Will handle normally, then re-trigger
@@ -5227,7 +5131,7 @@ func (this *CodeEditor) pasteText(text string) {
 
 func (this *CodeEditor) OnMouseWheel(x, y, z float64) {
 	this.DismissLanguageHints()
-	if this.completion != nil && this.completion.visible {
+	if this.completion != nil && (this.completion.visible || this.completion.open) {
 		if _, inside := this.completion.layout(this).hit(x, y, this.completion.scrollY); inside {
 			if this.completion.scroll(z) {
 				this.Self().Update()

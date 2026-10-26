@@ -1,5 +1,22 @@
 package gui
 
+import "unicode/utf8"
+
+// A committed multi-rune input (IME, paste or SDK call) is an atomic edit,
+// not the beginning of a run that later keystrokes may silently absorb.
+func editorTypingInput(text string) bool {
+	r, width := utf8.DecodeRuneInString(text)
+	return width > 0 && width == len(text) && r != '\r' && r != '\n'
+}
+
+// Command/navigation boundaries must not merge with adjacent typing. This is
+// UI-thread state only: no timers, polling, document copies or notifications.
+func (e *CodeEditor) breakTypingUndoGroup() {
+	if n := len(e.undoStack); n > 0 {
+		e.undoStack[n-1].typing = false
+	}
+}
+
 // CanUndo and CanRedo query the edit history in constant time, independently of
 // Modified (saved content can still have undo history). Read-only mode hides
 // availability without clearing stored history. UI-thread-only.

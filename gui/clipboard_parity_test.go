@@ -191,8 +191,5 @@ func TestSourceFunctionBodyHandlesCheckoutLineEndings(t *testing.T) {
 		if !strings.Contains(got, "lastCall()") || strings.Contains(got, "\r") {
 			t.Fatalf("line ending %q truncated or corrupted function: %q", newline, got)
 		}
-		if body := generateDropCursorsBody(t, "fixture.go", src); body != got {
-			t.Fatalf("cursor source helper disagrees: %q", body)
-		}
 	}
 }

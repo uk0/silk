@@ -12,6 +12,7 @@ var pointerWindow *Window // most recent pointer-event source, UI thread only
 // Platform bridge to the actual button event, if available. The injectable
 // seam keeps regression tests on real window dispatch without native windows.
 var mouseButtonEventPosition = nativeMouseButtonEventPosition
+var scrollEventPosition = nativeScrollEventPosition
 
 type pointerEventState struct {
 	x, y  float64

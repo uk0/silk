@@ -163,6 +163,7 @@ func (e *CodeEditor) OnFocusChanged(newFocusWidget, oldFocusWidget IWidget) {
 		e.findState.documentFocus = true
 	}
 	if newFocusWidget != e.Self() {
+		e.breakTypingUndoGroup()
 		if e.completion != nil {
 			e.completion.Dismiss()
 		}

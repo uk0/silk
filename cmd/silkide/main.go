@@ -128,19 +128,7 @@ func main() {
 	// slot. Without this the user has to mouse over to the right-side
 	// inspector to confirm what got selected after a click.
 	if designCanvas != nil && statusBar != nil {
-		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
-			n := len(items)
-			if n == 0 {
-				statusBar.SetMessage("")
-				return
-			}
-			if n == 1 {
-				name := itemDisplayName(items[0])
-				statusBar.SetMessage(i18n.Tf("Selected: %s", name) + " " + itemBoundsLabel(items[0]))
-				return
-			}
-			statusBar.SetMessage(i18n.Tf("Selected: %d items", n))
-		})
+		wireSelectionStatus(designCanvas)
 
 		// Status-bar zoom % cell stays in sync with Ctrl+wheel zoom
 		// thanks to GraphView.SigZoomChanged. Without this hookup the
@@ -240,35 +228,11 @@ func startTitleSync(frame *gui.Frame, canvas *ged.GedView) {
 	if frame == nil || canvas == nil {
 		return
 	}
-	last := ""
 	titleSyncTimer.Start(500, func() {
-		title := composeTitle(canvas)
 		if w := globalWorkbench; w != nil && w.canvas == canvas {
 			w.syncMode()
-			if documentMode(w.tabs, canvas) == modeEdit {
-				if ed := activeEditor(w.tabs); ed != nil {
-					path := activeEditorPath(w.tabs)
-					refreshEditorTab(w.tabs, ed, path)
-					title = filepath.Base(path)
-					if ed.Modified() {
-						title += " *"
-					}
-					title += " — " + idTitle()
-				}
-			}
 		}
-		if title == last {
-			return
-		}
-		// Frame.SetTitle just stores the value; the live window title
-		// goes through Window.SetTitle (which calls glfw.SetTitle).
-		// Updating both keeps a future Frame query consistent with the
-		// visible chrome.
-		frame.SetTitle(title)
-		if win := frame.Window(); win != nil {
-			win.SetTitle(title)
-		}
-		last = title
+		syncDocumentWindowTitle(frame, canvas)
 	})
 }
 
@@ -324,6 +288,7 @@ func composeTitle(canvas *ged.GedView) string {
 func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 	tb := gui.NewToolBar()
 	tb.SetCompact(true)
+	tb.SetPreserveContentFocus(true)
 	tb.SetSpacing(2)
 	addWorkspaceActions(tb)
 
@@ -523,6 +488,13 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 	if globalPrefs != nil {
 		welcome := ged.NewWelcomeScreen()
 		welcome.SetBranding(silkIDEAboutInfo())
+		welcome.SetActionLabels("New Form", "Open File")
+		mod := actionKeyHint()
+		welcome.SetShortcuts([]ged.WelcomeShortcut{
+			{Keys: mod + "+N", Label: "New Form"}, {Keys: mod + "+O", Label: "Open File"},
+			{Keys: mod + "+P", Label: "Quick Open"}, {Keys: mod + "+Shift+P", Label: "Command Palette"},
+			{Keys: mod + "+Shift+R", Label: "Preview"}, {Keys: "F5", Label: "Run"},
+		})
 		w.welcome = welcome
 		welcome.SetRecentFiles(globalPrefs.RecentFiles())
 		welcome.SetNewProjectCallback(func() {
@@ -983,10 +955,12 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	tabs.TabBar().SetContextMenuCallback(func(_ *gui.TabBar, menu *gui.Menu, idx int) {
 		buildEditorTabContextMenu(menu, tabs, idx)
 	})
+	tabs.TabBar().SetPointerFocusCallback(func(tb *gui.TabBar) { focusEditorAfterPointerTab(tabs, tb) })
 	tabs.SetCurrentChangedCallback(func(_ interface{}, _ int) {
 		syncOutlineToActiveEditor(tabs)
 		if w := globalWorkbench; w != nil && w.tabs == tabs {
 			w.syncHistoryActions()
+			syncDocumentWindowTitle(w.frame, w.canvas)
 		}
 	})
 	return tabs
@@ -1628,36 +1602,11 @@ func setZoomLabel(zoom float64) {
 	statusBarZoomLabel.InvalidateParentLayout()
 }
 
-// itemDisplayName returns a human-friendly identifier for a scene
-// item. Prefers the item's Title() when present (matches the IDE's
-// inspector tree column); falls back to the item's Go-type name so
-// even un-named freshly-dropped widgets get a reasonable label.
-func itemDisplayName(item graph.IItem) string {
-	if item == nil {
-		return "(nil)"
-	}
-	if t, ok := item.(interface{ Title() string }); ok {
-		if name := t.Title(); name != "" {
-			return name
-		}
-	}
-	return fmt.Sprintf("%T", item)
-}
+// itemDisplayName shares user-facing object/type identity with SDK designers.
+func itemDisplayName(item graph.IItem) string { return ged.SelectionItemName(item) }
 
-// itemBoundsLabel formats a "(x, y) w×h" description of an item's
-// current bounds for the status-bar selection cell. Click-time
-// snapshot only — the cell goes stale once the user starts dragging
-// the item; that's by design (keeping it live across drags would
-// need a per-Item move signal that doesn't currently exist on
-// graph.IItem).
-func itemBoundsLabel(item graph.IItem) string {
-	if item == nil {
-		return ""
-	}
-	x, y := item.Pos()
-	w, h := item.Size()
-	return fmt.Sprintf("(%.0f, %.0f) %.0f×%.0f", x, y, w, h)
-}
+// itemBoundsLabel shares fractional scene-unit formatting with SDK designers.
+func itemBoundsLabel(item graph.IItem) string { return ged.FormatItemBounds(item) }
 
 // openFromTree dispatches a FileExplorer click. .silkui files load
 // straight into the design canvas (closing the declarative loop —
@@ -1672,6 +1621,11 @@ func itemBoundsLabel(item graph.IItem) string {
 // MRU list survives across launches. The package-level globalPrefs
 // reference is set in main() right after newPreferences().
 func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerDock *gui.Dock) {
+	openDocument(path, tabs, canvas, centerDock, true)
+}
+
+// Session restore uses the same dispatch without rewriting the user's MRU.
+func openDocument(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerDock *gui.Dock, recordRecent bool) {
 	if rejectBusyFile(path) {
 		return
 	}
@@ -1696,7 +1650,9 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		if err := openDesignDocument(canvas.GedScene(), path, recoveryPath); err == nil {
 			showDesignWorkspace(canvas)
 			rebindAutoSaver(canvas.GedScene())
-			recordRecentFile(path)
+			if recordRecent {
+				recordRecentFile(path)
+			}
 			watchForReload(canvas, path)
 			logEvent(ged.LogInfo, "Opened "+path)
 			if centerDock != nil {
@@ -1714,7 +1670,7 @@ func openFromTree(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		}
 		return
 	}
-	if openFileInEditor(tabs, path) {
+	if loadFileInEditor(tabs, path) && recordRecent {
 		recordRecentFile(path)
 	}
 }
@@ -2098,13 +2054,16 @@ func splitRunArgs(s string) []string {
 // The IDE rename command is semantic/workspace-wide, whichever UI entry
 // invokes it. Missing LSP must be reported before opening the input dialog,
 // never disguised as a successful single-buffer textual replacement.
+var showSymbolRenameInput = gui.ShowValidatedInputBox
+var submitSymbolRename = renameSymbolViaLSP
+
 func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 	if globalLSP == nil {
 		reportLSPUnavailable()
 		return
 	}
 	ed := activeEditor(tabs)
-	if ed == nil {
+	if ed == nil || ed.IsReadOnly() || !ed.IsEnabled() {
 		return
 	}
 	path := activeEditorPath(tabs)
@@ -2112,25 +2071,31 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 		silkideToast(i18n.T("Rename Symbol not available"), gui.ToastWarning)
 		return
 	}
-	// Prefill: silk's CodeEditor doesn't currently expose a public
-	// WordAtCursor (the internal wordBoundsAt is unexported), so the
-	// dialog comes up with an empty default. When the parallel rename
-	// work lands a public accessor we can swap it in here.
-	prefill := ""
+	prefill := ed.WordAtCursor()
+	validator := gui.GoIdentifierValidator()
+	if validator.Validate(prefill) != gui.Acceptable {
+		silkideToast(i18n.T("No identifier at cursor"), gui.ToastInfo)
+		return
+	}
+	client, doc := globalLSP, lspDocuments[path]
+	current := renameEditorGuard(ed, path, true)
 	parent := gui.IWidget(globalFrame)
 	if parent == nil {
 		parent = gui.DefaultFrame()
 	}
-	newName, ok := gui.ShowInputBox(parent, nil,
-		i18n.T("Rename Symbol"), i18n.T("New name:"), prefill)
-	if !ok {
+	newName, ok := showSymbolRenameInput(parent, nil, i18n.T("Rename Symbol"), i18n.T("New name:"), prefill, validator)
+	if !ok || newName == prefill {
 		return
 	}
-	newName = strings.TrimSpace(newName)
-	if newName == "" {
+	// Modal event processing may close/rebind documents or restart the service.
+	if globalLSP != client || lspDocuments[path] != doc || !current() {
+		silkideToast(i18n.T("Rename aborted: editor changed"), gui.ToastWarning)
 		return
 	}
-	renameSymbolViaLSP(ed, path, newName)
+	if validator.Validate(newName) != gui.Acceptable {
+		return
+	}
+	submitSymbolRename(ed, path, newName)
 }
 
 // renameSymbolViaLSP performs a workspace-wide semantic rename through
@@ -2140,20 +2105,25 @@ func renameSymbolAtActiveEditor(tabs *gui.TabWidget) {
 // user can review/save/undo); files not currently open are rewritten on
 // disk. Cross-file and type-aware, unlike the single-file text fallback.
 func renameSymbolViaLSP(ed *gui.CodeEditor, path, newName string) {
+	if globalLSP == nil || ed == nil || ed.IsReadOnly() || !ed.IsEnabled() {
+		return
+	}
+	current := renameEditorGuard(ed, path, false)
 	uri := fileURIOf(path)
 	line := ed.CursorLine()
 	col := ed.CursorUTF16Col() // LSP `character` is a UTF-16 offset, not a rune index
-	origin := ed.Text()        // stale-guard: abort if the trigger buffer changes mid-RPC
 	lsp := globalLSP
 	doc := lspDocuments[path]
+	buffers := captureRenameBuffers()
 	go func() {
-		if !flushLSPDocument(doc) {
+		if !syncRenameBuffers(buffers) {
 			return
 		}
+
 		we, err := lsp.Rename(uri, line, col, newName)
 		if err != nil {
 			gui.Post(func() {
-				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				if globalLSP != lsp || lspDocuments[path] != doc || !current() {
 					return
 				}
 				silkideToast(i18n.Tf("Rename failed: %v", err), gui.ToastError)
@@ -2162,7 +2132,7 @@ func renameSymbolViaLSP(ed *gui.CodeEditor, path, newName string) {
 		}
 		if we == nil || len(we.Changes) == 0 {
 			gui.Post(func() {
-				if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+				if globalLSP != lsp || lspDocuments[path] != doc || !current() {
 					return
 				}
 				silkideToast(i18n.T("Rename: no changes"), gui.ToastInfo)
@@ -2170,11 +2140,11 @@ func renameSymbolViaLSP(ed *gui.CodeEditor, path, newName string) {
 			return
 		}
 		gui.Post(func() {
-			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
+			if globalLSP != lsp || lspDocuments[path] != doc {
 				return
 			}
 
-			if ed.Text() != origin {
+			if !current() || !renameTargetsCurrent(we, buffers) {
 				silkideToast(i18n.T("Rename aborted: buffer changed"), gui.ToastWarning)
 				return
 			}
@@ -3442,7 +3412,7 @@ func restoreSession(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		return
 	}
 	for _, path := range existingPaths(globalPrefs.OpenSession()) {
-		openFromTree(path, editorTabs, designCanvas, nil)
+		openDocument(path, editorTabs, designCanvas, nil, false)
 	}
 }
 
@@ -3455,8 +3425,17 @@ var openEditors = map[string]*gui.CodeEditor{}
 
 // openFileInEditor adds a fresh code-editor tab for path in tabs,
 // or focuses an existing one if the path is already open. Returns
-// true on success so the caller can record it in the MRU list.
+// true on success; all explicit open/navigation routes share MRU recording.
 func openFileInEditor(tabs *gui.TabWidget, path string) bool {
+	if !loadFileInEditor(tabs, path) {
+		return false
+	}
+	recordRecentFile(canonicalEditorPath(path))
+	return true
+}
+
+// loadFileInEditor is also used by session restore, which must preserve MRU.
+func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 	if path == "" {
 		return false
 	}

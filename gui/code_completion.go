@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/uk0/silk/paint"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -147,7 +148,7 @@ func (this *CompletionPopup) Accept(editor *CodeEditor) {
 		this.Dismiss()
 		return
 	}
-	if !this.visible || len(this.filtered) == 0 {
+	if !this.visible || this.selectedIdx < 0 || this.selectedIdx >= len(this.filtered) {
 		return
 	}
 	item := this.filtered[this.selectedIdx]
@@ -157,20 +158,30 @@ func (this *CompletionPopup) Accept(editor *CodeEditor) {
 		return
 	}
 
-	// Prefix replacement must be one undoable edit, including the removed
-	// prefix. Mutating lines before insertTextAtCursor lost the prefix on Undo.
-	editor.clampCursor()
+	// Keep untouched bytes (including malformed UTF-8) and record only this
+	// splice, not two whole-document copies. Host-owned semantic edits above
+	// retain their own range/selection policy.
 	line := editor.cursorLine
-	runes := []rune(editor.lines[line])
-	start := max(0, editor.cursorCol-len([]rune(this.prefix)))
-	lines := append([]string(nil), editor.lines...)
-	lines[line] = string(runes[:start]) + item.Text + string(runes[editor.cursorCol:])
-	inserted := strings.Split(item.Text, "\n")
-	col := len([]rune(inserted[len(inserted)-1]))
-	if len(inserted) == 1 {
-		col += start
+	if line < 0 || line >= len(editor.lines) {
+		return
 	}
-	editor.ReplaceAllTextAt(strings.Join(lines, "\n"), line+len(inserted)-1, col)
+	position := textPositionInLine(editor.lines[line], editor.cursorCol)
+	end := position.ByteColumn
+	start := end - len(this.prefix)
+	if position.RuneColumn != editor.cursorCol || start < 0 || editor.lines[line][start:end] != this.prefix || item.Text == this.prefix {
+		return // stale prefix or no effective edit
+	}
+	before := append([]cursorPos{{line, editor.cursorCol}}, editor.additionalCursors...)
+	selection := editor.selectionSnapshot()
+	edit := editorByteEdit{line: line, column: start, before: strings.Clone(this.prefix), after: strings.Clone(item.Text)}
+	editor.snippetSess = nil
+	after := editor.replaceByteRange(line, start, len(this.prefix), item.Text)
+	editor.restoreEditCursors([]cursorPos{after})
+	editor.clearSelection()
+	editor.pushUndo(editAction{kind: 4, group: []editorByteEdit{edit}, beforeCursors: before, afterCursors: []cursorPos{after}, selection: &editorSelectionHistory{selection, editor.selectionSnapshot()}})
+	editor.rebuildText()
+	editor.ensureCursorVisible()
+	editor.Self().Update()
 }
 
 // buildItems gathers all completion candidates from static lists and file identifiers.
@@ -188,6 +199,12 @@ func (this *CompletionPopup) buildItems(editor *CodeEditor) {
 // (see RankCompletions / fuzzyMatch) and ranks survivors by score.
 func (this *CompletionPopup) filter() {
 	this.filtered = RankCompletions(this.items, this.prefix)
+	// A literal identical to the typed prefix cannot change text or caret.
+	// Do not let it consume Enter/Tab. Opaque provider actions may add imports,
+	// expand snippets or change another range even with an identical label.
+	this.filtered = slices.DeleteFunc(this.filtered, func(item CompletionItem) bool {
+		return item.apply == nil && item.Text == this.prefix
+	})
 	// Semantic provider edits are authoritative for this position. Local
 	// identifier guesses include the fragment currently being typed (e.g. Pr),
 	// whose exact fuzzy match would otherwise hide Println behind a no-op.

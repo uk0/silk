@@ -19,7 +19,7 @@ func TestCodeEditorContextSymbolActionsReachTheirHost(t *testing.T) {
 		RenameSymbol: host("rename"), GoToDefinition: host("definition"), FindReferences: host("references"),
 	})
 	items := ed.contextMenuItems(ed.wordAtCursor())
-	for i, label := range []string{"重命名符号", "跳转定义", "查找引用"} {
+	for i, label := range []string{"Rename Symbol", "Go to Definition", "Find References"} {
 		item := findMenuItem(items, label)
 		if item == nil || !item.Enabled || item.Action == nil {
 			t.Fatalf("missing host action %q", label)
@@ -33,9 +33,10 @@ func TestCodeEditorContextSymbolActionsReachTheirHost(t *testing.T) {
 	if ed.cursorLine != 2 || len(ed.findMatches) != 0 || ed.renameActive {
 		t.Fatal("host-handled symbol command also ran the SDK's local fallback")
 	}
-	// An already-open menu reads the latest instance hooks when activated.
+	// Raw command specs dispatch through current hooks. Actual built menu rows
+	// also have a snapshot guard and are retired when host hooks are replaced.
 	ed.SetSymbolActions(CodeEditorSymbolActions{GoToDefinition: host("replacement")})
-	findMenuItem(items, "跳转定义").Action()
+	findMenuItem(items, "Go to Definition").Action()
 	if calls[len(calls)-1] != "replacement" {
 		t.Fatal("menu retained an obsolete host handler")
 	}
@@ -49,12 +50,12 @@ func TestCodeEditorContextDefaultAndPartialOverridesKeepSDKBehavior(t *testing.T
 		if configured {
 			ed.SetSymbolActions(CodeEditorSymbolActions{RenameSymbol: func(*CodeEditor) { t.Fatal("unrelated hook invoked") }})
 		}
-		findMenuItem(ed.contextMenuItems(ed.wordAtCursor()), "跳转定义").Action()
+		findMenuItem(ed.contextMenuItems(ed.wordAtCursor()), "Go to Definition").Action()
 		if ed.cursorLine != 1 {
 			t.Fatal("default SDK definition navigation was lost")
 		}
 		ed.cursorLine, ed.cursorCol = 2, 18
-		findMenuItem(ed.contextMenuItems(ed.wordAtCursor()), "查找引用").Action()
+		findMenuItem(ed.contextMenuItems(ed.wordAtCursor()), "Find References").Action()
 		if len(ed.findMatches) != 2 {
 			t.Fatalf("default SDK references were lost: %v", ed.findMatches)
 		}
@@ -72,7 +73,7 @@ func TestCodeEditorContextSymbolActionsRemainDisabledOnWhitespace(t *testing.T) 
 	ed.SetText("\n")
 	fail := func(*CodeEditor) { t.Fatal("disabled symbol command invoked its host") }
 	ed.SetSymbolActions(CodeEditorSymbolActions{RenameSymbol: fail, GoToDefinition: fail, FindReferences: fail})
-	for _, label := range []string{"重命名符号", "跳转定义", "查找引用"} {
+	for _, label := range []string{"Rename Symbol", "Go to Definition", "Find References"} {
 		item := findMenuItem(ed.contextMenuItems(""), label)
 		if item.Enabled {
 			t.Fatalf("%s enabled without a symbol", label)

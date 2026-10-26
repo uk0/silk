@@ -248,6 +248,34 @@ func applyCompoundProperties(obj interface{}, props []Prop) map[string]bool {
 			ranged.SetRange(min, max)
 		}
 	}
+	// Integer controls cannot use the float range capability: going through
+	// float64 would also corrupt int64 bounds beyond 2^53. Commit their final
+	// range before Value, for designer reload, preview and declarative builds.
+	if ranged, ok := obj.(interface {
+		Min() int
+		Max() int
+		SetRange(int, int)
+	}); ok {
+		min, max, changed := ranged.Min(), ranged.Max(), false
+		for _, p := range props {
+			switch strings.ToLower(p.Name) {
+			case "min", "最小值", "max", "最大值":
+				value, valid := propertyInteger(p.Value)
+				if !valid {
+					continue
+				}
+				if strings.ToLower(p.Name) == "min" || p.Name == "最小值" {
+					min = value
+				} else {
+					max = value
+				}
+				changed, handled[p.Name] = true, true
+			}
+		}
+		if changed {
+			ranged.SetRange(min, max)
+		}
+	}
 	if date, ok := obj.(interface {
 		Year() int
 		Month() int
@@ -279,6 +307,42 @@ func applyCompoundProperties(obj interface{}, props []Prop) map[string]bool {
 		}
 	}
 	return handled
+}
+
+// propertyInteger preserves typed and persisted integers without a float64
+// round trip. Reject fractions, overflow and non-data expressions rather than
+// silently truncating, rounding or wrapping them (including on 32-bit hosts).
+func propertyInteger(value Value) (int, bool) {
+	parse := func(raw string) (int, bool) {
+		n, err := strconv.ParseInt(raw, 10, strconv.IntSize)
+		return int(n), err == nil
+	}
+	switch v := value.(type) {
+	case Persisted:
+		return parse(v.Source)
+	case Lit:
+		if v.V == nil {
+			return 0, false
+		}
+		rv := reflect.ValueOf(v.V)
+		switch rv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			n := rv.Int()
+			return int(n), n >= int64(math.MinInt) && n <= int64(math.MaxInt)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			n := rv.Uint()
+			return int(n), n <= uint64(math.MaxInt)
+		case reflect.Float32, reflect.Float64:
+			n := rv.Float()
+			limit := math.Ldexp(1, strconv.IntSize-1)
+			if math.Trunc(n) == n && n >= -limit && n < limit {
+				return int(n), true
+			}
+		case reflect.String:
+			return parse(rv.String())
+		}
+	}
+	return 0, false
 }
 
 func propertyNumber(value Value) (float64, bool) {

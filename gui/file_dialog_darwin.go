@@ -9,6 +9,7 @@ int silkFileDialogDone(void *session);
 const char *silkFileDialogPath(void *session);
 void silkCancelFileDialog(void *session);
 void silkReleaseFileDialog(void *session);
+void silkRestoreFileDialogFocus(void *session);
 */
 import "C"
 
@@ -18,7 +19,10 @@ import (
 	"github.com/uk0/silk/core"
 )
 
-type cocoaFileDialogSession struct{ handle unsafe.Pointer }
+type cocoaFileDialogSession struct {
+	handle unsafe.Pointer
+	owner  *Window
+}
 
 func (s *cocoaFileDialogSession) result() (string, bool) {
 	if C.silkFileDialogDone(s.handle) == 0 {
@@ -29,6 +33,9 @@ func (s *cocoaFileDialogSession) result() (string, bool) {
 
 func (s *cocoaFileDialogSession) cancel() { C.silkCancelFileDialog(s.handle) }
 func (s *cocoaFileDialogSession) close() {
+	if fileDialogOwnerCanRestoreFocus(s.owner) {
+		C.silkRestoreFileDialogFocus(s.handle)
+	}
 	C.silkReleaseFileDialog(s.handle)
 	s.handle = nil
 }
@@ -56,7 +63,7 @@ func runCocoaFileDialog(kind nativeFileDialogKind) string {
 		core.Warn("file dialog: cannot attach native sheet (owner unavailable or already has a sheet)")
 		return ""
 	}
-	session := &cocoaFileDialogSession{handle: handle}
+	session := &cocoaFileDialogSession{handle: handle, owner: owner}
 	return waitNativeFileDialog(owner, session, func() bool {
 		return owner.widget != nil && owner.glfwWin != nil && owner.IsVisible()
 	})

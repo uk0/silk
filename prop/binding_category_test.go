@@ -10,8 +10,8 @@ func TestBindingCategoryClassifiesTagID(t *testing.T) {
 	if got := categoryOfPropID(TagBindingID); got != "binding" {
 		t.Errorf("categoryOfPropID(%q) = %q, want %q", TagBindingID, got, "binding")
 	}
-	if got := categoryNames["binding"]; got != "数据绑定" {
-		t.Errorf("categoryNames[\"binding\"] = %q, want 数据绑定", got)
+	if got := categoryNames["binding"]; got != "Data Binding" {
+		t.Errorf("categoryNames[\"binding\"] = %q, want source key Data Binding", got)
 	}
 	found := false
 	for _, key := range categoryOrder {

@@ -12,8 +12,8 @@ func init() {
 	core.RegisterFactory("gui.SpinBox", core.TypeOf((*SpinBox)(nil)))
 }
 
-// SpinBox is a numeric input widget with up/down buttons,
-// equivalent to QSpinBox in Qt.
+// SpinBox edits an integer with bounded steps and an owned single-line editor.
+// Drafts commit on Enter or focus loss; Value reports the last committed value.
 type SpinBox struct {
 	Widget
 	value    int
@@ -26,6 +26,8 @@ type SpinBox struct {
 	hoverPart int // 0=none, 1=up, 2=down
 	pushed    bool
 
+	editor         *spinBoxEdit
+	layoutTheme    uint64
 	cbValueChanged func(interface{}, int)
 }
 
@@ -41,6 +43,9 @@ func (this *SpinBox) Init(self IWidget) {
 	this.max = 99
 	this.step = 1
 	this.value = 0
+	this.editor = newSpinBoxEdit(this)
+	this.editor.SetParent(self)
+	this.syncEditor()
 }
 
 func (this *SpinBox) EnumProperties(list core.IPropertyList) {
@@ -48,6 +53,9 @@ func (this *SpinBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("最小值", this.Min, this.SetMin)
 	list.AddProperty("最大值", this.Max, this.SetMax)
 	list.AddProperty("步长", this.Step, this.SetStep)
+	list.AddProperty("分页步长", this.PageStepOverride, this.SetPageStep)
+	list.AddProperty("后缀", this.Suffix, this.SetSuffix)
+	list.AddProperty("只读", this.IsReadOnly, this.SetReadOnly)
 }
 
 func (this *SpinBox) Value() int {
@@ -61,12 +69,14 @@ func (this *SpinBox) SetValue(v int) {
 	if v > this.max {
 		v = this.max
 	}
-	if v != this.value {
-		this.value = v
+	changed := v != this.value
+	this.value = v
+	draftChanged := this.syncEditor() // an explicit model update supersedes any local draft
+	if changed || draftChanged {
 		this.Self().Update()
-		if this.cbValueChanged != nil {
-			this.cbValueChanged(this.Self(), this.value)
-		}
+	}
+	if changed && this.cbValueChanged != nil {
+		this.cbValueChanged(this.Self(), v)
 	}
 }
 
@@ -75,11 +85,15 @@ func (this *SpinBox) Min() int {
 }
 
 func (this *SpinBox) SetMin(v int) {
+	if this.min == v {
+		return
+	}
 	this.min = v
 	if this.max < this.min {
 		this.max = this.min
 	}
 	this.SetValue(this.value)
+	this.Self().Update()
 }
 
 func (this *SpinBox) Max() int {
@@ -87,20 +101,28 @@ func (this *SpinBox) Max() int {
 }
 
 func (this *SpinBox) SetMax(v int) {
+	if this.max == v {
+		return
+	}
 	this.max = v
 	if this.min > this.max {
 		this.min = this.max
 	}
 	this.SetValue(this.value)
+	this.Self().Update()
 }
 
 func (this *SpinBox) SetRange(min, max int) {
 	if max < min {
 		max = min
 	}
+	if this.min == min && this.max == max {
+		return
+	}
 	this.min = min
 	this.max = max
 	this.SetValue(this.value)
+	this.Self().Update()
 }
 
 func (this *SpinBox) Step() int {
@@ -120,8 +142,14 @@ func (this *SpinBox) PageStep() int {
 	if this.pageStep > 0 {
 		return this.pageStep
 	}
+	if this.step > math.MaxInt/10 {
+		return math.MaxInt
+	}
 	return this.step * 10
 }
+
+// PageStepOverride returns the configured page step; zero keeps it automatic.
+func (this *SpinBox) PageStepOverride() int { return this.pageStep }
 
 func (this *SpinBox) SetPageStep(s int) {
 	if s < 0 {
@@ -133,6 +161,13 @@ func (this *SpinBox) SetPageStep(s int) {
 // spinStepped returns cur+delta clamped to [min, max]. Pure helper so the
 // keyboard stepping logic stays unit-testable.
 func spinStepped(cur, delta, min, max int) int {
+	// Check machine limits before addition; clamping a wrapped result is too late.
+	if delta > 0 && cur > math.MaxInt-delta {
+		return max
+	}
+	if delta < 0 && cur < math.MinInt-delta {
+		return min
+	}
 	v := cur + delta
 	if v < min {
 		v = min
@@ -147,7 +182,11 @@ func (this *SpinBox) Suffix() string {
 }
 
 func (this *SpinBox) SetSuffix(s string) {
+	if this.suffix == s {
+		return
+	}
 	this.suffix = s
+	this.Layout()
 	this.Self().Update()
 }
 
@@ -165,97 +204,81 @@ func (this *SpinBox) displayText() string {
 
 // buttonWidth returns the width of the up/down button area on the right.
 func (this *SpinBox) buttonWidth() float64 {
-	return math.Max(this.h*0.6, 16)
+	return math.Min(math.Max(0, this.w), math.Max(this.h*0.6, 16))
 }
 
 func (this *SpinBox) Draw(g paint.Painter) {
+	if this.layoutTheme != ThemeRev() {
+		this.Layout()
+	}
 	t := Theme()
-	iw := this.Self()
-	w, h := iw.Size()
-	bw := this.buttonWidth()
-
-	// Background
+	w, h := this.Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, 0, w, h)
+	g.Clip()
 	g.Rectangle(0, 0, w, h)
 	g.SetBrush1(t.ViewBGColor)
 	g.Fill()
-
-	// Edit frame
-	t.DrawEditFrame(g, 0, 0, w, h, iw.HasFocus(), iw.IsHover(), false)
-
-	// Draw text
-	text := this.displayText()
-	g.SetFont(t.Font)
-	g.SetBrush1(t.TextColor)
-	fe := t.Font.FontExtents()
-	ext := t.Font.TextExtents(text)
-	tx := 4.0 - ext.XBearing
-	ty := (h+fe.Height)*0.5 - fe.Height + fe.Ascent
-	g.Save()
-	g.Rectangle(1, 1, w-bw-2, h-2)
-	g.Clip()
-	g.Translate(tx, ty)
-	g.DrawText(text)
-	g.Restore()
-
-	// Separator line between text and buttons
+	t.DrawEditFrame(g, 0, 0, w, h, this.HasFocus(), this.IsHover(), this.IsReadOnly())
+	bw, hh := this.buttonWidth(), h/2
 	g.MoveTo(w-bw, 1)
 	g.LineTo(w-bw, h-1)
-	g.SetPen1(t.BorderColor, 1)
-	g.Stroke()
-
-	// Horizontal divider in button area
-	hh := h * 0.5
 	g.MoveTo(w-bw, hh)
 	g.LineTo(w, hh)
 	g.SetPen1(t.BorderColor, 1)
 	g.Stroke()
-
-	// Up button background (hover/push)
-	if this.hoverPart == 1 {
-		g.Rectangle(w-bw+1, 1, bw-2, hh-1)
-		if this.pushed {
-			g.SetBrush1(paint.Color{200, 200, 200, 255})
-		} else {
-			g.SetBrush1(paint.Color{228, 228, 228, 255})
+	for part := 1; part <= 2; part++ {
+		canStep := this.IsEnabled() && !this.IsReadOnly() && (part == 1 && this.value < this.max || part == 2 && this.value > this.min)
+		ink := t.TextColor
+		if !canStep {
+			ink = t.MenuGrayTextColor
 		}
+		if canStep && this.hoverPart == part {
+			fill := t.ButtonHoverBGColor
+			if this.pushed {
+				fill = t.MenuActiveBGColor
+				ink = t.MenuActiveTextColor
+			}
+			g.Rectangle(w-bw+1, float64(part-1)*hh+1, math.Max(0, bw-2), math.Max(0, hh-2))
+			g.SetBrush1(fill)
+			g.Fill()
+		}
+		a := math.Min(3, math.Min(bw/4, hh/3))
+		cx, cy := w-bw/2, (float64(part)-.5)*hh
+		direction := 1.0
+		if part == 2 {
+			direction = -1
+		}
+		g.MoveTo(cx, cy-direction*a)
+		g.LineTo(cx-a*1.2, cy+direction*a*.5)
+		g.LineTo(cx+a*1.2, cy+direction*a*.5)
+		g.LineTo(cx, cy-direction*a)
+		g.SetBrush1(ink)
 		g.Fill()
 	}
-
-	// Down button background (hover/push)
-	if this.hoverPart == 2 {
-		g.Rectangle(w-bw+1, hh, bw-2, hh-1)
-		if this.pushed {
-			g.SetBrush1(paint.Color{200, 200, 200, 255})
-		} else {
-			g.SetBrush1(paint.Color{228, 228, 228, 255})
-		}
-		g.Fill()
+	if this.suffix != "" {
+		r := this.suffixRect()
+		text := ElideText(t.Font, this.suffix, r.Width)
+		g.Save()
+		g.Rectangle(r.X, r.Y, r.Width, r.Height)
+		g.Clip()
+		g.SetFont(t.Font)
+		g.SetBrush1(t.TextColor)
+		fe := t.Font.FontExtents()
+		g.Translate(r.X-t.Font.TextExtents(text).XBearing, (h-fe.Height)/2+fe.Ascent)
+		g.DrawText(text)
+		g.Restore()
 	}
-
-	// Draw up arrow
-	cx := w - bw*0.5
-	cy := hh * 0.5
-	a := 3.0
-	g.MoveTo(cx, cy-a)
-	g.LineTo(cx-a*1.2, cy+a*0.5)
-	g.LineTo(cx+a*1.2, cy+a*0.5)
-	g.LineTo(cx, cy-a)
-	g.SetBrush1(t.TextColor)
-	g.Fill()
-
-	// Draw down arrow
-	cy = hh + hh*0.5
-	g.MoveTo(cx, cy+a)
-	g.LineTo(cx-a*1.2, cy-a*0.5)
-	g.LineTo(cx+a*1.2, cy-a*0.5)
-	g.LineTo(cx, cy+a)
-	g.SetBrush1(t.TextColor)
-	g.Fill()
-
-	_ = fmt.Sprint // suppress unused import
 }
 
 func (this *SpinBox) hitTest(x, y float64) int {
+	if x < 0 || y < 0 || x >= this.w || y >= this.h {
+		return 0
+	}
 	bw := this.buttonWidth()
 	if x >= this.w-bw {
 		if y < this.h*0.5 {
@@ -285,7 +308,10 @@ func (this *SpinBox) OnMouseMove(x, y float64) {
 }
 
 func (this *SpinBox) OnLeftDown(x, y float64) {
-	if !this.IsEnabled() {
+	if !this.IsEnabled() || this.IsReadOnly() {
+		return
+	}
+	if x < 0 || y < 0 || x >= this.w || y >= this.h {
 		return
 	}
 	this.SetFocus()
@@ -294,9 +320,9 @@ func (this *SpinBox) OnLeftDown(x, y float64) {
 	this.pushed = true
 	switch part {
 	case 1:
-		this.SetValue(this.value + this.step)
+		this.stepBy(this.step)
 	case 2:
-		this.SetValue(this.value - this.step)
+		this.stepBy(-this.step)
 	}
 	this.Self().Update()
 }
@@ -307,13 +333,13 @@ func (this *SpinBox) OnLeftUp(x, y float64) {
 }
 
 func (this *SpinBox) OnMouseWheel(x, y, z float64) {
-	if !this.IsEnabled() {
+	if !this.IsEnabled() || this.IsReadOnly() {
 		return
 	}
 	if z > 0 {
-		this.SetValue(this.value + this.step)
+		this.stepBy(this.step)
 	} else if z < 0 {
-		this.SetValue(this.value - this.step)
+		this.stepBy(-this.step)
 	}
 }
 
@@ -324,24 +350,8 @@ func (this *SpinBox) OnMouseWheel(x, y, z float64) {
 // All paths route through SetValue, so clamping and the change callback behave
 // exactly as the up/down buttons do (callback fires only on a real change).
 func (this *SpinBox) OnKeyDown(key int, repeat bool) {
-	if !this.IsEnabled() {
-		return
-	}
-	step := this.step
-	page := this.PageStep()
-	switch key {
-	case KeyUp:
-		this.SetValue(spinStepped(this.value, step, this.min, this.max))
-	case KeyDown:
-		this.SetValue(spinStepped(this.value, -step, this.min, this.max))
-	case KeyPageUp:
-		this.SetValue(spinStepped(this.value, page, this.min, this.max))
-	case KeyPageDown:
-		this.SetValue(spinStepped(this.value, -page, this.min, this.max))
-	case KeyHome:
-		this.SetValue(this.min)
-	case KeyEnd:
-		this.SetValue(this.max)
+	if this.editor != nil {
+		this.editor.OnKeyDown(key, repeat)
 	}
 }
 

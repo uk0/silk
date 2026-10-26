@@ -141,7 +141,7 @@ func (this *CodeEditor) NavigateToLineCol(line, column int) {
 	this.clearSelection()
 	this.additionalCursors = nil
 	if this.completion != nil {
-		this.completion.visible = false
+		this.completion.Dismiss()
 	}
 	this.ScrollToLineCol(line, column)
 	this.ensureCursorVisible()

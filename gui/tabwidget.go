@@ -267,6 +267,7 @@ func (this *TabWidget) SetCurrentChangedCallback(cb func(interface{}, int)) {
 
 func (this *TabWidget) Layout() {
 	w, h := this.Self().Size()
+	w, h = max(0, w), max(0, h)
 
 	// TabBar at top
 	tabHints := this.tabBar.SizeHints()
@@ -275,6 +276,7 @@ func (this *TabWidget) Layout() {
 		tabH = Theme().TabBarHeight
 	}
 
+	tabH = min(tabH, h)
 	this.tabBar.SetBounds(0, 0, w, tabH)
 	this.tabBar.Layout()
 

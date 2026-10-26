@@ -113,12 +113,12 @@ func TestEditActionClipboardKeysAndReadOnlyProtection(t *testing.T) {
 			clipboardMu.Lock()
 			remaining := len(clipboardLocalData)
 			clipboardMu.Unlock()
-			if remaining != 0 || edit.Text() != "25" {
-				t.Fatal("platform Copy was not routed to Copy or changed text")
+			if remaining != 1 || edit.Text() != "25" {
+				t.Fatal("failed Copy erased the previous clipboard or changed text")
 			}
 			edit.OnKeyDown('X', false)
-			if edit.Text() != "" {
-				t.Fatal("platform Cut did not remove selection")
+			if edit.Text() != "25" {
+				t.Fatal("failed native Cut deleted text without copying it")
 			}
 			edit.SetText("read only")
 			edit.SetReadOnly(true)
@@ -188,5 +188,35 @@ func TestSearchBoxActionSelectAllReplacesQuery(t *testing.T) {
 				t.Fatal("new query was appended instead of replacing")
 			}
 		})
+	}
+}
+
+func TestEditKeyboardContextAndLocalHistory(t *testing.T) {
+	e, shown := editMenuTest(t)
+	e.SetFocus()
+	withEditActionModifiers(t, glfw.ModShift)
+	e.OnKeyDown(KeyF10, false)
+	if *shown == nil {
+		t.Fatal("Shift+F10 did not open edit menu")
+	}
+	*shown = nil
+	e.OnKeyDown(KeyF10, true)
+	if *shown != nil {
+		t.Fatal("repeat reopened menu")
+	}
+	for _, mods := range editActionTestModifiers() {
+		eventModifiers = &mods
+		e.SetText("")
+		e.OnTextInput("abc")
+		e.OnKeyDown('Z', false)
+		if e.Text() != "" {
+			t.Fatal("action Undo did not reach field")
+		}
+		redo := mods | glfw.ModShift
+		eventModifiers = &redo
+		e.OnKeyDown('Z', false)
+		if e.Text() != "abc" {
+			t.Fatal("action Redo did not reach field")
+		}
 	}
 }

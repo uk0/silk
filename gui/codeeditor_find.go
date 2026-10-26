@@ -20,6 +20,12 @@ type editorFindState struct {
 	jump                          *cursorPos
 	step                          int
 	jumpStrict                    bool
+	navigationFresh               bool
+	navigation                    editorFindNavigation
+	matchSelection                editorSelection
+	matchCaret                    cursorPos
+	matchRevision                 uint64
+	matchValid                    bool
 	scope, selectionCandidate     editorFindScope
 	scopeSerial                   uint64
 	pendingScope                  *editorFindScope
@@ -79,7 +85,7 @@ func (e *CodeEditor) SetFindQuery(query string) {
 	e.findText = query
 	e.findCursor = utf8.RuneCountInString(query)
 	e.findCurrentIdx = 0
-	e.findState.jump = &cursorPos{}
+	e.queueFindJump(cursorPos{}, false)
 	e.findUpdateMatches()
 	e.syncFindBar()
 }
@@ -87,7 +93,7 @@ func (e *CodeEditor) SetFindQuery(query string) {
 // ShowFind opens a child-widget bar, optionally with its replacement row.
 // Single-line selections seed the query; otherwise the previous query survives.
 func (e *CodeEditor) ShowFind(replace bool) {
-	if c := e.captureFindSelection(); c.valid {
+	if c := e.captureFindSelection(); c.valid && !e.ownsFindSelection() {
 		e.findState.selectionCandidate = c
 	}
 	e.findActive = true
@@ -119,6 +125,7 @@ func (e *CodeEditor) requestFindOperation(operation editorFindRequest) int {
 		e.CancelFind()
 		return 0
 	}
+	e.prepareFindNavigation()
 	s := &e.findState
 	s.generation++
 	if s.worker != nil {
@@ -172,6 +179,7 @@ func (e *CodeEditor) acceptFindResult(result editorFindResult) {
 	s.pending = false
 	s.err = result.err
 	if result.err != nil {
+		e.clearFindNavigation()
 		e.syncFindBar()
 		e.Update()
 		return
@@ -196,16 +204,21 @@ func (e *CodeEditor) acceptFindResult(result editorFindResult) {
 	if e.findCurrentIdx < 0 || e.findCurrentIdx >= len(e.findMatches) {
 		e.findCurrentIdx = 0
 	}
-	if s.jump != nil {
-		p := *s.jump
-		s.jump = nil
-		e.selectFindMatch(p.line, p.col, s.jumpStrict)
-		s.jumpStrict = false
-	}
-	if s.step != 0 {
-		step := s.step
-		s.step = 0
-		e.moveFind(step)
+	jump, step, strict := s.jump, s.step, s.jumpStrict
+	navigate := s.navigation.current(e)
+	e.clearFindNavigation()
+	if navigate {
+		if jump != nil {
+			e.selectFindMatch(jump.line, jump.col, strict)
+		}
+		if step != 0 {
+			e.moveFind(step)
+		}
+		if len(e.findMatches) == 0 && e.ownsFindSelection() {
+			e.clearSelection()
+			s.matchSelection = editorSelection{}
+			s.matchValid = false
+		}
 	}
 	e.syncFindBar()
 	e.Update()
@@ -216,8 +229,14 @@ func (e *CodeEditor) findRangesCurrent() bool {
 }
 func (e *CodeEditor) moveFind(step int) {
 	if !e.findRangesCurrent() {
-		e.findState.step = step
-		if !e.findState.pending {
+		s := &e.findState
+		if !s.navigationFresh && !s.navigation.current(e) {
+			e.clearFindNavigation()
+		}
+		s.step += step
+		s.navigation = e.captureFindNavigation()
+		s.navigationFresh = false
+		if !s.pending {
 			e.findUpdateMatches()
 		}
 		return
@@ -225,13 +244,7 @@ func (e *CodeEditor) moveFind(step int) {
 	if len(e.findMatches) == 0 {
 		return
 	}
-	e.findCurrentIdx = (e.findCurrentIdx + step + len(e.findMatches)) % len(e.findMatches)
-	m := e.findMatches[e.findCurrentIdx]
-	e.cursorLine, e.cursorCol = m.line, m.col
-	e.clearSelection()
-	e.ensureCursorVisible()
-	e.syncFindBar()
-	e.Update()
+	e.activateFindMatch(e.findNavigationIndex(step))
 }
 func (e *CodeEditor) findNext() { e.moveFind(1) }
 func (e *CodeEditor) findPrev() { e.moveFind(-1) }
@@ -244,9 +257,9 @@ func (e *CodeEditor) CancelFind() {
 	s.generation++
 	s.pending = false
 	s.valid = false
-	s.jump = nil
-	s.step = 0
-	s.jumpStrict = false
+	e.clearFindNavigation()
+	s.matchSelection = editorSelection{}
+	s.matchValid = false
 	s.count = 0
 	s.err = nil
 	e.findMatches = nil
@@ -263,7 +276,12 @@ func (e *CodeEditor) CancelFind() {
 		}
 	}
 }
-func (e *CodeEditor) OnHide() { e.CancelFind(); e.CancelFormat(); e.hideGoToLine(false) }
+func (e *CodeEditor) OnHide() {
+	e.closeEditorContextMenu()
+	e.CancelFind()
+	e.CancelFormat()
+	e.hideGoToLine(false)
+}
 func (e *CodeEditor) OnShow() {
 	if e.findActive {
 		e.findUpdateMatches()
@@ -368,19 +386,19 @@ func (e *CodeEditor) acceptRegexReplacement(result editorFindResult) {
 	p := cursorPos{r.target.endLine, r.target.endCol}
 	// An empty hit must advance strictly beyond the insertion position, or
 	// repeated Replace on ^ / \b would insert forever at the same caret.
-	e.findState.jumpStrict = r.target.start == r.target.end
+	strict := r.target.start == r.target.end
 	if old != result.text {
 		e.prepareFindScopeChange(result)
 		e.pushUndo(editAction{kind: 2, line: r.anchor.line, col: r.anchor.col, text: result.text, oldText: old})
 		column := textPositionInLine(e.lines[r.anchor.line], r.anchor.col).ByteColumn
 		p = e.replaceByteRange(r.anchor.line, column, len(old), result.text)
 		e.cursorLine, e.cursorCol = p.line, p.col
-		e.findState.jump = &p
+		e.queueFindJump(p, strict)
 		e.rebuildText()
 		if e.findActive {
 			return
 		}
 	}
-	e.findState.jump = &p
+	e.queueFindJump(p, strict)
 	e.findUpdateMatches()
 }

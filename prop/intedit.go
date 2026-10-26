@@ -42,12 +42,13 @@ func (edit *IntEdit) validInteger(text string) bool {
 }
 
 func (edit *IntEdit) OnEdited(text string) {
-	if edit.item != nil && !edit.item.IsReadOnly() && edit.validInteger(text) {
+	if edit.canEditProperty() && edit.validInteger(text) {
 		value, err := parsePropertyValue(edit.item.Type(), strings.TrimSpace(text))
 		if err != nil || !edit.item.IsMultiValue() && reflect.DeepEqual(value, edit.item.GetValue()) {
 			return // No-op boundary steps/deactivation must not create undo entries.
 		}
-		edit.item.SetValue(value)
+		edit.setEditedValue(value)
+		edit.updateHintTooltip()
 	}
 }
 
@@ -68,6 +69,9 @@ func (edit *IntEdit) OnKeyDown(key int, repeat bool) {
 	}
 	if edit.item == nil || edit.item.IsReadOnly() || !edit.IsEnabled() {
 		return
+	}
+	if !repeat {
+		edit.finishEdit()
 	}
 	// Start from the real value, not a mixed-selection placeholder or an
 	// invalid half-typed string. Check bounds before arithmetic to avoid wrap.
@@ -103,5 +107,5 @@ func (edit *IntEdit) OnKeyDown(key int, repeat bool) {
 		next = strconv.FormatUint(v, 10)
 	}
 	edit.OnEdited(next)
-	edit.UpdateValue()
+	edit.updateValueText()
 }

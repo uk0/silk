@@ -281,8 +281,8 @@ func TestCompletionIndexImmediateFallbackDoesNotDuplicateStaticItems(t *testing.
 					count++
 				}
 			}
-			if count != 1 {
-				t.Fatalf("immediate fallback contains %d copies of %q", count, prefix)
+			if count != 0 {
+				t.Fatalf("immediate fallback contains %d no-op copies of %q", count, prefix)
 			}
 		})
 	}

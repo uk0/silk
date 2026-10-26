@@ -295,6 +295,7 @@ func TestAboutDoesNotRestoreDetachedOwnerFocus(t *testing.T) {
 	edit.SetParent(owner)
 	edit.SetFocus()
 	showAboutDialog(owner, AboutInfo{}, func(dlg *gui.Dialog) gui.DialogResult {
+		dlg.SetFocus() // simulate native activation after owner capture
 		edit.SetParent(nil)
 		dlg.OnKeyDown(gui.KeyEsc, false)
 		return dlg.Result()
@@ -313,9 +314,11 @@ func TestAboutDialogCloseActionsRestoreOwnerFocus(t *testing.T) {
 			edit.SetParent(owner)
 			edit.SetFocus()
 			result := showAboutDialog(owner, AboutInfo{Name: "Silk IDE"}, func(dlg *gui.Dialog) gui.DialogResult {
-				if !dlg.HasFocus() || edit.HasFocus() {
-					t.Fatal("modal did not take keyboard focus")
+				if !edit.HasFocus() || dlg.HasFocus() {
+					t.Fatal("About stole owner focus before presentation")
 				}
+				// The injected presenter simulates native activation after capture.
+				dlg.SetFocus()
 				// Prime the opposite result so a missing action cannot pass
 				// merely because DialogResult's zero value happens to be OK.
 				if !strings.HasSuffix(action, "escape") {
@@ -351,5 +354,43 @@ func TestAboutDialogCloseActionsRestoreOwnerFocus(t *testing.T) {
 				t.Fatalf("result=%v want=%v restored focus=%v", result, want, edit.HasFocus())
 			}
 		})
+	}
+}
+
+func TestAboutPresentationPreservesFocusOutsideParentSubtree(t *testing.T) {
+	aboutTestEnvironment(t)
+	frame := gui.NewForm()
+	editor := gui.NewEdit()
+	editor.SetParent(frame)
+	editor.SetFocus()
+	// The IDE opens About using its designer canvas even while editing a text
+	// document in a sibling panel. Native ShowModal must capture that editor.
+	canvas := new(gui.Widget)
+	canvas.Init(canvas)
+	canvas.SetParent(frame)
+	canvas.SetVisible(false)
+	showAboutDialog(canvas, AboutInfo{}, func(dlg *gui.Dialog) gui.DialogResult {
+		if !editor.HasFocus() || dlg.HasFocus() {
+			t.Fatal("About stole the sibling editor focus before native modal capture")
+		}
+		return gui.DialogCancel
+	})
+}
+
+func TestAboutCloseDoesNotOverwriteNewFocus(t *testing.T) {
+	aboutTestEnvironment(t)
+	owner := gui.NewForm()
+	editor := gui.NewEdit()
+	editor.SetParent(owner)
+	editor.SetFocus()
+	other := gui.NewEdit()
+	showAboutDialog(owner, AboutInfo{}, func(dlg *gui.Dialog) gui.DialogResult {
+		dlg.SetFocus()
+		// A callback deliberately moved focus, possibly into another Form.
+		other.SetFocus()
+		return gui.DialogCancel
+	})
+	if !other.HasFocus() {
+		t.Fatal("About restored stale focus over an explicit new target")
 	}
 }

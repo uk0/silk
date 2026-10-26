@@ -272,3 +272,78 @@ func TestTransientFocusReturnDistinguishesActiveAppFromKeyWindowGap(t *testing.T
 		})
 	}
 }
+
+func TestPopupHideReturnsNativeFocusInsideModalWithoutOuterDrain(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(map[bool]string{false: "modal", true: "nested-modal"}[nested], func(t *testing.T) {
+			isolateFocusReturns(t)
+			outer, _ := focusReturnForm(t)
+			owner, field := focusReturnForm(t)
+			owner.inModal = true
+			if nested {
+				outer.inModal = true
+				outer.enabled = false
+				owner.widget.SetParent(outer.widget)
+			}
+			combo := NewComboBox()
+			combo.SetParent(field)
+			combo.SetEditable(false)
+			_, popup := testPopupWindow(combo.sub, WtPopup, owner)
+			key := popup
+			focused := func(w *Window) bool { return w == key }
+			r := prepareTransientFocusReturn(popup, owner, combo, focused)
+			focusWidget = combo
+			activated := 0
+			ok := r.restorePopupOwnerBeforeHide(visibleFocusReturnWindow, focused, focusReturnKeyWindowFallback, func(w *Window) { key = w; activated++ })
+			if !ok || activated != 1 || key != owner || focusWidget != combo || !owner.inModal || len(pendingNativeDestruction) != 0 {
+				t.Fatal("popup return waited for outer loop, changed logical focus or ended modal")
+			}
+		})
+	}
+}
+
+func TestPopupPreHideActivationNeverOverridesNewNativeIntent(t *testing.T) {
+	for _, scenario := range []string{"other-app", "other-window", "new-generation", "owner-hidden", "owner-disabled", "owner-minimized", "owner-destroyed", "quit", "modal-not-popup", "activation-failed"} {
+		t.Run(scenario, func(t *testing.T) {
+			isolateFocusReturns(t)
+			owner, field := focusReturnForm(t)
+			other, _ := focusReturnForm(t)
+			menu := NewMenu(false)
+			menu.SetParent(field)
+			_, popup := testPopupWindow(menu, WtPopup, owner)
+			key := popup
+			focused := func(w *Window) bool { return w == key }
+			r := prepareTransientFocusReturn(popup, owner, field, focused)
+			appActive := true
+			switch scenario {
+			case "other-app":
+				appActive = false
+			case "other-window":
+				key = other
+			case "new-generation":
+				noteNativeFocusTransfer()
+			case "owner-hidden":
+				owner.widget.NakedWidget().hidden = true
+			case "owner-disabled":
+				owner.enabled = false
+			case "owner-minimized":
+				owner.iconified = true
+			case "owner-destroyed":
+				owner.destroy()
+			case "quit":
+				shouldQuit = true
+			case "modal-not-popup":
+				popup.wt = WtForm
+			}
+			calls := 0
+			ok := r.restorePopupOwnerBeforeHide(visibleFocusReturnWindow, focused, func(bool) bool { return appActive }, func(*Window) { calls++ })
+			expected := 0
+			if scenario == "activation-failed" {
+				expected = 1
+			}
+			if ok || calls != expected {
+				t.Fatalf("unexpected restoration: ok=%v calls=%d", ok, calls)
+			}
+		})
+	}
+}

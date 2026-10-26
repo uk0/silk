@@ -52,3 +52,16 @@ int silkMouseButtonEventPosition(void *handle, int button, int action, double *x
     *y = [content frame].size.height - point.y;
     return 1;
 }
+
+int silkScrollEventPosition(void *handle, double *x, double *y) {
+    if (!handle || !x || !y || ![NSThread isMainThread]) return 0;
+    NSWindow *window = (NSWindow *)handle;
+    NSEvent *event = [NSApp currentEvent];
+    if (!event || [event window] != window || [event type] != NSEventTypeScrollWheel) return 0;
+    NSView *content = [window contentView];
+    if (!content) return 0;
+    NSPoint point = [event locationInWindow];
+    *x = point.x;
+    *y = [content frame].size.height - point.y;
+    return 1;
+}

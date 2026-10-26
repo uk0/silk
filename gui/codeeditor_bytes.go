@@ -65,10 +65,14 @@ func (e *CodeEditor) insertRawTextAtByte(line, column int, text string) {
 // anchor. It publishes only when its caller rebuilds the text, avoiding a
 // transient deleted selection reaching LSP/outline consumers.
 func (e *CodeEditor) replaceSelectionRecorded(text string) {
+	e.replaceSelectionEdit(text, false)
+}
+
+func (e *CodeEditor) replaceSelectionEdit(text string, typing bool) {
 	sl, sc, _, _ := e.selectionRange()
 	original := e.SelectedText()
 	column := textPositionInLine(e.lines[sl], sc).ByteColumn
-	e.pushUndo(editAction{kind: 2, line: sl, col: sc, text: text, oldText: original})
+	e.pushUndo(editAction{kind: 2, line: sl, col: sc, text: text, oldText: original, typing: typing && editorTypingInput(text)})
 	p := e.replaceByteRange(sl, column, len(original), text)
 	e.cursorLine, e.cursorCol = p.line, p.col
 	e.clearSelection()

@@ -69,6 +69,15 @@ func TestEditorSpanGeometryRasterParity(t *testing.T) {
 								if span[1] >= 0 {
 									b = e.measureText(e.linePrefix(0, span[1]))
 								}
+								if paint.NeedsClusterLayout(text) {
+									layout := paint.LayoutText(e.font.ScaledFont(nil), text)
+									a = layout.Carets[min(span[0], len(layout.Carets)-1)]
+									end := span[1]
+									if end < 0 {
+										end = len(layout.Carets) - 1
+									}
+									b = layout.Carets[min(end, len(layout.Carets)-1)]
+								}
 								v.fillRect(g, origin+a, 5.25, math.Max(2, b-a), 18.5)
 							} else {
 								e.fillColumnSpan(g, v, 0, span[0], span[1], origin, 5.25, 18.5, 2, 0)

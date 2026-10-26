@@ -1,37 +1,38 @@
 package gui
 
 import (
-	"os"
-	"strings"
+	"github.com/uk0/silk/paint"
+	"reflect"
 	"testing"
 )
 
-// TestDropCursorsSurviveMissingResources covers a nil dereference that only
-// ever fired on Windows: LoadCursorData leaves a zero CursorData behind when
-// the "cursor" resource directory is absent — which it is in every install
-// that does not ship one — and GenerateDropCursors then walked straight into
-// arrow.Pixmap.Width(). The panic happened inside the WM_MOUSEMOVE handler,
-// where wndProcFunc recovers it, so the only symptom was that nothing in the
-// widget palette could be dragged.
-//
-// The GLFW backend had grown the guard; the Win32 one had not. Both are
-// checked here because the divergence is the actual defect — a runtime test
-// can only ever run on one of them at a time.
 func TestDropCursorsSurviveMissingResources(t *testing.T) {
-	for _, file := range []string{"cursor_windows.go", "cursor_glfw.go"} {
-		src, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("cannot read %s: %v", file, err)
+	old := dndCursorData
+	dndCursorData = make([]CursorData, 4)
+	defer func() { dndCursorData = old }()
+	curs := generateDropCursors(nil, func(CursorData) (*Cursor, error) { t.Fatal("invalid pixels reached native creation"); return nil, nil })
+	for _, cur := range curs {
+		if cur == nil {
+			t.Fatal("missing pixels produced a nil cursor")
 		}
-		body := generateDropCursorsBody(t, file, string(src))
-		if !strings.Contains(body, "arrow.Pixmap == nil") {
-			t.Errorf("%s: GenerateDropCursors does not guard against a cursor that failed to load; dragging will panic wherever the resources are missing", file)
+	}
+	ReleaseDropCursors(curs)
+}
+
+func TestDropCursorTemporaryPixelsRetiredBeforeReturn(t *testing.T) {
+	var kept []paint.Pixmap
+	generateDropCursors(nil, func(data CursorData) (*Cursor, error) { kept = append(kept, data.Pixmap); return nil, nil })
+	if len(kept) != 4 {
+		t.Fatal("missing native creations")
+	}
+	for _, pix := range kept {
+		if !backbufferSurfaceRetiredForCursorTest(pix) {
+			t.Fatal("temporary surface waits for GC")
 		}
 	}
 }
 
-// generateDropCursorsBody returns the text of GenerateDropCursors in src.
-func generateDropCursorsBody(t *testing.T, file, src string) string {
-	t.Helper()
-	return funcBodyIn(t, src, "func GenerateDropCursors(")
+func backbufferSurfaceRetiredForCursorTest(p paint.Pixmap) bool {
+	v := reflect.ValueOf(p).Elem().FieldByName("Surface")
+	return v.IsValid() && v.Kind() == reflect.Pointer && v.IsNil()
 }

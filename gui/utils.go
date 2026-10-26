@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
 	"reflect"
 )
@@ -135,6 +136,10 @@ func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, o
 	area := popupWorkAreaAt(xref, yref)
 	if menu, ok := popup.(*Menu); ok && menu.IsPopup() {
 		menu.fitPopupWorkArea(area)
+	}
+	if list, ok := popup.(*comboPopup); ok {
+		area = comboPopupWorkArea(area)
+		list.fitPopupWorkArea(area, geom.Rect{X: xref, Y: yref, Width: wref, Height: href})
 	}
 	pw, ph := popup.Size()
 	x, y := popupPositionInWorkArea(area, xref, yref, wref, href, pw, ph, vertical, overlap)

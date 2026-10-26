@@ -71,14 +71,20 @@ type SelectionCallback func(items []graph.IItem)
 
 type GedView struct {
 	graph.GraphView
-	selCallbacks        []SelectionCallback
-	selectionListeners  []selectionListener
-	selectionSequence   int
-	showPropertiesPanel func()
-	showCodePanel       func()
-	showEventHandler    func(*FakeWidget, string) error
-	eventCodePanel      *CodePanel
-	showGrid            bool // paint the faint background dot overlay on top of the page
+	selCallbacks             []SelectionCallback
+	selectionListeners       []selectionListener
+	selectionSequence        int
+	selectionStatusFormatter func([]graph.IItem) string
+	selectionStatusBar       *gui.StatusBar
+	selectionStatusText      string
+	selectionStatusScene     *GedScene
+	selectionStatusListener  int
+	selectionStatusClosed    bool
+	showPropertiesPanel      func()
+	showCodePanel            func()
+	showEventHandler         func(*FakeWidget, string) error
+	eventCodePanel           *CodePanel
+	showGrid                 bool // paint the faint background dot overlay on top of the page
 
 	// Alignment guide state for drag operations
 	alignGuides []alignGuide
@@ -185,34 +191,11 @@ func (this *GedView) Init(self gui.IWidget) {
 		if !this.managedPress {
 			this.clearManagedGeometryHint()
 		}
-		items := sel.ItemList()
-		this.notifySelectionListeners(items)
-		frame := gui.FindOwnerFrame(this)
-		if frame == nil {
-			return
-		}
-		sb := frame.StatusBar()
-		if sb == nil {
-			return
-		}
-		count := sel.Count()
-		if count == 0 {
-			sb.ShowMessage("Ready")
-		} else if count == 1 {
-			item := sel.ItemList()[0]
-			if fw, ok := item.(*FakeWidget); ok {
-				name := fw.WidgetFactoryName()
-				if idx := strings.LastIndex(name, "."); idx >= 0 {
-					name = name[idx+1:]
-				}
-				w, h := fw.Width(), fw.Height()
-				sb.ShowMessage(fmt.Sprintf("Selected: %s (%.0fx%.0f mm)", name, w, h))
-			} else {
-				sb.ShowMessage("Selected: 1 item")
-			}
-		} else {
-			sb.ShowMessage(fmt.Sprintf("Selected: %d items", count))
-		}
+		// A selection event is an explicit request to show the new selection,
+		// even when two different items have identical geometry/text.
+		this.selectionStatusBar = nil
+		this.RefreshSelectionStatus()
+		this.notifySelectionListeners(sel.ItemList())
 	})
 }
 
@@ -240,8 +223,9 @@ func (this *GedView) Undo() {
 	stack.Undo()
 	if scene := this.GedScene(); scene != nil {
 		scene.NotifyDesignChanged()
+	} else {
+		this.refreshPropertyValues()
 	}
-	this.refreshPropertyValues()
 	this.Self().Update()
 }
 
@@ -261,8 +245,9 @@ func (this *GedView) Redo() {
 	stack.Redo()
 	if scene := this.GedScene(); scene != nil {
 		scene.NotifyDesignChanged()
+	} else {
+		this.refreshPropertyValues()
 	}
-	this.refreshPropertyValues()
 	this.Self().Update()
 }
 
@@ -2157,12 +2142,9 @@ func nudgeDelta(key int, shift bool, step, gridStep float64) (dx, dy float64, ha
 // move is wrapped in a MoveCommand so it lands on the UndoStack alongside
 // drag-moves — undo treats a Shift+Right press the same as a mouse drag.
 //
-// Note on undo: unlike AlignSelection / reorderSelection (which mutate +
-// Update with no command), nudge keeps the MoveCommand path. A clean move
-// command already exists here and the arrow-key contract is test-locked to
-// it (ged/nudge_test.go), so routing nudges through the UndoStack is the
-// existing, deliberate choice — matching align's plain mutation would
-// regress that behaviour.
+// Coordinates are translated exactly, including an untouched axis. The grid
+// controls the Shift step, not an implicit rounding of the resulting position;
+// mouse grid/guide snapping is a separate, explicit policy at drag completion.
 //
 // No-op if the selection is empty or contains only locked items;
 // GenerateMoveCommand handles both edge cases internally and returns
@@ -2443,6 +2425,7 @@ func (this *GedView) OpenFile(filename string) error {
 // one — outlives the design without this, and goes on describing a canvas the
 // user cannot open, let alone fix.
 func (this *GedView) Close() {
+	this.stopSelectionStatus()
 	if scene := this.GedScene(); scene != nil {
 		scene.DiscardPendingEdits()
 	}
@@ -2801,6 +2784,8 @@ func (this *GedView) OnMouseMove(x, y float64) {
 // OnLeftUp overrides GraphView.OnLeftUp to clear alignment guides when
 // the drag ends.
 func (this *GedView) OnLeftUp(x, y float64) {
+	// Grid snapping/reparenting can adjust geometry after the command signal.
+	defer this.RefreshSelectionStatus()
 	if this.managedPress {
 		// The graph tool only saw a press, never a drag. Release at that press
 		// point to preserve normal click selection without committing geometry.
@@ -2858,7 +2843,7 @@ func (this *GedView) OnLeftUp(x, y float64) {
 		// of them changed a size for the snap to tidy: rounding one there would
 		// resize a widget the user never grabbed a handle on, with nothing on
 		// the undo stack (the snap mutates directly) and nothing on screen (the
-		// status bar prints the size with %.0f).
+		// old status bar also rounded the size to an integer).
 		if resized != nil {
 			this.snapSelectionSizeToGrid(resized)
 		}
@@ -3084,7 +3069,20 @@ func (this *GedView) snapSelectionSizeToGrid(dragged graph.IItem) {
 
 // Older/custom property panels can omit this optional refresh capability.
 func (this *GedView) refreshPropertyValues() {
-	if panel, ok := this.GetPropertyView().(interface{ RefreshValues() }); ok {
-		panel.RefreshValues()
+	// Pointer commands are followed by snap/guide corrections. OnLeftUp
+	// refreshes their final state; publishing the intermediate one is wasteful.
+	if this.selectionStatusClosed || this.isDragging {
+		return
+	}
+	for w := this.Self(); w != nil; w = w.Parent() {
+		if !w.IsVisible() {
+			return
+		}
+	}
+	panel := this.GetPropertyView()
+	if owned, ok := panel.(interface{ RefreshValuesForOwner(interface{}) }); ok {
+		owned.RefreshValuesForOwner(this.Scene())
+	} else if legacy, ok := panel.(interface{ RefreshValues() }); ok {
+		legacy.RefreshValues()
 	}
 }

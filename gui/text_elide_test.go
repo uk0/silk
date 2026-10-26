@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -224,5 +225,28 @@ func TestToastDrawElidesMessageBeforeCloseButton(t *testing.T) {
 	if tw := msgFont.TextExtents(got).Width; tw > limit {
 		t.Errorf("toast painted %q at %.3f px wide, past the %.3f px text column and under the close button",
 			got, tw, limit)
+	}
+}
+
+func TestElideTextPublicBoundaryContract(t *testing.T) {
+	f := Theme().Font
+	for _, w := range []float64{-1, 0, math.NaN()} {
+		if ElideText(f, "text", w) != "" {
+			t.Fatal("invalid width paints text")
+		}
+	}
+	if ElideText(nil, "text", 100) != "" {
+		t.Fatal("nil font paints text")
+	}
+	for _, text := range []string{"", "Title", "控件🙂 Unicode"} {
+		if got := ElideText(f, text, math.Inf(1)); got != text {
+			t.Fatalf("unlimited width lost %q", text)
+		}
+		for _, w := range []float64{1, 15, 50, 120} {
+			got := ElideText(f, text, w)
+			if !utf8.ValidString(got) || f.TextExtents(got).Width > w {
+				t.Fatalf("text %q exceeds %g", got, w)
+			}
+		}
 	}
 }

@@ -147,12 +147,19 @@ func (this *GedScene) RemoveDesignChangedCallback(id int) {
 
 // PushCommand runs cmd through the undo stack, then reports the design changed.
 func (this *GedScene) PushCommand(cmd gui.ICommand) {
+	if cmd == nil {
+		return
+	}
 	if err := this.CommitPendingEdits(); err != nil {
 		core.Warn(err)
 		return
 	}
 	this.SceneItem.PushCommand(cmd)
-	this.NotifyDesignChanged()
+	// A field owns its in-progress text and merge session. Refreshing it here
+	// would commit partial input (e.g. "2.") and split one edit into commands.
+	// Undo/Redo and externally submitted commands must refresh the inspector.
+	_, fieldEdit := cmd.(*prop.PropertyCommand)
+	this.notifyDesignChanged(!fieldEdit)
 }
 
 // NotifyDesignChanged fires SigDesignChanged, then every listener added with
@@ -160,11 +167,24 @@ func (this *GedScene) PushCommand(cmd gui.ICommand) {
 // without pushing anything, so the paths that drive them call this to report
 // what the stack cannot.
 func (this *GedScene) NotifyDesignChanged() {
+	this.notifyDesignChanged(true)
+}
+
+func (this *GedScene) notifyDesignChanged(refreshProperties bool) {
 	if this.cbDesignChanged != nil {
 		this.cbDesignChanged()
 	}
 	for _, l := range this.designChangedList {
 		l.fn()
+	}
+	// Use the existing scene/view attachment rather than an idle poll or a
+	// permanent listener. Callbacks may have switched/closed the document.
+	if refreshProperties {
+		if view := this.View(); view != nil && view.Scene() == this {
+			if panel, ok := view.(interface{ refreshPropertyValues() }); ok {
+				panel.refreshPropertyValues()
+			}
+		}
 	}
 }
 

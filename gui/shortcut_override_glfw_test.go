@@ -77,3 +77,43 @@ func TestFocusedShortcutOverridePrecedesHostButStaysWindowScoped(t *testing.T) {
 		t.Fatal("re-enabled ancestor did not restore focused shortcut")
 	}
 }
+
+func TestGoToFieldNativeHistoryShortcutRunsOnce(t *testing.T) {
+	isolatePopupState(t)
+	old := shortcutHandlers
+	shortcutHandlers = make(map[shortcutKey]func())
+	t.Cleanup(func() { shortcutHandlers = old })
+	frame := NewFrame()
+	native, win := testPopupWindow(frame, WtForm, nil)
+	win.enabled = true
+	e := gotoTestEditor(t, "one\ntwo\nthree")
+	e.SetParent(frame)
+	e.OnTextInput("X")
+	e.ShowGoToLine()
+	q := e.gotoBar.query
+	initial := q.Text()
+	q.OnTextInput("2")
+	q.OnTextInput(":2")
+	global := 0
+	RegisterShortcut(ModAction, 'Z', func() { global++; e.Undo() })
+	mods := glfw.ModControl
+	if runtime.GOOS == "darwin" {
+		mods = glfw.ModSuper
+	}
+	onKey(native, glfw.KeyZ, 0, glfw.Press, mods)
+	if q.Text() != "2" || global != 0 {
+		t.Fatalf("Undo not dispatched exactly once: %q host=%d", q.Text(), global)
+	}
+	onKey(native, glfw.KeyZ, 0, glfw.Press, mods)
+	if q.Text() != initial {
+		t.Fatal("second undo failed")
+	}
+	onKey(native, glfw.KeyZ, 0, glfw.Press, mods)
+	if global != 0 || e.Text() != "Xone\ntwo\nthree" {
+		t.Fatal("empty history reached document")
+	}
+	onKey(native, glfw.KeyZ, 0, glfw.Press, mods|glfw.ModShift)
+	if q.Text() != "2" {
+		t.Fatal("redo failed")
+	}
+}

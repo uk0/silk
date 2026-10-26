@@ -86,6 +86,8 @@ func TestWindowTabNavigationOwnershipAndModifiers(t *testing.T) {
 	popup.SetParent(b)
 	_, popupWin := testPopupWindow(popup, WtPopup, win)
 	popupWin.enabled = true
+	// NewPopupMenu starts hidden; this fixture represents an opened popup.
+	popup.NakedWidget().hidden = false
 	popup.SetFocus()
 	onKey(native, glfw.KeyTab, 0, glfw.Press, glfw.ModControl)
 	if inner.CurrentIndex() != 1 || focusWidget != popup {

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/win32"
+	"syscall"
 )
 
 // timerMap maps a live win32 timer id to its callback. The WM_TIMER handler in
@@ -23,6 +24,32 @@ import (
 // value, which the dispatch site in window_windows.go would have to read too.
 var timerMap = make(map[uintptr]func())
 
+// A repeating timer may open a native modal loop. Do not recursively reenter
+// that same callback, but let other timers, posted tasks and paints progress.
+var runningTimerCallbacks = make(map[uintptr]bool)
+var uiTimerCallback uintptr
+
+func init() { uiTimerCallback = syscall.NewCallback(uiTimerProc) }
+
+func uiTimerProc(hwnd win32.HWND, msg uint32, id, tick uintptr) uintptr {
+	defer func() {
+		if e := recover(); e != nil {
+			reportWndProcPanic(hwnd, msg, id, tick, e)
+		}
+	}()
+	defer serviceUIFrame()
+	dispatchUITimer(id)
+	return 0
+}
+
+func dispatchUITimer(id uintptr) {
+	if f := timerMap[id]; f != nil && !runningTimerCallbacks[id] {
+		runningTimerCallbacks[id] = true
+		defer delete(runningTimerCallbacks, id)
+		f()
+	}
+}
+
 // Low precision timer in "UI thread"
 type Timer uintptr
 
@@ -36,7 +63,7 @@ func (t *Timer) Stop() {
 
 func (t *Timer) Start(millisecond uint32, f func()) bool {
 	t.Stop()
-	id := win32.SetTimer(millisecond)
+	id := win32.SetTimerCallback(millisecond, uiTimerCallback)
 	if id != 0 {
 		timerMap[id] = f
 		*t = Timer(id)
@@ -62,9 +89,7 @@ func processTimers() {
 		ids = append(ids, id)
 	}
 	for _, id := range ids {
-		if fn := timerMap[id]; fn != nil {
-			fn()
-		}
+		dispatchUITimer(id)
 	}
 }
 

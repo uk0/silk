@@ -222,6 +222,10 @@ func (this *scaledFont) validTextToGlyphsInto(x, y float64, text string, dst []G
 
 func (this *scaledFont) TextExtents(text string) *TextExtents {
 	text = displayText(text)
+	if shaped := this.complexLayout(text); shaped != nil {
+		e := shaped.extents
+		return &e
+	}
 	if needsTextFallback(text) {
 		return this.fallbackTextExtents(text)
 	}
@@ -253,12 +257,13 @@ type Font interface {
 }
 
 type font struct {
-	family string
-	size   int
-	italic bool
-	bold   bool
-	face   *cairo.FontFace // 为cairo做特别优化
-	desc   string
+	family     string
+	size       int
+	italic     bool
+	bold       bool
+	face       *cairo.FontFace // 为cairo做特别优化
+	nativeSize float64         // exact size of a retained Core Text fallback face
+	desc       string
 }
 
 type fontFace struct {
@@ -282,6 +287,7 @@ func (this *font) SetFamily(family string) {
 	this.family = family
 	this.face = nil
 	this.desc = ""
+	this.nativeSize = 0
 }
 
 func (this *font) Size() int {
@@ -292,6 +298,7 @@ func (this *font) SetSize(sz int) {
 	this.size = sz
 	this.face = nil
 	this.desc = ""
+	this.nativeSize = 0
 }
 
 func (this *font) Italic() bool {
@@ -302,6 +309,7 @@ func (this *font) SetItalic(b bool) {
 	this.italic = b
 	this.face = nil
 	this.desc = ""
+	this.nativeSize = 0
 }
 
 func (this *font) Bold() bool {
@@ -312,6 +320,7 @@ func (this *font) SetBold(b bool) {
 	this.bold = b
 	this.face = nil
 	this.desc = ""
+	this.nativeSize = 0
 }
 
 func (this *font) String() string {
@@ -384,7 +393,11 @@ func (this *font) scaledFont(ctm *geom.Mat3x2) *scaledFont {
 	// widget positions in this cache key kept an entry for every drag/scroll
 	// coordinate even though font scale, hinting and glyph metrics were equal.
 	key.m.X0, key.m.Y0 = 0, 0
-	key.fontMatrix.InitScale(float64(this.size), float64(this.size))
+	size := float64(this.size)
+	if this.nativeSize > 0 {
+		size = this.nativeSize
+	}
+	key.fontMatrix.InitScale(size, size)
 	isf, ok := scaledFontCache.Find(key)
 	if ok {
 		sf = isf.(*scaledFont)

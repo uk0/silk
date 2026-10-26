@@ -74,10 +74,10 @@ func captureWorkspaceSession(tabs *gui.TabWidget, canvas *ged.GedView) workspace
 
 func restoreWorkspaceSession(state workspaceSession, tabs *gui.TabWidget, canvas *ged.GedView) {
 	if len(existingPaths([]string{state.Design})) != 0 {
-		openFromTree(state.Design, tabs, canvas, nil)
+		openDocument(state.Design, tabs, canvas, nil, false)
 	}
 	for _, saved := range state.Editors {
-		if len(existingPaths([]string{saved.Path})) == 0 || !openFileInEditor(tabs, saved.Path) {
+		if len(existingPaths([]string{saved.Path})) == 0 || !loadFileInEditor(tabs, saved.Path) {
 			continue
 		}
 		ed := activeEditor(tabs)

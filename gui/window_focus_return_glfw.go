@@ -38,6 +38,26 @@ func nativeWindowFocused(win *Window) bool {
 	return win != nil && win.glfwWin != nil && win.IsVisible() && win.glfwWin.GetAttrib(glfw.Focused) == glfw.True
 }
 
+// A mouse-selected submenu can be the native key window even when neither
+// the root menu nor its Form is key. Follow transient ownership only: a
+// separately parented Form (and its popups) is not part of this closing tree.
+func transientSourceFocused(source *Window, focused func(*Window) bool) bool {
+	if source == nil {
+		return false
+	}
+	if focused(source) {
+		return true
+	}
+	if source.wt == WtPopup {
+		for _, candidate := range winMap {
+			if candidate.widget != nil && popupOwnedBy(candidate, source) && focused(candidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func focusReturnWindowTag(win *Window) string {
 	if win == nil {
 		return "nil"
@@ -69,12 +89,35 @@ func prepareTransientFocusReturn(source, owner *Window, target IWidget, focused 
 	}
 	// Closing a transient from a timer while the user is in another app must
 	// not reactivate this app. Non-activating menus keep native focus on owner.
-	if !focused(source) && !focused(owner) {
+	if !transientSourceFocused(source, focused) && !focused(owner) {
 		debugFocusReturn("prepare", "native-family-unfocused", source, owner, transientFocusGeneration, focused)
 		return nil
 	}
 	debugFocusReturn("prepare", "accepted", source, owner, transientFocusGeneration, focused)
 	return &transientFocusReturn{source, owner, focusTargetForOwner(owner, target), transientFocusGeneration}
+}
+
+// A popup can close inside an owner's modal loop. The destruction queue is
+// drained only by the outer loop, so deferring this activation can strand the
+// still-open dialog behind another Form. Return native focus while the popup is
+// still key, before Cocoa chooses a replacement key window on Hide. Real modal
+// destruction continues to use queue(), outside native callbacks.
+func (r *transientFocusReturn) restorePopupOwnerBeforeHide(visible, focused func(*Window) bool, applicationActive func(bool) bool, activate func(*Window)) bool {
+	if r == nil || r.source == nil || r.source.wt != WtPopup || shouldQuit || r.generation != transientFocusGeneration {
+		return false
+	}
+	owner := r.owner
+	if owner == nil || owner.widget == nil || owner.widget.Window() != owner || !owner.enabled || owner.iconified || !visible(owner) {
+		return false
+	}
+	// A callback may have opened a new transient or the user may have left the
+	// application. Never turn a background popup hide into foreground activation.
+	if !transientSourceFocused(r.source, focused) || !applicationActive(true) {
+		return false
+	}
+	debugFocusReturn("activate-before-hide", "popup-owner", r.source, owner, r.generation, focused)
+	activate(owner)
+	return focused(owner)
 }
 
 func (r *transientFocusReturn) queue() {

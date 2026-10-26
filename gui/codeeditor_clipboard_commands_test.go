@@ -181,7 +181,7 @@ func TestEditorClipboardQueriesDoNotReadOrAllocate(t *testing.T) {
 		t.Fatal(n)
 	}
 	for _, item := range e.contextMenuItems("") {
-		if item.Label == "粘贴" && !item.Enabled {
+		if item.Label == "Paste" && !item.Enabled {
 			t.Fatal("paste disabled")
 		}
 	}
