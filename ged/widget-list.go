@@ -1068,6 +1068,27 @@ func drawWidgetIconContents(g paint.Painter, factoryName string, x, y, size floa
 			g.Stroke()
 		}
 
+	case "SceneView":
+		// Vector cube keeps the palette sharp at different display scales.
+		g.SetBrush1(paint.Color{R: 65, G: 160, B: 220, A: 255})
+		g.MoveTo(x+s*.5, y+2)
+		g.LineTo(x+s-2, y+s*.3)
+		g.LineTo(x+s*.5, y+s*.5)
+		g.LineTo(x+2, y+s*.3)
+		g.Fill()
+		g.SetBrush1(paint.Color{R: 30, G: 105, B: 165, A: 255})
+		g.MoveTo(x+2, y+s*.3)
+		g.LineTo(x+s*.5, y+s*.5)
+		g.LineTo(x+s*.5, y+s-2)
+		g.LineTo(x+2, y+s*.7)
+		g.Fill()
+		g.SetBrush1(paint.Color{R: 40, G: 190, B: 170, A: 255})
+		g.MoveTo(x+s*.5, y+s*.5)
+		g.LineTo(x+s-2, y+s*.3)
+		g.LineTo(x+s-2, y+s*.7)
+		g.LineTo(x+s*.5, y+s-2)
+		g.Fill()
+
 	case "ImageView":
 		// Image placeholder (mountain landscape icon)
 		g.SetBrush1(paint.Color{R: 230, G: 235, B: 242, A: 255})

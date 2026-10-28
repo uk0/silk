@@ -154,3 +154,7 @@ func JSONView(attrs ...Attr) *Node { return New("gui.JSONView", attrs...) }
 
 // TransferProgress creates a passive progress display; runtime counts and state are not persisted.
 func TransferProgress(attrs ...Attr) *Node { return New("gui.TransferProgress", attrs...) }
+
+// SceneView builds an embedded 3D viewport. Model Source is configuration only;
+// call LoadModel explicitly after construction to start background model I/O.
+func SceneView(attrs ...Attr) *Node { return New("gui.SceneView", attrs...) }

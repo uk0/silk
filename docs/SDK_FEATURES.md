@@ -3,6 +3,23 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 工业 3D 场景基础（开发中）
+
+- `scene3d`：纯 Go 不可变网格、层级节点/快照、Box/Cylinder、受限 OBJ 加载器、
+  深度缓冲/ID 拾取与按需缓存的 CPU 参考渲染器；不新增第三方依赖。
+- `gui.SceneView`：同一控件树裁剪合成，HiDPI 物理像素渲染与拾取复用；拖拽环绕、
+  有界滚轮缩放、点击选择。无新增持续动画/轮询线程或定时器。
+- `SetScene` / `SetNodeTransform` / `SetNodeVisible` / `SetNodeColor` 在 UI 线程调用；
+  直接编辑 `Scene()` 后需 `RefreshScene()`。`Scene.Snapshot()` 可移交独立后台 Renderer。
+- `BindNodePosition` / `BindNodeVisibility` 复用 `BindTagUI` 合并最新 Good 样本；返回的
+  取消函数可跨 goroutine 调用。变更父级/场景和 Close 注销订阅，宿主须显式 Close。
+- `SetModelSource` 只保存配置；`LoadModel(ctx)` 用既有有界执行器加载，取消/版本检查
+  阻止过期模型覆盖新状态，失败保留旧场景；成功替换需重新绑定新节点。
+- 设计器 SCADA 面板、矢量图标、相机/源路径持久化、预览和 Go 代码/事件生成接入。
+  当前没有完整 Scene/多点位绑定持久化、GPU、glTF/PBR 或全平台 UI 验收。
+- [API 与限制](../scene3d/README.md)、[原生示例](../examples/scene3d/README.md)、
+  [验证范围](../SCENE3D_QA_20261028.md)、[后续路线](../SCENE3D_ROADMAP.md)。
+
 ## 有效补全与等待意图
 
 - `CodeEditor.CompletionActive() bool` 区分用户仍在等待补全与候选框当前是否可见；

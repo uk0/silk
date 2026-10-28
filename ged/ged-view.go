@@ -477,6 +477,8 @@ func defaultSizeForWidget(factoryName string) (w, h float64) {
 		shortName = factoryName[idx+1:]
 	}
 	switch strings.ToLower(shortName) {
+	case "sceneview":
+		return 100, 75
 	case "spriteview":
 		return 28, 28
 	case "processvalue":
