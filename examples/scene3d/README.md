@@ -4,6 +4,8 @@
 
 ```sh
 go run ./examples/scene3d -model examples/scene3d/pump.obj
+# 强制真实 GPU：不满足驱动能力则明确诊断，不静默回退。
+go run ./examples/scene3d -backend opengl
 # 离屏参考图；仍需本机 gui/Cairo 构建依赖，不是独立无显示 CLI。
 go run ./examples/scene3d -render /tmp/silk-scene3d.png
 ```
@@ -16,8 +18,8 @@ go run ./examples/scene3d -render /tmp/silk-scene3d.png
   选择、加载、相机、实际光栅化次数、警告及错误。统计在点击时采样，无定时刷新。
 - 拖拽环绕、滚轮缩放、点击选择节点。没有动画/轮询定时器，静态场景不重复光栅化。
 
-`pump.obj` 是本仓库自建几何夹具，无外部素材依赖。当前为平面着色的软件参考路径；
-不展示纹理/透明材质，不代表 GPU 性能。窗口关闭时取消上下文、绑定与加载并释放视口。
+`pump.obj` 是本仓库自建几何夹具，无外部素材依赖。默认 auto 在 native 视口尝试 OpenGL 并可查询回退原因；`-backend cpu` 强制 CPU。
+当前都是平面着色，不展示纹理/透明材质。窗口关闭时取消上下文、绑定与加载并释放视口。
 
 ## 在 SDK 中组装
 
@@ -51,7 +53,7 @@ if err := view.LoadModel(ctx); err != nil { return err }
 ## 设计器接入
 
 控件面板 **组态 (SCADA) → SceneView**，有矢量立方体图标。拖入后可设置 Model Source、
-Camera Yaw/Pitch/Distance；保存、重载、预览和生成 Go 代码保留这些配置。
+Camera Yaw/Pitch/Distance、Render Backend（auto/cpu/opengl）；保存、重载、预览和生成 Go 代码保留这些配置。
 OnSelected / OnModelLoaded / OnError 可生成事件处理函数；也可使用 `decl.SceneView(...)`。
 
 构造、预览及读取设计文件**不会自动打开模型文件**；宿主必须调用 `LoadModel`。

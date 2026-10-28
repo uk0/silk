@@ -1,7 +1,8 @@
 # scene3d：工业场景 SDK 基础
 
 纯 Go、无第三方依赖的场景数据、受限 OBJ 加载器和 **CPU 参考渲染器**。
-这是后续 GPU 后端的正确性对照，不是完整工业 3D 引擎或 Qt Creator 功能对等声明。
+本包仍不依赖 GL；可选 [glrender](glrender/README.md) 子包实现 GPU 后端。CPU 路径保留
+为正确性对照，不是完整工业 3D 引擎或 Qt Creator 功能对等声明。
 
 ## 快速使用
 

@@ -269,3 +269,38 @@ func TestSnapshotBudgetsCountInstancesAndRecover(t *testing.T) {
 		t.Fatal("budget recovery", err)
 	}
 }
+
+func TestBackendReadOnlyGeometryAccess(t *testing.T) {
+	mesh := Box()
+	v, ok := mesh.Vertex(0)
+	if !ok {
+		t.Fatal("missing vertex")
+	}
+	v.X = 999
+	if again, _ := mesh.Vertex(0); again.X == v.X {
+		t.Fatal("vertex alias")
+	}
+	indices := mesh.CopyIndices(nil)
+	indices[0] = 999
+	if again := mesh.CopyIndices(indices[:0]); again[0] == 999 {
+		t.Fatal("indices alias")
+	}
+	s := NewScene()
+	_ = s.Add(Node{ID: "a", Mesh: mesh})
+	snap := snapshot(t, s)
+	in, ok := snap.Instance(0)
+	if !ok {
+		t.Fatal("instance missing")
+	}
+	in.Transform[12] = 999
+	in.Color[0] = 0
+	if again, _ := snap.Instance(0); again.Transform[12] == 999 || again.Color[0] == 0 {
+		t.Fatal("snapshot exposed mutable draw state")
+	}
+	if _, ok = snap.Instance(-1); ok {
+		t.Fatal("negative instance")
+	}
+	if _, ok = snap.Instance(1); ok {
+		t.Fatal("out-of-bounds instance")
+	}
+}

@@ -33,6 +33,7 @@ func TestSceneWidgetDropPersistencePreviewCodegen(t *testing.T) {
 	v := fake.Widget().(*gui.SceneView)
 	defer v.Close()
 	v.SetModelSource("assets/中文 pump.obj")
+	v.SetRenderBackend("opengl")
 	v.SetYaw(.2)
 	v.SetPitch(-.3)
 	v.SetDistance(9)
@@ -70,7 +71,7 @@ func TestSceneWidgetDropPersistencePreviewCodegen(t *testing.T) {
 	if result.Err != nil {
 		t.Fatal(result.Err)
 	}
-	for _, word := range []string{"gui.NewSceneView()", "SetModelSource(", "SetYaw(0.2)", "SetPitch(-0.3)", "SetDistance(9)", "SigSelected("} {
+	for _, word := range []string{"gui.NewSceneView()", `SetRenderBackend("opengl")`, "SetModelSource(", "SetYaw(0.2)", "SetPitch(-0.3)", "SetDistance(9)", "SigSelected("} {
 		if !strings.Contains(result.Code, word) {
 			t.Fatal("missing codegen", word, result.Code)
 		}

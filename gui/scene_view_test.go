@@ -295,3 +295,36 @@ func TestSceneViewWheelBudgetAndRenderErrorRecovery(t *testing.T) {
 		t.Fatal("closed view picked model")
 	}
 }
+
+func TestSceneViewBackendSelectionIsExplicit(t *testing.T) {
+	v := NewSceneView()
+	defer v.Close()
+	v.SetSize(120, 90)
+	if v.RenderBackend() != "auto" {
+		t.Fatal("default backend")
+	}
+	paintScene(t, v)
+	if v.ActiveRenderBackend() != "cpu" || v.GPUError() != nil {
+		t.Fatal("offscreen tool attempted native context")
+	}
+	count := v.RenderCount()
+	v.SetRenderBackend("cpu")
+	paintScene(t, v)
+	if v.RenderCount() != count {
+		t.Fatal("backend switch fabricated a raster count")
+	}
+	v.SetRenderBackend("opengl")
+	paintScene(t, v)
+	if v.LastError() == nil {
+		t.Fatal("explicit GPU silently fell back offscreen")
+	}
+	v.SetRenderBackend("invalid")
+	if v.RenderBackend() != "opengl" {
+		t.Fatal("invalid backend accepted")
+	}
+	v.SetRenderBackend("auto")
+	paintScene(t, v)
+	if v.LastError() != nil {
+		t.Fatal("backend error did not recover", v.LastError())
+	}
+}

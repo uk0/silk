@@ -1660,6 +1660,7 @@ func MainLoop() {
 		panic(err)
 	}
 	core.Debug("MainLoop()")
+	defer closeSceneGPUDevice()
 	defer func() {
 		if e := recover(); e != nil {
 			core.Warn(fmt.Sprintf("Recover MainLoop() : %v ", e))
@@ -1707,6 +1708,7 @@ func MainLoop() {
 	flushNativeDestruction()
 	SetUIWakeup(nil)
 	glfwWakeup.stop() // join producers that already copied the old hook
+	closeSceneGPUDevice()
 	glfwReady = false
 	glfw.Terminate()
 }

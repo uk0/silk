@@ -22,15 +22,20 @@ import (
 // are UI-thread-only. Call Close when its host is disposed. Reparent/detach
 // cancels model work and tag subscriptions. No timer or animation runs at rest.
 //
-// This first backend is a cached software reference renderer. GPU acceleration,
-// glTF materials and persisted multi-node scene editing are separate milestones.
+// Auto uses an isolated offscreen OpenGL backend when available, with explicit
+// CPU fallback diagnostics. glTF/PBR and persisted node editing remain separate milestones.
 type SceneView struct {
 	Widget
+	renderCount                   uint64
 	renderError                   error
 	uploadedSequence              uint64
 	renderScaleX, renderScaleY    float64
 	scene                         *scene3d.Scene
 	renderer                      scene3d.Renderer
+	gpu                           sceneGPUBackend
+	backendMode                   string
+	gpuAttempted                  bool
+	gpuError                      error
 	pixmap                        paint.Pixmap
 	target                        scene3d.Vec3
 	yaw, pitch, distance          float64
@@ -54,6 +59,7 @@ func init()                    { core.RegisterFactory("gui.SceneView", core.Type
 func NewSceneView() *SceneView { v := new(SceneView); v.Init(v); return v }
 func (v *SceneView) Init(self IWidget) {
 	v.Widget.Init(self)
+	v.backendMode = "auto"
 	v.yaw = .65
 	v.pitch = .35
 	v.distance = 6
@@ -183,7 +189,7 @@ func (v *SceneView) LastError() error {
 }
 func (v *SceneView) ModelWarnings() []string     { return append([]string(nil), v.warnings...) }
 func (v *SceneView) SelectedNode() string        { return v.selected }
-func (v *SceneView) RenderCount() uint64         { return v.renderer.Sequence() }
+func (v *SceneView) RenderCount() uint64         { return v.renderCount }
 func (v *SceneView) SigSelected(fn func(string)) { v.selectedFn = fn }
 func (v *SceneView) SigModelLoaded(fn func())    { v.loadedFn = fn }
 func (v *SceneView) SigError(fn func(string))    { v.errorFn = fn }
@@ -301,6 +307,7 @@ func (v *SceneView) Close() {
 	v.unbindAll()
 	paint.CloseSurface(v.pixmap)
 	v.pixmap = nil
+	v.releaseGPU()
 	v.renderer.Reset()
 	v.scene = nil
 	v.selectedFn = nil
@@ -309,6 +316,9 @@ func (v *SceneView) Close() {
 }
 func (v *SceneView) SetParent(parent IWidget) {
 	if parent != v.Parent() {
+		v.releaseGPU()
+		v.gpuAttempted = false
+		v.gpuError = nil
 		v.OnHide()
 		v.CancelLoad()
 		v.unbindAll()
@@ -339,10 +349,10 @@ func (v *SceneView) Draw(g paint.Painter) {
 	v.renderScaleX, v.renderScaleY = sx, sy
 	snap, err := v.scene.Snapshot()
 	if err == nil {
-		var f *scene3d.Frame
-		f, err = v.renderer.Render(snap, v.camera(), int(rw), int(rh), color.RGBA{20, 28, 41, 255})
+		var f scene3d.FrameView
+		f, err = v.renderScene(snap, v.camera(), int(rw), int(rh))
 		if err == nil {
-			changed := v.uploadedSequence != f.Sequence
+			changed := v.uploadedSequence != v.renderCount
 
 			if v.pixmap == nil || v.pixmap.Width() != int(rw) || v.pixmap.Height() != int(rh) {
 				paint.CloseSurface(v.pixmap)
@@ -350,9 +360,9 @@ func (v *SceneView) Draw(g paint.Painter) {
 				changed = true
 			}
 			if changed {
-				err = v.pixmap.SetImage(f.Image)
+				err = v.pixmap.SetImage(f.RGBA())
 				if err == nil {
-					v.uploadedSequence = f.Sequence
+					v.uploadedSequence = v.renderCount
 				}
 			}
 			if err == nil {
@@ -376,6 +386,7 @@ func (v *SceneView) SizeHints() SizeHints {
 	return SizeHints{Width: 320, Height: 240, Policy: GrowHorizontal | GrowVertical}
 }
 func (v *SceneView) EnumProperties(list core.IPropertyList) {
+	list.AddProperty("Render Backend", v.RenderBackend, v.SetRenderBackend)
 	list.AddProperty("Model Source", v.ModelSource, v.SetModelSource)
 	list.AddProperty("Camera Yaw", v.Yaw, v.SetYaw)
 	list.AddProperty("Camera Pitch", v.Pitch, v.SetPitch)
@@ -446,7 +457,7 @@ func (v *SceneView) PickNode(x, y float64) string {
 	if !finiteSceneValue(rw) || !finiteSceneValue(rh) || rw > scene3d.MaxDimension || rh > scene3d.MaxDimension || rw*rh > scene3d.MaxPixels {
 		return ""
 	}
-	f, e := v.renderer.Render(snap, v.camera(), int(rw), int(rh), color.RGBA{20, 28, 41, 255})
+	f, e := v.renderScene(snap, v.camera(), int(rw), int(rh))
 	if e != nil {
 		return ""
 	}

@@ -8,5 +8,5 @@ func init() {
 	}, DefaultEvent: "OnSelected"}); err != nil {
 		panic(err)
 	}
-	industrialDesignProps["gui.SceneView"] = []designProp{{"ModelSource", "SetModelSource", dpString}, {"Yaw", "SetYaw", dpFloat}, {"Pitch", "SetPitch", dpFloat}, {"Distance", "SetDistance", dpFloat}}
+	industrialDesignProps["gui.SceneView"] = []designProp{{"RenderBackend", "SetRenderBackend", dpString}, {"ModelSource", "SetModelSource", dpString}, {"Yaw", "SetYaw", dpFloat}, {"Pitch", "SetPitch", dpFloat}, {"Distance", "SetDistance", dpFloat}}
 }

@@ -19,6 +19,8 @@ var (
 	procwglDeleteContext      = modopengl32.NewProc("wglDeleteContext")
 	procwglGetProcAddress     = modopengl32.NewProc("wglGetProcAddress")
 	procwglMakeCurrent        = modopengl32.NewProc("wglMakeCurrent")
+	procwglGetCurrentContext  = modopengl32.NewProc("wglGetCurrentContext")
+	procwglGetCurrentDC       = modopengl32.NewProc("wglGetCurrentDC")
 	procwglShareLists         = modopengl32.NewProc("wglShareLists")
 )
 
@@ -71,4 +73,15 @@ func WglShareLists(hglrc1, hglrc2 HGLRC) bool {
 	)
 
 	return ret == TRUE
+}
+
+// WglGetCurrentContext and WglGetCurrentDC report this OS thread's current
+// binding, allowing an embedded renderer to restore its host's context.
+func WglGetCurrentContext() HGLRC {
+	ret, _, _ := procwglGetCurrentContext.Call()
+	return HGLRC(ret)
+}
+func WglGetCurrentDC() HDC {
+	ret, _, _ := procwglGetCurrentDC.Call()
+	return HDC(ret)
 }

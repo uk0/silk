@@ -1825,6 +1825,7 @@ func markAllWindowsDirty() {
 }
 
 func MainLoop() {
+	defer closeSceneGPUDevice()
 	core.Debug("MainLoop()")
 	startUIMessageWindow()
 	if idleTimer == 0 {

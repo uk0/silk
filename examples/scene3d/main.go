@@ -34,7 +34,7 @@ func newDemo(model string) *demo {
 	f.view = gui.NewSceneView()
 	f.view.SetParent(f)
 	f.view.SetModelSource(model)
-	f.title = gui.NewLabel("3D Scene · CPU reference | Drag: orbit · Wheel: zoom · Click: select")
+	f.title = gui.NewLabel("3D Scene | Drag: orbit · Wheel: zoom · Click: select")
 	f.title.SetParent(f)
 	f.status = gui.NewLabel("")
 	f.status.SetParent(f)
@@ -106,7 +106,11 @@ func (f *demo) snapshot() {
 	if f.view.LastError() != nil {
 		err = f.view.LastError().Error()
 	}
-	state := map[string]any{"node": id, "y": n.Transform[13], "selected": f.view.SelectedNode(), "loaded": f.loaded, "busy": f.view.IsLoading(), "renders": f.view.RenderCount(), "on_ui": gui.IsUIThread(), "error": err, "yaw": f.view.Yaw(), "pitch": f.view.Pitch(), "distance": f.view.Distance(), "warnings": f.view.ModelWarnings()}
+	gpuError := ""
+	if f.view.GPUError() != nil {
+		gpuError = f.view.GPUError().Error()
+	}
+	state := map[string]any{"node": id, "y": n.Transform[13], "selected": f.view.SelectedNode(), "loaded": f.loaded, "busy": f.view.IsLoading(), "renders": f.view.RenderCount(), "on_ui": gui.IsUIThread(), "error": err, "yaw": f.view.Yaw(), "pitch": f.view.Pitch(), "distance": f.view.Distance(), "warnings": f.view.ModelWarnings(), "backend": f.view.ActiveRenderBackend(), "gpu": f.view.GPUInfo(), "gpu_error": gpuError}
 	b, _ := json.Marshal(state)
 	fmt.Println("SCENE_STATE", string(b))
 	text := fmt.Sprintf("Node: %s  |  Y: %.3f  |  Selected: %s  |  Loads: %d  |  Renders: %d", id, n.Transform[13], f.view.SelectedNode(), f.loaded, f.view.RenderCount())
@@ -117,6 +121,7 @@ func (f *demo) snapshot() {
 	} else if warnings := f.view.ModelWarnings(); len(warnings) > 0 {
 		text += "  |  " + warnings[0]
 	}
+	text += "  |  " + f.view.ActiveRenderBackend()
 	f.status.SetText(text)
 }
 func (f *demo) OnResize() {
@@ -130,11 +135,13 @@ func (f *demo) OnResize() {
 	f.status.SetBounds(12, max(0, h-30), max(0, w-24), 24)
 }
 func main() {
+	backend := flag.String("backend", "auto", "render backend: auto, cpu, opengl")
 	model := flag.String("model", "examples/scene3d/pump.obj", "explicit OBJ path")
 	render := flag.String("render", "", "write reference PNG and exit without a window")
 	flag.Parse()
 	defer core.Close()
 	f := newDemo(*model)
+	f.view.SetRenderBackend(*backend)
 	defer func() { f.cancel(); f.view.Close() }()
 	if *render != "" {
 		snap, err := f.view.Scene().Snapshot()

@@ -16,9 +16,13 @@
 - `SetModelSource` 只保存配置；`LoadModel(ctx)` 用既有有界执行器加载，取消/版本检查
   阻止过期模型覆盖新状态，失败保留旧场景；成功替换需重新绑定新节点。
 - 设计器 SCADA 面板、矢量图标、相机/源路径持久化、预览和 Go 代码/事件生成接入。
-  当前没有完整 Scene/多点位绑定持久化、GPU、glTF/PBR 或全平台 UI 验收。
+  当前没有完整 Scene/多点位绑定持久化、glTF/PBR 或全平台 UI 验收。
+- 可选 `scene3d/glrender` 提供 OpenGL 离屏深度/颜色/ID 渲染和共享网格缓冲。
+  `SetRenderBackend` 选择 auto/cpu/opengl；`ActiveRenderBackend` / `GPUInfo` /
+  `GPUError` 报告实际能力和回退原因。颜色仍回读至正常控件合成，详见
+  [GPU 契约与限制](../scene3d/glrender/README.md)。
 - [API 与限制](../scene3d/README.md)、[原生示例](../examples/scene3d/README.md)、
-  [验证范围](../SCENE3D_QA_20261028.md)、[后续路线](../SCENE3D_ROADMAP.md)。
+  [CPU 验证](../SCENE3D_QA_20261028.md)、[GPU/原生验证](../SCENE3D_GPU_QA_20261028.md)、[后续路线](../SCENE3D_ROADMAP.md)。
 
 ## 有效补全与等待意图
 

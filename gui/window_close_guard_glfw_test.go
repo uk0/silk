@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SILK_TEST_NATIVE_CURSORS") == "1" {
 		nativeCursorProbeErr = runNativeCursorProbe()
 	}
+	if os.Getenv("SILK_TEST_SCENE_GPU") == "1" {
+		sceneNativeErr = runSceneNativeProbe()
+	}
 	code := m.Run()
 	// Destroying is main-thread-only for the same reason, so it happens here
 	// rather than in a t.Cleanup.
