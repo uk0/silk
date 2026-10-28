@@ -9,9 +9,10 @@ import (
 
 type Renderer struct{}
 
-func NewCurrent() (*Renderer, error) { return nil, ErrUnavailable }
-func (*Renderer) Info() Info         { return Info{} }
-func (*Renderer) Close()             {}
+func NewCurrent() (*Renderer, error)  { return nil, ErrUnavailable }
+func (*Renderer) Info() Info          { return Info{} }
+func (*Renderer) Close()              {}
+func (*Renderer) CloseCurrent() error { return nil }
 func (*Renderer) Render(*scene3d.Snapshot, scene3d.Camera, int, int, color.RGBA) (*Frame, error) {
 	return nil, ErrUnavailable
 }

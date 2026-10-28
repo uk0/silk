@@ -7,10 +7,11 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"runtime"
 	"strings"
 
-	"github.com/go-gl/gl/v2.1/gl"
 	"github.com/uk0/silk/scene3d"
+	gl "github.com/uk0/silk/scene3d/glrender/internal/gl21"
 )
 
 const maxResidentBytes = 64 << 20
@@ -44,6 +45,7 @@ type meshBuffer struct {
 	seen          uint64
 }
 type Renderer struct {
+	api                           *gl.API
 	info                          Info
 	closed                        bool
 	program                       uint32
@@ -65,109 +67,135 @@ type Renderer struct {
 // NewCurrent changes GL state and needs a dedicated, current context. It never
 // creates, terminates or migrates a native context. Close before its destruction.
 func NewCurrent() (*Renderer, error) {
-	if err := gl.Init(); err != nil {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	api, err := gl.OpenCurrent()
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	version := gl.GetString(gl.VERSION)
-	if version == nil {
+	owned := false
+	defer func() {
+		if !owned {
+			api.Close()
+		}
+	}()
+	version := api.GetString(gl.VERSION)
+	if version == "" {
 		return nil, fmt.Errorf("%w: no current context", ErrUnavailable)
 	}
-	ext := " " + gl.GoStr(gl.GetString(gl.EXTENSIONS)) + " "
+	ext := " " + api.GetString(gl.EXTENSIONS) + " "
 	if !strings.Contains(ext, " GL_EXT_framebuffer_object ") {
 		return nil, fmt.Errorf("%w: EXT_framebuffer_object required", ErrUnavailable)
 	}
 	var buffers, colors, size, renderbufferSize int32
-	gl.GetIntegerv(gl.MAX_DRAW_BUFFERS, &buffers)
-	gl.GetIntegerv(gl.MAX_COLOR_ATTACHMENTS_EXT, &colors)
-	gl.GetIntegerv(gl.MAX_TEXTURE_SIZE, &size)
-	gl.GetIntegerv(gl.MAX_RENDERBUFFER_SIZE_EXT, &renderbufferSize)
+	api.GetIntegerv(gl.MAX_DRAW_BUFFERS, &buffers)
+	api.GetIntegerv(gl.MAX_COLOR_ATTACHMENTS_EXT, &colors)
+	api.GetIntegerv(gl.MAX_TEXTURE_SIZE, &size)
+	api.GetIntegerv(gl.MAX_RENDERBUFFER_SIZE_EXT, &renderbufferSize)
 	if buffers < 2 || colors < 2 || size < 1 || renderbufferSize < 1 {
 		return nil, fmt.Errorf("%w: insufficient framebuffer capabilities", ErrUnavailable)
 	}
-	r := &Renderer{info: Info{gl.GoStr(gl.GetString(gl.VENDOR)), gl.GoStr(gl.GetString(gl.RENDERER)), gl.GoStr(version)}, maxSize: int(min(size, renderbufferSize)), meshes: make(map[*scene3d.Mesh]*meshBuffer)}
-	program, err := compileProgram()
+	r := &Renderer{api: api, info: Info{api.GetString(gl.VENDOR), api.GetString(gl.RENDERER), version}, maxSize: int(min(size, renderbufferSize)), meshes: make(map[*scene3d.Mesh]*meshBuffer)}
+	program, err := compileProgram(api)
 	if err != nil {
 		return nil, err
 	}
 	r.program = program
-	r.world = gl.GetUniformLocation(program, gl.Str("world\x00"))
-	r.vp = gl.GetUniformLocation(program, gl.Str("viewProjection\x00"))
-	r.material = gl.GetUniformLocation(program, gl.Str("material\x00"))
-	r.objectID = gl.GetUniformLocation(program, gl.Str("objectID\x00"))
+	r.world = api.GetUniformLocation(program, "world")
+	r.vp = api.GetUniformLocation(program, "viewProjection")
+	r.material = api.GetUniformLocation(program, "material")
+	r.objectID = api.GetUniformLocation(program, "objectID")
 	if r.world < 0 || r.vp < 0 || r.material < 0 || r.objectID < 0 {
 		r.Close()
 		return nil, fmt.Errorf("%w: missing shader uniforms", ErrUnavailable)
 	}
-	if e := gl.GetError(); e != gl.NO_ERROR {
+	if e := api.GetError(); e != gl.NO_ERROR {
 		r.Close()
 		return nil, fmt.Errorf("%w: init GL error %#x", ErrUnavailable, e)
 	}
+	owned = true
 	return r, nil
 }
 func (r *Renderer) Info() Info { return r.info }
-func compileProgram() (uint32, error) {
+func compileProgram(api *gl.API) (uint32, error) {
 	var shaders []uint32
 	defer func() {
 		for _, s := range shaders {
-			gl.DeleteShader(s)
+			api.DeleteShader(s)
 		}
 	}()
 	for _, spec := range []struct {
 		kind   uint32
 		source string
 	}{{gl.VERTEX_SHADER, vertexShader}, {gl.FRAGMENT_SHADER, fragmentShader}} {
-		s := gl.CreateShader(spec.kind)
+		s := api.CreateShader(spec.kind)
 		if s == 0 {
 			return 0, fmt.Errorf("%w: create shader", ErrUnavailable)
 		}
 		shaders = append(shaders, s)
-		str, free := gl.Strs(spec.source + "\x00")
-		gl.ShaderSource(s, 1, str, nil)
-		free()
-		gl.CompileShader(s)
+		api.ShaderSource(s, spec.source)
+		api.CompileShader(s)
 		var ok int32
-		gl.GetShaderiv(s, gl.COMPILE_STATUS, &ok)
+		api.GetShaderiv(s, gl.COMPILE_STATUS, &ok)
 		if ok == 0 {
 			buf := make([]byte, 8192)
-			gl.GetShaderInfoLog(s, int32(len(buf)), nil, &buf[0])
+			api.GetShaderInfoLog(s, int32(len(buf)), nil, &buf[0])
 			return 0, fmt.Errorf("%w: shader: %s", ErrUnavailable, strings.TrimRight(string(buf), "\x00"))
 		}
 	}
-	p := gl.CreateProgram()
+	p := api.CreateProgram()
 	if p == 0 {
 		return 0, fmt.Errorf("%w: create program", ErrUnavailable)
 	}
 	for _, s := range shaders {
-		gl.AttachShader(p, s)
+		api.AttachShader(p, s)
 	}
-	gl.BindAttribLocation(p, 0, gl.Str("position\x00"))
-	gl.LinkProgram(p)
+	api.BindAttribLocation(p, 0, "position")
+	api.LinkProgram(p)
 	var ok int32
-	gl.GetProgramiv(p, gl.LINK_STATUS, &ok)
+	api.GetProgramiv(p, gl.LINK_STATUS, &ok)
 	if ok == 0 {
 		buf := make([]byte, 8192)
-		gl.GetProgramInfoLog(p, int32(len(buf)), nil, &buf[0])
-		gl.DeleteProgram(p)
+		api.GetProgramInfoLog(p, int32(len(buf)), nil, &buf[0])
+		api.DeleteProgram(p)
 		return 0, fmt.Errorf("%w: link: %s", ErrUnavailable, strings.TrimRight(string(buf), "\x00"))
 	}
 	return p, nil
 }
 func (r *Renderer) releaseTarget() {
 	if r.fbo != 0 {
-		gl.DeleteFramebuffersEXT(1, &r.fbo)
+		r.api.DeleteFramebuffersEXT(1, &r.fbo)
 		r.fbo = 0
 	}
 	if r.depth != 0 {
-		gl.DeleteRenderbuffersEXT(1, &r.depth)
+		r.api.DeleteRenderbuffersEXT(1, &r.depth)
 		r.depth = 0
 	}
-	gl.DeleteTextures(2, &r.textures[0])
+	r.api.DeleteTextures(2, &r.textures[0])
 	r.textures = [2]uint32{}
 	r.width, r.height = 0, 0
 }
-func (r *Renderer) Close() {
-	if r == nil || r.closed {
-		return
+
+// Close is an idempotent convenience wrapper. Use CloseCurrent to detect a
+// wrong thread/context; neither method deletes resources from another context.
+func (r *Renderer) Close() { _ = r.CloseCurrent() }
+
+// CloseCurrent deletes resources only on the owning thread and context. A
+// rejected call leaves the renderer intact so its owner can retry cleanup.
+func (r *Renderer) CloseCurrent() error {
+	if r == nil || r.api == nil {
+		return nil
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if !r.api.OnThread() {
+		return ErrContext
+	}
+	if r.closed {
+		return nil
+	}
+	if !r.api.Current() {
+		return ErrContext
 	}
 	r.closed = true
 	r.releaseTarget()
@@ -175,12 +203,14 @@ func (r *Renderer) Close() {
 		r.deleteMesh(mesh, b)
 	}
 	if r.program != 0 {
-		gl.DeleteProgram(r.program)
+		r.api.DeleteProgram(r.program)
 		r.program = 0
 	}
 	r.frame = Frame{}
 	r.readback = nil
 	r.key = nil
+	r.api.Close()
+	return nil
 }
 func (r *Renderer) target(w, h int) error {
 	if r.width == w && r.height == h {
@@ -188,23 +218,23 @@ func (r *Renderer) target(w, h int) error {
 	}
 	r.releaseTarget()
 	r.key = nil
-	gl.GenFramebuffersEXT(1, &r.fbo)
-	gl.BindFramebufferEXT(gl.FRAMEBUFFER_EXT, r.fbo)
-	gl.GenTextures(2, &r.textures[0])
-	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
+	r.api.GenFramebuffersEXT(1, &r.fbo)
+	r.api.BindFramebufferEXT(gl.FRAMEBUFFER_EXT, r.fbo)
+	r.api.GenTextures(2, &r.textures[0])
+	r.api.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
 	for i, tex := range r.textures {
-		gl.BindTexture(gl.TEXTURE_2D, tex)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(w), int32(h), 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
-		gl.FramebufferTexture2DEXT(gl.FRAMEBUFFER_EXT, gl.COLOR_ATTACHMENT0_EXT+uint32(i), gl.TEXTURE_2D, tex, 0)
+		r.api.BindTexture(gl.TEXTURE_2D, tex)
+		r.api.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+		r.api.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+		r.api.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(w), int32(h), 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
+		r.api.FramebufferTexture2DEXT(gl.FRAMEBUFFER_EXT, gl.COLOR_ATTACHMENT0_EXT+uint32(i), gl.TEXTURE_2D, tex, 0)
 	}
-	gl.GenRenderbuffersEXT(1, &r.depth)
-	gl.BindRenderbufferEXT(gl.RENDERBUFFER_EXT, r.depth)
-	gl.RenderbufferStorageEXT(gl.RENDERBUFFER_EXT, gl.DEPTH_COMPONENT24, int32(w), int32(h))
-	gl.FramebufferRenderbufferEXT(gl.FRAMEBUFFER_EXT, gl.DEPTH_ATTACHMENT_EXT, gl.RENDERBUFFER_EXT, r.depth)
-	status := gl.CheckFramebufferStatusEXT(gl.FRAMEBUFFER_EXT)
-	if e := gl.GetError(); e != gl.NO_ERROR || status != gl.FRAMEBUFFER_COMPLETE_EXT {
+	r.api.GenRenderbuffersEXT(1, &r.depth)
+	r.api.BindRenderbufferEXT(gl.RENDERBUFFER_EXT, r.depth)
+	r.api.RenderbufferStorageEXT(gl.RENDERBUFFER_EXT, gl.DEPTH_COMPONENT24, int32(w), int32(h))
+	r.api.FramebufferRenderbufferEXT(gl.FRAMEBUFFER_EXT, gl.DEPTH_ATTACHMENT_EXT, gl.RENDERBUFFER_EXT, r.depth)
+	status := r.api.CheckFramebufferStatusEXT(gl.FRAMEBUFFER_EXT)
+	if e := r.api.GetError(); e != gl.NO_ERROR || status != gl.FRAMEBUFFER_COMPLETE_EXT {
 		r.releaseTarget()
 		return fmt.Errorf("%w: framebuffer status %#x, GL error %#x", ErrUnavailable, status, e)
 	}
@@ -215,8 +245,8 @@ func (r *Renderer) target(w, h int) error {
 	return nil
 }
 func (r *Renderer) deleteMesh(mesh *scene3d.Mesh, b *meshBuffer) {
-	gl.DeleteBuffers(1, &b.vertex)
-	gl.DeleteBuffers(1, &b.index)
+	r.api.DeleteBuffers(1, &b.vertex)
+	r.api.DeleteBuffers(1, &b.index)
 	r.resident -= b.bytes
 	delete(r.meshes, mesh)
 }
@@ -235,15 +265,15 @@ func (r *Renderer) upload(mesh *scene3d.Mesh) (*meshBuffer, error) {
 	}
 	indices := mesh.CopyIndices(nil)
 	b := &meshBuffer{count: int32(len(indices)), bytes: bytes, seen: r.epoch}
-	gl.GenBuffers(1, &b.vertex)
-	gl.BindBuffer(gl.ARRAY_BUFFER, b.vertex)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
-	gl.GenBuffers(1, &b.index)
-	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
-	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Ptr(indices), gl.STATIC_DRAW)
-	if e := gl.GetError(); e != gl.NO_ERROR {
-		gl.DeleteBuffers(1, &b.vertex)
-		gl.DeleteBuffers(1, &b.index)
+	r.api.GenBuffers(1, &b.vertex)
+	r.api.BindBuffer(gl.ARRAY_BUFFER, b.vertex)
+	r.api.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Pointer(vertices), gl.STATIC_DRAW)
+	r.api.GenBuffers(1, &b.index)
+	r.api.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
+	r.api.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Pointer(indices), gl.STATIC_DRAW)
+	if e := r.api.GetError(); e != gl.NO_ERROR {
+		r.api.DeleteBuffers(1, &b.vertex)
+		r.api.DeleteBuffers(1, &b.index)
 		return nil, fmt.Errorf("%w: mesh upload %#x", ErrUnavailable, e)
 	}
 	r.meshes[mesh] = b
@@ -262,8 +292,19 @@ func matrix32(m scene3d.Mat4) ([16]float32, error) {
 	return out, nil
 }
 func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (*Frame, error) {
-	if r == nil || r.closed {
+	if r == nil || r.api == nil {
 		return nil, ErrClosed
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if !r.api.OnThread() {
+		return nil, ErrContext
+	}
+	if r.closed {
+		return nil, ErrClosed
+	}
+	if !r.api.Current() {
+		return nil, ErrContext
 	}
 	if s == nil {
 		return nil, scene3d.ErrNode
@@ -312,31 +353,31 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 	if e = r.target(w, h); e != nil {
 		return nil, e
 	}
-	gl.BindFramebufferEXT(gl.FRAMEBUFFER_EXT, r.fbo)
-	gl.Viewport(0, 0, int32(w), int32(h))
-	gl.Disable(gl.BLEND)
-	gl.Disable(gl.DITHER)
-	gl.Disable(gl.SCISSOR_TEST)
-	gl.Disable(gl.STENCIL_TEST)
-	gl.Disable(gl.CULL_FACE)
-	gl.Disable(gl.MULTISAMPLE)
-	gl.Enable(gl.DEPTH_TEST)
-	gl.DepthMask(true)
-	gl.DepthFunc(gl.LESS)
-	gl.ColorMask(true, true, true, true)
+	r.api.BindFramebufferEXT(gl.FRAMEBUFFER_EXT, r.fbo)
+	r.api.Viewport(0, 0, int32(w), int32(h))
+	r.api.Disable(gl.BLEND)
+	r.api.Disable(gl.DITHER)
+	r.api.Disable(gl.SCISSOR_TEST)
+	r.api.Disable(gl.STENCIL_TEST)
+	r.api.Disable(gl.CULL_FACE)
+	r.api.Disable(gl.MULTISAMPLE)
+	r.api.Enable(gl.DEPTH_TEST)
+	r.api.DepthMask(true)
+	r.api.DepthFunc(gl.LESS)
+	r.api.ColorMask(true, true, true, true)
 	// Clear IDs separately: the visible background is not an object ID.
-	gl.DrawBuffer(gl.COLOR_ATTACHMENT1_EXT)
-	gl.ClearColor(0, 0, 0, 0)
-	gl.Clear(gl.COLOR_BUFFER_BIT)
-	gl.DrawBuffer(gl.COLOR_ATTACHMENT0_EXT)
-	gl.ClearColor(float32(bg.R)/255, float32(bg.G)/255, float32(bg.B)/255, 1)
-	gl.ClearDepth(1)
-	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	r.api.DrawBuffer(gl.COLOR_ATTACHMENT1_EXT)
+	r.api.ClearColor(0, 0, 0, 0)
+	r.api.Clear(gl.COLOR_BUFFER_BIT)
+	r.api.DrawBuffer(gl.COLOR_ATTACHMENT0_EXT)
+	r.api.ClearColor(float32(bg.R)/255, float32(bg.G)/255, float32(bg.B)/255, 1)
+	r.api.ClearDepth(1)
+	r.api.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	attachments := [2]uint32{gl.COLOR_ATTACHMENT0_EXT, gl.COLOR_ATTACHMENT1_EXT}
-	gl.DrawBuffers(2, &attachments[0])
-	gl.UseProgram(r.program)
-	gl.UniformMatrix4fv(r.vp, 1, false, &vp32[0])
-	gl.EnableVertexAttribArray(0)
+	r.api.DrawBuffers(2, &attachments[0])
+	r.api.UseProgram(r.program)
+	r.api.UniformMatrix4fv(r.vp, 1, false, &vp32[0])
+	r.api.EnableVertexAttribArray(0)
 	for i := 0; i < s.InstanceCount(); i++ {
 		in, _ := s.Instance(i)
 		if in.Mesh.TriangleCount() == 0 {
@@ -350,27 +391,27 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 			continue
 		}
 		world, _ := matrix32(in.Transform)
-		gl.UniformMatrix4fv(r.world, 1, false, &world[0])
-		gl.Uniform4f(r.material, float32(in.Color[0])/255, float32(in.Color[1])/255, float32(in.Color[2])/255, 1)
+		r.api.UniformMatrix4fv(r.world, 1, false, &world[0])
+		r.api.Uniform4f(r.material, float32(in.Color[0])/255, float32(in.Color[1])/255, float32(in.Color[2])/255, 1)
 		id := i + 1
-		gl.Uniform3f(r.objectID, float32(id&255)/255, float32((id>>8)&255)/255, float32((id>>16)&255)/255)
-		gl.BindBuffer(gl.ARRAY_BUFFER, b.vertex)
-		gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
-		gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 12, 0)
-		gl.DrawElementsWithOffset(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0)
+		r.api.Uniform3f(r.objectID, float32(id&255)/255, float32((id>>8)&255)/255, float32((id>>16)&255)/255)
+		r.api.BindBuffer(gl.ARRAY_BUFFER, b.vertex)
+		r.api.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
+		r.api.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 12, 0)
+		r.api.DrawElementsWithOffset(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0)
 		r.frame.Stats.DrawCalls++
 		r.frame.Stats.Triangles += int(b.count) / 3
 	}
-	gl.DisableVertexAttribArray(0)
-	gl.UseProgram(0)
-	gl.BindBuffer(gl.PIXEL_PACK_BUFFER, 0)
-	gl.PixelStorei(gl.PACK_ALIGNMENT, 4)
-	gl.PixelStorei(gl.PACK_ROW_LENGTH, 0)
-	gl.ReadBuffer(gl.COLOR_ATTACHMENT0_EXT)
-	gl.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(r.readback))
-	gl.ReadBuffer(gl.COLOR_ATTACHMENT1_EXT)
-	gl.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(r.frame.pickPixels))
-	if e := gl.GetError(); e != gl.NO_ERROR {
+	r.api.DisableVertexAttribArray(0)
+	r.api.UseProgram(0)
+	r.api.BindBuffer(gl.PIXEL_PACK_BUFFER, 0)
+	r.api.PixelStorei(gl.PACK_ALIGNMENT, 4)
+	r.api.PixelStorei(gl.PACK_ROW_LENGTH, 0)
+	r.api.ReadBuffer(gl.COLOR_ATTACHMENT0_EXT)
+	r.api.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Pointer(r.readback))
+	r.api.ReadBuffer(gl.COLOR_ATTACHMENT1_EXT)
+	r.api.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Pointer(r.frame.pickPixels))
+	if e := r.api.GetError(); e != gl.NO_ERROR {
 		return nil, fmt.Errorf("%w: render/readback %#x", ErrUnavailable, e)
 	}
 	stride := w * 4

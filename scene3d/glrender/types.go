@@ -14,6 +14,10 @@ import (
 var ErrUnavailable = errors.New("scene3d: OpenGL backend unavailable")
 var ErrClosed = errors.New("scene3d: OpenGL renderer closed")
 
+// ErrContext rejects use from a different OS thread or native context before
+// drawing, returning a cached frame, or deleting any GL object.
+var ErrContext = errors.New("scene3d: OpenGL renderer requires its owning thread and context")
+
 // Info reports the driver's own identity; OpenGL may be software-emulated, so
 // this alone does not certify hardware acceleration.
 type Info struct{ Vendor, Renderer, Version string }

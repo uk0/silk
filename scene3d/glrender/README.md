@@ -1,6 +1,6 @@
 # OpenGL 场景后端
 
-`glrender` 是真实 GPU 光栅化路径，不是给 CPU 渲染改名。顶点/索引上传到缓冲对象，
+`glrender` 是真实 OpenGL 光栅化路径（驱动也可能是软件实现），不是给 CPU 参考渲染改名。顶点/索引上传到缓冲对象，
 顶点着色器处理世界/相机变换，片元着色器输出平面光照与独立 ID，深度附件完成遮挡。
 
 ## 使用与资源归属
@@ -8,9 +8,10 @@
 - 要求 cgo、OpenGL 2.1 compatibility、`GL_EXT_framebuffer_object` 和至少两个 draw buffers。
   `!cgo` / `silk_pure_go` 编译为明确返回 `ErrUnavailable` 的桩，不偷偷宣称 GPU 可用。
 - 宿主创建**独占**上下文，在绑定该上下文的同一 OS 线程调用 `NewCurrent`、`Render`、
-  `Close`；当前 go-gl 入口表为进程全局，因此多个 Renderer 的 GL 调用/初始化也应
-  串行安排在同一 OS 线程，不支持后台并行 GL context。后端会改变 GL 状态，
-  不负责保存共享上下文的任意外部状态。
+  `CloseCurrent`。每个 Renderer 现在拥有独立的 **58 项 GL 函数表**，不再初始化/
+  改写 go-gl 的进程全局入口。不同 context 的 Renderer 可以在各自锁定的 OS 线程并行；
+  同一个 Renderer 仍不可跨线程使用，宿主仍需 `runtime.LockOSThread` 并保持正确绑定。
+  后端会改变其独占 context 的 GL 状态，不负责恢复该 context 内任意外部状态。
 - `Render` 返回 `Frame`（实现 `scene3d.FrameView`），RGBA 是顶端起始，拾取坐标也是顶端
   起始。缓存不重复 GL draw/readback；新 Frame 的 `Sequence` 才增长。
 - 同一个 Mesh 在该 Renderer 内只上传一次，实例复用 VBO/索引缓冲；相机、颜色和节点
@@ -19,6 +20,13 @@
   驱动 texture/renderbuffer 上限约束。多个 Renderer 的预算不共享。
 - 返回图像/ID 缓冲只读，下一次 Render 可能覆盖；失败后不使用旧 Frame。Close 必须在
   native context 销毁前调用，不依赖 Go finalizer 进入 GL。
+- `Render` 和 `CloseCurrent() error` 在错误 OS 线程/context 上返回 `ErrContext`，
+  不返回缓存帧、不删除其它 context 的同名对象。错误线程先检查不可变归属，不触碰
+  可能已由 owner 释放的 C 表。`Close()` 保留兼容便利接口并忽略错误，必须在 owner
+  context 上调用；需要确认释放结果时用 `CloseCurrent`。关闭后仍需宿主销毁 native context。
+- 入口由 WGL / CGL / GLX 加载，Windows 仅使用系统 `opengl32.dll`；目前不提供 EGL loader。
+  Windows 的 SceneView 生产依赖树已不再包含 go-gl/glfw；Unix 既有 2D 呈现仍可能依赖它们。
+  [内部绑定与生成说明](internal/gl21/README.md) 说明 ABI、资源归属与可重放验证。
 - `Info` 是驱动原样报告，不据此保证硬件：远程桌面、VM、软件 GL 或缺少能力会不同。
 
 ## GUI 集成
@@ -50,7 +58,8 @@ SILK_TEST_SCENE_GPU=1 go test -race -count=1 -v -run '^TestScene' ./gui  # macOS
 当 GPU 通过。驱动测试比对 CPU 的稳定内部像素/ID、深度、三种尺寸、网格复用/替换/关闭。
 Windows WGL 探针区分 GPU 成功与驱动不支持时的 CPU 回退，验证宿主 context/DC 恢复、
 拾取缓存、普通绘制叠加与销毁。回退通过不等于 GPU 通过。
-还有含读回的 25.6 万三角形对照，不是纯 GPU timer、桌面 FPS 或普遍性能承诺。
+底层 glrender 驱动探针还验证错误 context/线程拒绝、并发错误 Close、两个独立 context 同时渲染
+128 帧，以及 CPU/GPU 使用相同相机序列。还有含读回的 25.6 万三角形对照，不是纯 GPU timer、桌面 FPS 或普遍性能承诺。
 
 限制：顶点/矩阵使用 float32；暂不支持大坐标相机相对精度方案、纹理/PBR、透明材质、
 平滑法线、MSAA、单 draw 硬件实例化、BVH/LOD、零读回合成。每变化帧同步读取颜色+ID

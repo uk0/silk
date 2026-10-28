@@ -22,7 +22,10 @@ func TestCompactToolbarGeometryAtFontAndIconSizes(t *testing.T) {
 			bar.AddSeparator()
 			both := bar.AddAction("水平布局", paint.LoadIcon("layout-horizontal"), func() {})
 			both.SetTextVisible(true)
-			for _, width := range []float64{900, 180, 28, 0} {
+			// Font availability/metrics vary by platform; 180px can fit the
+			// entire toolbar. Exercise both sides of its measured boundary too.
+			preferred := bar.SizeHints().Width
+			for _, width := range []float64{math.Max(900, preferred+1), preferred, preferred - .5, 180, 28, 0} {
 				bar.SetSize(width, bar.SizeHints().Height)
 				bar.Layout()
 				last := 0.0
@@ -36,7 +39,10 @@ func TestCompactToolbarGeometryAtFontAndIconSizes(t *testing.T) {
 					}
 					last = x + w
 				}
-				if width == 900 {
+				if width >= preferred {
+					if len(bar.OverflowItems()) != 0 {
+						t.Fatalf("fitting toolbar overflowed: width=%g preferred=%g", width, preferred)
+					}
 					if icon.Width() != icon.Height() || icon.Height() < 28 || icon.Height() != label.Height() || label.Height() != both.Height() {
 						t.Fatal("unequal or undersized tool targets")
 					}
@@ -45,7 +51,7 @@ func TestCompactToolbarGeometryAtFontAndIconSizes(t *testing.T) {
 						t.Fatal("icon and label overlap or clip")
 					}
 				} else if len(bar.OverflowItems()) == 0 {
-					t.Fatal("narrow toolbar lost overflow access")
+					t.Fatalf("narrow toolbar lost overflow access: font=%d icon=%d width=%g preferred=%g", fontSize, iconSize, width, preferred)
 				}
 			}
 		}

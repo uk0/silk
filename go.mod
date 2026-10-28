@@ -38,4 +38,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace mod/map => ./mod/map
+replace github.com/uk0/silk/mod/map => ./mod/map

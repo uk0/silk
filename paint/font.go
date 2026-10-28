@@ -20,6 +20,13 @@ var globalFontOptions = newUIFontOptions()
 
 func newUIFontOptions() *cairo.FontOptions {
 	options := cairo.NewFontOptions()
+	if runtime.GOOS == "linux" {
+		// FreeType's default device-rounded advances change with the CTM. A
+		// TextBlock retains logical glyph positions before the window's scale is
+		// known; keep those metrics stable at fractional DPI. This does not turn
+		// off outline hinting or antialiasing, and leaves Windows policy intact.
+		options.SetHintMetrics(cairo.HINT_METRICS_OFF)
+	}
 	if runtime.GOOS == "windows" {
 		// We render into ARGB offscreen surfaces, not directly to a known RGB
 		// LCD. ClearType's colored coverage becomes fringes when composited,

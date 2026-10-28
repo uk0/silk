@@ -29,23 +29,9 @@ jobs:
         run: |
           govulncheck -scan module
           govulncheck ./cmd/silkide ./gateway ./scada
-          root="$PWD"
-          # The legacy name mod/map is rejected by go/packages. Source scanning
-          # accepts explicit files. For module-only scanning, copy the manifest
-          # under a temporary valid identity without changing selected versions.
-          (cd mod/map && govulncheck ./map-scene.go ./map-view.go)
-          audit="$(mktemp -d)"
-          cp mod/map/go.mod mod/map/go.sum "$audit/"
-          (
-            cd "$audit"
-            go mod edit -module=audit.silk.invalid/map "-replace=github.com/uk0/silk=$root"
-            printf 'package audit\n' > audit.go
-            govulncheck -scan module
-          )
-          # Do not silently audit a different dependency graph.
-          diff -u \
-            <(cd mod/map && go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all | sed '/^$/d') \
-            <(cd "$audit" && go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all | sed '/^$/d')
+          # The map SDK now has a valid, independently importable module path.
+          # Audit its actual manifest/source rather than a renamed audit copy.
+          (cd mod/map && govulncheck -scan module && govulncheck ./...)
       - name: Audit the bundled language server
         # gopls has an isolated module/toolchain, so scanning the SDK alone does
         # not cover the executable distributed with the IDE.

@@ -188,3 +188,22 @@ complete logical/device coordinate conversion and WM_DPICHANGED lifecycle;
 Windows bitmap virtualization can remain blurry above 100% system scaling.
 Changing the manifest alone would break geometry/input/IME assumptions. CTM
 pixel tests at 125% / 150% / 200% are not system-DPI or cross-monitor acceptance.
+
+## 2026-10-28 context ownership and module follow-up
+
+- `scene3d/glrender` owns a compact GL table per renderer/context. `Render` and
+  `CloseCurrent` reject the wrong OS thread/current context (`ErrContext`);
+  `Close` remains a compatibility wrapper. Keep the owner thread locked across
+  the native context lifetime. Independent contexts can render in parallel;
+  this does not make widgets or a single renderer concurrently mutable.
+- Windows loads `opengl32.dll` from the system directory, not the working/model
+  directory. WGL names containing NUL are rejected without panic. Current
+  backends are WGL, CGL and GLX; EGL is not implemented.
+- Linux FreeType font advances now use unrounded logical metrics so cached
+  text layout and fractional-DPI drawing agree. Outline hinting/antialiasing
+  remain enabled by their existing policy; Windows font policy is unchanged.
+- The experimental nested map module now imports as
+  `github.com/uk0/silk/mod/map`, replacing the invalid `mod/map` module path.
+  Its dependency versions are unchanged. It is a scene assembly skeleton,
+  not a complete map engine or a published dynamic-plugin ABI; see
+  [module setup](mod/map/README.md).

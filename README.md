@@ -24,17 +24,21 @@ signed/notarized standalone apps.
 - New dependency-free `scene3d` package: immutable shared meshes, hierarchy snapshots,
   bounded OBJ geometry import, depth/picking, box/cylinder primitives and cached CPU rendering.
   The optional [OpenGL backend](scene3d/glrender/README.md) adds real offscreen GPU rendering,
-  shared mesh buffers and explicit CPU fallback diagnostics.
+  shared mesh buffers and explicit CPU fallback diagnostics. Its private 58-entry GL binding
+  is context-owned; independent contexts can render concurrently on their owning OS threads.
+  `CloseCurrent` reports incorrect context/thread ownership instead of deleting another
+  context's resources. The Windows scene example no longer links the large go-gl binding.
 - `gui.SceneView` is embedded in the normal widget tree with clipping and HiDPI rendering,
   orbit/zoom/pick interaction, cancellable background loading and coalesced tag bindings.
 - Designer palette, vector icon, saved camera/source properties, preview, generated events
   and `decl.SceneView` use the existing registration/code-generation paths.
 - The CPU reference and initial **OpenGL readback backend** do not provide glTF/PBR or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
-  and Linux native UI verification remain open.
+  and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is
+  software-GL validation, not hardware GPU performance evidence.
   See [SDK guide](scene3d/README.md), [runnable example](examples/scene3d/README.md),
-  [CPU verification](SCENE3D_QA_20261028.md), [GPU/native verification](SCENE3D_GPU_QA_20261028.md)
-  and [full roadmap](SCENE3D_ROADMAP.md).
+  [CPU verification](SCENE3D_QA_20261028.md), [GPU/native verification](SCENE3D_GPU_QA_20261028.md),
+  [GL dispatch and full regression](GL_DISPATCH_QA_20261028.md) and [full roadmap](SCENE3D_ROADMAP.md).
 
 ![Windows native SceneView using explicit CPU fallback](screenshots/scene3d-windows-fallback-20261028.png)
 

@@ -1,4 +1,4 @@
-module mod/map
+module github.com/uk0/silk/mod/map
 
 go 1.26.10
 
