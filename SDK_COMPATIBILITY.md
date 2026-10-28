@@ -207,3 +207,19 @@ pixel tests at 125% / 150% / 200% are not system-DPI or cross-monitor acceptance
   Its dependency versions are unchanged. It is a scene assembly skeleton,
   not a complete map engine or a published dynamic-plugin ABI; see
   [module setup](mod/map/README.md).
+
+## glTF static-scene import (bounded preview)
+
+`LoadGLTF` / `LoadModelFile` add JSON glTF and GLB without third-party dependencies.
+`SceneView.LoadModel` keeps its explicit-I/O, cancellation and UI-thread completion
+contract; a failed import preserves the old scene and its bindings. Successful
+imports use the `model` group with stable `model/node/N/primitive/P` children.
+`FitScene` is explicit; it does not introduce polling or continuous drawing.
+External buffers use local relative paths and `os.Root` containment. Required
+extensions, skinning, animation, morphs and MASK/BLEND are rejected. Flat base-color
+preview is not PBR/texture support; callers must surface import warnings.
+
+Final-source full normal/race suites pass on macOS, Linux and Windows, with
+platform/dependency skips reported separately. macOS and Windows SceneView
+interaction is verified; Windows uses CPU fallback and Linux uses software GL.
+See [glTF verification and limitations](GLTF_QA_20261028.md).

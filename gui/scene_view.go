@@ -2,10 +2,8 @@ package gui
 
 import (
 	"context"
-	"errors"
 	"image/color"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,7 +21,8 @@ import (
 // cancels model work and tag subscriptions. No timer or animation runs at rest.
 //
 // Auto uses an isolated offscreen OpenGL backend when available, with explicit
-// CPU fallback diagnostics. glTF/PBR and persisted node editing remain separate milestones.
+// CPU fallback diagnostics. OBJ/glTF/GLB static scenes are supported; PBR and
+// persisted node editing remain separate milestones.
 type SceneView struct {
 	Widget
 	renderCount                   uint64
@@ -180,6 +179,27 @@ func (v *SceneView) camera() scene3d.Camera {
 	sp, cp := math.Sincos(v.pitch)
 	return scene3d.Camera{Eye: v.target.Add(scene3d.Vec3{v.distance * cp * sy, v.distance * sp, v.distance * cp * cy}), Target: v.target, Up: scene3d.Vec3{Y: 1}, FOVY: math.Pi / 4, Near: v.distance / 1000, Far: v.distance * 1000}
 }
+
+// FitScene reframes the current visible world-space bounds after node edits or
+// tag updates. It is explicit, not an automatic camera-follow/render loop.
+func (v *SceneView) FitScene() error {
+	if v.closed {
+		return async.ErrClosed
+	}
+	snapshot, err := v.scene.Snapshot()
+	if err != nil {
+		return err
+	}
+	lo, hi, err := snapshot.Bounds()
+	if err != nil {
+		return err
+	}
+	v.target = lo.Add(hi.Sub(lo).Mul(.5))
+	v.SetDistance(max(.001, hi.Sub(lo).Length()*1.5))
+	v.RefreshScene()
+	return nil
+}
+
 func (v *SceneView) IsLoading() bool { return v.busy }
 func (v *SceneView) LastError() error {
 	if v.lastError != nil {
@@ -201,7 +221,7 @@ func (v *SceneView) fail(err error) {
 	}
 }
 
-// LoadModel parses an OBJ off-thread using the bounded executor. Relative paths
+// LoadModel parses OBJ/glTF/GLB off-thread using the bounded executor. Relative paths
 // resolve against the process working directory, not a project asset resolver.
 // Completion applies only to this generation. Failed loads keep the old scene.
 func (v *SceneView) LoadModel(ctx context.Context) error {
@@ -218,7 +238,8 @@ func (v *SceneView) LoadModel(ctx context.Context) error {
 		return err
 	}
 	path := v.modelSource
-	if path == "" || !strings.EqualFold(filepath.Ext(path), ".obj") {
+	extension := strings.ToLower(filepath.Ext(path))
+	if path == "" || (extension != ".obj" && extension != ".gltf" && extension != ".glb") {
 		return scene3d.ErrUnsupported
 	}
 	child, cancel := context.WithCancel(ctx)
@@ -227,30 +248,9 @@ func (v *SceneView) LoadModel(ctx context.Context) error {
 	v.cancel = cancel
 	v.busy = true
 	v.lastError = nil
-	_, err := RunAsync(child, nil, func(ctx context.Context) (*scene3d.OBJModel, error) {
-		info, e := os.Stat(path)
-		if e != nil {
-			return nil, e
-		}
-		if !info.Mode().IsRegular() {
-			return nil, errors.New("scene3d: model must be a regular file")
-		}
-		f, e := os.Open(path)
-		if e != nil {
-			return nil, e
-		}
-		defer f.Close()
-		info, e = f.Stat()
-		if e != nil {
-			return nil, e
-		}
-		if !info.Mode().IsRegular() {
-			return nil, errors.New("scene3d: model must be a regular file")
-		}
-		stop := context.AfterFunc(ctx, func() { _ = f.Close() })
-		defer stop()
-		return scene3d.LoadOBJ(ctx, f, scene3d.LoadLimits{})
-	}, func(model *scene3d.OBJModel, err error) {
+	_, err := RunAsync(child, nil, func(ctx context.Context) (*scene3d.LoadedModel, error) {
+		return scene3d.LoadModelFile(ctx, path, scene3d.LoadLimits{})
+	}, func(model *scene3d.LoadedModel, err error) {
 		if v.closed || generation != v.generation {
 			return
 		}
@@ -261,17 +261,21 @@ func (v *SceneView) LoadModel(ctx context.Context) error {
 			v.fail(err)
 			return
 		}
-		s := scene3d.NewScene()
-		if err = s.Add(scene3d.Node{ID: "model", Name: filepath.Base(path), Mesh: model.Mesh}); err != nil {
+		snapshot, err := model.Scene.Snapshot()
+		if err != nil {
+			v.fail(err)
+			return
+		}
+		lo, hi, err := snapshot.Bounds()
+		if err != nil {
 			v.fail(err)
 			return
 		}
 		v.unbindAll()
-		v.scene = s
+		v.scene = model.Scene
 		v.selected = ""
 		v.warnings = append([]string(nil), model.Warnings...)
-		lo, hi := model.Mesh.Bounds()
-		v.target = lo.Add(hi).Mul(.5)
+		v.target = lo.Add(hi.Sub(lo).Mul(.5))
 		v.SetDistance(max(.001, hi.Sub(lo).Length()*1.5))
 		v.RefreshScene()
 		if v.loadedFn != nil {

@@ -22,7 +22,7 @@ signed/notarized standalone apps.
 ## Industrial 3D scene SDK (development)
 
 - New dependency-free `scene3d` package: immutable shared meshes, hierarchy snapshots,
-  bounded OBJ geometry import, depth/picking, box/cylinder primitives and cached CPU rendering.
+  bounded OBJ/glTF/GLB static-scene import, depth/picking, box/cylinder primitives and cached CPU rendering.
   The optional [OpenGL backend](scene3d/glrender/README.md) adds real offscreen GPU rendering,
   shared mesh buffers and explicit CPU fallback diagnostics. Its private 58-entry GL binding
   is context-owned; independent contexts can render concurrently on their owning OS threads.
@@ -32,13 +32,16 @@ signed/notarized standalone apps.
   orbit/zoom/pick interaction, cancellable background loading and coalesced tag bindings.
 - Designer palette, vector icon, saved camera/source properties, preview, generated events
   and `decl.SceneView` use the existing registration/code-generation paths.
-- The CPU reference and initial **OpenGL readback backend** do not provide glTF/PBR or a complete
+- glTF preserves hierarchy, transforms and shared meshes with stable primitive IDs. Explicit
+  `FitScene()` reframes tag-driven assemblies; external buffers stay inside the selected model directory.
+- The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
   and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is
   software-GL validation, not hardware GPU performance evidence.
   See [SDK guide](scene3d/README.md), [runnable example](examples/scene3d/README.md),
   [CPU verification](SCENE3D_QA_20261028.md), [GPU/native verification](SCENE3D_GPU_QA_20261028.md),
-  [GL dispatch and full regression](GL_DISPATCH_QA_20261028.md) and [full roadmap](SCENE3D_ROADMAP.md).
+  [GL dispatch and full regression](GL_DISPATCH_QA_20261028.md),
+  [glTF import and three-platform regression](GLTF_QA_20261028.md), and [full roadmap](SCENE3D_ROADMAP.md).
 
 ![Windows native SceneView using explicit CPU fallback](screenshots/scene3d-windows-fallback-20261028.png)
 

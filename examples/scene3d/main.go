@@ -1,4 +1,4 @@
-// A timer-free 3D industrial scene: orbit, pick, load OBJ and publish tag data.
+// A timer-free 3D industrial scene: orbit, pick, load OBJ/glTF/GLB and publish tag data.
 package main
 
 import (
@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"strings"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
@@ -17,13 +18,13 @@ import (
 
 type demo struct {
 	gui.Form
-	view          *gui.SceneView
-	title, status *gui.Label
-	buttons       []*gui.Button
-	tag           *core.Tag
-	loaded        int
-	ctx           context.Context
-	cancel        context.CancelFunc
+	view                  *gui.SceneView
+	title, status, notice *gui.Label
+	buttons               []*gui.Button
+	tag                   *core.Tag
+	loaded                int
+	ctx                   context.Context
+	cancel                context.CancelFunc
 }
 
 func newDemo(model string) *demo {
@@ -38,6 +39,8 @@ func newDemo(model string) *demo {
 	f.title.SetParent(f)
 	f.status = gui.NewLabel("")
 	f.status.SetParent(f)
+	f.notice = gui.NewLabel("")
+	f.notice.SetParent(f)
 	s := scene3d.NewScene()
 	mesh := scene3d.Box()
 	tankMesh, err := scene3d.Cylinder(1, 2, 40)
@@ -84,13 +87,19 @@ func newDemo(model string) *demo {
 			_ = gui.PostContext(ctx, f.snapshot)
 		}()
 	})
-	add("Load OBJ", func() {
+	add("Load model", func() {
 		if err := f.view.LoadModel(f.ctx); err != nil {
 			fmt.Println("LOAD_ERROR", err)
 		}
 		f.snapshot()
 	})
 	add("Reset camera", func() { f.view.SetYaw(.65); f.view.SetPitch(.35); f.view.SetDistance(6); f.snapshot() })
+	add("Fit scene", func() {
+		if err := f.view.FitScene(); err != nil {
+			fmt.Println("FIT_ERROR", err)
+		}
+		f.snapshot()
+	})
 	add("Snapshot", f.snapshot)
 	f.snapshot()
 	return f
@@ -118,25 +127,35 @@ func (f *demo) snapshot() {
 		text += "  |  Loading…"
 	} else if err != "" {
 		text = "Error: " + err
-	} else if warnings := f.view.ModelWarnings(); len(warnings) > 0 {
-		text += "  |  " + warnings[0]
 	}
 	text += "  |  " + f.view.ActiveRenderBackend()
 	f.status.SetText(text)
+	gui.SetToolTip(f.status, text)
+	warnings := f.view.ModelWarnings()
+	f.notice.SetText("")
+	if len(warnings) > 0 {
+		f.notice.SetText(fmt.Sprintf("Geometry preview · %d import warning(s) — hover for details", len(warnings)))
+	}
+	gui.SetToolTip(f.notice, strings.Join(warnings, "\n"))
 }
 func (f *demo) OnResize() {
 	w, h := f.Size()
 	f.title.SetBounds(12, 8, max(0, w-24), 26)
+	columns := max(1, min(len(f.buttons), int(max(0, w-24)/170)))
+	rows := (len(f.buttons) + columns - 1) / columns
+	buttonWidth := max(0, (w-24)/float64(columns))
 	for i, b := range f.buttons {
-		bw := max(0, (w-24)/4)
-		b.SetBounds(12+float64(i)*bw, 40, max(0, bw-6), 32)
+		b.SetBounds(12+float64(i%columns)*buttonWidth, 40+float64(i/columns)*38, max(0, buttonWidth-6), 32)
 	}
-	f.view.SetBounds(12, 84, max(0, w-24), max(0, h-122))
-	f.status.SetBounds(12, max(0, h-30), max(0, w-24), 24)
+	top := 84 + float64(rows-1)*38
+	bottom := max(top, h-58)
+	f.view.SetBounds(12, top, max(0, w-24), max(0, bottom-top))
+	f.status.SetBounds(12, bottom+4, max(0, w-24), 24)
+	f.notice.SetBounds(12, bottom+28, max(0, w-24), 24)
 }
 func main() {
 	backend := flag.String("backend", "auto", "render backend: auto, cpu, opengl")
-	model := flag.String("model", "examples/scene3d/pump.obj", "explicit OBJ path")
+	model := flag.String("model", "examples/scene3d/pump.obj", "explicit OBJ, glTF or GLB path")
 	render := flag.String("render", "", "write reference PNG and exit without a window")
 	flag.Parse()
 	defer core.Close()

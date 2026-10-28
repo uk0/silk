@@ -4,6 +4,7 @@
 
 ```sh
 go run ./examples/scene3d -model examples/scene3d/pump.obj
+go run ./examples/scene3d -model examples/scene3d/assembly.gltf
 # 强制真实 GPU：不满足驱动能力则明确诊断，不静默回退。
 go run ./examples/scene3d -backend opengl
 # 离屏参考图；仍需本机 gui/Cairo 构建依赖，不是独立无显示 CLI。
@@ -11,14 +12,16 @@ go run ./examples/scene3d -render /tmp/silk-scene3d.png
 ```
 
 - **Publish 1000 values**：后台发布 0…999，UI 合并更新 tank 的 Y 坐标为 0.999。
-- **Load OBJ**：显式后台加载参数路径，替换为 `model` 节点，并重新绑定相同点位。
+- **Load model**：显式后台加载 OBJ/glTF/GLB，保留 `model` 根节点并重新绑定相同点位。
+  glTF 保留组装件的层级、局部变换和共享网格，点击可选择 primitive 子节点。
   加载成功自动对准模型初始包围盒；之后的点位移动不会自动追踪相机。
 - **Reset camera**：恢复环绕角和距离，保留当前模型的观察中心。
+- **Fit scene**：按当前世界包围盒重新对准组装件，适用于点位移动后；不启动相机跟随循环。
 - **Snapshot**：状态栏显示摘要，stdout 的 `SCENE_STATE` JSON 可回读线程、位置、
   选择、加载、相机、实际光栅化次数、警告及错误。统计在点击时采样，无定时刷新。
 - 拖拽环绕、滚轮缩放、点击选择节点。没有动画/轮询定时器，静态场景不重复光栅化。
 
-`pump.obj` 是本仓库自建几何夹具，无外部素材依赖。默认 auto 在 native 视口尝试 OpenGL 并可查询回退原因；`-backend cpu` 强制 CPU。
+`pump.obj` 与 `assembly.gltf` 是本仓库自建几何夹具，无外部素材依赖。默认 auto 在 native 视口尝试 OpenGL 并可查询回退原因；`-backend cpu` 强制 CPU。
 当前都是平面着色，不展示纹理/透明材质。窗口关闭时取消上下文、绑定与加载并释放视口。
 
 ## 在 SDK 中组装
