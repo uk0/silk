@@ -17,6 +17,8 @@ typedef struct silk_gl_api {
     uintptr_t thread;
     silk_current_fn getCurrent;
     silk_lookup_fn getProc;
+    void (SILK_GL_CALL *VertexAttribDivisor)(uint32_t index, uint32_t divisor);
+    void (SILK_GL_CALL *DrawElementsInstancedWithOffset)(uint32_t mode, int32_t count, uint32_t kind, const void * offset, int32_t instances);
     const uint8_t * (SILK_GL_CALL *GetString)(uint32_t name);
     void (SILK_GL_CALL *GetIntegerv)(uint32_t pname, int32_t * data);
     uint32_t (SILK_GL_CALL *GetError)(void);
@@ -80,7 +82,10 @@ silk_gl_api *silk_gl_open(char *error, size_t capacity);
 void silk_gl_close(silk_gl_api *api);
 int silk_gl_current(silk_gl_api *api);
 uintptr_t silk_gl_thread(void);
+int silk_gl_instancing_entries(silk_gl_api *api);
 void silk_gl_shader_source(silk_gl_api *api, uint32_t shader, const char *source, int32_t length);
+static inline void silk_VertexAttribDivisor(silk_gl_api *api, uint32_t index, uint32_t divisor) { api->VertexAttribDivisor(index, divisor); }
+static inline void silk_DrawElementsInstancedWithOffset(silk_gl_api *api, uint32_t mode, int32_t count, uint32_t kind, uintptr_t offset, int32_t instances) { api->DrawElementsInstancedWithOffset(mode, count, kind, (const void *)offset, instances); }
 static inline const uint8_t * silk_GetString(silk_gl_api *api, uint32_t name) { return api->GetString(name); }
 static inline void silk_GetIntegerv(silk_gl_api *api, uint32_t pname, int32_t * data) { api->GetIntegerv(pname, data); }
 static inline uint32_t silk_GetError(silk_gl_api *api) { return api->GetError(); }

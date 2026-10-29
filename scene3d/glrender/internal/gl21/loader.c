@@ -95,12 +95,23 @@ silk_gl_api *silk_gl_open(char *error, size_t capacity) {
         _Static_assert(sizeof(api->field) == sizeof(p), "GL function pointer ABI"); \
         memcpy(&api->field, &p, sizeof(p)); \
     } while (0)
+#define SILK_OPTIONAL(field, name) do { \
+        if (!api->field) { \
+            void *p = lookup(api, name); \
+            _Static_assert(sizeof(api->field) == sizeof(p), "GL optional function pointer ABI"); \
+            memcpy(&api->field, &p, sizeof(p)); \
+        } \
+    } while (0)
 #include "load.inc"
+#undef SILK_OPTIONAL
 #undef SILK_LOAD
     return api;
 fail:
     silk_gl_close(api);
     return NULL;
+}
+int silk_gl_instancing_entries(silk_gl_api *api) {
+    return api && api->VertexAttribDivisor && api->DrawElementsInstancedWithOffset;
 }
 void silk_gl_shader_source(silk_gl_api *api, uint32_t shader, const char *source, int32_t length) {
     api->ShaderSource(shader, 1, &source, &length);

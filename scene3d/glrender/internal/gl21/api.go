@@ -53,6 +53,17 @@ func (api *API) ShaderSource(shader uint32, source string) {
 	defer C.free(unsafe.Pointer(text))
 	C.silk_gl_shader_source(api.table, C.uint32_t(shader), text, C.int32_t(len(source)))
 }
+
+// SupportsInstancing is queried on the owning context; addresses alone do not
+// prove support (GLX can return dispatch stubs for unsupported entrypoints).
+func (api *API) SupportsInstancing() bool {
+	if !api.Current() {
+		return false
+	}
+	var attributes int32
+	api.GetIntegerv(MAX_VERTEX_ATTRIBS, &attributes)
+	return supportsInstancing(api.GetString(VERSION), api.GetString(EXTENSIONS), attributes, C.silk_gl_instancing_entries(api.table) != 0)
+}
 func boolByte(v bool) uint8 {
 	if v {
 		return 1

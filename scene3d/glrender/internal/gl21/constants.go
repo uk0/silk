@@ -39,6 +39,8 @@ const (
 	RGBA8                     = 0x8058
 	SCISSOR_TEST              = 0x0C11
 	STATIC_DRAW               = 0x88E4
+	STREAM_DRAW               = 0x88E0
+	MAX_VERTEX_ATTRIBS        = 0x8869
 	STENCIL_TEST              = 0x0B90
 	TEXTURE_2D                = 0x0DE1
 	TEXTURE_MAG_FILTER        = 0x2800

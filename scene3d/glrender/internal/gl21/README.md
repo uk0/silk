@@ -1,6 +1,6 @@
 # SceneView 的精简 GL ABI
 
-这是私有实现，不是通用 OpenGL SDK。维护 `generate.go` 的 58 个函数声明，然后执行：
+这是私有实现，不是通用 OpenGL SDK。维护 `generate.go` 的 58 个必需 + 2 个可选函数声明，然后执行：
 
 ```sh
 go generate ./scene3d/glrender/internal/gl21
@@ -22,8 +22,14 @@ go generate ./scene3d/glrender/internal/gl21
 - 默认单测覆盖无 current context 时反复打开失败、零值 API；真实驱动探针覆盖颜色/ID、
   深度、两 context 并行、错误 context/线程及并发 owner Close。只编译不代表驱动成功。
 
-此替换不实现零读回、MSAA、PBR 或硬件实例化；不要据此宣称整个 3D 引擎目标完成。
+此绑定不实现零读回、MSAA 或 PBR；不要据此宣称整个 3D 引擎目标完成。
 
 ABI 依据：[OpenGL Registry](https://registry.khronos.org/OpenGL/index_gl.php)、
 [WGL GetProcAddress](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglgetprocaddress)、
 [GLX 1.4](https://registry.khronos.org/OpenGL/specs/gl/glx1.4.pdf)。
+
+
+可选的 `VertexAttribDivisor` / `DrawElementsInstanced` 仍属于每个 context 自己的表，
+按 core / ARB（draw 也允许 EXT）名称解析；空指针不会让整个表失败。必须通过
+`SupportsInstancing()` 验证驱动声明、入口、属性数及 flat varying 能力才能调用，不能
+仅凭 GLX dispatch 地址判断支持。OpenGL 3.x core shader 与 GL 2.1 EXT shader 分别验证。

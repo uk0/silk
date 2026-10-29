@@ -27,6 +27,11 @@ type Stats struct {
 	ResidentMeshes                    int
 	ResidentBytes, ReadbackBytes      int64
 	Cached                            bool
+	CulledInstances, CulledTriangles  int
+	// Instances counts submitted instances, not draw calls. Batching never reorders them.
+	Instances, InstancedDrawCalls, InstancedInstances int
+	// Instance buffers are bounded separately from the existing mesh budget.
+	InstanceUploadBytes, InstanceBufferBytes int64
 }
 
 type Frame struct {

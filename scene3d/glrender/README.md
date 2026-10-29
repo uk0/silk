@@ -8,14 +8,14 @@
 - 要求 cgo、OpenGL 2.1 compatibility、`GL_EXT_framebuffer_object` 和至少两个 draw buffers。
   `!cgo` / `silk_pure_go` 编译为明确返回 `ErrUnavailable` 的桩，不偷偷宣称 GPU 可用。
 - 宿主创建**独占**上下文，在绑定该上下文的同一 OS 线程调用 `NewCurrent`、`Render`、
-  `CloseCurrent`。每个 Renderer 现在拥有独立的 **58 项 GL 函数表**，不再初始化/
+  `CloseCurrent`。每个 Renderer 现在拥有独立的 **58 项必需 + 2 项可选 GL 函数表**，不再初始化/
   改写 go-gl 的进程全局入口。不同 context 的 Renderer 可以在各自锁定的 OS 线程并行；
   同一个 Renderer 仍不可跨线程使用，宿主仍需 `runtime.LockOSThread` 并保持正确绑定。
   后端会改变其独占 context 的 GL 状态，不负责恢复该 context 内任意外部状态。
 - `Render` 返回 `Frame`（实现 `scene3d.FrameView`），RGBA 是顶端起始，拾取坐标也是顶端
   起始。缓存不重复 GL draw/readback；新 Frame 的 `Sequence` 才增长。
-- 同一个 Mesh 在该 Renderer 内只上传一次，实例复用 VBO/索引缓冲；相机、颜色和节点
-  变换通过 uniform 更新。当前不是单次 draw 的硬件实例化；每可见节点一次 draw。
+- 同一个 Mesh 在该 Renderer 内只上传一次，实例复用 VBO/索引缓冲；支持时按原顺序合并连续的共享 mesh 实例，
+  每批最多 1024 个，一次 instanced draw。单个实例/缺失能力仍走原 uniform 普通 draw。
 - 新场景绘制前回收不再引用的 mesh。网格缓冲预算 64 MiB，帧还受 `scene3d.MaxPixels`、
   驱动 texture/renderbuffer 上限约束。多个 Renderer 的预算不共享。
 - 返回图像/ID 缓冲只读，下一次 Render 可能覆盖；失败后不使用旧 Frame。Close 必须在
@@ -62,7 +62,7 @@ Windows WGL 探针区分 GPU 成功与驱动不支持时的 CPU 回退，验证�
 128 帧，以及 CPU/GPU 使用相同相机序列。还有含读回的 25.6 万三角形对照，不是纯 GPU timer、桌面 FPS 或普遍性能承诺。
 
 限制：顶点/矩阵使用 float32；暂不支持大坐标相机相对精度方案、纹理/PBR、透明材质、
-平滑法线、MSAA、单 draw 硬件实例化、BVH/LOD、零读回合成。每变化帧同步读取颜色+ID
+平滑法线、MSAA、跨不相邻 mesh 的重排批处理、BVH/LOD、零读回合成。每变化帧同步读取颜色+ID
 两个附件，在简单场景中可能比 CPU 慢。后续需要避免读回并维持正确的控件合成顺序，
 不能为了性能改回悬空 overlay。参见 [总路线](../../SCENE3D_ROADMAP.md)。
 
@@ -70,3 +70,57 @@ Windows WGL 探针区分 GPU 成功与驱动不支持时的 CPU 回退，验证�
 [GLSL 1.20](https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.1.20.pdf)、
 [GLFW context guide](https://www.glfw.org/docs/latest/context_guide.html)、
 [Microsoft WGL current context](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglgetcurrentcontext)。
+
+### 屏外实例与缓存
+
+CPU/GPU 共用 `scene3d.Frustum` 做保守 AABB / 六平面检查。完全屏外的实例不上传首次使用
+的网格，也不提交 draw；进入视野后再上传。仍被场景引用的已有缓冲保持驻留，避免相机
+来回移动时反复上传；从场景移除后照常回收。输入矩阵与保守内存预算在裁剪前验证，不能
+靠把巨大/非法模型放到屏外绕过错误或预算。拾取 ID 不重新编号，帧缓存继续跳过全部工作。
+
+`Stats.CulledInstances` / `CulledTriangles` 为原始被裁剪工作量；`DrawCalls` / `Triangles`
+仅计实际提交，缓存帧保留上次统计。这不减少每帧 RGBA / ID readback，也不等于 GPU
+硬件实例化、遮挡剔除或零拷贝合成。真实驱动像素/拾取、冷上传、移入、关闭与性能证据
+见 [视锥裁剪 QA](../../SCENE_FRUSTUM_QA_20261028.md)。
+
+## 有序 GPU 硬件实例化（开发候选）
+
+`NewCurrent()` 默认 `InstancingAuto`。同一可见运行段共享 mesh 时，将各自世界矩阵、颜色、
+原始拾取 ID 放入实例属性缓冲，以一次硬件实例化命令提交；不是复制几何后冒充批处理。
+不按 mesh 全局排序，不跨仍可见的不同 mesh 合并，保持等深度先绘制者和节点顺序。视锥
+裁剪后的空洞不会重新编号。单个实例仍走原 ordinary shader；帧缓存跳过全部提交/上传。
+
+```go
+r, err := glrender.NewCurrentWithOptions(glrender.Options{
+    Instancing: glrender.InstancingRequired, // Auto / Disabled / Required
+})
+// 仍需独占 current context、锁定 OS 线程，并在 context 销毁前 CloseCurrent。
+// Required 在缺少能力时明确失败；Disabled 适合对照/驱动性能调优。
+_ = err
+if r != nil {
+    caps := r.Capabilities() // InstancedDrawing
+    _ = caps
+}
+```
+
+- 支持判定同时检查版本/扩展、7 个 vertex attributes、两个非空入口以及 flat varying
+  能力；GLX 返回一个地址不等于支持。可选入口缺失不会破坏旧的 GL 2.1 普通 GPU 路径。
+- GL 2.1 使用 `GL_EXT_gpu_shader4` 的 `flat varying`，GL 3.x 可用 GLSL 1.30；颜色
+  与拾取 ID 不做平滑插值。Linux Mesa 测试确实发现过颜色 1 LSB 差异，修复后仍按完整
+  RGBA / ID 字节对照，未放宽断言。`worldPosition` 保持平滑以保留原法线计算。
+- 实例 staging 与 GPU buffer 单批最大各 **96 KiB**；每实例 96 B。缓冲复用，不保存
+  Go 指针到 C，Close 释放；网格预算和绘制前矩阵验证仍生效，不因实例化绕过。
+- `Stats.Instances` 为实际提交实例数；`InstancedDrawCalls` / `InstancedInstances` 为
+  真实批量 draw 工作量；`InstanceUploadBytes` 为本帧传输，`InstanceBufferBytes` 为实例
+  buffer 当前大小，与原 `ResidentBytes` 网格预算分开。缓存帧保留上次统计。
+- `SceneView.GPUCapabilities()` 只查询已建立的后端，CPU 回退、未绘制或关闭后返回空
+  能力，不隐式创建 context；真实 GUI 测试覆盖 1000 个设备经正常控件树合成和拾取。
+
+`SILK_TEST_SCENE_GPU=1 SILK_TEST_REQUIRE_INSTANCING=1` 启用严格驱动测试，不允许缺失能力
+被 skip 掩盖。物理 Apple GPU 与 Linux llvmpipe 的验证含义不同：API 的实例化命令在软件
+驱动也可以运行。软件 GL 下该基准不保证更快；可用 Disabled 对照。readback 仍存在，不能
+把减少 draw 数当作整个应用的统一提速倍数。见 [实例化 QA](../../SCENE_INSTANCING_QA_20261028.md)。
+
+参考：[ARB instanced arrays](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_instanced_arrays.txt)、
+[ARB draw instanced](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_draw_instanced.txt)、
+[EXT gpu shader4](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_gpu_shader4.txt)。

@@ -122,6 +122,9 @@ func (d *Document) checkLimits() error {
 		}
 	}
 	for _, n := range d.Nodes {
+		if len(n.Transform) != 0 && len(n.Transform) != 16 {
+			return ErrNode
+		}
 		if !validSceneText(n.ID, 256, false) || !validSceneText(n.Parent, 256, true) || !validSceneText(n.Name, 4096, true) || !validSceneText(n.Mesh, 256, true) {
 			return ErrNode
 		}
@@ -157,7 +160,11 @@ func (h *documentOrder) Pop() any          { old := *h; n := len(old); x := old[
 // immutable mesh among its instances. Input node order is retained whenever it
 // is already topological; unordered documents are stably topologically sorted.
 // This preserves coplanar depth/picking order on a capture/save/load roundtrip.
-func (d *Document) Build(ctx context.Context) (*Scene, error) {
+func (d *Document) Build(ctx context.Context) (*Scene, error) { return d.buildWithMeshes(ctx, nil) }
+
+// Reused meshes belong only to a private EditSession whose mesh definitions are
+// immutable. Public Build never accepts an external cache or skips validation.
+func (d *Document) buildWithMeshes(ctx context.Context, reusable map[string]*Mesh) (*Scene, error) {
 	if ctx == nil {
 		return nil, ErrGeometry
 	}
@@ -175,9 +182,16 @@ func (d *Document) Build(ctx context.Context) (*Scene, error) {
 		if _, ok := meshes[m.ID]; ok {
 			return nil, fmt.Errorf("%w: duplicate mesh", ErrGeometry)
 		}
-		mesh, err := NewMesh(m.Vertices, m.Indices)
-		if err != nil {
-			return nil, err
+		mesh := reusable[m.ID]
+		if mesh == nil {
+			var err error
+			mesh, err = NewMesh(m.Vertices, m.Indices)
+			if err != nil {
+				return nil, err
+			}
+			if reusable != nil {
+				reusable[m.ID] = mesh
+			}
 		}
 		meshes[m.ID] = mesh
 	}

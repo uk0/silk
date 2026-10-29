@@ -39,6 +39,19 @@ signed/notarized standalone apps.
   UI delivery and authored-baseline export/reconfiguration. **Tools → Edit 3D Scene...** and the
   command palette open the node/binding inspector; edits use normal buffer Undo/Redo and Save.
   See [scene document workflow and QA](SCENE_DOCUMENT_QA_20261028.md).
+- Reusable device `Template`s add atomic batch placement, shared mesh storage and per-device tag
+  mapping. The pure-Go [plant assembler](examples/scene3dplant/README.md) builds multi-device
+  `.silkscene` files for the existing scene editor; node edits preserve the observation camera.
+  See [template SDK, native screenshots and regression evidence](SCENE_TEMPLATE_QA_20261028.md).
+- `scene3d.EditSession` adds atomic node/group/box/cylinder creation, subtree copy/delete,
+  keep-world reparenting and bounded Undo/Redo. The scene editor exposes these through owned
+  **Node actions** menus and forms; **Use changes** creates one host-editor transaction,
+  while Cancel leaves the document untouched. See [authoring SDK](scene3d/README.md).
+- Conservative CPU/GPU frustum culling avoids offscreen vertex work and first-time uploads.
+  Optional per-context GPU instancing batches consecutive shared meshes without changing
+  draw order or picking IDs; capability checks retain the ordinary-draw/CPU fallback paths.
+  The [final regression matrix](SCENE_RELEASE_QA_20261028.md) distinguishes actual hardware,
+  software GL, native desktop flows, skipped fixtures and unsupported capabilities.
 - The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
   and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is
@@ -2086,7 +2099,7 @@ which gofmt
 
 ## Tech Stack
 
-- **Go 1.21+** — compiler
+- **Go 1.26.10+** — compiler (see `go.mod`)
 - **Cairo 2D** — 2D rendering
 - **GLFW 3.3** — macOS/Linux window management
 - **Win32 API** — Windows window management

@@ -161,3 +161,115 @@ if err != nil { return err }
 示例资产：`examples/scene3d/assembly.silkscene`，由仓库自有几何生成。当前不包含
 节点新增/删除、交互变换 gizmo、完整 TRS 表单、PBR/纹理或现场驱动配置。不能把这个
 阶段等同于完整工业编辑器；测试记录见 [本轮 QA](../SCENE_DOCUMENT_QA_20261028.md)。
+
+## 设备模板与批量产线组装
+
+`Template` 把已验证的创作场景编译成可复用设备定义。加载/验证网格一次，后续所有实例
+共享不可变 `Mesh`，节点状态和点位目标彼此独立。这是数据层实例化，**不是 GPU 硬件
+实例化**；可见实例仍逐个计算快照预算和绘制工作量。
+
+```go
+// source 是 LoadDocument 或 CaptureDocument 得到的创作基线。
+template, err := scene3d.NewTemplate(ctx, source)
+if err != nil { return err }
+plant := scene3d.NewScene()
+instances, err := template.InstantiateBatch(ctx, plant, []scene3d.InstanceOptions{
+    {ID: "pump-01", Transform: scene3d.Translation(scene3d.Vec3{X: -3}), TagPrefix: "pump01."},
+    {ID: "pump-02", Transform: scene3d.Translation(scene3d.Vec3{X:  3}), TagPrefix: "pump02.",
+        TagMap: map[string]string{"alarm": "line.sharedAlarm"}}, // key 必须是源模板的真实 tag
+})
+if err != nil { return err }
+var bindings []scene3d.Binding
+for _, instance := range instances { bindings = append(bindings, instance.Bindings()...) }
+// UI 线程：view.SetScene(plant)，然后显式选择注册表安装 bindings。
+// 不自动创建点位，也不自动连接任何设备。
+```
+
+- 每次放置增加一个无网格根节点；源节点 ID 映射为 `实例 ID + "/" + 源 ID`，保留原层级、
+  合法绘制顺序和共享网格。`RootID()` / `NodeID(sourceID)` 不依赖显示名称；组合 ID 仍须
+  在 256 字节内。`Parent` 可以是目标中已有节点或同批次更早放置的节点。
+- `TagMap` 精确覆盖源点位名称，否则原名加 `TagPrefix`；未知 map key、空名称、非法文本、
+  超限及同名数值/布尔混用均拒绝。多个数值通道可明确映射到同一个数值点位。
+  `Bindings()` / `Warnings()` 返回副本；描述符不会创建订阅。
+- `InstantiateBatch` 只复制一次目标节点元数据，不按实例复制网格数组；整个批次验证成功
+  后仅增加一次 revision。失败、取消、ID 冲突、世界矩阵溢出及快照超限均不改变目标节点、
+  revision 或旧缓存快照。空批次不修改场景。批量组装优先用此方法而非循环单次添加。
+- 模板可跨 goroutine 共享，但每个目标 `Scene` 仍严格单所有者；不要同时改 options/map。
+  原场景的外部绑定计划不会自动重配，调用者应显式合并所需配置；用 `Remove(RootID())`
+  可删除整台设备，之后调用者负责停止/重配相关绑定，描述符不会跟踪删除状态。
+- 活跃场景应先用 `BindingSet.CaptureDocument` 取得创作基线，避免把运行时变化烘焙进模板。
+  不同模型可编译各自模板后装入同一目标；共享只发生在同一模板的网格，不做跨文件内容哈希
+  去重。导出仍受 `.silkscene` 自身的唯一几何、文本和 32 MiB 文件预算约束。
+
+纯 Go 产线生成示例见 [`examples/scene3dplant`](../examples/scene3dplant/README.md)。
+
+## CPU / GPU 共享视锥裁剪
+
+`NewFrustum` / `Frustum.Intersects` 使用不可变网格的缓存 AABB，不遍历
+顶点、不分配堆对象。将六个齐次裁剪平面变换到模型空间，只拒绝完全处于某个平面外的
+包围盒；旋转、负缩放、剪切、零缩放、相机位于盒内和穿越近裁剪面均保留原逐三角裁剪。
+零值/不确定或超出 float32 算术范围的输入保守放行，不能用它代替模型/相机验证。
+内部误差裕量基于绝对中间量，避免大数抵消或 CPU float64 / GPU float32 差异造成边缘跳变。
+
+```go
+vp, err := camera.ViewProjection(float64(width) / float64(height))
+if err != nil { return err }
+frustum := scene3d.NewFrustum(vp)
+if frustum.Intersects(mesh, world) {
+    // 可能可见；不是精确网格相交，也不是遮挡判定。
+}
+```
+
+CPU 与 OpenGL 后端均自动使用它：屏外实例不再变换全部顶点/扫描三角形或提交 GPU draw。
+Snapshot 及实例顺序不改写，拾取 ID 保持原索引；点位把设备移回视野时正常重绘。
+`CulledInstances` / `CulledTriangles` 记录拒绝的实例与原索引三角形（含退化三角形）。
+`Triangles` 仍表示实际进入后续处理的工作；缓存帧保留上次实际绘制的统计，并标记 Cached。
+视锥裁剪不会放宽导入、Snapshot 或 GPU 内存预算，不是 BVH、遮挡剔除或硬件实例化。
+
+裁剪体依据：[OpenGL 2.1 specification §2.12](https://registry.khronos.org/OpenGL/specs/gl/glspec21.pdf)。
+当前隔离开发与验证记录见 [视锥裁剪 QA](../SCENE_FRUSTUM_QA_20261028.md)。
+
+
+### GPU 实例化与控件能力查询
+
+`glrender.NewCurrentWithOptions` 提供 Auto / Disabled / Required 有序实例化策略；
+支持的 context 对连续共享 mesh 设备批量提交，保留原节点 ID、深度顺序、视锥裁剪和
+普通控件树合成。`SceneView.GPUCapabilities()` 暴露当前已启用能力，不触发绘制/建窗。
+仍有独占 OS 线程/context 契约，未消除 readback，也不保证所有驱动/模型都会提速。
+详细 API、内存预算与验收边界见 [GPU 后端](glrender/README.md)。
+
+### Inert scene authoring and bounded history
+
+`NewEditSession(ctx, document)` owns a private copy for authoring tools/plugins.
+Methods are single-owner, just like `Scene`; immutable meshes/snapshots can be
+shared with render owners. `Document()` and `Scene()` return independent mutable
+copies. Editing never opens a tag database, driver, file or graphics context.
+
+```go
+edit, err := scene3d.NewEditSession(ctx, document)
+if err != nil { return err }
+defer edit.Close()
+if err := edit.AddNode(ctx, scene3d.DocumentNode{ID: "line-b"}); err != nil { return err }
+ids, err := edit.DuplicateSubtree(ctx, "pump-a", scene3d.DuplicateOptions{
+    RootID: "pump-b", Offset: scene3d.Vec3{X: 3},
+    CopyBindings: true, Tags: map[string]string{"pump-a.level": "pump-b.level"},
+})
+if err != nil { return err }
+if err := edit.Reparent(ctx, ids["pump-a"], "line-b", true); err != nil { return err }
+if err := edit.Undo(ctx); err != nil { return err }
+updated, err := edit.Document() // the host decides when/how to commit or save
+```
+
+`AddMeshNode` adds a new immutable mesh and its first node atomically;
+`AddNode` references an existing mesh ID. `UpdateNode`, `SetBinding`,
+`RemoveBinding`, `RemoveSubtree`, `Undo` and `Redo` share the same transaction
+boundary. All failures/cancellation preserve state and history. Duplicate bindings
+are opt-in; unmapped tags stay the same process points. Removing a subtree removes
+its binding declarations but retains mesh resources. Keep-world reparent rejects
+unsafe/singular inverses instead of making geometry jump (1e-9 matrix-element
+relative/absolute tolerance). It preserves authored transforms, not live tag state.
+
+History retains at most 32 states / 32 MiB estimated metadata, excluding shared
+geometry and current/initial state; normal document geometry limits still apply.
+Renames/inert binding edits reuse unchanged draw snapshots and compiled meshes.
+See `SCENE_AUTHORING_QA_20261028.md` for test contracts and acceptance boundaries.

@@ -45,28 +45,39 @@ type meshBuffer struct {
 	seen          uint64
 }
 type Renderer struct {
-	api                           *gl.API
-	info                          Info
-	closed                        bool
-	program                       uint32
-	world, vp, material, objectID int32
-	fbo, depth                    uint32
-	textures                      [2]uint32
-	width, height                 int
-	maxSize                       int
-	meshes                        map[*scene3d.Mesh]*meshBuffer
-	resident                      int64
-	epoch                         uint64
-	frame                         Frame
-	readback                      []byte
-	key                           *scene3d.Snapshot
-	camera                        scene3d.Camera
-	bg                            color.RGBA
+	api                                          *gl.API
+	info                                         Info
+	closed                                       bool
+	program                                      uint32
+	world, vp, material, objectID                int32
+	fbo, depth                                   uint32
+	textures                                     [2]uint32
+	width, height                                int
+	maxSize                                      int
+	meshes                                       map[*scene3d.Mesh]*meshBuffer
+	resident                                     int64
+	epoch                                        uint64
+	frame                                        Frame
+	readback                                     []byte
+	key                                          *scene3d.Snapshot
+	camera                                       scene3d.Camera
+	bg                                           color.RGBA
+	capabilities                                 Capabilities
+	instanceProgram, instanceBuffer, drawProgram uint32
+	instanceVP                                   int32
+	instanceData                                 []float32
+	instanceBufferBytes                          int64
 }
 
 // NewCurrent changes GL state and needs a dedicated, current context. It never
 // creates, terminates or migrates a native context. Close before its destruction.
-func NewCurrent() (*Renderer, error) {
+func NewCurrent() (*Renderer, error) { return NewCurrentWithOptions(Options{}) }
+
+// NewCurrentWithOptions additionally controls ordered hardware draw instancing.
+func NewCurrentWithOptions(options Options) (*Renderer, error) {
+	if !options.valid() {
+		return nil, ErrOptions
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	api, err := gl.OpenCurrent()
@@ -96,7 +107,7 @@ func NewCurrent() (*Renderer, error) {
 		return nil, fmt.Errorf("%w: insufficient framebuffer capabilities", ErrUnavailable)
 	}
 	r := &Renderer{api: api, info: Info{api.GetString(gl.VENDOR), api.GetString(gl.RENDERER), version}, maxSize: int(min(size, renderbufferSize)), meshes: make(map[*scene3d.Mesh]*meshBuffer)}
-	program, err := compileProgram(api)
+	program, err := compileProgram(api, vertexShader, fragmentShader, []string{"position"})
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +120,10 @@ func NewCurrent() (*Renderer, error) {
 		r.Close()
 		return nil, fmt.Errorf("%w: missing shader uniforms", ErrUnavailable)
 	}
+	if err := r.initInstancing(options.Instancing); err != nil {
+		r.Close()
+		return nil, err
+	}
 	if e := api.GetError(); e != gl.NO_ERROR {
 		r.Close()
 		return nil, fmt.Errorf("%w: init GL error %#x", ErrUnavailable, e)
@@ -117,7 +132,7 @@ func NewCurrent() (*Renderer, error) {
 	return r, nil
 }
 func (r *Renderer) Info() Info { return r.info }
-func compileProgram(api *gl.API) (uint32, error) {
+func compileProgram(api *gl.API, vertex, fragment string, attributes []string) (uint32, error) {
 	var shaders []uint32
 	defer func() {
 		for _, s := range shaders {
@@ -127,7 +142,7 @@ func compileProgram(api *gl.API) (uint32, error) {
 	for _, spec := range []struct {
 		kind   uint32
 		source string
-	}{{gl.VERTEX_SHADER, vertexShader}, {gl.FRAGMENT_SHADER, fragmentShader}} {
+	}{{gl.VERTEX_SHADER, vertex}, {gl.FRAGMENT_SHADER, fragment}} {
 		s := api.CreateShader(spec.kind)
 		if s == 0 {
 			return 0, fmt.Errorf("%w: create shader", ErrUnavailable)
@@ -150,7 +165,9 @@ func compileProgram(api *gl.API) (uint32, error) {
 	for _, s := range shaders {
 		api.AttachShader(p, s)
 	}
-	api.BindAttribLocation(p, 0, "position")
+	for index, name := range attributes {
+		api.BindAttribLocation(p, uint32(index), name)
+	}
 	api.LinkProgram(p)
 	var ok int32
 	api.GetProgramiv(p, gl.LINK_STATUS, &ok)
@@ -206,6 +223,16 @@ func (r *Renderer) CloseCurrent() error {
 		r.api.DeleteProgram(r.program)
 		r.program = 0
 	}
+	if r.instanceProgram != 0 {
+		r.api.DeleteProgram(r.instanceProgram)
+		r.instanceProgram = 0
+	}
+	if r.instanceBuffer != 0 {
+		r.api.DeleteBuffers(1, &r.instanceBuffer)
+		r.instanceBuffer = 0
+	}
+	r.instanceData = nil
+	r.instanceBufferBytes = 0
 	r.frame = Frame{}
 	r.readback = nil
 	r.key = nil
@@ -375,35 +402,12 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 	r.api.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 	attachments := [2]uint32{gl.COLOR_ATTACHMENT0_EXT, gl.COLOR_ATTACHMENT1_EXT}
 	r.api.DrawBuffers(2, &attachments[0])
-	r.api.UseProgram(r.program)
-	r.api.UniformMatrix4fv(r.vp, 1, false, &vp32[0])
 	r.api.EnableVertexAttribArray(0)
-	for i := 0; i < s.InstanceCount(); i++ {
-		in, _ := s.Instance(i)
-		if in.Mesh.TriangleCount() == 0 {
-			continue
-		}
-		b, e := r.upload(in.Mesh)
-		if e != nil {
-			return nil, e
-		}
-		if b.count == 0 {
-			continue
-		}
-		world, _ := matrix32(in.Transform)
-		r.api.UniformMatrix4fv(r.world, 1, false, &world[0])
-		r.api.Uniform4f(r.material, float32(in.Color[0])/255, float32(in.Color[1])/255, float32(in.Color[2])/255, 1)
-		id := i + 1
-		r.api.Uniform3f(r.objectID, float32(id&255)/255, float32((id>>8)&255)/255, float32((id>>16)&255)/255)
-		r.api.BindBuffer(gl.ARRAY_BUFFER, b.vertex)
-		r.api.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
-		r.api.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 12, 0)
-		r.api.DrawElementsWithOffset(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0)
-		r.frame.Stats.DrawCalls++
-		r.frame.Stats.Triangles += int(b.count) / 3
+	defer r.finishDraw()
+	if e = r.drawInstances(s, vp, &vp32); e != nil {
+		return nil, e
 	}
-	r.api.DisableVertexAttribArray(0)
-	r.api.UseProgram(0)
+	r.finishDraw()
 	r.api.BindBuffer(gl.PIXEL_PACK_BUFFER, 0)
 	r.api.PixelStorei(gl.PACK_ALIGNMENT, 4)
 	r.api.PixelStorei(gl.PACK_ROW_LENGTH, 0)
@@ -422,6 +426,7 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 	r.frame.Sequence++
 	r.frame.Stats.ResidentMeshes = len(r.meshes)
 	r.frame.Stats.ResidentBytes = r.resident
+	r.frame.Stats.InstanceBufferBytes = r.instanceBufferBytes
 	r.frame.Stats.ReadbackBytes = int64(w) * int64(h) * 8
 	r.key, r.camera, r.bg = s, c, bg
 	return &r.frame, nil

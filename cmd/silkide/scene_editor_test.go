@@ -203,3 +203,83 @@ func TestSceneAssetEditorCancellationInvalidDocumentAndLineEndings(t *testing.T)
 		t.Fatal("invalid changed buffer")
 	}
 }
+
+func TestSceneAssetAuthoringOneHostTransactionAndDiskRoundtrip(t *testing.T) {
+	w := testWorkbench(t)
+	sceneAssetTestHooks(t)
+	source := sceneAssetTestSource(t)
+	path := writeFile(t, t.TempDir(), "authoring.silkscene", source)
+	openFileInEditor(w.tabs, path)
+	w.activate(modeEdit)
+	ed := activeEditor(w.tabs)
+	ed.SetFocus()
+	var staged *scene3d.Document
+	showSceneAssetEditor = func(_ gui.IWidget, d *scene3d.Document, commit func(*scene3d.Document) error) error {
+		e, err := gui.NewSceneDocumentEditor(d)
+		if err != nil {
+			return err
+		}
+		defer e.Close()
+		if err = e.AddNode(scene3d.DocumentNode{ID: "assembly", Name: "装配组"}); err != nil {
+			return err
+		}
+		if err = e.ReparentNode("tank", "assembly", true); err != nil {
+			return err
+		}
+		if err = e.SetBinding(scene3d.Binding{Node: "tank", Tag: "tank.level", Property: scene3d.PositionY, Gain: 1}); err != nil {
+			return err
+		}
+		if _, err = e.DuplicateSubtree("assembly", scene3d.DuplicateOptions{RootID: "second", CopyBindings: true, Tags: map[string]string{"tank.level": "second.level"}}); err != nil {
+			return err
+		}
+		if err = e.RemoveSubtree("assembly"); err != nil {
+			return err
+		}
+		if err = e.Undo(); err != nil {
+			return err
+		}
+		staged, err = e.Document()
+		if err != nil {
+			return err
+		}
+		return commit(staged)
+	}
+	editSceneAsset(w.tabs, w.canvas, ed)
+	if staged == nil || len(staged.Nodes) != 4 || len(staged.Bindings) != 2 || len(staged.Meshes) != 1 || !ed.Modified() {
+		t.Fatal("authoring not committed")
+	}
+	disk, err := os.ReadFile(path)
+	if err != nil || string(disk) != source {
+		t.Fatal("staged changes bypassed Save", err)
+	}
+	edited := ed.Text()
+	ed.Undo()
+	if ed.Text() != source || ed.CanUndo() {
+		t.Fatal("multiple host undo transactions")
+	}
+	ed.Redo()
+	if ed.Text() != edited {
+		t.Fatal("host redo")
+	}
+	if !saveEditorToDisk(ed, path) {
+		t.Fatal("save")
+	}
+	disk, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := scene3d.LoadDocument(context.Background(), bytes.NewReader(disk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a, b bytes.Buffer
+	if err = scene3d.SaveDocument(context.Background(), &a, staged); err != nil {
+		t.Fatal(err)
+	}
+	if err = scene3d.SaveDocument(context.Background(), &b, reopened); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a.Bytes(), b.Bytes()) {
+		t.Fatal("save/reopen lost authored state")
+	}
+}

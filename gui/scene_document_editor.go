@@ -2,7 +2,6 @@ package gui
 
 import (
 	"context"
-	"reflect"
 
 	"github.com/uk0/silk/async"
 	"github.com/uk0/silk/i18n"
@@ -17,6 +16,10 @@ import (
 type SceneDocumentEditor struct {
 	Widget
 	document         *scene3d.Document
+	session          *scene3d.EditSession
+	nodeMenu         *Menu
+	primitiveMeshes  map[string]*scene3d.Mesh
+	primitiveIDs     map[string]string
 	scene            *scene3d.Scene
 	tree             *TreeView
 	model            *sceneDocumentTree
@@ -46,11 +49,13 @@ func cloneSceneDocument(d *scene3d.Document) *scene3d.Document {
 }
 
 func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
-	s, err := d.Build(context.Background())
+	session, err := scene3d.NewEditSession(context.Background(), d)
 	if err != nil {
 		return nil, err
 	}
-	e := &SceneDocumentEditor{document: cloneSceneDocument(d), scene: s}
+	s, _ := session.Scene()
+	owned, _ := session.Document()
+	e := &SceneDocumentEditor{document: owned, scene: s, session: session, primitiveMeshes: make(map[string]*scene3d.Mesh), primitiveIDs: make(map[string]string)}
 	e.Widget.Init(e)
 	e.tree = NewTreeView()
 	e.tree.SetParent(e)
@@ -85,6 +90,9 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 				e.report(err)
 			}
 		}},
+		{"Node actions", "menu", func() {}},
+		{"Undo", "edit-undo", func() { e.report(e.Undo()) }},
+		{"Redo", "edit-redo", func() { e.report(e.Redo()) }},
 	} {
 		b := NewButton()
 		b.SetText(i18n.T(spec.label))
@@ -95,6 +103,7 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 		b.Action().BindFunc0(spec.run)
 		e.buttons = append(e.buttons, b)
 	}
+	e.initNodeMenu()
 	e.rebuildTree()
 	if len(d.Nodes) > 0 {
 		e.SelectNode(d.Nodes[0].ID)
@@ -121,7 +130,14 @@ func (e *SceneDocumentEditor) Close() {
 		return
 	}
 	e.closed = true
+	for _, b := range e.buttons {
+		b.HideSubPopup()
+	}
+	e.session.Close()
+	clear(e.primitiveMeshes)
+	clear(e.primitiveIDs)
 	e.preview.Close()
+	e.syncActions()
 }
 func (e *SceneDocumentEditor) SelectNode(id string) bool {
 	if e.closed {
@@ -131,6 +147,8 @@ func (e *SceneDocumentEditor) SelectNode(id string) bool {
 		return false
 	}
 	e.selected = id
+	e.preview.selected = id
+	e.preview.Update()
 	// Expand only the ancestry of the picked node, not a 10,000-node forest.
 	chain := []string{}
 	for p := e.model.parents[id]; p != ""; p = e.model.parents[p] {
@@ -188,6 +206,26 @@ func (e *SceneDocumentEditor) syncActions() {
 	e.buttons[0].SetEnabled(selected)
 	e.buttons[1].SetEnabled(selected)
 	e.buttons[2].SetEnabled(selected && e.bindings.ActiveIndex() >= 0)
+	// Group-only or fully hidden scenes have no bounds to fit. Snapshot is
+	// already cached by the edit session; selection changes do not walk geometry.
+	canFit := false
+	if !e.closed && e.scene != nil {
+		snapshot, err := e.scene.Snapshot()
+		canFit = err == nil && snapshot.InstanceCount() > 0
+	}
+	e.buttons[3].SetEnabled(canFit)
+	if len(e.buttons) >= 7 {
+		e.buttons[4].SetEnabled(!e.closed)
+		e.buttons[5].SetEnabled(e.CanUndo())
+		e.buttons[6].SetEnabled(e.CanRedo())
+	}
+	if e.nodeMenu != nil {
+		for i, item := range e.nodeMenu.items {
+			if b, ok := item.(*Button); ok {
+				b.SetEnabled(!e.closed && (i == 0 || selected))
+			}
+		}
+	}
 	text := i18n.Tf("%d nodes · %d bindings", len(e.document.Nodes), len(e.document.Bindings))
 	if e.selected != "" {
 		text += " · " + e.selected
@@ -201,93 +239,46 @@ func (e *SceneDocumentEditor) report(err error) {
 	}
 }
 
-// UpdateNode preserves mesh ownership and validates hierarchy/world bounds as a
-// transaction. IDs identify existing nodes; insertion/deletion is not provided.
+// UpdateNode preserves resource ownership and validates the whole graph/bindings.
+// Existing node edits retain the original mesh ID; AddMeshNode creates resources.
 func (e *SceneDocumentEditor) UpdateNode(node scene3d.DocumentNode) error {
 	if e.closed {
 		return async.ErrClosed
 	}
-	candidate := *e.document
-	candidate.Nodes = append([]scene3d.DocumentNode(nil), candidate.Nodes...)
-	found := false
-	for i, old := range candidate.Nodes {
-		if old.ID == node.ID {
-			if old.Mesh != node.Mesh {
-				return scene3d.ErrUnsupported
-			}
-			if reflect.DeepEqual(old, node) {
-				return nil
-			}
-			node.Transform = append([]float64(nil), node.Transform...)
-			candidate.Nodes[i] = node
-			found = true
-			break
+	for _, old := range e.document.Nodes {
+		if old.ID == node.ID && old.Mesh != node.Mesh {
+			return scene3d.ErrUnsupported
 		}
 	}
-	if !found {
-		return scene3d.ErrNode
-	}
-	s, err := candidate.Build(context.Background())
-	if err != nil {
+	if err := e.session.UpdateNode(context.Background(), node); err != nil {
 		return err
 	}
-	e.document = &candidate
-	e.scene = s
-	e.modified = true
-	e.revision++
-	e.preview.SetScene(s)
-	e.rebuildTree()
-	e.SelectNode(node.ID)
+	e.syncSession(node.ID)
 	return nil
 }
 
-// SetBinding inserts/replaces one node/property channel. The SDK rejects
-// invalid tags/types, duplicate destinations, non-finite values and group color
-// targets. The editor does not require a running TagDB or activate the binding.
+// SetBinding validates inert metadata; it never activates a driver/subscription.
 func (e *SceneDocumentEditor) SetBinding(spec scene3d.Binding) error {
 	if e.closed {
 		return async.ErrClosed
 	}
-	next := append([]scene3d.Binding(nil), e.document.Bindings...)
-	found := false
-	for i, b := range next {
-		if b.Node == spec.Node && b.Property == spec.Property {
-			if b == spec {
-				return nil
-			}
-			next[i] = spec
-			found = true
-			break
-		}
-	}
-	if !found {
-		next = append(next, spec)
-	}
-	if _, err := scene3d.NewBindingSet(e.scene, next); err != nil {
+	if err := e.session.SetBinding(context.Background(), spec); err != nil {
 		return err
 	}
-	e.document.Bindings = next
-	e.modified = true
-	e.revision++
-	e.rebuildBindings()
-	e.syncActions()
+	e.syncSession(e.selected)
 	return nil
 }
 func (e *SceneDocumentEditor) RemoveBinding(node string, property scene3d.BindingProperty) bool {
 	if e.closed {
 		return false
 	}
-	for i, b := range e.document.Bindings {
-		if b.Node == node && b.Property == property {
-			e.document.Bindings = append(e.document.Bindings[:i:i], e.document.Bindings[i+1:]...)
-			e.modified = true
-			e.revision++
-			e.rebuildBindings()
-			e.syncActions()
-			return true
-		}
+	removed, err := e.session.RemoveBinding(context.Background(), node, property)
+	if err != nil {
+		e.report(err)
+		return false
 	}
-	return false
+	e.syncSession(e.selected)
+	return removed
 }
 func (e *SceneDocumentEditor) removeSelectedBinding() {
 	i := e.bindings.ActiveIndex()
@@ -313,16 +304,18 @@ func (e *SceneDocumentEditor) Layout() {
 	if w < 760 {
 		cols = 2
 	}
-	if w < 360 {
+	if w < 300 {
 		cols = 1
 	}
 	rows := (len(e.buttons) + cols - 1) / cols
-	bh := min(row, h/float64(max(1, rows)))
-	cell := max(0, (w-float64(cols-1)*gap)/float64(cols))
+	gx := min(gap, w/float64(max(1, cols)))
+	gy := min(gap, h/float64(max(1, rows)))
+	bh := min(row, max(0, h-float64(rows-1)*gy)/float64(max(1, rows)))
+	cell := max(0, (w-float64(cols-1)*gx)/float64(cols))
 	for i, b := range e.buttons {
-		b.SetBounds(float64(i%cols)*(cell+gap), float64(i/cols)*(bh+gap), cell, bh)
+		b.SetBounds(float64(i%cols)*(cell+gx), float64(i/cols)*(bh+gy), cell, bh)
 	}
-	top := min(h, float64(rows)*(bh+gap))
+	top := min(h, float64(rows)*bh+float64(rows-1)*gy+gap)
 	bottom := min(row, max(0, h-top))
 	body := max(0, h-top-bottom-gap)
 	left := max(0, (w-gap)*.35)

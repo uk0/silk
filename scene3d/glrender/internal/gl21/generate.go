@@ -33,6 +33,8 @@ var types = map[string]abiType{
 // Parameter names avoid C/Go keywords. Offset parameters are passed as integers
 // across cgo and cast inside C, never forged into Go pointers under checkptr.
 const spec = `
+VertexAttribDivisor void index:u32 divisor:u32
+DrawElementsInstancedWithOffset void mode:u32 count:i32 kind:u32 offset:offset instances:i32
 GetString bytestr name:u32
 GetIntegerv void pname:u32 data:i32p
 GetError u32
@@ -93,6 +95,13 @@ ReadBuffer void src:u32
 ReadPixels void x:i32 y:i32 width:i32 height:i32 format:u32 kind:u32 pixels:ptr
 `
 
+// Optional entrypoints must not make existing GL 2.1 renderers unavailable.
+// Availability requires both an advertised capability and non-null pointers.
+var optional = map[string][]string{
+	"VertexAttribDivisor":             {"glVertexAttribDivisor", "glVertexAttribDivisorARB"},
+	"DrawElementsInstancedWithOffset": {"glDrawElementsInstanced", "glDrawElementsInstancedARB", "glDrawElementsInstancedEXT"},
+}
+
 func main() {
 	var fields, wrappers, loaders, methods strings.Builder
 	count := 0
@@ -127,7 +136,13 @@ func main() {
 			cp = "void"
 		}
 		fmt.Fprintf(&fields, "    %s (SILK_GL_CALL *%s)(%s);\n", ret.c, name, cp)
-		fmt.Fprintf(&loaders, "    SILK_LOAD(%s, \"gl%s\");\n", name, native)
+		if aliases, ok := optional[name]; ok {
+			for _, alias := range aliases {
+				fmt.Fprintf(&loaders, "    SILK_OPTIONAL(%s, %q);\n", name, alias)
+			}
+		} else {
+			fmt.Fprintf(&loaders, "    SILK_LOAD(%s, \"gl%s\");\n", name, native)
+		}
 		count++
 		if name == "ShaderSource" {
 			continue
@@ -177,6 +192,7 @@ silk_gl_api *silk_gl_open(char *error, size_t capacity);
 void silk_gl_close(silk_gl_api *api);
 int silk_gl_current(silk_gl_api *api);
 uintptr_t silk_gl_thread(void);
+int silk_gl_instancing_entries(silk_gl_api *api);
 void silk_gl_shader_source(silk_gl_api *api, uint32_t shader, const char *source, int32_t length);
 %s
 #endif

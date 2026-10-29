@@ -38,6 +38,16 @@ func (v *SceneView) GPUInfo() glrender.Info {
 	return glrender.Info{}
 }
 
+// GPUCapabilities reports the currently active native renderer. Before the first
+// draw, after Close, and on CPU fallback it returns no GPU capabilities. Like
+// other SceneView accessors this is UI-owner-only; it does not create a context.
+func (v *SceneView) GPUCapabilities() glrender.Capabilities {
+	if provider, ok := v.gpu.(interface{ Capabilities() glrender.Capabilities }); ok {
+		return provider.Capabilities()
+	}
+	return glrender.Capabilities{}
+}
+
 // GPUError exposes why auto fell back, separately from model/render errors.
 // Setting another backend then auto allows an explicit retry; Draw never loops
 // context creation after a failure.

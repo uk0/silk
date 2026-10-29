@@ -16,7 +16,7 @@
 
 当前阶段的 CPU 参考渲染器不是 GPU 高性能目标的替代品；完整材质/纹理、高性能 GPU 管线、大场景性能与三平台桌面验收未完成前，整个目标保持 active。
 
-## 当前证据与下一步
+## 早期阶段证据（后续进展见文末）
 
 - `14ab7b4` 已提交 CPU 参考、OBJ、嵌入式控件、位置/可见性绑定与设计器接入。
 - 本阶段增加真实 OpenGL FBO/深度/颜色与 ID、共享网格缓冲和后端诊断。
@@ -34,7 +34,7 @@ DLL 加载策略。Linux Xvfb/Mesa 软件 GL 的实际渲染与控件合成已�
 下一步继续有序合成、场景绑定编辑和完整材质导入；按 context 入口独立不等于整个 GUI 可以从
 任意 goroutine 绘制，原生控件仍严格遵守 UI 线程契约。
 
-## glTF 静态组装件（基础导入已实现）
+## glTF 静态组装件（基础导入阶段记录）
 
 现有异步控件链路接入 glTF/GLB：层级、共享网格、变换、基础色、稳定子节点 ID、根节点
 点位绑定和显式 FitScene。外部 buffer 由 os.Root 限制到模型目录，失败/取消不替换当前场景。
@@ -43,7 +43,7 @@ DLL 加载策略。Linux Xvfb/Mesa 软件 GL 的实际渲染与控件合成已�
 Windows 为 CPU 回退，Linux 为软件 GL，不代替 Windows GPU 或 Linux 物理桌面验收。
 跳过项、源码校验、失败重测与限制见 [glTF 验证记录](GLTF_QA_20261028.md)。
 
-## 场景文档与组态编辑链
+## 场景文档与组态编辑链（阶段记录）
 
 当前补齐 `.silkscene` 静态场景持久化、共享 mesh/节点 ID 回读、创作基线导出及编译式
 位置/旋转/缩放/可见性/告警颜色绑定；SceneView 使用一条合并投递，分批让出 UI 调度。
@@ -51,3 +51,40 @@ Windows 为 CPU 回退，Linux 为软件 GL，不代替 Windows GPU 或 Linux �
 嵌套原生对话框立即隐藏、延迟释放，关闭子窗时把焦点交回仍在运行的父模态。
 本轮验证及平台边界见 [场景文档 QA](SCENE_DOCUMENT_QA_20261028.md)。
 后续仍需节点增删/gizmo、材质、GPU 直接合成、实例化及大场景性能验证；整体目标未完成。
+
+## 设备模板与批量组装（初始阶段记录）
+
+新增可复用的不可变 `Template`、原子批量放置、独立节点 ID 与点位映射，复用网格而不按设备
+拷贝顶点数组；纯 Go `scene3dplant` 示例可把一个设备装配成可在现有 IDE 中打开的产线文档。
+它是设备库/复制拖入的 SDK 基础，不是 GPU 硬件实例化，也没有把交互式设备库、节点增删、
+多模型拖入、gizmo、材质或大场景渲染性能验收标为完成。新一轮验证与编辑器接入持续推进。
+
+
+## 有序硬件实例化（实现与验证范围）
+
+增加可选的 per-context instancing 入口、连续共享 mesh 批量 draw、保留 ID / 等深度顺序、
+有界 staging、SDK 策略和 SceneView 能力查询。Apple 真实 GPU 与 Mesa 软件 GL 对照已
+发现并修复每实例颜色插值精度差异；最终合并候选的全量回归、Windows 与真实桌面验收
+统一记录在 [最终验收矩阵](SCENE_RELEASE_QA_20261028.md)，不以旧候选结果替代。
+不因此将材质/纹理、直接 GPU 合成、设备库/gizmo 或完整工业 IDE 目标标成完成。
+
+## 原子场景创作 SDK 与编辑器
+
+- Added inert authoring sessions, resource-sharing node creation, subtree copy /
+  delete, safe keep-world reparent and bounded undo/redo.
+- Integrated owned scene-editor menus/forms, primitive creation, history controls,
+  exact one-transaction host commit/save and small-host bounds regression coverage.
+- Scope remains opaque static geometry and authored binding declarations, not
+  animation, physics, a general CAD editor or completed Qt Creator parity.
+- Safety contracts are documented in `SCENE_AUTHORING_QA_20261028.md`; the
+  final frozen-source regression matrix is in `SCENE_RELEASE_QA_20261028.md`.
+
+## 本次整合后的能力边界
+
+设备模板/批量放置、保守视锥裁剪、有序实例化，以及节点新增/复制/删除/改父级和有界历史
+已实现；上文按阶段保留的“未完成”描述是当时的历史状态，当前证据以
+[最终验收矩阵](SCENE_RELEASE_QA_20261028.md) 为准。
+
+仍未完成：交互式设备库拖入/gizmo、PBR/纹理/动画/蒙皮、BVH/LOD、GPU 直接合成、
+Windows 硬件 GPU 和 Linux 物理桌面验收、全应用高负载性能指标、完整工业 IDE 与 Qt
+Creator 功能对等。当前实例化不保证所有驱动更快，原生控件仍限定 UI 所属线程。

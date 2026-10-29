@@ -23,11 +23,11 @@ func TestOpenWithoutContextNeverPublishesPartialTable(t *testing.T) {
 		}
 	}
 	var zero API
-	if zero.Current() || zero.OnThread() {
+	if zero.Current() || zero.OnThread() || zero.SupportsInstancing() {
 		t.Fatal("zero API has native ownership")
 	}
 	zero.Close()
-	if EntryCount != 58 {
+	if EntryCount != 60 {
 		t.Fatal("review any change to the supported GL ABI", EntryCount)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,12 +51,27 @@ func nativeProbe() error {
 	}
 	defer w.Destroy()
 	w.MakeContextCurrent()
+	nativeInstancingRan = true
+	nativeInstancingErr = nativeInstancingProbe()
+	if nativeInstancingErr != nil {
+		return nativeInstancingErr
+	}
+	nativeFrustumRan = true
+	nativeFrustumErr = nativeFrustumProbe()
+	if nativeFrustumErr != nil {
+		return nativeFrustumErr
+	}
 	r, e := NewCurrent()
 	if e != nil {
 		return e
 	}
 	defer r.Close()
 	fmt.Printf("GPU_INFO %+v\n", r.Info())
+	for _, extension := range strings.Fields(r.api.GetString(0x1F03)) {
+		if strings.Contains(extension, "instanc") {
+			fmt.Printf("GPU_INSTANCE_EXTENSION %s\n", extension)
+		}
+	}
 	s := scene3d.NewScene()
 	mesh := scene3d.Box()
 	for _, n := range []scene3d.Node{{ID: "front", Mesh: mesh, Color: color.RGBA{230, 40, 60, 255}}, {ID: "back", Mesh: mesh, Transform: scene3d.Translation(scene3d.Vec3{X: .7, Z: -3}), Color: color.RGBA{20, 210, 140, 255}}} {

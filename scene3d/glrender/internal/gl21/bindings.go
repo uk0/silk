@@ -9,8 +9,14 @@ package gl21
 import "C"
 import "unsafe"
 
-const EntryCount = 58
+const EntryCount = 60
 
+func (api *API) VertexAttribDivisor(index uint32, divisor uint32) {
+	C.silk_VertexAttribDivisor(api.table, C.uint32_t(index), C.uint32_t(divisor))
+}
+func (api *API) DrawElementsInstancedWithOffset(mode uint32, count int32, kind uint32, offset uintptr, instances int32) {
+	C.silk_DrawElementsInstancedWithOffset(api.table, C.uint32_t(mode), C.int32_t(count), C.uint32_t(kind), C.uintptr_t(offset), C.int32_t(instances))
+}
 func (api *API) GetString(name uint32) string {
 	return C.GoString((*C.char)(unsafe.Pointer(C.silk_GetString(api.table, C.uint32_t(name)))))
 }

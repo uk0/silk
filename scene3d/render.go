@@ -13,6 +13,9 @@ const MaxDimension = 8192
 type RenderStats struct {
 	Triangles, Clipped, Pixels int
 	Cached                     bool
+	// CulledTriangles counts source index triangles, including degenerate ones.
+	// Cached frames retain the statistics from the last actual render.
+	CulledInstances, CulledTriangles int
 }
 
 // Frame is renderer-owned and valid until its next Render. Treat pixels as
@@ -86,7 +89,13 @@ func (r *Renderer) Render(s *Snapshot, c Camera, width, height int, bg color.RGB
 		filled += copy(pixels[filled:], pixels[:filled])
 	}
 	light := Vec3{.35, .8, .45}.Unit()
+	frustum := NewFrustum(vp)
 	for ii, in := range s.instances {
+		if !frustum.Intersects(in.mesh, in.world) {
+			f.Stats.CulledInstances++
+			f.Stats.CulledTriangles += in.mesh.TriangleCount()
+			continue
+		}
 		count := len(in.mesh.vertices)
 		if cap(r.world) < count {
 			r.world = make([]Vec3, count)
