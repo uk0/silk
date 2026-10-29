@@ -9,13 +9,19 @@ package gl21
 import "C"
 import "unsafe"
 
-const EntryCount = 60
+const EntryCount = 62
 
 func (api *API) VertexAttribDivisor(index uint32, divisor uint32) {
 	C.silk_VertexAttribDivisor(api.table, C.uint32_t(index), C.uint32_t(divisor))
 }
 func (api *API) DrawElementsInstancedWithOffset(mode uint32, count int32, kind uint32, offset uintptr, instances int32) {
 	C.silk_DrawElementsInstancedWithOffset(api.table, C.uint32_t(mode), C.int32_t(count), C.uint32_t(kind), C.uintptr_t(offset), C.int32_t(instances))
+}
+func (api *API) BlitFramebufferEXT(srcX0 int32, srcY0 int32, srcX1 int32, srcY1 int32, dstX0 int32, dstY0 int32, dstX1 int32, dstY1 int32, mask uint32, filter uint32) {
+	C.silk_BlitFramebufferEXT(api.table, C.int32_t(srcX0), C.int32_t(srcY0), C.int32_t(srcX1), C.int32_t(srcY1), C.int32_t(dstX0), C.int32_t(dstY0), C.int32_t(dstX1), C.int32_t(dstY1), C.uint32_t(mask), C.uint32_t(filter))
+}
+func (api *API) Scissor(x int32, y int32, width int32, height int32) {
+	C.silk_Scissor(api.table, C.int32_t(x), C.int32_t(y), C.int32_t(width), C.int32_t(height))
 }
 func (api *API) GetString(name uint32) string {
 	return C.GoString((*C.char)(unsafe.Pointer(C.silk_GetString(api.table, C.uint32_t(name)))))

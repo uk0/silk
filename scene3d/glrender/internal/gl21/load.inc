@@ -4,6 +4,9 @@
     SILK_OPTIONAL(DrawElementsInstancedWithOffset, "glDrawElementsInstanced");
     SILK_OPTIONAL(DrawElementsInstancedWithOffset, "glDrawElementsInstancedARB");
     SILK_OPTIONAL(DrawElementsInstancedWithOffset, "glDrawElementsInstancedEXT");
+    SILK_OPTIONAL(BlitFramebufferEXT, "glBlitFramebufferEXT");
+    SILK_OPTIONAL(BlitFramebufferEXT, "glBlitFramebuffer");
+    SILK_LOAD(Scissor, "glScissor");
     SILK_LOAD(GetString, "glGetString");
     SILK_LOAD(GetIntegerv, "glGetIntegerv");
     SILK_LOAD(GetError, "glGetError");

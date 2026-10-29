@@ -19,6 +19,8 @@ typedef struct silk_gl_api {
     silk_lookup_fn getProc;
     void (SILK_GL_CALL *VertexAttribDivisor)(uint32_t index, uint32_t divisor);
     void (SILK_GL_CALL *DrawElementsInstancedWithOffset)(uint32_t mode, int32_t count, uint32_t kind, const void * offset, int32_t instances);
+    void (SILK_GL_CALL *BlitFramebufferEXT)(int32_t srcX0, int32_t srcY0, int32_t srcX1, int32_t srcY1, int32_t dstX0, int32_t dstY0, int32_t dstX1, int32_t dstY1, uint32_t mask, uint32_t filter);
+    void (SILK_GL_CALL *Scissor)(int32_t x, int32_t y, int32_t width, int32_t height);
     const uint8_t * (SILK_GL_CALL *GetString)(uint32_t name);
     void (SILK_GL_CALL *GetIntegerv)(uint32_t pname, int32_t * data);
     uint32_t (SILK_GL_CALL *GetError)(void);
@@ -83,9 +85,12 @@ void silk_gl_close(silk_gl_api *api);
 int silk_gl_current(silk_gl_api *api);
 uintptr_t silk_gl_thread(void);
 int silk_gl_instancing_entries(silk_gl_api *api);
+int silk_gl_blit_entries(silk_gl_api *api);
 void silk_gl_shader_source(silk_gl_api *api, uint32_t shader, const char *source, int32_t length);
 static inline void silk_VertexAttribDivisor(silk_gl_api *api, uint32_t index, uint32_t divisor) { api->VertexAttribDivisor(index, divisor); }
 static inline void silk_DrawElementsInstancedWithOffset(silk_gl_api *api, uint32_t mode, int32_t count, uint32_t kind, uintptr_t offset, int32_t instances) { api->DrawElementsInstancedWithOffset(mode, count, kind, (const void *)offset, instances); }
+static inline void silk_BlitFramebufferEXT(silk_gl_api *api, int32_t srcX0, int32_t srcY0, int32_t srcX1, int32_t srcY1, int32_t dstX0, int32_t dstY0, int32_t dstX1, int32_t dstY1, uint32_t mask, uint32_t filter) { api->BlitFramebufferEXT(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter); }
+static inline void silk_Scissor(silk_gl_api *api, int32_t x, int32_t y, int32_t width, int32_t height) { api->Scissor(x, y, width, height); }
 static inline const uint8_t * silk_GetString(silk_gl_api *api, uint32_t name) { return api->GetString(name); }
 static inline void silk_GetIntegerv(silk_gl_api *api, uint32_t pname, int32_t * data) { api->GetIntegerv(pname, data); }
 static inline uint32_t silk_GetError(silk_gl_api *api) { return api->GetError(); }

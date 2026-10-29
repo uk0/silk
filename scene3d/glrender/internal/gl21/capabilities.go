@@ -27,3 +27,22 @@ func supportsInstancing(version, extensions string, attributes int32, entries bo
 	flat := major >= 3 || has("GL_EXT_gpu_shader4")
 	return draw && arrays && flat
 }
+
+func supportsFramebufferBlit(version, extensions string, entry bool) bool {
+	if !entry {
+		return false
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil || major < 2 {
+		return false
+	}
+	if major >= 3 {
+		return true
+	}
+	for _, ext := range strings.Fields(extensions) {
+		if ext == "GL_EXT_framebuffer_blit" || ext == "GL_ARB_framebuffer_object" {
+			return true
+		}
+	}
+	return false
+}

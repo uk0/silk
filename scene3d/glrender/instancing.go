@@ -144,9 +144,9 @@ func (r *Renderer) drawSingle(in scene3d.RenderInstance, id int, vp *[16]float32
 	r.api.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
 	r.api.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 12, 0)
 	r.api.DrawElementsWithOffset(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0)
-	r.frame.Stats.DrawCalls++
-	r.frame.Stats.Instances++
-	r.frame.Stats.Triangles += int(b.count) / 3
+	r.stats.DrawCalls++
+	r.stats.Instances++
+	r.stats.Triangles += int(b.count) / 3
 	return nil
 }
 
@@ -173,19 +173,19 @@ func (r *Renderer) drawBatch(mesh *scene3d.Mesh, count int, vp *[16]float32) err
 	r.api.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.index)
 	r.api.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 12, 0)
 	r.api.DrawElementsInstancedWithOffset(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0, int32(count))
-	r.frame.Stats.DrawCalls++
-	r.frame.Stats.InstancedDrawCalls++
-	r.frame.Stats.InstancedInstances += count
-	r.frame.Stats.Instances += count
-	r.frame.Stats.Triangles += int(b.count) / 3 * count
-	r.frame.Stats.InstanceUploadBytes += int64(size)
+	r.stats.DrawCalls++
+	r.stats.InstancedDrawCalls++
+	r.stats.InstancedInstances += count
+	r.stats.Instances += count
+	r.stats.Triangles += int(b.count) / 3 * count
+	r.stats.InstanceUploadBytes += int64(size)
 	return nil
 }
 
 func (r *Renderer) drawInstances(s *scene3d.Snapshot, vp scene3d.Mat4, vp32 *[16]float32) error {
-	r.visible, r.frame.Stats.Culling = r.culler.Cull(r.visible, s, scene3d.NewFrustum(vp))
-	r.frame.Stats.CulledInstances = r.frame.Stats.Culling.CulledInstances
-	r.frame.Stats.CulledTriangles = r.frame.Stats.Culling.CulledTriangles
+	r.visible, r.stats.Culling = r.culler.Cull(r.visible, s, scene3d.NewFrustum(vp))
+	r.stats.CulledInstances = r.stats.Culling.CulledInstances
+	r.stats.CulledTriangles = r.stats.Culling.CulledTriangles
 	var first scene3d.RenderInstance
 	firstID, count := 0, 0
 	r.instanceData = r.instanceData[:0]

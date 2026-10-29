@@ -2,7 +2,8 @@
 // It requires a dedicated OpenGL 2.1 compatibility context with EXT framebuffer
 // objects and two draw buffers. The host owns the context and OS thread; call
 // NewCurrent, Render and Close only while that same context is current.
-// The CPU readback preserves ordinary UI composition, not a floating overlay.
+// Render retains CPU readback for ordinary UI composition. RenderGPU exposes
+// resident frames for hosts that explicitly implement ordered GPU composition.
 package glrender
 
 import (

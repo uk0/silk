@@ -66,6 +66,11 @@ func nativeProbe() error {
 	if nativeBVHErr != nil {
 		return nativeBVHErr
 	}
+	nativeResidentRan = true
+	nativeResidentErr = nativeResidentProbe()
+	if nativeResidentErr != nil {
+		return nativeResidentErr
+	}
 	r, e := NewCurrent()
 	if e != nil {
 		return e

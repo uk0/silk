@@ -30,3 +30,24 @@ func TestInstancingRequiresCapabilityEntriesAndAttributes(t *testing.T) {
 		})
 	}
 }
+
+func TestFramebufferBlitRequiresCapabilityAndEntry(t *testing.T) {
+	for _, c := range []struct {
+		version, ext string
+		entry, want  bool
+	}{
+		{"2.1 Metal", "GL_EXT_framebuffer_blit", true, true},
+		{"2.1", "GL_ARB_framebuffer_object", true, true},
+		{"3.0 Mesa", "", true, true},
+		{"4.6", "", false, false},
+		{"2.1", "", true, false},
+		{"2.1", "GL_EXT_framebuffer_blit_not_real", true, false},
+		{"1.5", "GL_EXT_framebuffer_blit", true, false},
+		{"OpenGL ES 3.0", "GL_EXT_framebuffer_blit", true, false},
+		{"bad", "GL_EXT_framebuffer_blit", true, false},
+	} {
+		if got := supportsFramebufferBlit(c.version, c.ext, c.entry); got != c.want {
+			t.Fatalf("%+v: %v", c, got)
+		}
+	}
+}

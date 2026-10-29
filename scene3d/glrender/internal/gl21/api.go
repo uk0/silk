@@ -73,3 +73,12 @@ func boolByte(v bool) uint8 {
 func Pointer[T ~byte | ~uint32 | ~float32](values []T) unsafe.Pointer {
 	return unsafe.Pointer(unsafe.SliceData(values))
 }
+
+// SupportsFramebufferBlit requires an advertised desktop capability as well as
+// an entrypoint: GLX may return dispatch stubs for unsupported functionality.
+func (api *API) SupportsFramebufferBlit() bool {
+	if !api.Current() {
+		return false
+	}
+	return supportsFramebufferBlit(api.GetString(VERSION), api.GetString(EXTENSIONS), C.silk_gl_blit_entries(api.table) != 0)
+}

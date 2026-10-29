@@ -4,7 +4,6 @@ package glrender
 
 import (
 	"fmt"
-	"image"
 	"image/color"
 	"math"
 	"runtime"
@@ -47,6 +46,7 @@ type meshBuffer struct {
 type Renderer struct {
 	api                                          *gl.API
 	info                                         Info
+	canBlit                                      bool
 	closed                                       bool
 	program                                      uint32
 	world, vp, material, objectID                int32
@@ -57,6 +57,9 @@ type Renderer struct {
 	meshes                                       map[*scene3d.Mesh]*meshBuffer
 	resident                                     int64
 	epoch                                        uint64
+	stats                                        Stats
+	sequence, generation, capturedGeneration     uint64
+	transfers                                    TransferStats
 	frame                                        Frame
 	readback                                     []byte
 	prepared                                     *scene3d.Snapshot
@@ -114,6 +117,7 @@ func NewCurrentWithOptions(options Options) (*Renderer, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.canBlit = api.SupportsFramebufferBlit()
 	r.program = program
 	r.world = api.GetUniformLocation(program, "world")
 	r.vp = api.GetUniformLocation(program, "viewProjection")
@@ -271,9 +275,6 @@ func (r *Renderer) target(w, h int) error {
 		return fmt.Errorf("%w: framebuffer status %#x, GL error %#x", ErrUnavailable, status, e)
 	}
 	r.width, r.height = w, h
-	r.frame.Image = image.NewRGBA(image.Rect(0, 0, w, h))
-	r.frame.pickPixels = make([]byte, w*h*4)
-	r.readback = make([]byte, w*h*4)
 	return nil
 }
 func (r *Renderer) deleteMesh(mesh *scene3d.Mesh, b *meshBuffer) {
@@ -310,7 +311,7 @@ func (r *Renderer) upload(mesh *scene3d.Mesh) (*meshBuffer, error) {
 	}
 	r.meshes[mesh] = b
 	r.resident += bytes
-	r.frame.Stats.MeshUploads++
+	r.stats.MeshUploads++
 	return b, nil
 }
 func matrix32(m scene3d.Mat4) ([16]float32, error) {
@@ -323,39 +324,55 @@ func matrix32(m scene3d.Mat4) ([16]float32, error) {
 	}
 	return out, nil
 }
+
+// Render preserves the CPU FrameView path used by ordinary Cairo composition.
+// Advanced hosts can use RenderGPU and explicit BlitColor/Readback/PickGPU instead.
 func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (*Frame, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	f, err := r.RenderGPU(s, c, w, h, bg)
+	if err != nil {
+		return nil, err
+	}
+	return r.Readback(f)
+}
+
+// RenderGPU leaves color and ID attachments resident, without full-frame host
+// allocation or glReadPixels. Like Render, it changes GL state on its owner.
+// A changed render invalidates older GPUFrame leases; validation failures before
+// touching the render target leave the preceding lease valid.
+func (r *Renderer) RenderGPU(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (GPUFrame, error) {
 	if r == nil || r.api == nil {
-		return nil, ErrClosed
+		return GPUFrame{}, ErrClosed
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if !r.api.OnThread() {
-		return nil, ErrContext
+		return GPUFrame{}, ErrContext
 	}
 	if r.closed {
-		return nil, ErrClosed
+		return GPUFrame{}, ErrClosed
 	}
 	if !r.api.Current() {
-		return nil, ErrContext
+		return GPUFrame{}, ErrContext
 	}
 	if s == nil {
-		return nil, scene3d.ErrNode
+		return GPUFrame{}, scene3d.ErrNode
 	}
 	if w <= 0 || h <= 0 || w > min(r.maxSize, scene3d.MaxDimension) || h > min(r.maxSize, scene3d.MaxDimension) || w > scene3d.MaxPixels/h {
-		return nil, scene3d.ErrLimit
+		return GPUFrame{}, scene3d.ErrLimit
 	}
 	bg.A = 255
 	if r.key == s && r.camera == c && r.bg == bg && r.width == w && r.height == h {
-		r.frame.Stats.Cached = true
-		return &r.frame, nil
+		return r.gpuFrame(true), nil
 	}
 	vp, e := c.ViewProjection(float64(w) / float64(h))
 	if e != nil {
-		return nil, e
+		return GPUFrame{}, e
 	}
 	vp32, e := matrix32(vp)
 	if e != nil {
-		return nil, e
+		return GPUFrame{}, e
 	}
 	validated := 0
 	if r.prepared != s {
@@ -366,7 +383,7 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 		for i := 0; i < s.InstanceCount(); i++ {
 			in, _ := s.Instance(i)
 			if _, e = matrix32(in.Transform); e != nil {
-				return nil, e
+				return GPUFrame{}, e
 			}
 			if b := r.meshes[in.Mesh]; b != nil {
 				b.seen = r.epoch
@@ -375,7 +392,7 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 		}
 		// Conservative per-instance upper bound also bounds cold-cache uploads.
 		if total > maxResidentBytes {
-			return nil, scene3d.ErrLimit
+			return GPUFrame{}, scene3d.ErrLimit
 		}
 		for mesh, b := range r.meshes {
 			if b.seen != r.epoch {
@@ -386,9 +403,10 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 		validated = s.InstanceCount()
 	}
 	r.key = nil
-	r.frame.Stats = Stats{ValidatedInstances: validated}
+	r.generation++ // Any mutation retires prior GPU leases, including failed draws.
+	r.stats = Stats{ValidatedInstances: validated}
 	if e = r.target(w, h); e != nil {
-		return nil, e
+		return GPUFrame{}, e
 	}
 	r.api.BindFramebufferEXT(gl.FRAMEBUFFER_EXT, r.fbo)
 	r.api.Viewport(0, 0, int32(w), int32(h))
@@ -415,29 +433,16 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 	r.api.EnableVertexAttribArray(0)
 	defer r.finishDraw()
 	if e = r.drawInstances(s, vp, &vp32); e != nil {
-		return nil, e
+		return GPUFrame{}, e
 	}
 	r.finishDraw()
-	r.api.BindBuffer(gl.PIXEL_PACK_BUFFER, 0)
-	r.api.PixelStorei(gl.PACK_ALIGNMENT, 4)
-	r.api.PixelStorei(gl.PACK_ROW_LENGTH, 0)
-	r.api.ReadBuffer(gl.COLOR_ATTACHMENT0_EXT)
-	r.api.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Pointer(r.readback))
-	r.api.ReadBuffer(gl.COLOR_ATTACHMENT1_EXT)
-	r.api.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Pointer(r.frame.pickPixels))
 	if e := r.api.GetError(); e != gl.NO_ERROR {
-		return nil, fmt.Errorf("%w: render/readback %#x", ErrUnavailable, e)
+		return GPUFrame{}, fmt.Errorf("%w: render %#x", ErrUnavailable, e)
 	}
-	stride := w * 4
-	for y := 0; y < h; y++ {
-		copy(r.frame.Image.Pix[y*stride:(y+1)*stride], r.readback[(h-y-1)*stride:(h-y)*stride])
-	}
-	r.frame.snapshot = s
-	r.frame.Sequence++
-	r.frame.Stats.ResidentMeshes = len(r.meshes)
-	r.frame.Stats.ResidentBytes = r.resident
-	r.frame.Stats.InstanceBufferBytes = r.instanceBufferBytes
-	r.frame.Stats.ReadbackBytes = int64(w) * int64(h) * 8
+	r.sequence++
+	r.stats.ResidentMeshes = len(r.meshes)
+	r.stats.ResidentBytes = r.resident
+	r.stats.InstanceBufferBytes = r.instanceBufferBytes
 	r.key, r.camera, r.bg = s, c, bg
-	return &r.frame, nil
+	return r.gpuFrame(false), nil
 }

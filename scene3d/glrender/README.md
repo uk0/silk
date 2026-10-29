@@ -8,7 +8,7 @@
 - 要求 cgo、OpenGL 2.1 compatibility、`GL_EXT_framebuffer_object` 和至少两个 draw buffers。
   `!cgo` / `silk_pure_go` 编译为明确返回 `ErrUnavailable` 的桩，不偷偷宣称 GPU 可用。
 - 宿主创建**独占**上下文，在绑定该上下文的同一 OS 线程调用 `NewCurrent`、`Render`、
-  `CloseCurrent`。每个 Renderer 现在拥有独立的 **58 项必需 + 2 项可选 GL 函数表**，不再初始化/
+  `CloseCurrent`。每个 Renderer 现在拥有独立的 **59 项必需 + 3 项可选 GL 函数表**，不再初始化/
   改写 go-gl 的进程全局入口。不同 context 的 Renderer 可以在各自锁定的 OS 线程并行；
   同一个 Renderer 仍不可跨线程使用，宿主仍需 `runtime.LockOSThread` 并保持正确绑定。
   后端会改变其独占 context 的 GL 状态，不负责恢复该 context 内任意外部状态。
@@ -137,3 +137,43 @@ GPU 的矩阵可表示性、完整场景预算与驻留集合验证按不可变 
 颜色时不重建空间树；移入视野的冷网格仍按需上传；移除的网格仍被回收；关闭时释放
 空间 scratch 和缓存快照。`Render` 仍返回顶端起始 CPU 图像，颜色和 ID 同步 readback
 没有在本阶段移除，不能据此宣称解决了所有驱动/所有场景的呈现瓶颈。
+
+## GPU 驻留帧与显式传输（开发增量）
+
+`RenderGPU` 与旧 `Render` 共用相同几何/实例化/裁剪/深度路径，但把颜色和 ID 保留在 FBO。
+不调用 `glReadPixels`，也不创建全帧 Image、ID 像素或翻转缓冲。`GPUFrame` 是不暴露 GL 名称的
+不可变借用令牌；变化绘制/resize/Close 后失效，相同缓存命中不使其失效。错误线程、错误 context、
+其他 Renderer 的令牌、零值和过期令牌在调用 GL 前拒绝。参数验证在触碰旧帧之前失败时保留旧令牌。
+
+```go
+frame, err := renderer.RenderGPU(snapshot, camera, width, height, background)
+if err != nil { return err }
+if !renderer.CanBlitColor() { return glrender.ErrUnavailable }
+// The host configures targetFBO's draw buffers and supplies its exact pixel size.
+// Rectangles use top-left physical pixels; scaling is nearest, clip is explicit.
+err = renderer.BlitColor(frame, targetFBO, targetWidth, targetHeight, destination, clip)
+// Only when input requires a raster ID:
+node, err := renderer.PickGPU(frame, pixelX, pixelY) // exactly four ID bytes
+// Only for CPU composition, export or explicit diagnostics:
+capture, err := renderer.Readback(frame) // both attachments, lazy/reused host buffers
+_ = node; _ = capture
+return err
+```
+
+- `BlitColor` 要求可选 EXT/core framebuffer blit；是**不透明复制**，不做 alpha 混合或控件排序。
+  目标已配置的所有 draw buffers 接收颜色。宿主不得将源附件别名绑定到目标。保存/恢复 read/draw
+  framebuffer、源 read selector 和 scissor 状态；它不会破坏目标的 MRT draw-buffer 配置。
+- `PickGPU` 与全量 Readback 使用同一 raster ID，不以几何射线冒充光栅可见性；界外查询零传输。
+  调用是同步的，单像素仍可能等待 GPU 完成，不是“零延迟”。Readback/Pick 显式重置 pack buffer、
+  alignment、row length 和 skip rows/pixels，以免宿主残余状态越过目标切片；它们不保存该 GL 状态。
+- `Transfers()` 为所属线程上的累计成功调用/字节计数，区分 ColorBlits、ColorReads、IDReads 和
+  字节数；不是驱动计时。`GPUFrame.Statistics().ReadbackBytes` 为 0；CPU Frame 保持旧统计语义。
+- `Render` 仍返回 `FrameView`，等价于 GPU render + 显式完整 readback，兼容当前 Cairo 控件树。
+  **SceneView 尚未接入驻留帧**：不能在最终 2D 图像上无条件叠一张 GPU 图，那会覆盖菜单、同级控件
+  与 toast。后续必须完成有序合成、截图/导出、所有权迁移与原生控件生命周期后，才称 IDE 零读回。
+- `SILK_TEST_SCENE_GPU=1 SILK_TEST_REQUIRE_BLIT=1` 启用实际 native resident 探针，检查零全帧
+  CPU 缓冲、4 字节拾取、裁剪/负偏移/缩放逐像素结果、GL 状态恢复和线程/关闭/过期拒绝。
+
+依据：[Khronos 同步语义](https://wikis.khronos.org/opengl/Synchronization)、
+[EXT framebuffer blit](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_framebuffer_blit.txt)。
+使用 PBO 后立即映射并不能消除等待，故本阶段先拆开驻留帧和真正需要的读回，不增加空闲绘制循环。

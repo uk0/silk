@@ -116,3 +116,5 @@ int silk_gl_instancing_entries(silk_gl_api *api) {
 void silk_gl_shader_source(silk_gl_api *api, uint32_t shader, const char *source, int32_t length) {
     api->ShaderSource(shader, 1, &source, &length);
 }
+
+int silk_gl_blit_entries(silk_gl_api *api) { return api && api->BlitFramebufferEXT; }

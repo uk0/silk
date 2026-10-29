@@ -1,6 +1,6 @@
 # SceneView 的精简 GL ABI
 
-这是私有实现，不是通用 OpenGL SDK。维护 `generate.go` 的 58 个必需 + 2 个可选函数声明，然后执行：
+这是私有实现，不是通用 OpenGL SDK。维护 `generate.go` 的 59 个必需 + 3 个可选函数声明，然后执行：
 
 ```sh
 go generate ./scene3d/glrender/internal/gl21
@@ -22,7 +22,8 @@ go generate ./scene3d/glrender/internal/gl21
 - 默认单测覆盖无 current context 时反复打开失败、零值 API；真实驱动探针覆盖颜色/ID、
   深度、两 context 并行、错误 context/线程及并发 owner Close。只编译不代表驱动成功。
 
-此绑定不实现零读回、MSAA 或 PBR；不要据此宣称整个 3D 引擎目标完成。
+驻留帧和可选 framebuffer blit 允许 SDK 宿主不读回颜色；这不等于 GUI 已接入有序直接合成，
+也不实现 MSAA 或 PBR；不要据此宣称整个 3D 引擎目标完成。
 
 ABI 依据：[OpenGL Registry](https://registry.khronos.org/OpenGL/index_gl.php)、
 [WGL GetProcAddress](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglgetprocaddress)、
@@ -33,3 +34,7 @@ ABI 依据：[OpenGL Registry](https://registry.khronos.org/OpenGL/index_gl.php)
 按 core / ARB（draw 也允许 EXT）名称解析；空指针不会让整个表失败。必须通过
 `SupportsInstancing()` 验证驱动声明、入口、属性数及 flat varying 能力才能调用，不能
 仅凭 GLX dispatch 地址判断支持。OpenGL 3.x core shader 与 GL 2.1 EXT shader 分别验证。
+
+可选 `BlitFramebufferEXT` 解析 EXT / core 名称，`SupportsFramebufferBlit` 同时要求驱动版本/
+扩展与非空入口。Scissor 是 GL 1.x 必需入口，用于维持嵌入矩形的裁剪。新增入口不提升
+旧 readback 路径的最低硬件能力；缺失 blit 时由显式 API 返回不可用。
