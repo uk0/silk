@@ -26,6 +26,8 @@ import (
 // SceneDocumentEditor adds inert, undoable authoring and translation handles.
 type SceneView struct {
 	Widget
+	deviceDropActive              bool
+	deviceDropPosition            scene3d.Vec3
 	translation                   *sceneTranslationTool
 	renderCount                   uint64
 	renderError                   error
@@ -401,6 +403,7 @@ func (v *SceneView) Draw(g paint.Painter) {
 	if v.translation != nil {
 		v.translation.draw(g)
 	}
+	v.drawDeviceDrop(g)
 	// Paint diagnostics without callbacks or I/O during Draw.
 	v.renderError = err
 	v.drawDiagnostic(g, w)
@@ -518,6 +521,7 @@ func (v *SceneView) OnMouseWheel(x, y, z float64) {
 	v.SetDistance(v.distance * math.Exp(-max(-1, min(1, z))*.1))
 }
 func (v *SceneView) OnHide() {
+	v.OnDragLeave()
 	v.dragging = false
 	if v.translation != nil {
 		v.translation.cancel()

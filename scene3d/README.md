@@ -361,3 +361,41 @@ culler.Reset() // 释放上一快照、BVH、排序/位集合 scratch
 
 概念参考：[PBRT 的 BVH 与 Morton 空间排序](https://www.pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies)。
 本实现使用普通 Go 整数排序、平衡分组及稳定原序输出，不复用 PBRT 的 HLBVH/SAH 实现。
+
+## Transactional device library placement
+
+`BuiltinDeviceTemplates()` provides three small **schematic**, not manufacturer-CAD,
+pump/tank/conveyor assemblies. `LoadTemplateFile(ctx, path, limits)` compiles a bounded
+OBJ/glTF/GLB/`.silkscene` import once. Immutable templates expose `Stats()` and sorted
+`Tags()` metadata and may be shared; edit sessions remain single-owner.
+
+```go
+definitions, err := scene3d.BuiltinDeviceTemplates()
+if err != nil { return err }
+instance, err := edit.InstantiateTemplate(ctx, definitions[0].Template, scene3d.InstanceOptions{
+    ID: "pump-17", TagPrefix: "lineA.pump17.",
+    Transform: scene3d.Translation(scene3d.Vec3{X: 12, Z: 4}),
+})
+if err != nil { return err }
+_ = instance.RootID()
+```
+
+`InstantiateTemplates` places a batch as one undo step. It preserves existing IDs,
+node order and matrix encoding; reuses immutable template geometry across placements;
+merges inert bindings and import diagnostics; and validates combined budgets and
+numeric/bool point conflicts before publishing. Failure or cancellation leaves document,
+snapshot, revision and history unchanged. No point subscription or driver starts.
+
+In `gui.SceneDocumentEditor`, **Node actions → Device library** opens an embedded shelf.
+Search, select and drag to the viewport's Y=0 ground plane (Shift snaps to one world unit),
+or use **Insert device** at the camera target's X/Z. Empty tag prefix allocates a unique
+`device-N.` namespace; explicit prefixes support intentional shared points. Hover feedback
+is a clipped overlay, not a new native window or authored scene mutation. **Import model...**
+runs on the bounded worker pool; hiding/replacing/closing the shelf retires its completion.
+Use changes/Save and both editor undo layers retain the existing transaction contract.
+
+Plugins can replace the shelf with `SetDeviceLibrary` or place using `InstantiateDevice`.
+The current shelf is **session-local**, limited to 64 entries and a 64 MiB aggregate
+`TemplateStats.EstimatedBytes` budget (not RSS). Placed geometry/bindings are embedded in
+saved documents. Cross-session catalog persistence, thumbnails, multi-selection and
+rotation/scale gizmos are not included in this increment.

@@ -4,6 +4,8 @@ import "github.com/uk0/silk/i18n"
 
 func init() {
 	i18n.AddMany("zh", map[string]string{
+		"Device library": "设备库", "Import model...": "导入模型...", "Search devices": "搜索设备", "Tag prefix (empty = device ID)": "点位前缀（空为设备 ID）", "Insert device": "插入设备", "No matching devices": "没有匹配设备", "Loading model...": "正在加载模型...", "Drop device": "放置设备", "Pump": "泵", "Tank": "储罐", "Conveyor": "输送机", "Drag onto the ground plane; Shift snaps to 1 unit. No live points are started.": "拖到地平面放置；Shift 按 1 单位吸附；不会启动实时点位。",
+
 		"Move node": "移动节点",
 		"Move on X/Y/Z; Shift snaps to 1 unit; Escape cancels drag": "沿 X/Y/Z 轴拖动；Shift 按 1 单位吸附；Escape 取消拖动",
 		"Color affects this node's mesh, not child materials":       "颜色只作用于当前节点网格，不改变子节点材质",

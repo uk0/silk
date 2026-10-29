@@ -117,7 +117,7 @@ func TestSceneDocumentAuthoringAllMenuActionsAndStaleDialogs(t *testing.T) {
 	e := authoringEditor(t)
 	old := showSceneDocumentDialog
 	t.Cleanup(func() { showSceneDocumentDialog = old })
-	if e.buttons[4].SubPopup() != e.nodeMenu || e.nodeMenu.IsVisible() || len(e.nodeMenu.items) != 4 {
+	if e.buttons[4].SubPopup() != e.nodeMenu || e.nodeMenu.IsVisible() || len(e.nodeMenu.items) != 5 {
 		t.Fatal("popup not owned/deferred")
 	}
 	for _, button := range e.buttons {

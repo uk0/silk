@@ -1468,28 +1468,42 @@ func AllWindows() (list []*Window) {
 }
 
 func FindTopWindow(xg, yg float64) *Window {
-	// Find topmost window containing (xg, yg).
-	// Popup windows are on top, so check them first.
-	var fallback *Window
-	for _, win := range winMap {
+	return findGLFWPointerWindow(winMap, func(win *Window) bool {
 		if !win.IsVisible() || win.glfwWin == nil {
-			continue
+			return false
 		}
 		wx, wy := win.glfwWin.GetPos()
 		m := win.FrameMargin()
 		ww, wh := win.widget.Size()
-		lx := float64(wx) + m.L
-		ly := float64(wy) + m.T
-		if xg >= lx && yg >= ly && xg < lx+ww && yg < ly+wh {
-			if win.wt == WtPopup {
-				return win // Popup windows have highest priority
+		lx, ly := float64(wx)+m.L, float64(wy)+m.T
+		return xg >= lx && yg >= ly && xg < lx+ww && yg < ly+wh
+	}, func(win *Window) bool {
+		return win.glfwWin.GetAttrib(glfw.Hovered) == glfw.True
+	}, nativeWindowFocused)
+}
+
+// Native hover resolves actual occlusion, not Go map iteration order. During a
+// captured/released pointer transition GLFW may not yet report hover; only the
+// focused, enabled surface is a safe fallback. In particular a modal's disabled
+// owner must never receive its drops. A disabled hovered window still occludes
+// other windows, and an unfocused background window is not a drop target.
+func findGLFWPointerWindow(windows map[*glfw.Window]*Window, contains, hovered, focused func(*Window) bool) *Window {
+	var focus *Window
+	for _, win := range windows {
+		if !contains(win) {
+			continue
+		}
+		if hovered(win) {
+			if win.IsEnabled() {
+				return win
 			}
-			if fallback == nil {
-				fallback = win
-			}
+			return nil
+		}
+		if win.IsEnabled() && focused(win) {
+			focus = win
 		}
 	}
-	return fallback
+	return focus
 }
 
 func AnyWindowId() (ret WinId) {

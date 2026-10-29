@@ -36,6 +36,7 @@ func (e *SceneDocumentEditor) syncSession(selection string) {
 	e.document.Meshes = meshes
 	e.document.Nodes = e.session.Nodes()
 	e.document.Bindings = e.session.Bindings()
+	e.document.Warnings = e.session.Warnings()
 	e.scene, _ = e.session.Scene()
 	e.modified = e.session.Modified()
 	e.revision = e.session.Revision()
@@ -183,6 +184,7 @@ func (e *SceneDocumentEditor) initNodeMenu() {
 		{"Duplicate subtree...", "edit-copy", e.duplicateNodeDialog},
 		{"Change parent...", "folder", e.reparentNodeDialog},
 		{"Delete subtree...", "close", e.deleteNodeDialog},
+		{"Device library", "project", func() { e.SetDeviceLibraryVisible(!e.DeviceLibraryVisible()) }},
 	} {
 		b := menu.AddButton1(i18n.T(spec.label), LoadIcon(spec.icon))
 		b.Action().BindFunc0(spec.run)

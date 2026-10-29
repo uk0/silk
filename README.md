@@ -63,6 +63,11 @@ signed/notarized standalone apps.
   The SDK exposes camera projection/rays, an immutable axis solver and revision-guarded
   translation edits that preserve parent rotation/scale/shear. See [interaction SDK](scene3d/README.md)
   and [translation QA](SCENE_GIZMO_QA_20261029.md); rotation/scale handles remain future work.
+- **Node actions → Device library** adds an embedded searchable pump/tank/conveyor shelf,
+  bounded background model import, ground-plane drag placement and per-device point prefixes.
+  The SDK's `EditSession.InstantiateTemplate(s)` merges geometry, inert bindings and diagnostics
+  as one atomic undo step. Shelf metadata is session-local; placed resources persist in the document.
+  See [device library and placement contracts](scene3d/README.md#transactional-device-library-placement).
 - The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
   and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is

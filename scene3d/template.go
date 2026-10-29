@@ -3,6 +3,7 @@ package scene3d
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // Template is a validated, immutable device/assembly definition. Compile it once
@@ -15,6 +16,7 @@ type Template struct {
 	bindings []Binding
 	tags     map[string]bool
 	warnings []string
+	stats    TemplateStats
 }
 
 // InstanceOptions describes one wrapper node and its device tag mapping.
@@ -50,11 +52,24 @@ func NewTemplate(ctx context.Context, document *Document) (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Template{
-		nodes: s.Nodes(), ids: make(map[string]struct{}, len(s.nodes)),
-		bindings: append([]Binding(nil), document.Bindings...),
-		tags:     make(map[string]bool), warnings: append([]string(nil), document.Warnings...),
+	return compileTemplate(ctx, s, document.Bindings, document.Warnings)
+}
+
+// LoadTemplateFile explicitly loads an OBJ/glTF/GLB/.silkscene into an immutable
+// reusable device. It preserves the loader's resource budgets, containment and
+// diagnostics. Geometry compiled by the loader is adopted, not copied again.
+// Call it on a worker for GUI use. No file I/O occurs during later placement.
+func LoadTemplateFile(ctx context.Context, path string, limits LoadLimits) (*Template, error) {
+	model, err := LoadModelFile(ctx, path, limits)
+	if err != nil {
+		return nil, err
 	}
+	return compileTemplate(ctx, model.Scene, model.Bindings, model.Warnings)
+}
+
+// Both callers supply a validated scene with privately owned immutable meshes.
+func compileTemplate(ctx context.Context, s *Scene, bindings []Binding, warnings []string) (*Template, error) {
+	t := &Template{nodes: s.Nodes(), ids: make(map[string]struct{}, len(s.nodes)), bindings: append([]Binding(nil), bindings...), tags: make(map[string]bool), warnings: append([]string(nil), warnings...)}
 	for _, n := range t.nodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -64,10 +79,61 @@ func NewTemplate(ctx context.Context, document *Document) (*Template, error) {
 	for _, b := range t.bindings {
 		t.tags[b.Tag] = bindingChannel(b.Property) >= 9
 	}
+	t.stats.Nodes, t.stats.Bindings = len(t.nodes), len(t.bindings)
+	seen := make(map[*Mesh]bool)
+	for _, n := range t.nodes {
+		t.stats.EstimatedBytes += 256 + len(n.ID) + len(n.Parent) + len(n.Name)
+		if n.Mesh != nil && !seen[n.Mesh] {
+			seen[n.Mesh] = true
+			t.stats.Meshes++
+			t.stats.Vertices += n.Mesh.VertexCount()
+			t.stats.Triangles += n.Mesh.TriangleCount()
+			t.stats.EstimatedBytes += 128 + n.Mesh.VertexCount()*24 + n.Mesh.TriangleCount()*12
+		}
+	}
+	for _, b := range t.bindings {
+		t.stats.EstimatedBytes += 192 + len(b.Node) + len(b.Tag) + len(b.Property)
+	}
+	for _, w := range t.warnings {
+		t.stats.EstimatedBytes += 32 + len(w)
+	}
+	t.stats.EstimatedBytes += len(t.tags) * 128
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return t, nil
+}
+
+// TemplateStats describes unique retained resources, not rendered instances.
+// EstimatedBytes is a conservative entry-budget estimate, not process RSS.
+type TemplateStats struct{ Nodes, Meshes, Vertices, Triangles, Bindings, EstimatedBytes int }
+
+func (t *Template) Stats() TemplateStats {
+	if t == nil {
+		return TemplateStats{}
+	}
+	return t.stats
+}
+
+// TemplateTag describes a source point. Boolean is false for numeric channels.
+// Placement only declares mappings; it never creates or subscribes these points.
+type TemplateTag struct {
+	Name    string
+	Boolean bool
+}
+
+// Tags returns independent source point metadata, sorted by name for stable UI.
+func (t *Template) Tags() []TemplateTag {
+	if t == nil {
+		return nil
+	}
+	out := make([]TemplateTag, 0, len(t.tags))
+	for name, boolean := range t.tags {
+		out = append(out, TemplateTag{name, boolean})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // NodeCount excludes the extra wrapper node created by each placement.

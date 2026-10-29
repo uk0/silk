@@ -29,6 +29,8 @@ type SceneDocumentEditor struct {
 	buttons             []*Button
 	selected            string
 	modified, closed    bool
+	library             *sceneDeviceLibrary
+	libraryVisible      bool
 	translationEnabled  bool
 	translationSnapStep float64
 	revision            uint64
@@ -135,6 +137,10 @@ func (e *SceneDocumentEditor) Close() {
 		return
 	}
 	e.closed = true
+	if e.library != nil {
+		e.library.cancelImport()
+		e.library.devices = nil
+	}
 	for _, b := range e.buttons {
 		b.HideSubPopup()
 	}
@@ -235,7 +241,10 @@ func (e *SceneDocumentEditor) syncActions() {
 	if e.nodeMenu != nil {
 		for i, item := range e.nodeMenu.items {
 			if b, ok := item.(*Button); ok {
-				b.SetEnabled(!e.closed && (i == 0 || selected))
+				b.SetEnabled(!e.closed && (i == 0 || i == 4 || selected))
+				if i == 4 {
+					b.Action().SetChecked(e.libraryVisible)
+				}
 			}
 		}
 	}
@@ -336,6 +345,10 @@ func (e *SceneDocumentEditor) Layout() {
 	e.tree.SetBounds(0, top, left, body*.62)
 	e.fitTreeColumn()
 	e.bindings.SetBounds(0, top+body*.62+min(gap, body*.38), left, max(0, body*.38-gap))
+	if e.library != nil {
+		e.library.SetBounds(0, top, left, body)
+		e.library.Layout()
+	}
 	e.preview.SetBounds(rightX, top, max(0, w-rightX), body)
 	e.status.SetBounds(0, max(top, h-bottom), w, bottom)
 }
