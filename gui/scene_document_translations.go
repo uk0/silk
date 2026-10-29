@@ -4,6 +4,12 @@ import "github.com/uk0/silk/i18n"
 
 func init() {
 	i18n.AddMany("zh", map[string]string{
+		"Tag prefix": "点位前缀", "Nodes": "节点", "Import...": "导入...",
+		"Ground plane": "地平面", "Surface: upright": "表面：保持竖直", "Surface: align normal": "表面：法线对齐",
+		"Prepare surfaces": "准备表面", "Preparing surfaces...": "正在准备表面...", "Retry surfaces": "重试表面", "Surfaces ready": "表面已就绪",
+		"Surface placement has no ground fallback; Shift grid snapping applies only to ground mode.":                       "表面模式未命中不会退回地面；Shift 网格吸附只适用于地面模式。",
+		"Surface modes place the visible template's bottom-center. Normal alignment follows mesh winding, not the camera.": "以可见模板的底部中心贴合表面；法线对齐遵循网格绕序，不随相机翻转。",
+
 		"Device library": "设备库", "Import model...": "导入模型...", "Search devices": "搜索设备", "Tag prefix (empty = device ID)": "点位前缀（空为设备 ID）", "Insert device": "插入设备", "No matching devices": "没有匹配设备", "Loading model...": "正在加载模型...", "Drop device": "放置设备", "Pump": "泵", "Tank": "储罐", "Conveyor": "输送机", "Drag onto the ground plane; Shift snaps to 1 unit. No live points are started.": "拖到地平面放置；Shift 按 1 单位吸附；不会启动实时点位。",
 
 		"Move node": "移动节点", "Rotate node": "旋转节点", "Scale node": "缩放节点",

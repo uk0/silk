@@ -36,6 +36,10 @@ type sceneDeviceLibrary struct {
 	initialized                bool
 	selectedID                 string
 	lastError                  error
+	placement                  *ComboBox
+	prepareSurface             *Button
+	surface                    sceneDeviceSurface
+	placementGeneration        uint64
 }
 
 // SetDeviceLibrary replaces this editor's shelf atomically. Definitions are
@@ -102,11 +106,16 @@ func (e *SceneDocumentEditor) SetDeviceLibraryVisible(visible bool) {
 	e.libraryVisible = visible
 	if !visible {
 		e.library.cancelImport()
+		e.library.retireSurface(true)
+		e.library.placement.HideSubPopup()
 		e.preview.OnDragLeave()
 	}
 	e.tree.SetVisible(!visible)
 	e.bindings.SetVisible(!visible)
 	e.library.SetVisible(visible)
+	if visible && e.devicePlacementMode != SceneDeviceGround {
+		e.report(e.PrepareDeviceSurface(context.Background()))
+	}
 	e.syncActions()
 	e.Layout()
 	e.Update()
@@ -157,22 +166,42 @@ func (e *SceneDocumentEditor) ensureDeviceLibrary() {
 		if !ok || e.closed {
 			return nil, DndIgnore
 		}
-		return []interface{}{sceneDeviceDrag{editor: e, id: d.ID, template: d.Template, generation: l.generation, revision: e.revision, prefix: l.prefix.Text()}}, DndCopy
+		return []interface{}{sceneDeviceDrag{editor: e, id: d.ID, template: d.Template, generation: l.generation, revision: e.revision, mode: e.devicePlacementMode, placementGeneration: l.placementGeneration, prefix: l.prefix.Text()}}, DndCopy
 	})
+	l.placement = NewComboBox()
+	l.placement.SetParent(l)
+	l.placement.SetEditWidget(nil)
+	for _, label := range []string{"Ground plane", "Surface: upright", "Surface: align normal"} {
+		l.placement.Append(ListItem{Text: i18n.T(label)})
+	}
+	l.placement.SetActiveIndex(int(e.devicePlacementMode))
+	l.placement.SigSelectionChanged(func(_ interface{}, index int) { e.report(e.SetDevicePlacementMode(SceneDevicePlacementMode(index))) })
+	SetToolTip(l.placement, i18n.T("Surface modes place the visible template's bottom-center. Normal alignment follows mesh winding, not the camera."))
+	l.prepareSurface = button("Prepare surfaces", "preview", func() { e.report(e.PrepareDeviceSurface(context.Background())) })
 	l.prefixLabel = NewLabel(i18n.T("Tag prefix (empty = device ID)"))
 	l.prefixLabel.SetParent(l)
 	l.prefix = NewEdit()
 	l.prefix.SetParent(l)
+	SetToolTip(l.prefix, i18n.T("Tag prefix (empty = device ID)"))
 	l.details = NewLabel("")
 	l.details.SetParent(l)
 	l.insert = button("Insert device", "plus", func() {
 		if d, ok := l.deviceAt(l.list.ActiveIndex()); ok {
-			_, err := e.insertDevice(d, scene3d.Vec3{X: e.preview.target.X, Z: e.preview.target.Z}, l.prefix.Text())
-			e.report(err)
+			if e.devicePlacementMode == SceneDeviceGround {
+				_, err := e.insertDevice(d, scene3d.Vec3{X: e.preview.target.X, Z: e.preview.target.Z}, l.prefix.Text())
+				e.report(err)
+			} else {
+				placement, err := e.preview.devicePlacementAt(e.preview.Width()/2, e.preview.Height()/2, d.Template)
+				if err == nil {
+					_, err = e.insertDeviceTransform(d, placement.transform, l.prefix.Text())
+				}
+				e.report(err)
+			}
 		}
 	})
 	SetToolTip(l.list, i18n.T("Drag onto the ground plane; Shift snaps to 1 unit. No live points are started."))
 	l.filter()
+	l.surfaceStatus()
 }
 func (l *sceneDeviceLibrary) deviceAt(row int) (scene3d.DeviceDefinition, bool) {
 	if row < 0 || row >= len(l.rows) {
@@ -209,7 +238,7 @@ func (l *sceneDeviceLibrary) filter() {
 }
 func (l *sceneDeviceLibrary) describe() {
 	d, ok := l.deviceAt(l.list.ActiveIndex())
-	l.insert.SetEnabled(ok && !l.editor.closed)
+	l.insert.SetEnabled(ok && !l.editor.closed && (l.editor.devicePlacementMode == SceneDeviceGround || l.editor.DeviceSurfaceReady()))
 	if !ok {
 		l.selectedID = ""
 		l.details.SetText(i18n.T("No matching devices"))
@@ -239,23 +268,63 @@ func (l *sceneDeviceLibrary) Layout() {
 		return
 	}
 	w, h := l.Size()
-	w = max(0, w)
-	h = max(0, h)
-	gap := min(6.0, h/12)
-	row := min(max(30.0, Theme().ItemHeight+6), max(0, h-6*gap)/6)
+	w, h = max(0, w), max(0, h)
+	nominal := max(30.0, Theme().ItemHeight+6)
+	compact := h < 8*(nominal+6)+3*Theme().ItemHeight
+	rows := 8.0
+	if compact {
+		rows = 5
+	}
+	gap := min(6.0, h/(rows*2))
+	row := min(nominal, max(0, h-rows*gap)/rows)
 	half := max(0, (w-min(gap, w))/2)
+	// Keep the full actions in tooltips when the shelf is too narrow for captions.
+	backText, importText := "Scene nodes", "Import model..."
+	if w < 330 {
+		backText, importText = "Nodes", "Import..."
+	}
+	if l.busy {
+		importText = "Loading model..."
+	}
+	l.back.SetText(i18n.T(backText))
+	l.importButton.SetText(i18n.T(importText))
 	l.back.SetBounds(0, 0, half, row)
 	l.importButton.SetBounds(min(w, half+gap), 0, half, row)
 	y := row + gap
 	l.search.SetBounds(0, y, w, row)
 	y += row + gap
-	listHeight := max(0, h-y-4*(row+gap))
+	listHeight := max(0, h-y-(rows-2)*(row+gap))
 	l.list.SetBounds(0, y, w, listHeight)
 	y += listHeight + gap
-	for _, widget := range []IWidget{l.prefixLabel, l.prefix, l.details, l.insert} {
+	l.prefixLabel.SetVisible(true)
+	l.details.SetVisible(!compact)
+	l.prepareSurface.SetTextVisible(!compact)
+	if compact {
+		side := min(row, w)
+		space := min(gap, max(0, w-side))
+		l.placement.SetBounds(0, min(y, h), max(0, w-side-space), min(row, max(0, h-y)))
+		l.prepareSurface.SetBounds(max(0, w-side), min(y, h), side, min(row, max(0, h-y)))
+		y += row + gap
+		l.details.SetBounds(0, 0, 0, 0)
+		l.prefixLabel.SetText(i18n.T("Tag prefix"))
 		height := min(row, max(0, h-y))
-		widget.SetBounds(0, min(h, y), w, height)
+		labelWidth := min(w*.4, l.prefixLabel.SizeHints().Width)
+		labelGap := min(gap, max(0, w-labelWidth))
+		l.prefixLabel.SetBounds(0, min(h, y), labelWidth, height)
+		l.prefix.SetBounds(labelWidth+labelGap, min(h, y), max(0, w-labelWidth-labelGap), height)
 		y += height + gap
+		for _, widget := range []IWidget{l.insert} {
+			height := min(row, max(0, h-y))
+			widget.SetBounds(0, min(h, y), w, height)
+			y += height + gap
+		}
+	} else {
+		l.prefixLabel.SetText(i18n.T("Tag prefix (empty = device ID)"))
+		for _, widget := range []IWidget{l.placement, l.prepareSurface, l.prefixLabel, l.prefix, l.details, l.insert} {
+			height := min(row, max(0, h-y))
+			widget.SetBounds(0, min(h, y), w, height)
+			y += height + gap
+		}
 	}
 }
 func (l *sceneDeviceLibrary) cancelImport() {
@@ -322,6 +391,9 @@ func (e *SceneDocumentEditor) nextDeviceID() string {
 	}
 }
 func (e *SceneDocumentEditor) insertDevice(d scene3d.DeviceDefinition, point scene3d.Vec3, prefix string) (*scene3d.TemplateInstance, error) {
+	return e.insertDeviceTransform(d, scene3d.Translation(point), prefix)
+}
+func (e *SceneDocumentEditor) insertDeviceTransform(d scene3d.DeviceDefinition, transform scene3d.Mat4, prefix string) (*scene3d.TemplateInstance, error) {
 	if e.closed {
 		return nil, async.ErrClosed
 	}
@@ -330,7 +402,7 @@ func (e *SceneDocumentEditor) insertDevice(d scene3d.DeviceDefinition, point sce
 	if prefix == "" {
 		prefix = id + "."
 	}
-	return e.InstantiateDevice(d.Template, scene3d.InstanceOptions{ID: id, Name: d.Name, TagPrefix: prefix, Transform: scene3d.Translation(point)})
+	return e.InstantiateDevice(d.Template, scene3d.InstanceOptions{ID: id, Name: d.Name, TagPrefix: prefix, Transform: transform})
 }
 
 // InstantiateDevice merges the template and mapped inert bindings in one edit.

@@ -74,7 +74,10 @@ signed/notarized standalone apps.
   snapshot refits, cancellation and storage budgets are explicit; queries need no framebuffer.
   `SceneView.SurfaceAt` rejects stale indexes and respects logical coordinates/camera clipping.
   The scene example's **Inspect center** demonstrates worker preparation without idle polling.
-  This does not replace raster picking or add surface snapping to the device editor.
+  The device editor now supports ground, upright-surface and normal-aligned placement,
+  with cancellable preparation, bottom-center anchors, inert bindings and one-step undo.
+  Missing/stale surfaces never fall back to ground; this is not a persistent attachment constraint.
+  This does not replace raster picking.
   See [surface-query SDK](scene3d/README.md#geometric-surface-queries).
 - The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU

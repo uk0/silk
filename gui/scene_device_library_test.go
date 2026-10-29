@@ -66,6 +66,9 @@ func TestSceneDeviceLibraryCatalogSearchAndActions(t *testing.T) {
 			t.Fatal("missing icon", b.Text())
 		}
 	}
+	if l.prepareSurface.Icon() == nil || l.prepareSurface.Icon() == LoadIcon("image-missing") || l.prepareSurface.Icon().IsAir() {
+		t.Fatal("missing surface status icon")
+	}
 	copy := e.DeviceLibrary()
 	copy[0].Name = "changed"
 	if e.DeviceLibrary()[0].Name == "changed" {
@@ -264,7 +267,7 @@ func TestSceneDeviceLibraryTinyLayoutAndInsertButton(t *testing.T) {
 		e.SetSize(size[0], size[1])
 		e.Layout()
 		l.Layout()
-		widgets := []IWidget{l.back, l.importButton, l.search, l.list, l.prefixLabel, l.prefix, l.details, l.insert}
+		widgets := []IWidget{l.back, l.importButton, l.search, l.list, l.placement, l.prepareSurface, l.prefixLabel, l.prefix, l.details, l.insert}
 		for i, a := range widgets {
 			if a.X() < 0 || a.Y() < 0 || a.Width() < 0 || a.Height() < 0 || a.X()+a.Width() > l.Width()+1e-9 || a.Y()+a.Height() > l.Height()+1e-9 {
 				t.Fatalf("outside library %v child %d", size, i)

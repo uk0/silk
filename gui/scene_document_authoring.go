@@ -55,6 +55,9 @@ func (e *SceneDocumentEditor) syncSession(selection string) {
 		}
 	}
 	e.preview.translation.sync()
+	if e.libraryVisible && e.devicePlacementMode != SceneDeviceGround {
+		e.report(e.PrepareDeviceSurface(context.Background()))
+	}
 }
 func (e *SceneDocumentEditor) CanUndo() bool { return !e.closed && e.session.CanUndo() }
 func (e *SceneDocumentEditor) CanRedo() bool { return !e.closed && e.session.CanRedo() }

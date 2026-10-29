@@ -11,12 +11,14 @@ import (
 // Placed nodes share the template's immutable meshes, not their mutable state.
 // This is scene-data instancing, not hardware-instanced GPU drawing.
 type Template struct {
-	nodes    []Node
-	ids      map[string]struct{}
-	bindings []Binding
-	tags     map[string]bool
-	warnings []string
-	stats    TemplateStats
+	nodes              []Node
+	ids                map[string]struct{}
+	bindings           []Binding
+	tags               map[string]bool
+	warnings           []string
+	stats              TemplateStats
+	boundsLo, boundsHi Vec3
+	boundsValid        bool
 }
 
 // InstanceOptions describes one wrapper node and its device tag mapping.
@@ -70,6 +72,13 @@ func LoadTemplateFile(ctx context.Context, path string, limits LoadLimits) (*Tem
 // Both callers supply a validated scene with privately owned immutable meshes.
 func compileTemplate(ctx context.Context, s *Scene, bindings []Binding, warnings []string) (*Template, error) {
 	t := &Template{nodes: s.Nodes(), ids: make(map[string]struct{}, len(s.nodes)), bindings: append([]Binding(nil), bindings...), tags: make(map[string]bool), warnings: append([]string(nil), warnings...)}
+	snapshot, err := s.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	t.boundsLo, t.boundsHi, err = snapshot.Bounds()
+	t.boundsValid = err == nil
+	t.stats.EstimatedBytes += 64 // cached visible bounds; no retained scene
 	for _, n := range t.nodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err

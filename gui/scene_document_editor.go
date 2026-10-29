@@ -31,6 +31,7 @@ type SceneDocumentEditor struct {
 	modified, closed                 bool
 	library                          *sceneDeviceLibrary
 	libraryVisible                   bool
+	devicePlacementMode              SceneDevicePlacementMode
 	transformMode                    SceneTransformMode
 	rotationSnapStep, scaleSnapRatio float64
 	translationSnapStep              float64
@@ -144,6 +145,8 @@ func (e *SceneDocumentEditor) Close() {
 	e.closed = true
 	if e.library != nil {
 		e.library.cancelImport()
+		e.library.retireSurface(true)
+		e.library.placement.HideSubPopup()
 		e.library.devices = nil
 	}
 	for _, b := range e.buttons {
@@ -330,17 +333,13 @@ func (e *SceneDocumentEditor) Layout() {
 	h = max(0, h)
 	gap := 8.0
 	row := max(34.0, Theme().ItemHeight+8)
-	// Small hosts wrap actions instead of putting text over the preview.
-	cols := 4
-	if w >= 850 {
-		cols = 5
+	// Use measured captions, not a 760px cliff that doubled toolbar rows and
+	// crushed the library at ordinary laptop/dialog widths.
+	buttonWidth := 140.0
+	for _, b := range e.buttons {
+		buttonWidth = max(buttonWidth, b.SizeHints().Width)
 	}
-	if w < 760 {
-		cols = 2
-	}
-	if w < 300 {
-		cols = 1
-	}
+	cols := max(1, min(5, int((w+gap)/(buttonWidth+gap))))
 	rows := (len(e.buttons) + cols - 1) / cols
 	gx := min(gap, w/float64(max(1, cols)))
 	gy := min(gap, h/float64(max(1, rows)))

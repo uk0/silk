@@ -28,6 +28,8 @@ type SceneView struct {
 	Widget
 	deviceDropActive              bool
 	deviceDropPosition            scene3d.Vec3
+	deviceDropNormal              scene3d.Vec3
+	deviceDropNode                string
 	translation                   *sceneTranslationTool
 	renderCount                   uint64
 	renderError                   error

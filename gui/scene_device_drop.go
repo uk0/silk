@@ -12,6 +12,8 @@ type sceneDeviceDrag struct {
 	id                   string
 	template             *scene3d.Template
 	generation, revision uint64
+	mode                 SceneDevicePlacementMode
+	placementGeneration  uint64
 	prefix               string
 }
 
@@ -28,7 +30,7 @@ func (v *SceneView) deviceDrag(dnd IDndContext) (sceneDeviceDrag, bool) {
 		return sceneDeviceDrag{}, false
 	}
 	payload, ok := data[0].(sceneDeviceDrag)
-	if !ok || payload.editor != e || payload.generation != e.library.generation || payload.revision != e.revision {
+	if !ok || payload.editor != e || payload.generation != e.library.generation || payload.revision != e.revision || payload.mode != e.devicePlacementMode || payload.placementGeneration != e.library.placementGeneration {
 		return sceneDeviceDrag{}, false
 	}
 	for _, d := range e.library.devices {
@@ -69,18 +71,21 @@ func (v *SceneView) OnDragMove(x, y float64, dnd IDndContext) {
 		return
 	}
 	dnd.SetAction(DndIgnore)
-	if _, ok := v.deviceDrag(dnd); !ok {
-		v.OnDragLeave()
-		return
-	}
-	point, ok := v.deviceDropPoint(x, y)
+	payload, ok := v.deviceDrag(dnd)
 	if !ok {
 		v.OnDragLeave()
 		return
 	}
-	if !v.deviceDropActive || v.deviceDropPosition != point {
+	placement, err := v.devicePlacementAt(x, y, payload.template)
+	if err != nil {
+		v.OnDragLeave()
+		return
+	}
+	if !v.deviceDropActive || v.deviceDropPosition != placement.point || v.deviceDropNormal != placement.normal || v.deviceDropNode != placement.node {
 		v.deviceDropActive = true
-		v.deviceDropPosition = point
+		v.deviceDropPosition = placement.point
+		v.deviceDropNormal = placement.normal
+		v.deviceDropNode = placement.node
 		v.Update()
 	}
 	dnd.SetAction(DndCopy)
@@ -101,14 +106,15 @@ func (v *SceneView) OnDrop(x, y float64, dnd IDndContext) {
 	if !ok {
 		return
 	}
-	point, ok := v.deviceDropPoint(x, y)
-	if !ok {
+	placement, err := v.devicePlacementAt(x, y, payload.template)
+	if err != nil {
+		payload.editor.report(err)
 		return
 	}
 	e := payload.editor
 	for _, d := range e.library.devices {
 		if d.ID == payload.id {
-			if _, err := e.insertDevice(d, point, payload.prefix); err != nil {
+			if _, err := e.insertDeviceTransform(d, placement.transform, payload.prefix); err != nil {
 				e.report(err)
 				return
 			}
@@ -133,5 +139,14 @@ func (v *SceneView) drawDeviceDrop(g paint.Painter) {
 	g.Stroke()
 	g.SetFont(Theme().Font)
 	g.SetBrush1(paint.Color{220, 247, 250, 255})
-	g.DrawText1(p.X+20, p.Y-12, i18n.T("Drop device"))
+	label := i18n.T("Drop device")
+	if v.deviceDropNode != "" {
+		label += " · " + v.deviceDropNode
+		end, visible, err := v.camera().Project(v.deviceDropPosition.Add(v.deviceDropNormal.Mul(v.distance*.05)), v.Width(), v.Height())
+		if err == nil && visible {
+			g.Line(p.X, p.Y, end.X, end.Y)
+			g.Stroke()
+		}
+	}
+	g.DrawText1(p.X+20, p.Y-12, label)
 }

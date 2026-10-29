@@ -475,3 +475,44 @@ _ = hit; _ = found; _ = work; _ = err
 [PBRT BVH](https://www.pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies)。
 独立 Moller–Trumbore 对照、边界/数量/取消/并发、极值缩放 fuzz 与三平台门禁用于验证本实现，
 不能用微基准推导整应用 FPS 或硬件 GPU 性能。
+
+
+## Surface placement and mounting frames
+
+`Template.Bounds()` 与 `BaseAnchor()` 返回预编译的可见几何 AABB / 底部中心，O(1)，不在拖动时
+扫描顶点；空/全隐藏或数值不可表示的几何返回错误。它们是模板空间的保守包围盒约定，不是
+碰撞接触、自动识别 CAD 安装面或运行时绑定后的边界。
+
+```go
+anchor, err := template.BaseAnchor()
+if err != nil { return err }
+world, err := scene3d.SurfacePlacementTransform(hit.Position, hit.Normal,
+    scene3d.SurfacePlacementOptions{Anchor: anchor, AlignNormal: true})
+if err != nil { return err }
+// On the owning thread, after verifying the hit's snapshot is still current:
+instance, err := edits.InstantiateTemplate(ctx, template,
+    scene3d.InstanceOptions{ID: "pump-1", TagPrefix: "line.pump1.", Transform: world})
+_ = instance
+return err
+```
+
+- `SurfacePlacementTransform` 为无分配、常量工作量的纯求解器：把 Anchor 定位到
+  `position + unit(normal)*Offset`。可选将本地 +Y 对齐法线，Heading 以弧度先绕本地 +Y 旋转；
+  默认保持竖直。法线遵循调用者给定方向/三角绕序，背面不会自动朝向相机。
+- 返回的是**世界矩阵**；示例按根级放置。若指定 `InstanceOptions.Parent`，需显式转换为该父级
+  的局部矩阵，不能把世界矩阵直接当局部矩阵。非有限输入、零法线或不可表示结果返回错误。
+- 求解器不持有 Scene / RayIndex，也不验证命中时效；调用者须在同一所属线程确认快照身份并
+  提交。已有 EditSession 事务继续保证资源/绑定合并、失败不发布和单步撤销/重做。
+
+`gui.SceneDocumentEditor` 的设备库提供地面、表面保持竖直、表面法线对齐三种模式。
+`SetDevicePlacementMode` / `PrepareDeviceSurface` 在 UI 线程捕获快照，后台可取消构建/refit；
+`DeviceSurfaceReady`、`IsDeviceSurfacePreparing`、`DeviceSurfaceError` 暴露状态供静态插件协作。
+打开表面模式或创作状态变更时准备一次，不在 Draw/hover/idle 建树或轮询。旧结果以快照身份和
+请求代数隔离；模式切换、隐藏设备库和关闭会取消请求，隐藏/关闭释放索引引用。
+拖动使用准备好的索引，20ms 协作式查询取消预算并非实时硬截止；未准备/过期/未命中/超时均
+拒绝放置，不退回地面。网格吸附只适用于地面，避免吸附后锚点离开曲面。Insert device 在表面
+模式查询视口中心；模式/点位前缀在拖动开始时捕获，历史变更使旧拖动失效。
+
+落下后只保存普通节点矩阵和惰性绑定，不保存附着约束，也不会在目标表面之后移动时自动跟随。
+法线/标记是内嵌裁剪后的绘制，不创建悬空子窗。小窗口使用测量后的工具栏列数和紧凑设备库，
+保留插入/重试、模式、点位前缀和设备列表；重试状态在图标 tooltip 可读。
