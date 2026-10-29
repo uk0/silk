@@ -22,9 +22,11 @@ import (
 //
 // Auto uses an isolated offscreen OpenGL backend when available, with explicit
 // CPU fallback diagnostics. OBJ/glTF/GLB static scenes are supported; PBR and
-// persisted node editing remain separate milestones.
+// full material/animation rendering remain separate milestones.
+// SceneDocumentEditor adds inert, undoable authoring and translation handles.
 type SceneView struct {
 	Widget
+	translation                   *sceneTranslationTool
 	renderCount                   uint64
 	renderError                   error
 	uploadedSequence              uint64
@@ -86,6 +88,7 @@ func (v *SceneView) SetScene(s *scene3d.Scene) error {
 	if _, err := s.Snapshot(); err != nil {
 		return err
 	}
+	v.OnHide()
 	v.CancelLoad()
 	v.unbindAll()
 	v.scene = s
@@ -155,6 +158,9 @@ func (v *SceneView) SetYaw(x float64) {
 	if finiteSceneValue(x) {
 		x = math.Remainder(x, 2*math.Pi)
 		if x != v.yaw {
+			if v.translation != nil {
+				v.translation.cancel()
+			}
 			v.yaw = x
 			v.RefreshScene()
 		}
@@ -164,6 +170,9 @@ func (v *SceneView) SetPitch(x float64) {
 	if finiteSceneValue(x) {
 		x = max(-1.5, min(1.5, x))
 		if x != v.pitch {
+			if v.translation != nil {
+				v.translation.cancel()
+			}
 			v.pitch = x
 			v.RefreshScene()
 		}
@@ -173,6 +182,9 @@ func (v *SceneView) SetDistance(x float64) {
 	if finiteSceneValue(x) {
 		x = max(.001, min(1e12, x))
 		if x != v.distance {
+			if v.translation != nil {
+				v.translation.cancel()
+			}
 			v.distance = x
 			v.RefreshScene()
 		}
@@ -190,6 +202,7 @@ func (v *SceneView) FitScene() error {
 	if v.closed {
 		return async.ErrClosed
 	}
+	v.OnHide()
 	snapshot, err := v.scene.Snapshot()
 	if err != nil {
 		return err
@@ -315,6 +328,7 @@ func (v *SceneView) Close() {
 	}
 	v.closed = true
 	v.OnHide()
+	v.translation = nil
 	v.CancelLoad()
 	v.unbindAll()
 	paint.CloseSurface(v.pixmap)
@@ -384,6 +398,9 @@ func (v *SceneView) Draw(g paint.Painter) {
 			}
 		}
 	}
+	if v.translation != nil {
+		v.translation.draw(g)
+	}
 	// Paint diagnostics without callbacks or I/O during Draw.
 	v.renderError = err
 	v.drawDiagnostic(g, w)
@@ -412,12 +429,19 @@ func (v *SceneView) OnLeftDown(x, y float64) {
 	}
 	v.OnHide()
 	v.SetFocus()
+	if v.translation != nil && v.translation.begin(x, y) {
+		return
+	}
 	v.dragging = true
 	v.moved = false
 	v.lastX, v.lastY, v.startX, v.startY = x, y, x, y
 	v.PushCapture()
 }
 func (v *SceneView) OnMouseMove(x, y float64) {
+	if v.translation != nil && v.translation.gesture != nil {
+		v.translation.move(x, y)
+		return
+	}
 	if !v.dragging || v.closed || !finiteSceneValue(x) || !finiteSceneValue(y) {
 		return
 	}
@@ -435,6 +459,10 @@ func (v *SceneView) OnMouseMove(x, y float64) {
 	v.lastX, v.lastY = x, y
 }
 func (v *SceneView) OnLeftUp(x, y float64) {
+	if v.translation != nil && v.translation.gesture != nil {
+		v.translation.finish(x, y)
+		return
+	}
 	was, moved := v.dragging, v.moved
 	v.dragging = false
 	v.PopCapture()
@@ -481,9 +509,18 @@ func (v *SceneView) OnMouseWheel(x, y, z float64) {
 	if v.closed || !v.IsEnabled() || !finiteSceneValue(z) {
 		return
 	}
+	if v.translation != nil && v.translation.gesture != nil {
+		v.translation.cancel()
+	}
 	// GLFW/macOS can deliver large smooth-scroll/page deltas, unlike a Win32
 	// wheel notch. Cap one event to one notch while preserving fractional input;
 	// a page event must not zoom by exp(5) and make the model disappear.
 	v.SetDistance(v.distance * math.Exp(-max(-1, min(1, z))*.1))
 }
-func (v *SceneView) OnHide() { v.dragging = false; v.PopCapture() }
+func (v *SceneView) OnHide() {
+	v.dragging = false
+	if v.translation != nil {
+		v.translation.cancel()
+	}
+	v.PopCapture()
+}

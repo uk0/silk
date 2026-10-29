@@ -13,6 +13,7 @@ import (
 // Geometry is copied for GUI document storage only when a resource is first
 // introduced, never on every name/binding change or history traversal.
 func (e *SceneDocumentEditor) syncSession(selection string) {
+	e.preview.translation.cancel()
 	if e.revision == e.session.Revision() {
 		return
 	}
@@ -52,6 +53,7 @@ func (e *SceneDocumentEditor) syncSession(selection string) {
 			e.syncActions()
 		}
 	}
+	e.preview.translation.sync()
 }
 func (e *SceneDocumentEditor) CanUndo() bool { return !e.closed && e.session.CanUndo() }
 func (e *SceneDocumentEditor) CanRedo() bool { return !e.closed && e.session.CanRedo() }

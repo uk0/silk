@@ -57,6 +57,12 @@ signed/notarized standalone apps.
   CPU and GPU renderers share the culling API; unchanged GPU snapshots reuse matrix/budget
   validation. `CullingStats` and `ValidatedInstances` expose work rather than guessed FPS.
   See the [BVH regression and measured limits](SCENE_BVH_QA_20261029.md).
+- **Move node** adds embedded world-X/Y/Z handles to the scene editor. A drag previews without
+  modifying the authored document, then commits one undo step on release. Shift snaps to one
+  world unit; Escape, lost capture/focus, resize and scene replacement cancel the gesture.
+  The SDK exposes camera projection/rays, an immutable axis solver and revision-guarded
+  translation edits that preserve parent rotation/scale/shear. See [interaction SDK](scene3d/README.md)
+  and [translation QA](SCENE_GIZMO_QA_20261029.md); rotation/scale handles remain future work.
 - The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
   and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is

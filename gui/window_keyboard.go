@@ -39,7 +39,7 @@ func (win *Window) textInputTarget() IEventTextInput {
 	return input
 }
 
-// Escape belongs to the receiving popup/dialog, not to whichever child the
+// Escape normally belongs to the receiving popup/dialog, not to whichever child the
 // Tab chain selected. IEventKeyDown has no handled result, so routing it after
 // a child handler cannot distinguish consumption from a silently ignored key.
 // Enter and ordinary keys deliberately remain owned by the focused child.
@@ -59,6 +59,9 @@ func (win *Window) dispatchEscape(key int, repeat bool) bool {
 		if !repeat && popup.widget != nil {
 			popup.widget.Hide()
 		}
+		return true
+	}
+	if target, ok := win.focusedInputTarget().(IEventEscape); ok && target.HandleEscape(repeat) {
 		return true
 	}
 	if dialog, ok := win.widget.(interface{ resolveCancel() }); ok {

@@ -205,6 +205,50 @@ for _, instance := range instances { bindings = append(bindings, instance.Bindin
 
 纯 Go 产线生成示例见 [`examples/scene3dplant`](../examples/scene3dplant/README.md)。
 
+## 轴向移动交互 SDK
+
+`Camera.Project` 把世界坐标映射到左上原点的视口 XY，Z 为 0（近）到 1（远）；
+返回的 `visible` 检查完整视锥。`Camera.Ray` 使用同一相机/视口生成归一化世界射线，
+允许捕获指针越出视口。两者必须使用同一种单位：GUI 逻辑像素或物理像素，不能混用。
+`Ray.IntersectPlane` 仅接受射线前方交点，拒绝无效、近乎平行和溢出输入。
+
+```go
+// 鼠标按下时；edit 是单所有者 EditSession，preview 是独立的预览 Scene。
+world, err := edit.WorldTransform(nodeID)
+if err != nil { return err }
+ray, err := camera.Ray(x, y, width, height)
+if err != nil { return err }
+axis, err := scene3d.NewAxisDrag(ray, world.Point(scene3d.Vec3{}), scene3d.Vec3{X: 1})
+if err != nil { return err }
+gesture, err := edit.BeginTranslation(ctx, nodeID)
+if err != nil { return err }
+defer gesture.Cancel()
+// 后续移动使用按下时冻结的 camera/width/height；delta 是从起点算起的绝对位移。
+nextRay, err := camera.Ray(nextX, nextY, width, height)
+if err != nil { return err }
+delta, err := axis.Offset(nextRay, .5) // 0 = 自由移动；.5 = 世界位移吸附
+if err != nil { return err }
+local, err := gesture.Transform(delta)
+if err != nil { return err }
+if err := preview.SetTransform(nodeID, local); err != nil { return err }
+// 鼠标释放时调用一次。取消则丢弃/恢复 preview，不调用 Commit。
+if err := gesture.Commit(ctx, delta); err != nil { return err }
+```
+
+- 固定拖拽平面与起始抓取偏移，避免按下跳变和累计漂移；几乎正对视线的轴拒绝拖动。
+- `Transform` 不修改 session、绑定或历史，O(1)、零分配；通过父级逆线性基保持局部旋转、
+  缩放、镜像和剪切。奇异父级拒绝，隐藏节点/组可由 SDK 编辑。
+- `Commit` 完整验证后最多追加一个历史项；无变化不改矩阵编码、不清空 redo。
+  期间发生任何 session revision 变化（包括 undo/redo）返回 `ErrEditConflict`，避免覆盖新编辑。
+  `Cancel` 只释放事务引用，**不会替宿主恢复其独立 preview Scene**。
+- GUI `SceneDocumentEditor.SetTranslationEnabled(true)` 开启 XYZ 工具；
+  `SetTranslationSnapStep(.5)` 设置步长，Shift 临时使用 1 单位。未命中手柄仍可旋转/拾取。
+  手柄只在自身画布绘制与裁剪，静止帧继续使用缓存，不创建动画定时器。
+- GUI 对焦点/捕获丢失、Escape、resize、禁用、相机/场景变化取消正在进行的手势。
+  `IEventPointerCancel.OnPointerCancel` 在 UI 线程调用；实现方必须先退休自己的手势，
+  再释放捕获，不能在回调中提交或重新捕获。其他线程须使用现有 UI 调度接口。
+- 当前仅世界坐标单节点/组平移，尚无旋转、缩放、多选或局部坐标模式。
+
 ## CPU / GPU 共享视锥裁剪
 
 `NewFrustum` / `Frustum.Intersects` 使用不可变网格的缓存 AABB，不遍历

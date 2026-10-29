@@ -4,7 +4,9 @@ import "github.com/uk0/silk/i18n"
 
 func init() {
 	i18n.AddMany("zh", map[string]string{
-		"Color affects this node's mesh, not child materials": "颜色只作用于当前节点网格，不改变子节点材质",
+		"Move node": "移动节点",
+		"Move on X/Y/Z; Shift snaps to 1 unit; Escape cancels drag": "沿 X/Y/Z 轴拖动；Shift 按 1 单位吸附；Escape 取消拖动",
+		"Color affects this node's mesh, not child materials":       "颜色只作用于当前节点网格，不改变子节点材质",
 		"3D Scene Editor": "3D 场景编辑器", "Edit 3D Scene...": "编辑 3D 场景...",
 		"Scene nodes": "场景节点", "Edit node...": "编辑节点...", "Set binding...": "设置绑定...",
 		"Remove binding": "删除绑定", "Fit scene": "适合场景", "Use changes": "应用更改",

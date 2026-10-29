@@ -15,21 +15,23 @@ import (
 // Node/geometry validation runs on explicit edits, not on paint or idle.
 type SceneDocumentEditor struct {
 	Widget
-	document         *scene3d.Document
-	session          *scene3d.EditSession
-	nodeMenu         *Menu
-	primitiveMeshes  map[string]*scene3d.Mesh
-	primitiveIDs     map[string]string
-	scene            *scene3d.Scene
-	tree             *TreeView
-	model            *sceneDocumentTree
-	preview          *SceneView
-	bindings         *ListWidget
-	status           *Label
-	buttons          []*Button
-	selected         string
-	modified, closed bool
-	revision         uint64
+	document            *scene3d.Document
+	session             *scene3d.EditSession
+	nodeMenu            *Menu
+	primitiveMeshes     map[string]*scene3d.Mesh
+	primitiveIDs        map[string]string
+	scene               *scene3d.Scene
+	tree                *TreeView
+	model               *sceneDocumentTree
+	preview             *SceneView
+	bindings            *ListWidget
+	status              *Label
+	buttons             []*Button
+	selected            string
+	modified, closed    bool
+	translationEnabled  bool
+	translationSnapStep float64
+	revision            uint64
 }
 
 func cloneSceneDocument(d *scene3d.Document) *scene3d.Document {
@@ -62,6 +64,7 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 	e.preview = NewSceneView()
 	e.preview.SetParent(e)
 	e.preview.SetScene(s)
+	e.preview.translation = &sceneTranslationTool{editor: e, axis: -1}
 	e.bindings = NewListWidget()
 	e.bindings.SetFillAvailable(true)
 	e.bindings.SetParent(e)
@@ -93,6 +96,7 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 		{"Node actions", "menu", func() {}},
 		{"Undo", "edit-undo", func() { e.report(e.Undo()) }},
 		{"Redo", "edit-redo", func() { e.report(e.Redo()) }},
+		{"Move node", "transform-move", func() { e.SetTranslationEnabled(!e.TranslationEnabled()) }},
 	} {
 		b := NewButton()
 		b.SetText(i18n.T(spec.label))
@@ -103,6 +107,7 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 		b.Action().BindFunc0(spec.run)
 		e.buttons = append(e.buttons, b)
 	}
+	SetToolTip(e.buttons[7], i18n.T("Move on X/Y/Z; Shift snaps to 1 unit; Escape cancels drag"))
 	e.initNodeMenu()
 	e.rebuildTree()
 	if len(d.Nodes) > 0 {
@@ -143,11 +148,15 @@ func (e *SceneDocumentEditor) SelectNode(id string) bool {
 	if e.closed {
 		return false
 	}
+	if e.preview.translation != nil {
+		e.preview.translation.cancel()
+	}
 	if _, ok := e.scene.Node(id); !ok {
 		return false
 	}
 	e.selected = id
 	e.preview.selected = id
+	e.preview.translation.sync()
 	e.preview.Update()
 	// Expand only the ancestry of the picked node, not a 10,000-node forest.
 	chain := []string{}
@@ -218,6 +227,10 @@ func (e *SceneDocumentEditor) syncActions() {
 		e.buttons[4].SetEnabled(!e.closed)
 		e.buttons[5].SetEnabled(e.CanUndo())
 		e.buttons[6].SetEnabled(e.CanRedo())
+	}
+	if len(e.buttons) >= 8 {
+		e.buttons[7].SetEnabled(selected)
+		e.buttons[7].Action().SetChecked(e.translationEnabled)
 	}
 	if e.nodeMenu != nil {
 		for i, item := range e.nodeMenu.items {

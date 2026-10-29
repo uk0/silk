@@ -80,6 +80,13 @@ type IEventHide interface {
 	OnHide()
 }
 
+// IEventEscape lets a focused interactive tool cancel its own gesture before
+// the enclosing dialog closes. Return false when no gesture is active. Popups
+// retain priority, and repeat events must not commit or cancel a second action.
+type IEventEscape interface {
+	HandleEscape(repeat bool) bool
+}
+
 type IEventKeyDown interface {
 	OnKeyDown(key int, repeat bool)
 }

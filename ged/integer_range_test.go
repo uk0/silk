@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -127,14 +128,42 @@ func TestIntegerGeneratedRuntime(t *testing.T){ui:=NewRangeUI();_,index,err:=%s(
 			t.Fatal(err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "test", "-race", "-mod=mod", "-p", "1", "-count=1", "-run", "TestIntegerGeneratedRuntime", "-v", ".")
+	// A cold Windows race build can consume almost the entire old 120-second
+	// combined deadline. Bound compilation independently so a slow compiler is
+	// not reported as a failed SDK runtime assertion. Keep execution much tighter
+	// and let the test binary print its own timeout stack before the outer kill.
+	binary := filepath.Join(dir, "rangefixture.test")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer buildCancel()
+	childEnv := append(os.Environ(), "GOMAXPROCS=2", "SILK_DATA_DIR="+filepath.Join(dir, "data"))
+	cmd := exec.CommandContext(buildCtx, "go", "test", "-c", "-race", "-mod=mod", "-p", "1", "-o", binary, ".")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOMAXPROCS=2")
+	cmd.Env = childEnv
+	cmd.WaitDelay = 5 * time.Second
+	started := time.Now()
 	out, err := cmd.CombinedOutput()
+	buildErr := buildCtx.Err()
+	buildCancel()
 	if err != nil {
-		t.Fatalf("generated SDK runtime: %v\n%s", err, out)
+		t.Fatalf("generated SDK build after %s: %v (context: %v)\n%s", time.Since(started), err, buildErr, out)
+	}
+	t.Logf("generated SDK race build: %s", time.Since(started))
+	runCtx, runCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer runCancel()
+	cmd = exec.CommandContext(runCtx, binary, "-test.paniconexit0", "-test.timeout=25s", "-test.count=1", "-test.run=^TestIntegerGeneratedRuntime$", "-test.v")
+	cmd.Dir = dir
+	cmd.Env = childEnv
+	cmd.WaitDelay = 5 * time.Second
+	started = time.Now()
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated SDK execution after %s: %v (context: %v)\n%s", time.Since(started), err, runCtx.Err(), out)
+	}
+	if !strings.Contains(string(out), "--- PASS: TestIntegerGeneratedRuntime") {
+		t.Fatalf("generated SDK binary did not run the required assertion:\n%s", out)
 	}
 	t.Logf("both generated constructors verified:\n%s", out)
 }

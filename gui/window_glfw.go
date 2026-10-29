@@ -477,6 +477,7 @@ func (this *Window) destroy() {
 // the main form and a stale capture would steal all subsequent main-window
 // mouse events. Independent preview/dialog windows are not part of this set.
 func (this *Window) clearWindowInput() {
+	this.cancelPointerGestures()
 	belongs := func(widget IWidget) bool {
 		return widget != nil && widget.OwnerWindow() == this
 	}
@@ -1057,12 +1058,14 @@ func pushCapture(w IWidget) bool {
 			if p == cur {
 				captureStack = append(captureStack, w)
 				setCapture(w)
+				cancelPointerGesture(cur)
 				return true
 			}
 		}
 	}
 	captureStack = append(captureStack[:0], w)
 	setCapture(w)
+	cancelPointerGesture(cur)
 	return true
 }
 
@@ -1815,6 +1818,7 @@ func onWindowFocus(gw *glfw.Window, focused bool) {
 		}
 		return
 	}
+	win.cancelPointerGestures()
 	owner := win
 	for owner.wt == WtPopup && owner.popupOwner != nil && owner.popupOwner != owner {
 		owner = owner.popupOwner

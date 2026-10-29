@@ -431,6 +431,7 @@ func forgetWidgetsOfWindow(win *Window) {
 	if win == nil {
 		return
 	}
+	win.cancelPointerGestures()
 	belongs := func(iw IWidget) bool {
 		if iw == nil {
 			return false
@@ -880,6 +881,7 @@ func pushCapture(w IWidget) bool {
 				//core.MoreDebug("pushCapture: p == cur")
 				captureStack = append(captureStack, w)
 				setCapture(w)
+				cancelPointerGesture(cur)
 				return true
 			}
 		}
@@ -887,6 +889,7 @@ func pushCapture(w IWidget) bool {
 	captureStack = append(captureStack[:0], w)
 	//core.MoreDebug("pushCapture: captureStack = append(captureStack[:0], w)")
 	setCapture(w)
+	cancelPointerGesture(cur)
 	return true
 }
 
@@ -1342,7 +1345,11 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		}
 		win.dispatchUnicode(wParam)
 		return 0
+	case win32.WM_CAPTURECHANGED, win32.WM_CANCELMODE:
+		win.cancelPointerGestures()
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_KILLFOCUS:
+		win.cancelPointerGestures()
 		win.textInput.reset()
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_IME_STARTCOMPOSITION, win32.WM_IME_COMPOSITION:
