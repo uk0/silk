@@ -28,6 +28,7 @@ func (*Renderer) Render(*scene3d.Snapshot, scene3d.Camera, int, int, color.RGBA)
 func (*Renderer) RenderGPU(*scene3d.Snapshot, scene3d.Camera, int, int, color.RGBA) (GPUFrame, error) {
 	return GPUFrame{}, ErrUnavailable
 }
+func (*Renderer) ReadColor(GPUFrame) (*ColorFrame, error)    { return nil, ErrUnavailable }
 func (*Renderer) Readback(GPUFrame) (*Frame, error)          { return nil, ErrUnavailable }
 func (*Renderer) PickGPU(GPUFrame, int, int) (string, error) { return "", ErrUnavailable }
 func (*Renderer) Transfers() (TransferStats, error)          { return TransferStats{}, ErrUnavailable }

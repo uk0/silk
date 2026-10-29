@@ -88,3 +88,7 @@ go run ./examples/scene3d -model examples/scene3d/assembly.gltf -scene-output /t
 在 SilkIDE 打开 `examples/scene3d/assembly.silkscene`，通过 Tools → Edit 3D Scene...
 编辑节点与绑定。Use changes 返回 JSON 缓冲，Ctrl/Cmd+S 保存，单次 Undo 撤销整批修改。
 该自有示例包含 2 个共享网格、8 个节点和 3 个惰性绑定；单纯打开不会连接现场点位。
+
+`Snapshot` 的 `SCENE_STATE` 日志包含 `gpu_transfers`（累计 ColorReads/IDReads 与字节数）；
+CPU 回退时为零。这是显式按钮/事件诊断，不安装采样定时器。可对比拖动前后与点击前后的计数：
+GPU 绘制只读颜色，点击单次读取 4 字节 ID，静止缓存不持续传输。

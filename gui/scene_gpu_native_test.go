@@ -3,9 +3,11 @@
 package gui
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -21,10 +23,10 @@ type recordedSceneNativeGPU struct {
 }
 
 func (b *recordedSceneNativeGPU) Capabilities() glrender.Capabilities { return b.capabilities }
-func (b *recordedSceneNativeGPU) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (scene3d.FrameView, error) {
+func (b *recordedSceneNativeGPU) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (sceneViewFrame, error) {
 	f, e := b.sceneGPUBackend.Render(s, c, w, h, bg)
 	if e == nil {
-		b.stats = f.(*glrender.Frame).Stats
+		b.stats = f.(*glrender.ColorFrame).Stats
 	}
 	return f, e
 }
@@ -71,9 +73,17 @@ func runSceneNativeProbe() error {
 	if glfw.GetCurrentContext() != previous {
 		return fmt.Errorf("GPU draw changed host current context")
 	}
+	initialTransfers, e := v.GPUTransfers()
+	if e != nil || initialTransfers.ColorReads != 1 || initialTransfers.ColorBytes != 160*120*4 || initialTransfers.IDReads != 0 || initialTransfers.IDBytes != 0 {
+		return fmt.Errorf("drawing captured IDs: %+v %v", initialTransfers, e)
+	}
 	before := v.RenderCount()
 	if v.PickNode(80, 60) != "model" || v.RenderCount() != before {
 		return fmt.Errorf("GPU pick/cache mismatch")
+	}
+	pickedTransfers, e := v.GPUTransfers()
+	if e != nil || pickedTransfers.ColorBytes != initialTransfers.ColorBytes || pickedTransfers.IDReads != 1 || pickedTransfers.IDBytes != 4 {
+		return fmt.Errorf("pick was not one pixel: %+v %v", pickedTransfers, e)
 	}
 	// A normal widget painted later must remain on top of the GPU result.
 	p.SetBrush1(paint.Color{R: 231, G: 12, B: 170, A: 255})
@@ -97,8 +107,17 @@ func runSceneNativeProbe() error {
 	if e := v.SetNodeTransform("model", scene3d.Identity()); e != nil {
 		return e
 	}
+	beforePick, e := v.GPUTransfers()
+	if e != nil {
+		return e
+	}
+	beforeCount := v.RenderCount()
 	if v.PickNode(80, 60) != "model" {
 		return fmt.Errorf("GPU instance failed to reenter after culling")
+	}
+	afterPick, e := v.GPUTransfers()
+	if e != nil || afterPick.ColorBytes != beforePick.ColorBytes || afterPick.IDBytes != beforePick.IDBytes+4 || v.RenderCount() != beforeCount+1 {
+		return fmt.Errorf("fresh pick downloaded color or wrong count: before=%+v after=%+v %v", beforePick, afterPick, e)
 	}
 	v.Draw(p)
 	im, e = pm.Image()
@@ -108,6 +127,10 @@ func runSceneNativeProbe() error {
 	r, g, b, a := im.At(80, 60).RGBA()
 	if r != initialR || g != initialG || b != initialB || a != initialA {
 		return fmt.Errorf("GPU reentry pick did not refresh composed pixels")
+	}
+	afterDraw, e := v.GPUTransfers()
+	if e != nil || afterDraw.ColorBytes != afterPick.ColorBytes+160*120*4 || afterDraw.IDBytes != afterPick.IDBytes || v.RenderCount() != beforeCount+1 {
+		return fmt.Errorf("post-pick color capture rerendered or read IDs: %+v %v", afterDraw, e)
 	}
 	// Exercise the actual composed widget path with a shared-mesh instance run,
 	// not only a direct SDK renderer with a detached FBO.
@@ -158,6 +181,34 @@ func runSceneNativeProbe() error {
 	if sceneDevice == nil || len(sceneDevice.clients) != 1 {
 		return fmt.Errorf("closing one view destroyed sibling resources")
 	}
+	// Fractional/asymmetric HiDPI pick must use the last composed resolution,
+	// and bind/restore correctly even if another native window became current.
+	p.Save()
+	p.Scale(1.5, 2)
+	v.Draw(p)
+	p.Restore()
+	if v.LastError() != nil {
+		return v.LastError()
+	}
+	hiBefore, e := v.GPUTransfers()
+	if e != nil {
+		return e
+	}
+	hiCount := v.RenderCount()
+	host, e := glfw.CreateWindow(16, 16, "selective pick host", nil, nil)
+	if e != nil {
+		return e
+	}
+	host.MakeContextCurrent()
+	id := v.PickNode(80, 60)
+	hostRestored := glfw.GetCurrentContext() == host
+	sceneRestoreContext(previous)
+	host.Destroy()
+	hiAfter, e := v.GPUTransfers()
+	if e != nil || id == "" || !hostRestored || v.RenderCount() != hiCount || hiAfter.ColorBytes != hiBefore.ColorBytes || hiAfter.IDBytes != hiBefore.IDBytes+4 {
+		return fmt.Errorf("HiDPI pick resized/captured or leaked context: %+v %+v %v", hiBefore, hiAfter, e)
+	}
+	fmt.Println("SCENE_SELECTIVE_PASS draw_color_only pick_four_bytes fresh_pick_no_color hidpi context_restore")
 	v.SetRenderBackend("cpu")
 	v.Draw(p)
 	if v.LastError() != nil || v.ActiveRenderBackend() != "cpu" || sceneDevice != nil || v.GPUCapabilities().InstancedDrawing {
@@ -168,7 +219,32 @@ func runSceneNativeProbe() error {
 	if v.LastError() != nil || sceneDevice == nil {
 		return fmt.Errorf("explicit GPU retry failed")
 	}
+	// Wrong-thread native calls must be rejected before fields mutated by Close.
+	backend := v.gpu.(*nativeSceneGPU)
+	ready, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		close(ready)
+		for i := 0; i < 64; i++ {
+			_, a := backend.Render(snapshot, scene3d.DefaultCamera(), 16, 16, color.RGBA{})
+			_, _, b := backend.Pick(snapshot, scene3d.DefaultCamera(), 16, 16, color.RGBA{}, 0, 0)
+			_, c := backend.Transfers()
+			backend.Close()
+			for _, err := range []error{a, b, c} {
+				if !errors.Is(err, ErrUIInvalid) {
+					done <- fmt.Errorf("native worker accepted: %v", err)
+					return
+				}
+			}
+		}
+		done <- nil
+	}()
+	<-ready
 	closeSceneGPUDevice()
+	if e := <-done; e != nil {
+		return e
+	}
 	if sceneDevice != nil {
 		return fmt.Errorf("shutdown retained GPU device")
 	}

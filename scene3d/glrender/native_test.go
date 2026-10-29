@@ -71,6 +71,11 @@ func nativeProbe() error {
 	if nativeResidentErr != nil {
 		return nativeResidentErr
 	}
+	nativeColorRan = true
+	nativeColorErr = nativeColorProbe()
+	if nativeColorErr != nil {
+		return nativeColorErr
+	}
 	r, e := NewCurrent()
 	if e != nil {
 		return e

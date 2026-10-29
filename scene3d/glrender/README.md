@@ -169,7 +169,8 @@ return err
 - `Transfers()` 为所属线程上的累计成功调用/字节计数，区分 ColorBlits、ColorReads、IDReads 和
   字节数；不是驱动计时。`GPUFrame.Statistics().ReadbackBytes` 为 0；CPU Frame 保持旧统计语义。
 - `Render` 仍返回 `FrameView`，等价于 GPU render + 显式完整 readback，兼容当前 Cairo 控件树。
-  **SceneView 尚未接入驻留帧**：不能在最终 2D 图像上无条件叠一张 GPU 图，那会覆盖菜单、同级控件
+  **SceneView 已使用 RenderGPU + ReadColor，拾取另走 PickGPU，但还不是零读回合成**。
+  不能在最终 2D 图像上无条件叠一张 GPU 图，那会覆盖菜单、同级控件
   与 toast。后续必须完成有序合成、截图/导出、所有权迁移与原生控件生命周期后，才称 IDE 零读回。
 - `SILK_TEST_SCENE_GPU=1 SILK_TEST_REQUIRE_BLIT=1` 启用实际 native resident 探针，检查零全帧
   CPU 缓冲、4 字节拾取、裁剪/负偏移/缩放逐像素结果、GL 状态恢复和线程/关闭/过期拒绝。
@@ -177,3 +178,25 @@ return err
 依据：[Khronos 同步语义](https://wikis.khronos.org/opengl/Synchronization)、
 [EXT framebuffer blit](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_framebuffer_blit.txt)。
 使用 PBO 后立即映射并不能消除等待，故本阶段先拆开驻留帧和真正需要的读回，不增加空闲绘制循环。
+
+## 选择性颜色捕获与 GUI 按需拾取
+
+`ReadColor(GPUFrame)` 返回 `*ColorFrame`，只包含顶端起始 RGBA、Sequence 和 Stats；
+不分配或读回整张 ID 图，也不伪装成有 CPU 拾取数据的 `scene3d.FrameView`。
+同一 generation 重复捕获零传输；随后 `Readback` 只补读 ID，同一帧不重复读颜色。
+`ReadColor` 与 `Readback` 共享借用的颜色存储，下一次捕获/Render/Close 后不得继续持有，
+跨 goroutine 或长期保留必须复制。两者仍要求所属 OS 线程和当前 context。
+
+`ColorFrame.Stats.ReadbackBytes` 描述颜色捕获大小（4 × 像素数），完整 Frame 保持
+8 × 像素数；混合使用时以 `Transfers()` 的累计字节为实际 API 传输依据。
+`IsCached` 表示捕获缓存，而 `GPUFrame.Statistics().Cached` 表示 GPU 绘制缓存。
+
+`SceneView` 正常绘制使用颜色捕获；`PickNode` 独立渲染/复用当前场景并读取单个 raster ID
+（4 字节），即使场景在绘制前变化也不为了拾取先下载整张颜色。下一次 Draw 会补取颜色并
+更新 pixmap，而不重复 GPU 绘制。使用最后绘制的 HiDPI 分辨率并恢复调用前 native context。
+拾取失败时 auto 释放 GPU 并回退 CPU，强制 opengl 不静默回退；错误保留在 `GPUError()`。
+`SceneView.GPUTransfers()` 提供当前后端累计计数，查询不会创建上下文或安排重绘。
+
+这将没有拾取操作的变化帧附件读回量从 8 降到 4 字节/像素，并省去整张 CPU ID 缓冲，
+**不是 FPS 翻倍或消除 GPU 同步等待的承诺**。颜色读回、Cairo 合成与窗口纹理上传仍存在；
+菜单/遮挡仍复用原控件树顺序，Windows 缺少所需 GL 时继续 CPU 路径。

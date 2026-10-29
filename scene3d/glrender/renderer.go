@@ -59,6 +59,8 @@ type Renderer struct {
 	epoch                                        uint64
 	stats                                        Stats
 	sequence, generation, capturedGeneration     uint64
+	colorGeneration                              uint64
+	colorFrame                                   ColorFrame
 	transfers                                    TransferStats
 	frame                                        Frame
 	readback                                     []byte
@@ -241,6 +243,7 @@ func (r *Renderer) CloseCurrent() error {
 	r.instanceData = nil
 	r.instanceBufferBytes = 0
 	r.frame = Frame{}
+	r.colorFrame = ColorFrame{}
 	r.readback = nil
 	r.key, r.prepared = nil, nil
 	r.culler.Reset()

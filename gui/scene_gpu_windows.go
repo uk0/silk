@@ -4,11 +4,10 @@ package gui
 
 import (
 	"fmt"
-	"image/color"
+	"runtime"
 	"syscall"
 	"unsafe"
 
-	"github.com/uk0/silk/scene3d"
 	"github.com/uk0/silk/scene3d/glrender"
 	"github.com/uk0/silk/win32"
 )
@@ -26,6 +25,7 @@ type nativeSceneGPU struct {
 	device   *nativeSceneDevice
 	renderer *glrender.Renderer
 	info     glrender.Info
+	frame    glrender.ColorFrame
 }
 
 var sceneDevice *nativeSceneDevice
@@ -115,21 +115,29 @@ func newSceneGPUBackend() (sceneGPUBackend, error) {
 	return b, nil
 }
 func (b *nativeSceneGPU) Info() glrender.Info { return b.info }
-func (b *nativeSceneGPU) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (scene3d.FrameView, error) {
-	if b.renderer == nil || b.device == nil || b.device.rc == 0 {
-		return nil, glrender.ErrClosed
-	}
+func (b *nativeSceneGPU) withCurrent(fn func(*glrender.Renderer) error) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Reject a worker before reading fields the UI thread may change on Close.
 	if !IsUIThread() {
-		return nil, ErrUIInvalid
+		return ErrUIInvalid
+	}
+	if b.renderer == nil || b.device == nil || b.device.rc == 0 {
+		return glrender.ErrClosed
 	}
 	previousDC, previousRC := win32.WglGetCurrentDC(), win32.WglGetCurrentContext()
 	if !win32.WglMakeCurrent(b.device.dc, b.device.rc) {
-		return nil, fmt.Errorf("%w: wglMakeCurrent", glrender.ErrUnavailable)
+		return fmt.Errorf("%w: wglMakeCurrent", glrender.ErrUnavailable)
 	}
 	defer win32.WglMakeCurrent(previousDC, previousRC)
-	return b.renderer.Render(s, c, w, h, bg)
+	return fn(b.renderer)
 }
 func (b *nativeSceneGPU) Close() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if !IsUIThread() {
+		return
+	}
 	if b.renderer == nil {
 		return
 	}
@@ -139,6 +147,7 @@ func (b *nativeSceneGPU) Close() {
 		b.renderer.Close()
 	}
 	b.renderer = nil
+	b.frame = glrender.ColorFrame{}
 	delete(d.clients, b)
 	if previousRC == d.rc {
 		previousDC, previousRC = 0, 0

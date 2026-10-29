@@ -62,10 +62,25 @@ func TestSceneNativeWindowsWGLCompositionAndFallback(t *testing.T) {
 	if v.LastError() != nil || !v.gpuAttempted || len(winMap) != windowCount {
 		t.Fatal("auto renderer or invisible device ownership failed", v.LastError())
 	}
+	initialTransfers, err := v.GPUTransfers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ActiveRenderBackend() == "opengl" && (initialTransfers.ColorReads != 1 || initialTransfers.ColorBytes != 160*120*4 || initialTransfers.IDBytes != 0) {
+		t.Fatal("drawing captured IDs", initialTransfers)
+	}
 	before := v.RenderCount()
 	if v.PickNode(80, 60) != "model" || v.RenderCount() != before {
 		t.Fatal("native pick rerendered or returned wrong node")
 	}
+	afterPick, err := v.GPUTransfers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ActiveRenderBackend() == "opengl" && (afterPick.ColorBytes != initialTransfers.ColorBytes || afterPick.IDReads != 1 || afterPick.IDBytes != 4) {
+		t.Fatal("picking did not use one raster pixel", afterPick)
+	}
+	checkHost()
 	p.SetBrush1(paint.Color{R: 231, G: 12, B: 170, A: 255})
 	p.Rectangle(70, 50, 20, 20)
 	p.Fill()

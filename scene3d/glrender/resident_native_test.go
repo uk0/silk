@@ -166,8 +166,9 @@ func nativeResidentProbe() error {
 			_, b := r.Readback(next)
 			_, d := r.PickGPU(next, 4, 4)
 			_, e := r.Transfers()
+			_, colorErr := r.ReadColor(next)
 			x := r.BlitColor(next, 0, 32, 32, image.Rect(0, 0, 32, 32), image.Rect(0, 0, 32, 32))
-			for _, err := range []error{a, b, d, e, x} {
+			for _, err := range []error{a, b, d, e, x, colorErr} {
 				if !errors.Is(err, ErrContext) {
 					done <- fmt.Errorf("worker error %v", err)
 					return

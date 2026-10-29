@@ -3,11 +3,21 @@ package gui
 import (
 	"github.com/uk0/silk/scene3d"
 	"github.com/uk0/silk/scene3d/glrender"
+	"image"
 	"image/color"
 )
 
+// The GUI painter needs color pixels, not a complete CPU picking attachment.
+type sceneViewFrame interface {
+	RGBA() *image.RGBA
+	RenderSequence() uint64
+	IsCached() bool
+}
+
 type sceneGPUBackend interface {
-	Render(*scene3d.Snapshot, scene3d.Camera, int, int, color.RGBA) (scene3d.FrameView, error)
+	Render(*scene3d.Snapshot, scene3d.Camera, int, int, color.RGBA) (sceneViewFrame, error)
+	Pick(*scene3d.Snapshot, scene3d.Camera, int, int, color.RGBA, int, int) (string, bool, error)
+	Transfers() (glrender.TransferStats, error)
 	Info() glrender.Info
 	Close()
 }
@@ -59,13 +69,17 @@ func (v *SceneView) releaseGPU() {
 	}
 	v.uploadedSequence = ^uint64(0)
 }
-func (v *SceneView) renderScene(s *scene3d.Snapshot, c scene3d.Camera, w, h int) (scene3d.FrameView, error) {
-	bg := color.RGBA{20, 28, 41, 255}
+func (v *SceneView) ensureSceneGPU() {
 	if v.backendMode != "cpu" && !v.gpuAttempted && IsUIThread() && v.OwnerWindow() != nil {
 		v.gpuAttempted = true
 		v.gpu, v.gpuError = newSceneGPUBackend()
 	}
-	var f scene3d.FrameView
+}
+
+func (v *SceneView) renderScene(s *scene3d.Snapshot, c scene3d.Camera, w, h int) (sceneViewFrame, error) {
+	bg := color.RGBA{20, 28, 41, 255}
+	v.ensureSceneGPU()
+	var f sceneViewFrame
 	var err error
 	if v.gpu != nil {
 		f, err = v.gpu.Render(s, c, w, h, bg)
@@ -90,4 +104,40 @@ func (v *SceneView) renderScene(s *scene3d.Snapshot, c scene3d.Camera, w, h int)
 		v.renderCount++
 	}
 	return f, nil
+}
+
+// GPUTransfers returns cumulative successful transfers of the active backend.
+// It does not initialize a context. CPU fallback/before first draw/after Close
+// returns zero. Like all SceneView accessors, call on the owning UI thread.
+func (v *SceneView) GPUTransfers() (glrender.TransferStats, error) {
+	if v.gpu == nil {
+		return glrender.TransferStats{}, nil
+	}
+	return v.gpu.Transfers()
+}
+
+func (v *SceneView) pickScene(s *scene3d.Snapshot, c scene3d.Camera, w, h, x, y int) string {
+	v.ensureSceneGPU()
+	if v.gpu != nil {
+		id, cached, err := v.gpu.Pick(s, c, w, h, color.RGBA{20, 28, 41, 255}, x, y)
+		if err == nil {
+			if !cached {
+				v.renderCount++
+			}
+			return id
+		}
+		v.gpuError = err
+		v.releaseGPU()
+	}
+	if v.backendMode == "opengl" {
+		return ""
+	}
+	f, err := v.renderer.Render(s, c, w, h, color.RGBA{20, 28, 41, 255})
+	if err != nil {
+		return ""
+	}
+	if !f.IsCached() {
+		v.renderCount++
+	}
+	return f.Pick(x, y)
 }

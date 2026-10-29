@@ -237,6 +237,11 @@ func (f *demo) snapshot() {
 		gpuError = f.view.GPUError().Error()
 	}
 	state := map[string]any{"node": id, "y": n.Transform[13], "selected": f.view.SelectedNode(), "loaded": f.loaded, "busy": f.view.IsLoading(), "renders": f.view.RenderCount(), "on_ui": gui.IsUIThread(), "error": err, "yaw": f.view.Yaw(), "pitch": f.view.Pitch(), "distance": f.view.Distance(), "warnings": f.view.ModelWarnings(), "backend": f.view.ActiveRenderBackend(), "gpu": f.view.GPUInfo(), "gpu_error": gpuError, "binding_count": len(f.view.SceneBindings()), "node_transform": n.Transform, "node_color": n.Color, "document_saving": f.saving, "document_saves": f.saved, "rotation": f.angle.Value().Float(), "alarm": f.alarm.Value().Bool()}
+	transfers, transferErr := f.view.GPUTransfers()
+	state["gpu_transfers"] = transfers
+	if transferErr != nil {
+		state["gpu_transfer_error"] = transferErr.Error()
+	}
 	b, _ := json.Marshal(state)
 	fmt.Println("SCENE_STATE", string(b))
 	text := fmt.Sprintf("Node: %s  |  Y: %.3f  |  Selected: %s  |  Loads: %d  |  Renders: %d", id, n.Transform[13], f.view.SelectedNode(), f.loaded, f.view.RenderCount())

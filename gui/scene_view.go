@@ -381,7 +381,7 @@ func (v *SceneView) Draw(g paint.Painter) {
 	v.renderScaleX, v.renderScaleY = sx, sy
 	snap, err := v.scene.Snapshot()
 	if err == nil {
-		var f scene3d.FrameView
+		var f sceneViewFrame
 		f, err = v.renderScene(snap, v.camera(), int(rw), int(rh))
 		if err == nil {
 			changed := v.uploadedSequence != v.renderCount
@@ -504,11 +504,7 @@ func (v *SceneView) PickNode(x, y float64) string {
 	if !finiteSceneValue(rw) || !finiteSceneValue(rh) || rw > scene3d.MaxDimension || rh > scene3d.MaxDimension || rw*rh > scene3d.MaxPixels {
 		return ""
 	}
-	f, e := v.renderScene(snap, v.camera(), int(rw), int(rh))
-	if e != nil {
-		return ""
-	}
-	return f.Pick(min(int(rw)-1, int(x*rw/w)), min(int(rh)-1, int(y*rh/h)))
+	return v.pickScene(snap, v.camera(), int(rw), int(rh), min(int(rw)-1, int(x*rw/w)), min(int(rh)-1, int(y*rh/h)))
 }
 func (v *SceneView) OnMouseWheel(x, y, z float64) {
 	if v.closed || !v.IsEnabled() || !finiteSceneValue(z) {

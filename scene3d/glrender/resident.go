@@ -59,24 +59,29 @@ func (r *Renderer) prepareReadback() {
 	r.api.PixelStorei(gl.PACK_SKIP_PIXELS, 0)
 }
 
-// Readback captures both attachments for CPU composition/export. Host buffers
-// are allocated lazily and reused until Close. Like the legacy Render result,
-// the returned Frame is borrowed until another Readback/Render or Close.
-// This changes GL framebuffer and pixel-pack state; it does not draw again.
-func (r *Renderer) Readback(f GPUFrame) (*Frame, error) {
+// ReadColor captures only the color attachment for ordinary CPU composition.
+// It never allocates or reads an ID buffer. Repeated captures of an unchanged
+// generation reuse the image without a GPU transfer, including after Readback.
+// Like Readback, it changes framebuffer and pixel-pack state and does not draw.
+// Cached describes this capture; GPUFrame.Statistics describes the render.
+func (r *Renderer) ReadColor(f GPUFrame) (*ColorFrame, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := r.validateGPU(f); err != nil {
 		return nil, err
 	}
-	if r.capturedGeneration == r.generation && r.frame.Image != nil {
-		r.frame.Stats.Cached = true
-		return &r.frame, nil
+	return r.readColor()
+}
+
+// The owning OS thread/context must already be validated and locked.
+func (r *Renderer) readColor() (*ColorFrame, error) {
+	if r.colorGeneration == r.generation && r.colorFrame.Image != nil {
+		r.colorFrame.Stats.Cached = true
+		return &r.colorFrame, nil
 	}
 	w, h := r.width, r.height
-	if r.frame.Image == nil || r.frame.Image.Rect != image.Rect(0, 0, w, h) {
-		r.frame.Image = image.NewRGBA(image.Rect(0, 0, w, h))
-		r.frame.pickPixels = make([]byte, w*h*4)
+	if r.colorFrame.Image == nil || r.colorFrame.Image.Rect != image.Rect(0, 0, w, h) {
+		r.colorFrame.Image = image.NewRGBA(image.Rect(0, 0, w, h))
 		r.readback = make([]byte, w*h*4)
 	}
 	r.prepareReadback()
@@ -87,6 +92,43 @@ func (r *Renderer) Readback(f GPUFrame) (*Frame, error) {
 	}
 	r.transfers.ColorReads++
 	r.transfers.ColorBytes += uint64(w) * uint64(h) * 4
+	stride := w * 4
+	for y := 0; y < h; y++ {
+		copy(r.colorFrame.Image.Pix[y*stride:(y+1)*stride], r.readback[(h-y-1)*stride:(h-y)*stride])
+	}
+	r.colorFrame.Sequence = r.sequence
+	r.colorFrame.Stats = r.stats
+	r.colorFrame.Stats.ReadbackBytes = int64(w) * int64(h) * 4
+	r.colorGeneration = r.generation
+	return &r.colorFrame, nil
+}
+
+// Readback captures both attachments for CPU composition/export. A prior
+// ReadColor of this generation is reused, so only the missing IDs are read.
+// Host buffers are allocated lazily and reused until Close. The returned Frame
+// is borrowed until another ReadColor/Readback/Render or Close.
+// This changes GL framebuffer and pixel-pack state; it does not draw again.
+// Stats.ReadbackBytes describes the complete capture (8 bytes per pixel); use
+// Transfers for actual traffic when mixing selective and complete captures.
+func (r *Renderer) Readback(f GPUFrame) (*Frame, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := r.validateGPU(f); err != nil {
+		return nil, err
+	}
+	if r.capturedGeneration == r.generation && r.frame.Image != nil {
+		r.frame.Stats.Cached = true
+		return &r.frame, nil
+	}
+	colorFrame, err := r.readColor()
+	if err != nil {
+		return nil, err
+	}
+	w, h := r.width, r.height
+	if len(r.frame.pickPixels) != w*h*4 {
+		r.frame.pickPixels = make([]byte, w*h*4)
+	}
+	r.prepareReadback()
 	r.api.ReadBuffer(gl.COLOR_ATTACHMENT1_EXT)
 	r.api.ReadPixels(0, 0, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Pointer(r.frame.pickPixels))
 	if e := r.api.GetError(); e != gl.NO_ERROR {
@@ -94,10 +136,7 @@ func (r *Renderer) Readback(f GPUFrame) (*Frame, error) {
 	}
 	r.transfers.IDReads++
 	r.transfers.IDBytes += uint64(w) * uint64(h) * 4
-	stride := w * 4
-	for y := 0; y < h; y++ {
-		copy(r.frame.Image.Pix[y*stride:(y+1)*stride], r.readback[(h-y-1)*stride:(h-y)*stride])
-	}
+	r.frame.Image = colorFrame.Image
 	r.frame.snapshot = r.key
 	r.frame.Sequence = r.sequence
 	r.frame.Stats = r.stats

@@ -5,13 +5,12 @@ package gui
 import (
 	"fmt"
 	"github.com/go-gl/glfw/v3.3/glfw"
-	"github.com/uk0/silk/scene3d"
 	"github.com/uk0/silk/scene3d/glrender"
-	"image/color"
+	"runtime"
 )
 
-// This unshown context is a resource owner, not a visual child window. Color/ID
-// FBOs are read back and composited through the same Cairo tree as other widgets.
+// This unshown context is a resource owner, not a visual child window. Color
+// is composited through the ordinary Cairo tree. IDs are read only on picking.
 // A shared device avoids a native context/window per SceneView.
 type nativeSceneDevice struct {
 	window  *glfw.Window
@@ -21,6 +20,7 @@ type nativeSceneGPU struct {
 	device   *nativeSceneDevice
 	renderer *glrender.Renderer
 	info     glrender.Info
+	frame    glrender.ColorFrame
 }
 
 var sceneDevice *nativeSceneDevice // UI-thread-only, like the window registry
@@ -70,19 +70,27 @@ func newSceneGPUBackend() (sceneGPUBackend, error) {
 	return b, nil
 }
 func (b *nativeSceneGPU) Info() glrender.Info { return b.info }
-func (b *nativeSceneGPU) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg color.RGBA) (scene3d.FrameView, error) {
-	if b.renderer == nil || b.device == nil || b.device.window == nil {
-		return nil, glrender.ErrClosed
-	}
+func (b *nativeSceneGPU) withCurrent(fn func(*glrender.Renderer) error) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Reject a worker before reading fields the UI thread may change on Close.
 	if !IsUIThread() {
-		return nil, ErrUIInvalid
+		return ErrUIInvalid
+	}
+	if b.renderer == nil || b.device == nil || b.device.window == nil {
+		return glrender.ErrClosed
 	}
 	previous := glfw.GetCurrentContext()
 	b.device.window.MakeContextCurrent()
 	defer sceneRestoreContext(previous)
-	return b.renderer.Render(s, c, w, h, bg)
+	return fn(b.renderer)
 }
 func (b *nativeSceneGPU) Close() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if !IsUIThread() {
+		return
+	}
 	if b.renderer == nil {
 		return
 	}
@@ -91,6 +99,7 @@ func (b *nativeSceneGPU) Close() {
 	d.window.MakeContextCurrent()
 	b.renderer.Close()
 	b.renderer = nil
+	b.frame = glrender.ColorFrame{}
 	delete(d.clients, b)
 	if previous == d.window {
 		previous = nil
