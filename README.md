@@ -34,6 +34,11 @@ signed/notarized standalone apps.
   and `decl.SceneView` use the existing registration/code-generation paths.
 - glTF preserves hierarchy, transforms and shared meshes with stable primitive IDs. Explicit
   `FitScene()` reframes tag-driven assemblies; external buffers stay inside the selected model directory.
+- Portable `.silkscene` documents preserve shared geometry, node hierarchy and inert tag bindings.
+  Compiled bindings cover position/relative rotation/scale, visibility and alarm color, with bounded
+  UI delivery and authored-baseline export/reconfiguration. **Tools → Edit 3D Scene...** and the
+  command palette open the node/binding inspector; edits use normal buffer Undo/Redo and Save.
+  See [scene document workflow and QA](SCENE_DOCUMENT_QA_20261028.md).
 - The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
   and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is

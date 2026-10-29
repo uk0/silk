@@ -12,8 +12,8 @@ import (
 // It preserves the other transform components, coalesces bursts on the UI queue,
 // and holds the last good position for bad/uncertain/non-numeric samples.
 // Returned cancellation is safe from any goroutine. SetScene, reparent and Close
-// cancel all bindings owned by this view. Rotation/scale bindings are not yet
-// part of this initial API.
+// cancel all bindings owned by this view. Use SetSceneBindings for persisted
+// configuration, relative rotation/scale and alarm-color channels.
 func (v *SceneView) BindNodePosition(tag *core.Tag, id string, axis int, scale, offset float64) (func(), error) {
 	if tag == nil || axis < 0 || axis > 2 || !finiteSceneValue(scale) || !finiteSceneValue(offset) {
 		return nil, ErrUIInvalid

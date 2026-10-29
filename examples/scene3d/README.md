@@ -60,4 +60,26 @@ Camera Yaw/Pitch/Distance、Render Backend（auto/cpu/opengl）；保存、重�
 OnSelected / OnModelLoaded / OnError 可生成事件处理函数；也可使用 `decl.SceneView(...)`。
 
 构造、预览及读取设计文件**不会自动打开模型文件**；宿主必须调用 `LoadModel`。
-当前不把完整运行时 Scene、相机观察中心或 tag 绑定序列化到设计文件，也没有节点树编辑器。
+当前不把完整运行时 Scene、相机观察中心或 tag 绑定序列化到设计文件，场景节点/绑定通过独立 `.silkscene` 文件及其结构化编辑器保存。
+
+## 场景文档与实时绑定验证
+
+```sh
+go run ./examples/scene3d -model examples/scene3d/assembly.gltf -scene-output /tmp/plant.silkscene
+```
+
+显式提供 `-scene-output` 才增加保存/回读操作，不在默认启动时写文件：
+
+1. **Load model** 加载组装件并安装高度、旋转及单个 mesh 的告警颜色绑定。
+2. **Publish 1000 values**、**Rotate 90 degrees**、**Toggle alarm** 驱动可见状态。
+3. **Reconnect bindings** 验证原地重绑不重复叠加旋转；**Save scene** 在后台保存创作基线、共享几何、警告及绑定定义；等待 `document_saving=false`
+   和 `SCENE_DOCUMENT_SAVED`，不能把按钮点击当作保存成功。
+4. **Reload saved scene** 通过同一异步加载链回读，绑定来自文件且使用本例显式选择的 TagDB。
+   最新点位重新应用一次；旋转/缩放不在每次保存后累积。
+
+`SCENE_STATE` 增加绑定数量、保存状态/次数、旋转、告警值及目标矩阵/颜色。目标路径应使用 `.silkscene`；
+本示例不是完整的 IDE 场景编辑器，也不会自动配置现场驱动或相机跟随。
+
+在 SilkIDE 打开 `examples/scene3d/assembly.silkscene`，通过 Tools → Edit 3D Scene...
+编辑节点与绑定。Use changes 返回 JSON 缓冲，Ctrl/Cmd+S 保存，单次 Undo 撤销整批修改。
+该自有示例包含 2 个共享网格、8 个节点和 3 个惰性绑定；单纯打开不会连接现场点位。

@@ -11,7 +11,7 @@ import (
 )
 
 func TestSceneWidgetDropPersistencePreviewCodegen(t *testing.T) {
-	for _, ext := range []string{"obj", "gltf", "glb"} {
+	for _, ext := range []string{"obj", "gltf", "glb", "silkscene"} {
 		t.Run(ext, func(t *testing.T) {
 			palette := NewWidgetList()
 			found := false

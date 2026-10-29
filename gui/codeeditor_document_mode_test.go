@@ -86,6 +86,7 @@ func TestEditorLanguagePathDetection(t *testing.T) {
 		{"SETTINGS.JSON", "json", "JSON"}, {"settings.jsonc", "plaintext", "Plain Text"},
 		{"README", "plaintext", "Plain Text"}, {"go.mod", "plaintext", "Plain Text"},
 		{"script.go.txt", "plaintext", "Plain Text"},
+		{"plant.silkscene", "json", "JSON"}, {"PLANT.SILKSCENE", "json", "JSON"},
 	} {
 		e := NewCodeEditor()
 		e.filePath = tc.path

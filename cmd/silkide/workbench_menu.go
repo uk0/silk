@@ -224,6 +224,12 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("build.debug", "Debug", "debug", "Shift+F5", true, func() { runProjectInDebugger(canvas) })
 		add("build.stop", "Stop", "stop", "", true, stopProjectExecution)
 	case "Tools":
+		sceneEditor := visibleCaretEditor(tabs, canvas)
+		add("tools.sceneEditor", "Edit 3D Scene...", "preview", "", sceneAssetEditorAvailable(sceneEditor), func() {
+			if sceneEditor != nil {
+				editSceneAsset(tabs, canvas, sceneEditor)
+			}
+		})
 		add("tools.status", "Toolchain Status", "settings", "", true, func() { showToolchainStatus(globalFrame) })
 		add("tools.restartLSP", "Restart LSP", "refresh", "", true, func() { restartLSP(canvas) })
 		add("tools.appearance", "Appearance & Editor", "settings", "", true, func() { showAppearanceDialog(globalFrame) })

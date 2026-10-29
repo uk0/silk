@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/uk0/silk/core"
@@ -22,6 +24,12 @@ type demo struct {
 	title, status, notice *gui.Label
 	buttons               []*gui.Button
 	tag                   *core.Tag
+	db                    *core.TagDB
+	angle, alarm          *core.Tag
+	sceneOutput           string
+	saving                bool
+	saved                 int
+	documentError         string
 	loaded                int
 	ctx                   context.Context
 	cancel                context.CancelFunc
@@ -55,17 +63,18 @@ func newDemo(model string) *demo {
 	if err := f.view.SetScene(s); err != nil {
 		panic(err)
 	}
-	f.tag = core.NewTagDB().GetOrCreate("tank.level", core.Meta{})
+	f.db = core.NewTagDB()
+	f.tag = f.db.GetOrCreate("tank.level", core.Meta{})
+	f.angle = f.db.GetOrCreate("tank.rotation", core.Meta{})
+	f.alarm = f.db.GetOrCreate("tank.alarm", core.Meta{})
+	f.angle.SetValue(0.0)
+	f.alarm.SetValue(false)
 	f.tag.SetValue(0.0)
-	if _, err := f.view.BindNodePosition(f.tag, "tank", 1, .001, 0); err != nil {
-		panic(err)
-	}
+	f.bindScene("tank")
 	f.view.SigSelected(func(string) { f.snapshot() })
 	f.view.SigModelLoaded(func() {
 		f.loaded++
-		if _, err := f.view.BindNodePosition(f.tag, "model", 1, .001, 0); err != nil {
-			panic(err)
-		}
+		f.bindScene("model")
 		gui.Post(f.snapshot)
 	})
 	f.view.SigError(func(string) { f.snapshot() })
@@ -104,14 +113,115 @@ func newDemo(model string) *demo {
 	f.snapshot()
 	return f
 }
+func (f *demo) bindScene(root string) {
+	f.documentError = ""
+	specs := f.view.SceneBindings()
+	if len(specs) == 0 && !(root == "model" && strings.EqualFold(filepath.Ext(f.view.ModelSource()), ".silkscene")) {
+		specs = []scene3d.Binding{{Node: root, Tag: "tank.level", Property: scene3d.PositionY, Gain: .001}, {Node: root, Tag: "tank.rotation", Property: scene3d.RotationY, Gain: 1}}
+		// Color is per mesh; group nodes do not silently claim color inheritance.
+		meshID := root
+		node, ok := f.view.Scene().Node(meshID)
+		if !ok {
+			return
+		}
+		if node.Mesh == nil {
+			for _, candidate := range f.view.Scene().Nodes() {
+				if candidate.Mesh != nil {
+					meshID = candidate.ID
+					node = candidate
+					break
+				}
+			}
+		}
+		if node.Mesh != nil {
+			specs = append(specs, scene3d.Binding{Node: meshID, Tag: "tank.alarm", Property: scene3d.AlarmColor, FalseColor: node.Color, TrueColor: color.RGBA{240, 45, 35, 255}})
+		}
+	}
+	if _, err := f.view.SetSceneBindings(f.db, specs); err != nil {
+		f.documentError = err.Error()
+		fmt.Println("BIND_ERROR", err)
+	} else {
+		f.documentError = ""
+	}
+}
+
+// The destination is supplied explicitly by the host; normal demo startup does
+// not write anything. Save runs off-thread and reload goes through LoadModel.
+func (f *demo) enableSceneDocuments(path string) {
+	f.sceneOutput = path
+	add := func(text string, fn func()) {
+		b := gui.NewButton1(text, nil)
+		b.SetParent(f)
+		b.Action().BindFunc0(fn)
+		f.buttons = append(f.buttons, b)
+	}
+	add("Rotate 90 degrees", func() { f.angle.SetValue(f.angle.Value().Float() + math.Pi/2); gui.Post(f.snapshot) })
+	add("Toggle alarm", func() { f.alarm.SetValue(!f.alarm.Value().Bool()); gui.Post(f.snapshot) })
+	add("Save scene", func() {
+		if f.saving || f.view.IsLoading() {
+			return
+		}
+		doc, err := f.view.CaptureSceneDocument()
+		if err != nil {
+			f.documentError = err.Error()
+			f.snapshot()
+			return
+		}
+		f.saving = true
+		f.documentError = ""
+		_, err = gui.RunAsync(f.ctx, nil, func(ctx context.Context) (struct{}, error) {
+			return struct{}{}, scene3d.SaveDocumentFile(ctx, path, doc)
+		}, func(_ struct{}, err error) {
+			f.saving = false
+			if err != nil {
+				f.documentError = err.Error()
+			} else {
+				f.saved++
+				fmt.Println("SCENE_DOCUMENT_SAVED", path)
+			}
+			f.snapshot()
+		})
+		if err != nil {
+			f.saving = false
+			f.documentError = err.Error()
+		}
+		f.snapshot()
+	})
+	add("Reconnect bindings", func() {
+		if _, err := f.view.SetSceneBindings(f.db, f.view.SceneBindings()); err != nil {
+			f.documentError = err.Error()
+		} else {
+			f.documentError = ""
+		}
+		gui.Post(f.snapshot)
+	})
+	add("Reload saved scene", func() {
+		if f.saving || f.view.IsLoading() {
+			return
+		}
+		f.view.SetModelSource(path)
+		if err := f.view.LoadModel(f.ctx); err != nil {
+			f.documentError = err.Error()
+		}
+		f.snapshot()
+	})
+}
+
 func (f *demo) snapshot() {
 	id := "tank"
 	n, ok := f.view.Scene().Node(id)
 	if !ok {
 		id = "model"
-		n, _ = f.view.Scene().Node(id)
+		n, ok = f.view.Scene().Node(id)
+		if !ok {
+			id = ""
+			if nodes := f.view.Scene().Nodes(); len(nodes) > 0 {
+				n = nodes[0]
+				id = n.ID
+			}
+		}
 	}
-	err := ""
+	err := f.documentError
 	if f.view.LastError() != nil {
 		err = f.view.LastError().Error()
 	}
@@ -119,7 +229,7 @@ func (f *demo) snapshot() {
 	if f.view.GPUError() != nil {
 		gpuError = f.view.GPUError().Error()
 	}
-	state := map[string]any{"node": id, "y": n.Transform[13], "selected": f.view.SelectedNode(), "loaded": f.loaded, "busy": f.view.IsLoading(), "renders": f.view.RenderCount(), "on_ui": gui.IsUIThread(), "error": err, "yaw": f.view.Yaw(), "pitch": f.view.Pitch(), "distance": f.view.Distance(), "warnings": f.view.ModelWarnings(), "backend": f.view.ActiveRenderBackend(), "gpu": f.view.GPUInfo(), "gpu_error": gpuError}
+	state := map[string]any{"node": id, "y": n.Transform[13], "selected": f.view.SelectedNode(), "loaded": f.loaded, "busy": f.view.IsLoading(), "renders": f.view.RenderCount(), "on_ui": gui.IsUIThread(), "error": err, "yaw": f.view.Yaw(), "pitch": f.view.Pitch(), "distance": f.view.Distance(), "warnings": f.view.ModelWarnings(), "backend": f.view.ActiveRenderBackend(), "gpu": f.view.GPUInfo(), "gpu_error": gpuError, "binding_count": len(f.view.SceneBindings()), "node_transform": n.Transform, "node_color": n.Color, "document_saving": f.saving, "document_saves": f.saved, "rotation": f.angle.Value().Float(), "alarm": f.alarm.Value().Bool()}
 	b, _ := json.Marshal(state)
 	fmt.Println("SCENE_STATE", string(b))
 	text := fmt.Sprintf("Node: %s  |  Y: %.3f  |  Selected: %s  |  Loads: %d  |  Renders: %d", id, n.Transform[13], f.view.SelectedNode(), f.loaded, f.view.RenderCount())
@@ -155,11 +265,15 @@ func (f *demo) OnResize() {
 }
 func main() {
 	backend := flag.String("backend", "auto", "render backend: auto, cpu, opengl")
-	model := flag.String("model", "examples/scene3d/pump.obj", "explicit OBJ, glTF or GLB path")
+	model := flag.String("model", "examples/scene3d/pump.obj", "explicit OBJ, glTF, GLB or .silkscene path")
+	sceneOutput := flag.String("scene-output", "", "enable explicit save/reload controls for this .silkscene destination")
 	render := flag.String("render", "", "write reference PNG and exit without a window")
 	flag.Parse()
 	defer core.Close()
 	f := newDemo(*model)
+	if *sceneOutput != "" {
+		f.enableSceneDocuments(*sceneOutput)
+	}
 	f.view.SetRenderBackend(*backend)
 	defer func() { f.cancel(); f.view.Close() }()
 	if *render != "" {

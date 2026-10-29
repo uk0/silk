@@ -21,7 +21,16 @@ var nativeBackbufferEvidence []string
 type backbufferProbeWidget struct {
 	nativeRenderProbeWidget
 	nestPaint, closeInDraw bool
+	closeInResize          bool
 	finishedDraws          int
+}
+
+func (widget *backbufferProbeWidget) OnResize() {
+	widget.Widget.OnResize()
+	if widget.closeInResize {
+		widget.closeInResize = false
+		widget.win.Close()
+	}
 }
 
 func (widget *backbufferProbeWidget) Draw(p paint.Painter) {
@@ -98,7 +107,7 @@ func runNativeBackbufferProbe() error {
 			}
 		}
 		if !bytes.Equal(got[len(got)-4:], []byte{30, 20, 10, 255}) {
-			return fmt.Errorf("new bottom-right pixel was not fully repainted")
+			return fmt.Errorf("new bottom-right pixel %v was not fully repainted (framebuffer=%dx%d widget=%vx%v)", got[len(got)-4:], w, h, widget.Width(), widget.Height())
 		}
 		return nil
 	}
@@ -118,6 +127,9 @@ func runNativeBackbufferProbe() error {
 			glfw.PollEvents()
 			ww, hh := win.glfwWin.GetSize()
 			widget.SetSize(float64(ww), float64(hh))
+			// Simulate a delayed native resize callback on every platform. The
+			// frame must reconcile the root before drawing, not leave blank edges.
+			widget.w, widget.h = 320, 240
 			win.MarkDirtyRect(1, 1, 2, 2) // resize must still force a full paint
 			win.paint()
 			if err := checkPixels(); err != nil {
@@ -153,6 +165,14 @@ func runNativeBackbufferProbe() error {
 		return err
 	}
 	surface, painter := win.backBuffer, win.backPainter
+	// Keep the native pointer only until the deferred destruction queue drains.
+	// A modal caller cannot drain that queue yet, but its closed child must
+	// immediately disappear instead of becoming a visible, input-dead window.
+	native := win.glfwWin
+	native.Show()
+	if native.GetAttrib(glfw.Visible) == 0 {
+		return fmt.Errorf("native retirement probe was never visible")
+	}
 	beforeCloseDraws := widget.finishedDraws
 	widget.closeInDraw = true
 	win.MarkFullDirty()
@@ -161,12 +181,36 @@ func runNativeBackbufferProbe() error {
 		!backbufferSurfaceRetired(surface) || painter.CurrentState() != 0 {
 		return fmt.Errorf("Draw-triggered close did not retire resources after frame exit")
 	}
+	if native.GetAttrib(glfw.Visible) != 0 {
+		return fmt.Errorf("detached native window remained visible before deferred destruction")
+	}
+	nativeBackbufferEvidence = append(nativeBackbufferEvidence, "closed native window hidden before outer-loop destruction; no inert modal remnant")
 	for i, p := range retired {
 		if !backbufferSurfaceRetired(p) || retiredPainters[i].CurrentState() != 0 {
 			return fmt.Errorf("retained wrapper %d still owns native resources", i)
 		}
 	}
 	nativeBackbufferEvidence = append(nativeBackbufferEvidence, "48 retired surface/painter pairs remain reachable but own no native resources; nested paint and Draw-triggered close passed")
+	// Layout invoked by pre-paint size reconciliation can close the owner.
+	// It must retire the old surface without allocating or drawing another one.
+	closing := &backbufferProbeWidget{}
+	closing.Init(closing)
+	closing.SetSize(320, 240)
+	cw := &Window{widget: closing}
+	closing.win = cw
+	if err := cw.create(nil, WtForm); err != nil {
+		return err
+	}
+	defer func() { cw.destroy(); flushNativeDestruction() }()
+	cw.paint()
+	old, draws := cw.backBuffer, closing.finishedDraws
+	closing.w, closing.h, closing.closeInResize = 100, 100, true
+	cw.MarkFullDirty()
+	cw.paint()
+	if cw.glfwWin != nil || cw.backBuffer != nil || cw.painting || closing.finishedDraws != draws || !backbufferSurfaceRetired(old) {
+		return fmt.Errorf("resize-layout close drew or retained a retired window")
+	}
+	nativeBackbufferEvidence = append(nativeBackbufferEvidence, "delayed resize callback reconciled before draw; layout-triggered close retired without another draw")
 	return nil
 }
 

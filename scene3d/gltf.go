@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // GLTFOptions configures a bounded glTF 2.0 / GLB static-scene import.
@@ -297,6 +298,11 @@ func LoadGLTF(ctx context.Context, r io.Reader, options GLTFOptions) (*GLTFModel
 // Bound metadata amplification before json.Unmarshal allocates document tables.
 // Also reject duplicate JSON keys: ambiguous accessor offsets are not accepted.
 func checkGLTFJSON(ctx context.Context, b []byte) error {
+	return checkBoundedJSON(ctx, b, 2_000_000, MaxNodes*16, 64, false)
+}
+
+// Shared metadata gate for bounded glTF and authored scene documents.
+func checkBoundedJSON(ctx context.Context, b []byte, maxTokens, maxContainers, maxDepth int, foldKeys bool) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 	type frame struct {
@@ -316,17 +322,17 @@ func checkGLTFJSON(ctx context.Context, b []byte) error {
 			break
 		}
 		if e != nil {
-			return fmt.Errorf("%w: glTF JSON: %v", ErrGeometry, e)
+			return fmt.Errorf("%w: JSON: %v", ErrGeometry, e)
 		}
 		tokens++
-		if tokens > 2_000_000 {
+		if tokens > maxTokens {
 			return ErrLimit
 		}
 		if delim, ok := t.(json.Delim); ok {
 			switch delim {
 			case '{', '[':
 				containers++
-				if containers > MaxNodes*16 || len(stack) >= 64 {
+				if containers > maxContainers || len(stack) >= maxDepth {
 					return ErrLimit
 				}
 				if len(stack) > 0 {
@@ -348,6 +354,9 @@ func checkGLTFJSON(ctx context.Context, b []byte) error {
 			if f.object {
 				if f.key {
 					key, ok := t.(string)
+					if foldKeys {
+						key = strings.ToLower(key)
+					}
 					if !ok || f.keys[key] {
 						return fmt.Errorf("%w: duplicate/invalid JSON key", ErrGeometry)
 					}

@@ -100,10 +100,27 @@ func prepareTransientFocusReturn(source, owner *Window, target IWidget, focused 
 // A popup can close inside an owner's modal loop. The destruction queue is
 // drained only by the outer loop, so deferring this activation can strand the
 // still-open dialog behind another Form. Return native focus while the popup is
-// still key, before Cocoa chooses a replacement key window on Hide. Real modal
-// destruction continues to use queue(), outside native callbacks.
+// still key, before Cocoa chooses a replacement key window on Hide. Physical
+// destruction remains deferred; nested modals use the same activation policy.
 func (r *transientFocusReturn) restorePopupOwnerBeforeHide(visible, focused func(*Window) bool, applicationActive func(bool) bool, activate func(*Window)) bool {
-	if r == nil || r.source == nil || r.source.wt != WtPopup || shouldQuit || r.generation != transientFocusGeneration {
+	if r == nil || r.source == nil || r.source.wt != WtPopup {
+		return false
+	}
+	return r.restoreOwnerBeforeHide(visible, focused, applicationActive, activate, false)
+}
+
+// A nested modal also cannot wait for the outer destruction queue: its owner
+// keeps that loop suspended. Activate the re-enabled owner while the closing
+// child is still key, without freeing a native window inside its callback.
+func (r *transientFocusReturn) restoreModalOwnerBeforeHide(visible, focused func(*Window) bool, applicationActive func(bool) bool, activate func(*Window)) bool {
+	if r == nil || r.source == nil || r.source.wt != WtForm {
+		return false
+	}
+	return r.restoreOwnerBeforeHide(visible, focused, applicationActive, activate, true)
+}
+
+func (r *transientFocusReturn) restoreOwnerBeforeHide(visible, focused func(*Window) bool, applicationActive func(bool) bool, activate func(*Window), logical bool) bool {
+	if shouldQuit || r.generation != transientFocusGeneration {
 		return false
 	}
 	owner := r.owner
@@ -115,7 +132,17 @@ func (r *transientFocusReturn) restorePopupOwnerBeforeHide(visible, focused func
 	if !transientSourceFocused(r.source, focused) || !applicationActive(true) {
 		return false
 	}
-	debugFocusReturn("activate-before-hide", "popup-owner", r.source, owner, r.generation, focused)
+	if logical {
+		if focusWidget != nil && focusWidget.IsAllAncentorsVisible() && focusWidget.OwnerWindow() != r.source && focusWidget.OwnerWindow() != owner {
+			return false
+		}
+		if focusWidget == nil || focusWidget.OwnerWindow() != owner {
+			if target := focusTargetForOwner(owner, r.target); target != nil {
+				target.SetFocus()
+			}
+		}
+	}
+	debugFocusReturn("activate-before-hide", "transient-owner", r.source, owner, r.generation, focused)
 	activate(owner)
 	return focused(owner)
 }

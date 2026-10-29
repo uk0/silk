@@ -467,9 +467,7 @@ func (this *Window) destroy() {
 		// callback. Freeing that native window here made Cmd+Q use freed
 		// memory on return. Detach now; release after outer event dispatch.
 		native := this.glfwWin
-		pendingNativeDestruction = append(pendingNativeDestruction, func() {
-			duringTransientTeardown(native.Destroy)
-		})
+		retireNativeWindow(native.Hide, native.Destroy)
 		this.glfwWin = nil
 	}
 }
@@ -538,16 +536,19 @@ func (this *Window) paint() {
 
 	this.glfwWin.MakeContextCurrent()
 
-	// Widget layout uses logical pixels (window size)
-	width, height := this.widget.Size()
-	if width <= 0 || height <= 0 {
-		// Fallback: use window size (logical pixels) when widget has no size yet
-		ww, wh := this.glfwWin.GetSize()
-		if ww > 0 && wh > 0 {
-			width, height = float64(ww), float64(wh)
-			this.widget.NakedWidget().setSize(width, height)
-		} else {
-			return
+	// X11 can resize the drawable before its ConfigureNotify reaches the
+	// widget callback. Reconcile actual logical dimensions before layout/draw,
+	// rather than painting old bounds into a newly enlarged framebuffer.
+	ww, wh := this.glfwWin.GetSize()
+	if ww <= 0 || wh <= 0 {
+		return
+	}
+	width, height := float64(ww), float64(wh)
+	if this.widget.Width() != width || this.widget.Height() != height {
+		this.widget.NakedWidget().setSize(width, height)
+		this.MarkFullDirty()
+		if this.destroyAfterPaint || this.widget == nil || this.glfwWin == nil {
+			return // Layout may close its owner; do not allocate/present afterward.
 		}
 	}
 
@@ -2519,8 +2520,13 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 		for pw := range enabledMap {
 			pw.SetEnabled(true)
 		}
+		returned := focusReturn.restoreModalOwnerBeforeHide(func(w *Window) bool {
+			return w.glfwWin != nil && w.IsVisible()
+		}, nativeWindowFocused, nativeApplicationActive, func(w *Window) { w.glfwWin.Focus() })
 		this.Close()
-		focusReturn.queue()
+		if !returned {
+			focusReturn.queue()
+		}
 	}()
 
 	for pw := this.ParentWindow(); pw != nil; pw = pw.ParentWindow() {

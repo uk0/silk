@@ -1,9 +1,13 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDemoToolbarReflowsWithoutOverlap(t *testing.T) {
 	f := newDemo("assembly.gltf")
+	f.enableSceneDocuments(filepath.Join(t.TempDir(), "saved.silkscene"))
 	defer f.cancel()
 	defer f.view.Close()
 	for _, width := range []float64{280, 500, 700, 980} {

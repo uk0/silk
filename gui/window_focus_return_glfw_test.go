@@ -347,3 +347,49 @@ func TestPopupPreHideActivationNeverOverridesNewNativeIntent(t *testing.T) {
 		})
 	}
 }
+
+func TestNestedModalReturnsOwnerBeforeNativeRetirement(t *testing.T) {
+	for _, scenario := range []string{"nested", "background", "new-intent", "disabled", "foreign-focus"} {
+		t.Run(scenario, func(t *testing.T) {
+			isolateFocusReturns(t)
+			_, outside := focusReturnForm(t)
+			owner, target := focusReturnForm(t)
+			owner.inModal = true
+			modal, input := focusReturnForm(t)
+			modal.widget.SetParent(target)
+			focusWidget = input
+			focused := modal
+			r := prepareTransientFocusReturn(modal, owner, target, func(w *Window) bool { return w == focused })
+			if r == nil {
+				t.Fatal("missing return")
+			}
+			switch scenario {
+			case "background":
+				focused = nil
+			case "new-intent":
+				noteNativeFocusTransfer()
+			case "disabled":
+				owner.enabled = false
+			case "foreign-focus":
+				focusWidget = outside
+			}
+			calls := 0
+			ok := r.restoreModalOwnerBeforeHide(visibleFocusReturnWindow, func(w *Window) bool { return w == focused }, focusReturnKeyWindowFallback, func(w *Window) {
+				calls++
+				if w != owner || focusWidget != target || modal.widget == nil {
+					t.Fatal("incorrect activation order or owner")
+				}
+				focused = w
+			})
+			if ok != (scenario == "nested") || (calls == 1) != ok {
+				t.Fatalf("return=%v calls=%d", ok, calls)
+			}
+			if ok {
+				modal.destroy()
+				if focusWidget != target {
+					t.Fatal("child teardown cleared owner focus")
+				}
+			}
+		})
+	}
+}

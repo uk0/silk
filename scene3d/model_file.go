@@ -13,9 +13,11 @@ import (
 type LoadedModel struct {
 	Scene    *Scene
 	Warnings []string
+	// Bindings are inert document metadata; the host chooses a tag registry.
+	Bindings []Binding
 }
 
-// LoadModelFile explicitly opens an OBJ, glTF or GLB regular file. Referenced
+// LoadModelFile explicitly opens an OBJ, glTF, GLB or .silkscene regular file. Referenced
 // buffers are restricted to that file's directory using os.Root (including
 // symlink containment); no network, absolute paths, images or MTL are opened.
 // A hostile local process can still replace a regular file with a special file
@@ -28,7 +30,7 @@ func LoadModelFile(ctx context.Context, path string, limits LoadLimits) (*Loaded
 		return nil, err
 	}
 	extension := strings.ToLower(filepath.Ext(path))
-	if extension != ".obj" && extension != ".gltf" && extension != ".glb" {
+	if extension != ".obj" && extension != ".gltf" && extension != ".glb" && extension != ".silkscene" {
 		return nil, ErrUnsupported
 	}
 	if _, err := limits.normalized(); err != nil {
@@ -55,6 +57,17 @@ func LoadModelFile(ctx context.Context, path string, limits LoadLimits) (*Loaded
 	}
 	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
 	defer stop()
+	if extension == ".silkscene" {
+		d, e := loadDocumentWithLimits(ctx, f, limits)
+		if e != nil {
+			return nil, e
+		}
+		s, e := d.Build(ctx)
+		if e != nil {
+			return nil, e
+		}
+		return &LoadedModel{Scene: s, Warnings: append([]string(nil), d.Warnings...), Bindings: append([]Binding(nil), d.Bindings...)}, nil
+	}
 	if extension == ".obj" {
 		model, e := LoadOBJ(ctx, f, limits)
 		if e != nil {
@@ -64,7 +77,7 @@ func LoadModelFile(ctx context.Context, path string, limits LoadLimits) (*Loaded
 		if e = s.Add(Node{ID: "model", Name: filepath.Base(path), Mesh: model.Mesh}); e != nil {
 			return nil, e
 		}
-		return &LoadedModel{s, model.Warnings}, nil
+		return &LoadedModel{Scene: s, Warnings: model.Warnings}, nil
 	}
 	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
@@ -79,5 +92,5 @@ func LoadModelFile(ctx context.Context, path string, limits LoadLimits) (*Loaded
 	if err != nil {
 		return nil, err
 	}
-	return &LoadedModel{s, model.Warnings()}, nil
+	return &LoadedModel{Scene: s, Warnings: model.Warnings()}, nil
 }

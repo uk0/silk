@@ -171,3 +171,30 @@ func TestScrollUsesNativeEventCoordinates(t *testing.T) {
 		t.Fatal("disabled window consumed scroll")
 	}
 }
+
+func TestNativeRetirementHidesBeforeDeferredDestruction(t *testing.T) {
+	previous := pendingNativeDestruction
+	depth := transientTeardownDepth
+	pendingNativeDestruction = nil
+	defer func() { pendingNativeDestruction = previous; transientTeardownDepth = depth }()
+	hidden, destroyed := false, false
+	retireNativeWindow(func() {
+		if transientTeardownDepth == 0 {
+			t.Fatal("hide steals focus generation")
+		}
+		hidden = true
+	}, func() {
+		if !hidden || transientTeardownDepth == 0 {
+			t.Fatal("destroy ordering")
+		}
+		destroyed = true
+	})
+	if !hidden || destroyed || len(pendingNativeDestruction) != 1 {
+		t.Fatal("modal retirement must hide now and free later")
+	}
+	flushNativeDestruction()
+	flushNativeDestruction()
+	if !destroyed {
+		t.Fatal("never released")
+	}
+}

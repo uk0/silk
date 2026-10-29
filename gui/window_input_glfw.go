@@ -51,6 +51,17 @@ func modifierKeyState(key int, mods glfw.ModifierKey) (held, modifier bool) {
 // nested inside a GLFW callback that still refers to a closing native window.
 var pendingNativeDestruction []func()
 
+// A nested modal can keep the outer event dispatch alive for minutes. Native
+// destruction must wait, but presentation must not: an already-detached window
+// left visible becomes an inert, floating window that still steals OS focus.
+// Hiding is safe during dispatch (as for ordinary popups); freeing is not.
+func retireNativeWindow(hide, destroy func()) {
+	duringTransientTeardown(hide)
+	pendingNativeDestruction = append(pendingNativeDestruction, func() {
+		duringTransientTeardown(destroy)
+	})
+}
+
 func flushNativeDestruction() {
 	pending := pendingNativeDestruction
 	pendingNativeDestruction = nil

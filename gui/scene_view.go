@@ -52,6 +52,8 @@ type SceneView struct {
 	bindingMu                     sync.Mutex
 	bindings                      map[uint64]func()
 	nextBinding                   uint64
+	bindingProgram                *scene3d.BindingSet
+	bindingSpecs                  []scene3d.Binding
 }
 
 func init()                    { core.RegisterFactory("gui.SceneView", core.TypeOf((*SceneView)(nil))) }
@@ -87,6 +89,8 @@ func (v *SceneView) SetScene(s *scene3d.Scene) error {
 	v.CancelLoad()
 	v.unbindAll()
 	v.scene = s
+	v.bindingProgram = nil
+	v.bindingSpecs = nil
 	v.selected = ""
 	v.warnings = nil
 	v.target = scene3d.Vec3{}
@@ -221,7 +225,7 @@ func (v *SceneView) fail(err error) {
 	}
 }
 
-// LoadModel parses OBJ/glTF/GLB off-thread using the bounded executor. Relative paths
+// LoadModel parses OBJ/glTF/GLB/.silkscene off-thread using the bounded executor. Relative paths
 // resolve against the process working directory, not a project asset resolver.
 // Completion applies only to this generation. Failed loads keep the old scene.
 func (v *SceneView) LoadModel(ctx context.Context) error {
@@ -239,7 +243,7 @@ func (v *SceneView) LoadModel(ctx context.Context) error {
 	}
 	path := v.modelSource
 	extension := strings.ToLower(filepath.Ext(path))
-	if path == "" || (extension != ".obj" && extension != ".gltf" && extension != ".glb") {
+	if path == "" || (extension != ".obj" && extension != ".gltf" && extension != ".glb" && extension != ".silkscene") {
 		return scene3d.ErrUnsupported
 	}
 	child, cancel := context.WithCancel(ctx)
@@ -267,16 +271,20 @@ func (v *SceneView) LoadModel(ctx context.Context) error {
 			return
 		}
 		lo, hi, err := snapshot.Bounds()
-		if err != nil {
+		if err != nil && !(extension == ".silkscene" && snapshot.InstanceCount() == 0) {
 			v.fail(err)
 			return
 		}
 		v.unbindAll()
 		v.scene = model.Scene
+		v.bindingProgram = nil
+		v.bindingSpecs = append([]scene3d.Binding(nil), model.Bindings...)
 		v.selected = ""
 		v.warnings = append([]string(nil), model.Warnings...)
 		v.target = lo.Add(hi.Sub(lo).Mul(.5))
-		v.SetDistance(max(.001, hi.Sub(lo).Length()*1.5))
+		if snapshot.InstanceCount() > 0 {
+			v.SetDistance(max(.001, hi.Sub(lo).Length()*1.5))
+		}
 		v.RefreshScene()
 		if v.loadedFn != nil {
 			v.loadedFn()
@@ -314,6 +322,8 @@ func (v *SceneView) Close() {
 	v.releaseGPU()
 	v.renderer.Reset()
 	v.scene = nil
+	v.bindingProgram = nil
+	v.bindingSpecs = nil
 	v.selectedFn = nil
 	v.loadedFn = nil
 	v.errorFn = nil
