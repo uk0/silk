@@ -6,7 +6,15 @@ import (
 )
 
 func TestTransformMoveIconVisibleXYZAcrossSizes(t *testing.T) {
-	icon := LoadIcon("transform-move")
+	testTransformIconColors(t, "transform-move")
+}
+func TestTransformRotateScaleIconsVisibleAcrossSizes(t *testing.T) {
+	for _, name := range []string{"transform-rotate", "transform-scale"} {
+		t.Run(name, func(t *testing.T) { testTransformIconColors(t, name) })
+	}
+}
+func testTransformIconColors(t *testing.T, name string) {
+	icon := LoadIcon(name)
 	if icon.IsAir() || icon == LoadIcon("image-missing") {
 		t.Fatal("missing transform icon")
 	}

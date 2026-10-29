@@ -1,10 +1,14 @@
 package gui
 
 import (
+	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/uk0/silk/paint"
 )
@@ -270,6 +274,25 @@ func TestEditorReadOnlyCutRechecksPermissionAfterNativeWrite(t *testing.T) {
 }
 
 func TestEditorReadOnlyQueriesAllocateNothingOnLargeSelection(t *testing.T) {
+	// AllocsPerRun counts allocations across the process, including workers
+	// left active by other GUI tests. Keep the exact zero-allocation contract
+	// in a fresh copy of this test binary, retaining its race instrumentation.
+	const child = "SILK_QA_READONLY_ALLOCATION_CHILD"
+	if os.Getenv(child) != "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, exe, "-test.run=^TestEditorReadOnlyQueriesAllocateNothingOnLargeSelection$", "-test.count=1", "-test.v")
+		cmd.Env = append(os.Environ(), child+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "--- PASS: TestEditorReadOnlyQueriesAllocateNothingOnLargeSelection") {
+			t.Fatalf("isolated read-only allocation check: %v\n%s", err, out)
+		}
+		return
+	}
 	e := NewCodeEditor()
 	e.SetText(strings.Repeat("line\n", 100000))
 	e.SelectAll()
@@ -286,6 +309,6 @@ func TestEditorReadOnlyQueriesAllocateNothingOnLargeSelection(t *testing.T) {
 		_ = e.CanMoveLinesUp()
 		e.SetReadOnly(true)
 	}); n != 0 {
-		t.Fatal(n)
+		t.Fatalf("read-only queries allocated %g times per run", n)
 	}
 }

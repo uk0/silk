@@ -62,7 +62,8 @@ signed/notarized standalone apps.
   world unit; Escape, lost capture/focus, resize and scene replacement cancel the gesture.
   The SDK exposes camera projection/rays, an immutable axis solver and revision-guarded
   translation edits that preserve parent rotation/scale/shear. See [interaction SDK](scene3d/README.md)
-  and [translation QA](SCENE_GIZMO_QA_20261029.md); rotation/scale handles remain future work.
+  and [translation QA](SCENE_GIZMO_QA_20261029.md). World-axis rotation and scale now share the
+  same one-gesture/one-undo contract, with vector handles, angle/ratio snapping and cached overlays.
 - **Node actions → Device library** adds an embedded searchable pump/tank/conveyor shelf,
   bounded background model import, ground-plane drag placement and per-device point prefixes.
   The SDK's `EditSession.InstantiateTemplate(s)` merges geometry, inert bindings and diagnostics

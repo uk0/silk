@@ -15,25 +15,26 @@ import (
 // Node/geometry validation runs on explicit edits, not on paint or idle.
 type SceneDocumentEditor struct {
 	Widget
-	document            *scene3d.Document
-	session             *scene3d.EditSession
-	nodeMenu            *Menu
-	primitiveMeshes     map[string]*scene3d.Mesh
-	primitiveIDs        map[string]string
-	scene               *scene3d.Scene
-	tree                *TreeView
-	model               *sceneDocumentTree
-	preview             *SceneView
-	bindings            *ListWidget
-	status              *Label
-	buttons             []*Button
-	selected            string
-	modified, closed    bool
-	library             *sceneDeviceLibrary
-	libraryVisible      bool
-	translationEnabled  bool
-	translationSnapStep float64
-	revision            uint64
+	document                         *scene3d.Document
+	session                          *scene3d.EditSession
+	nodeMenu                         *Menu
+	primitiveMeshes                  map[string]*scene3d.Mesh
+	primitiveIDs                     map[string]string
+	scene                            *scene3d.Scene
+	tree                             *TreeView
+	model                            *sceneDocumentTree
+	preview                          *SceneView
+	bindings                         *ListWidget
+	status                           *Label
+	buttons                          []*Button
+	selected                         string
+	modified, closed                 bool
+	library                          *sceneDeviceLibrary
+	libraryVisible                   bool
+	transformMode                    SceneTransformMode
+	rotationSnapStep, scaleSnapRatio float64
+	translationSnapStep              float64
+	revision                         uint64
 }
 
 func cloneSceneDocument(d *scene3d.Document) *scene3d.Document {
@@ -98,7 +99,9 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 		{"Node actions", "menu", func() {}},
 		{"Undo", "edit-undo", func() { e.report(e.Undo()) }},
 		{"Redo", "edit-redo", func() { e.report(e.Redo()) }},
-		{"Move node", "transform-move", func() { e.SetTranslationEnabled(!e.TranslationEnabled()) }},
+		{"Move node", "transform-move", func() { e.toggleTransformMode(SceneTransformMove) }},
+		{"Rotate node", "transform-rotate", func() { e.toggleTransformMode(SceneTransformRotate) }},
+		{"Scale node", "transform-scale", func() { e.toggleTransformMode(SceneTransformScale) }},
 	} {
 		b := NewButton()
 		b.SetText(i18n.T(spec.label))
@@ -110,6 +113,8 @@ func NewSceneDocumentEditor(d *scene3d.Document) (*SceneDocumentEditor, error) {
 		e.buttons = append(e.buttons, b)
 	}
 	SetToolTip(e.buttons[7], i18n.T("Move on X/Y/Z; Shift snaps to 1 unit; Escape cancels drag"))
+	SetToolTip(e.buttons[8], i18n.T("Rotate around X/Y/Z; Shift snaps to 15 degrees; Escape cancels drag"))
+	SetToolTip(e.buttons[9], i18n.T("Scale on X/Y/Z or center; Shift snaps in 10 percent ratios; Escape cancels drag"))
 	e.initNodeMenu()
 	e.rebuildTree()
 	if len(d.Nodes) > 0 {
@@ -236,7 +241,11 @@ func (e *SceneDocumentEditor) syncActions() {
 	}
 	if len(e.buttons) >= 8 {
 		e.buttons[7].SetEnabled(selected)
-		e.buttons[7].Action().SetChecked(e.translationEnabled)
+		e.buttons[7].Action().SetChecked(e.TranslationEnabled())
+		for i, mode := range []SceneTransformMode{SceneTransformRotate, SceneTransformScale} {
+			e.buttons[8+i].SetEnabled(selected)
+			e.buttons[8+i].Action().SetChecked(e.transformMode == mode)
+		}
 	}
 	if e.nodeMenu != nil {
 		for i, item := range e.nodeMenu.items {
@@ -323,6 +332,9 @@ func (e *SceneDocumentEditor) Layout() {
 	row := max(34.0, Theme().ItemHeight+8)
 	// Small hosts wrap actions instead of putting text over the preview.
 	cols := 4
+	if w >= 850 {
+		cols = 5
+	}
 	if w < 760 {
 		cols = 2
 	}

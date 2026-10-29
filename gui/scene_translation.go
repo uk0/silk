@@ -11,16 +11,13 @@ import (
 
 // TranslationEnabled enables world XYZ handles in this editor's embedded
 // preview. It does not start live bindings or change the authored document.
-func (e *SceneDocumentEditor) TranslationEnabled() bool { return e.translationEnabled }
+func (e *SceneDocumentEditor) TranslationEnabled() bool { return e.transformMode == SceneTransformMove }
 func (e *SceneDocumentEditor) SetTranslationEnabled(enabled bool) {
-	if e.closed || enabled == e.translationEnabled {
-		return
+	if enabled {
+		_ = e.SetTransformMode(SceneTransformMove)
+	} else if e.TranslationEnabled() {
+		_ = e.SetTransformMode(SceneTransformNone)
 	}
-	e.preview.OnHide()
-	e.translationEnabled = enabled
-	e.preview.translation.sync()
-	e.syncActions()
-	e.preview.RefreshScene()
 }
 func (e *SceneDocumentEditor) TranslationSnapStep() float64 { return e.translationSnapStep }
 
@@ -44,7 +41,7 @@ type sceneTranslationTool struct {
 	editor                        *SceneDocumentEditor
 	origin                        scene3d.Vec3 // cached authored origin, updated on selection/edit only
 	valid                         bool
-	gesture                       *scene3d.TranslationEdit
+	gesture                       interface{ Cancel() }
 	solver                        scene3d.AxisDrag
 	id                            string
 	original                      scene3d.Mat4
@@ -54,6 +51,10 @@ type sceneTranslationTool struct {
 	width, height, startX, startY float64
 	axis                          int
 	moved                         bool
+	operation                     scene3d.Mat4
+	rotationSolver                scene3d.RotationDrag
+	rawAngle, handleLength        float64
+	rings                         sceneRotationCache
 }
 
 type sceneTranslationHandle struct {
@@ -78,7 +79,7 @@ func (t *sceneTranslationTool) sync() {
 func (t *sceneTranslationTool) handles() (scene3d.Vec3, [3]sceneTranslationHandle, bool) {
 	var handles [3]sceneTranslationHandle
 	v := t.editor.preview
-	if !t.valid || !t.editor.translationEnabled || t.editor.closed || v.closed || !v.IsEnabled() {
+	if !t.valid || t.editor.transformMode == SceneTransformNone || t.editor.closed || v.closed || !v.IsEnabled() {
 		return scene3d.Vec3{}, handles, false
 	}
 	w, h := v.Size()
@@ -99,6 +100,10 @@ func (t *sceneTranslationTool) handles() (scene3d.Vec3, [3]sceneTranslationHandl
 	return pixel, handles, true
 }
 func (t *sceneTranslationTool) draw(g paint.Painter) {
+	if t.editor.transformMode == SceneTransformRotate {
+		t.drawRotation(g)
+		return
+	}
 	origin, handles, ok := t.handles()
 	if !ok {
 		return
@@ -120,15 +125,26 @@ func (t *sceneTranslationTool) draw(g paint.Painter) {
 		g.Line(origin.X, origin.Y, end.X, end.Y)
 		g.Stroke()
 		g.SetBrush1(color)
-		g.Arc(end.X, end.Y, 4, 0, 2*math.Pi)
+		if t.editor.transformMode == SceneTransformScale {
+			g.Rectangle(end.X-4, end.Y-4, 8, 8)
+		} else {
+			g.Arc(end.X, end.Y, 4, 0, 2*math.Pi)
+		}
 		g.Fill()
 		g.DrawText1(end.X+7, end.Y-5, []string{"X", "Y", "Z"}[i])
 	}
 	g.SetBrush1(paint.Color{235, 242, 250, 255})
-	g.Arc(origin.X, origin.Y, 3, 0, 2*math.Pi)
+	if t.editor.transformMode == SceneTransformScale {
+		g.Rectangle(origin.X-5, origin.Y-5, 10, 10)
+	} else {
+		g.Arc(origin.X, origin.Y, 3, 0, 2*math.Pi)
+	}
 	g.Fill()
 }
 func (t *sceneTranslationTool) begin(x, y float64) bool {
+	if t.editor.transformMode == SceneTransformRotate || t.editor.transformMode == SceneTransformScale {
+		return t.beginBasis(x, y)
+	}
 	origin, handles, ok := t.handles()
 	v := t.editor.preview
 	if !ok || x < 0 || y < 0 || x >= v.Width() || y >= v.Height() || math.Hypot(x-origin.X, y-origin.Y) < 9 {
@@ -188,6 +204,10 @@ func (t *sceneTranslationTool) move(x, y float64) {
 	if !t.moved {
 		return
 	}
+	if _, ok := t.gesture.(*scene3d.TransformEdit); ok {
+		t.moveBasis(x, y)
+		return
+	}
 	ray, err := t.camera.Ray(x, y, t.width, t.height)
 	step := t.editor.translationSnapStep
 	if IsKeyDown(KeyShift) {
@@ -199,7 +219,7 @@ func (t *sceneTranslationTool) move(x, y float64) {
 	}
 	var matrix scene3d.Mat4
 	if err == nil {
-		matrix, err = t.gesture.Transform(delta)
+		matrix, err = t.gesture.(*scene3d.TranslationEdit).Transform(delta)
 	}
 	if err == nil {
 		err = v.SetNodeTransform(t.id, matrix)
@@ -221,7 +241,13 @@ func (t *sceneTranslationTool) finish(x, y float64) {
 	t.delta = scene3d.Vec3{}
 	v.PopCapture()
 	_ = v.SetNodeTransform(id, original)
-	err := gesture.Commit(context.Background(), delta)
+	var err error
+	switch g := gesture.(type) {
+	case *scene3d.TranslationEdit:
+		err = g.Commit(context.Background(), delta)
+	case *scene3d.TransformEdit:
+		err = g.Commit(context.Background(), t.operation)
+	}
 	gesture.Cancel()
 	if err != nil {
 		t.editor.report(err)

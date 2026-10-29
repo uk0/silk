@@ -398,4 +398,31 @@ Plugins can replace the shelf with `SetDeviceLibrary` or place using `Instantiat
 The current shelf is **session-local**, limited to 64 entries and a 64 MiB aggregate
 `TemplateStats.EstimatedBytes` budget (not RSS). Placed geometry/bindings are embedded in
 saved documents. Cross-session catalog persistence, thumbnails, multi-selection and
-rotation/scale gizmos are not included in this increment.
+persistent material editing remain outside the device-library increment; world-axis transform tools are described below.
+
+
+## World-axis rotation and scaling
+
+`RotationAxis(axis, radians)` creates a validated right-handed matrix with robust axis
+normalization. `NewRotationDrag(ray, origin, axis)` creates an immutable ring solver;
+`Angle(ray, previousRawAngle)` unwraps both directions and multiple turns. Consecutive
+samples must differ by less than pi; do not feed snapped angles back as the raw history.
+Parallel/behind-eye/zero-radius rays are rejected, not silently converted into motion.
+
+`EditSession.BeginTransform(ctx, nodeID)` captures a revision-guarded `TransformEdit`.
+`Transform(worldLinearDelta)` previews and `Commit(ctx, worldLinearDelta)` publishes one
+undo step. The affine delta must have zero translation and acts about the node's own
+origin in **world axes**, preserving the exact local translation. Parent reflection,
+nonuniform scale and shear are retained without Euler/TRS decomposition. Singular
+parents are rejected. Identity preserves authored encoding and redo; errors/cancel
+leave the session unchanged. Preview math is O(1) and allocation-free, not a claim that
+rendering or complete-graph commit is O(1).
+
+The embedded scene editor offers mutually exclusive Move / Rotate / Scale actions.
+Rotation uses XYZ rings; scale uses XYZ squares plus a center uniform-scale square.
+Shift uses 15-degree rotation snapping or multiplicative 1.1 scale steps. Plugins can
+set `SetTransformMode`, `SetRotationSnapStep` (radians) and `SetScaleSnapRatio` (>1 or 0).
+A scale drag is bounded to 1/1024..1024 before optional snapping; successive gestures
+can author larger scales. Screen rings reuse cached projections, tool changes do not
+rerasterize geometry, and no idle frame timer or floating native child window is added.
+These are single-selection world-axis tools, not local-axis/multi-pivot CAD manipulators.

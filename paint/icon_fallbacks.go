@@ -37,6 +37,8 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"expander-expanded":  drawExpanderExpanded,
 	"arrow-tool":         drawArrowTool,
 	"transform-move":     drawTransformMove,
+	"transform-rotate":   drawTransformRotate,
+	"transform-scale":    drawTransformScale,
 	"rect-tool":          drawRectTool,
 	"menu":               drawMenuBars,
 	"toolbar-overflow":   drawToolbarOverflow,
