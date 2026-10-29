@@ -22,6 +22,11 @@ type demo struct {
 	gui.Form
 	view                  *gui.SceneView
 	title, status, notice *gui.Label
+	surfaceStatus         *gui.Label
+	surfaceIndex          *scene3d.RayIndex
+	surfaceBusy           bool
+	surfaceQueries        int
+	surfaceText           string
 	buttons               []*gui.Button
 	tag                   *core.Tag
 	db                    *core.TagDB
@@ -74,6 +79,7 @@ func newDemo(model string) *demo {
 	f.view.SigSelected(func(string) { f.snapshot() })
 	f.view.SigModelLoaded(func() {
 		f.loaded++
+		f.surfaceIndex = nil
 		f.bindScene("model")
 		gui.Post(f.snapshot)
 	})
@@ -110,6 +116,7 @@ func newDemo(model string) *demo {
 		f.snapshot()
 	})
 	add("Snapshot", f.snapshot)
+	f.enableSurfaceInspection()
 	f.snapshot()
 	return f
 }
@@ -258,10 +265,11 @@ func (f *demo) OnResize() {
 		b.SetBounds(12+float64(i%columns)*buttonWidth, 40+float64(i/columns)*38, max(0, buttonWidth-6), 32)
 	}
 	top := 84 + float64(rows-1)*38
-	bottom := max(top, h-58)
+	bottom := max(top, h-84)
 	f.view.SetBounds(12, top, max(0, w-24), max(0, bottom-top))
 	f.status.SetBounds(12, bottom+4, max(0, w-24), 24)
 	f.notice.SetBounds(12, bottom+28, max(0, w-24), 24)
+	f.surfaceStatus.SetBounds(12, bottom+52, max(0, w-24), 24)
 }
 func main() {
 	backend := flag.String("backend", "auto", "render backend: auto, cpu, opengl")

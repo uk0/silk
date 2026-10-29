@@ -26,7 +26,7 @@ func TestDemoToolbarReflowsWithoutOverlap(t *testing.T) {
 				}
 			}
 		}
-		if f.view.Y()+f.view.Height() > f.status.Y() || f.status.Y()+f.status.Height() > f.notice.Y() {
+		if f.view.Y()+f.view.Height() > f.status.Y() || f.status.Y()+f.status.Height() > f.notice.Y() || f.notice.Y()+f.notice.Height() > f.surfaceStatus.Y() || f.surfaceStatus.Y()+f.surfaceStatus.Height() > f.Height() {
 			t.Fatal("overlapping status rows")
 		}
 	}

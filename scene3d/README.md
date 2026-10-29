@@ -426,3 +426,52 @@ A scale drag is bounded to 1/1024..1024 before optional snapping; successive ges
 can author larger scales. Screen rings reuse cached projections, tool changes do not
 rerasterize geometry, and no idle frame timer or floating native child window is added.
 These are single-selection world-axis tools, not local-axis/multi-pivot CAD manipulators.
+
+
+## Geometric surface queries
+
+`RayIndex` 是独立于帧缓冲、渲染器及窗口的不可变双层 BVH：共享 Mesh 只建一份局部三角树，
+实例层处理层级世界变换。`Cast` 返回最近表面的原始节点/实例/三角索引、世界距离、世界/局部坐标、
+重心权重、世界法线和正反面信息；默认双面，可限定距离、排除一个节点或开启背面剔除。
+
+```go
+// Scene 是单所有者对象：在其 UI/所属线程捕获快照。
+snapshot, err := view.Scene().Snapshot()
+if err != nil { return err }
+// 将 snapshot 交给工作线程；不要在工作线程读取 view 或可变 Scene。
+index, err := scene3d.NewRayIndex(ctx, snapshot, scene3d.RayIndexLimits{})
+if err != nil { return err }
+hit, found, work, err := index.Cast(ctx, scene3d.Ray{
+    Origin: scene3d.Vec3{Z: 5}, Direction: scene3d.Vec3{Z: -1},
+}, scene3d.RayQuery{})
+// hit.LocalPosition 可作为该 Mesh 的局部附着点；work 报告访问工作量。
+_ = hit; _ = found; _ = work; _ = err
+```
+
+- 同一索引允许并发 `Cast` / `WithSnapshot`；后者成功才返回新索引，旧结果不变。
+  同一个 Snapshot 直接复用；颜色变化复用整棵实例树；数量不变时 refit 实例边界；
+  数量变化重建空间顺序。共享 Mesh 的三角树跨更新复用，已删除 Mesh 不留在新缓存中。
+  长距离移动可能降低旧树效率，可显式 `NewRayIndex` 重排；不是 SAH、遮挡、LOD 或物理引擎。
+- `MinDistance` 含端点且非负；`MaxDistance=0` 无上限，其他值须有限且不小于 MinDistance。
+  Direction 可为任意有限非零长度，距离仍是世界单位。`SkipNode` 只排除一个 ID，不含子树。
+  完全等距时取原始快照较早的实例，再取原始 Mesh 较早的三角，不依赖树遍历顺序。
+- 隐藏节点由 Snapshot 排除。平行/共面射线、退化三角不命中；共享边/顶点含边界。
+  反射、剪切、奇异仿射变换不要求矩阵求逆；法线遵循变换后的绕序，不自动朝向射线。
+  采用独立二进制坐标缩放，避免巨大深度或非均匀缩放吞掉较小投影轴；并非任意精度几何核。
+  不可表示的计算返回错误，不返回部分命中。几何结果不保证像素/MSAA/float32 深度一致。
+- 默认/硬上限 64 MiB 是**索引保留内存的保守估算**，不是 RSS、源 Mesh、所有旧索引或临时
+  工作区之和；可设更小 `MaxBytes`。另受场景实例/三角总预算限制，临时质心缓冲最多一份
+  MaxTriangles 长度的 Vec3 数组（约 12 MiB）。取消在遍历/构建边界检查，整数排序阶段有界
+  但不可中断。索引本身没有后台协程、定时器或原生资源；释放最后引用即可回收。
+- `gui.SceneView.SurfaceAt(ctx, index, x, y, options)` 在 UI 线程使用**已准备**索引，按当前相机
+  与逻辑像素求交并裁剪 near/far；不会构建、绘制、GPU 读回或改变选中节点。
+  快照身份不一致返回 `gui.ErrSceneSurfaceStale`，包括颜色变化和同 revision 的不同场景。
+  在所属线程重新捕获快照后，可在工作线程调用 `index.WithSnapshot`，再回 UI 交付。
+  相机/HiDPI 变化无需重建；窗口外坐标不命中，关闭控件拒绝查询。
+- 可运行的异步交付示例见 `examples/scene3d/surface.go` 的 **Inspect center**。保持现有
+  `PickNode` 像素语义；此增量没有自动设备表面吸附、持久化附着关系或新的编辑器菜单。
+
+算法背景：[PBRT triangle intersection](https://www.pbr-book.org/4ed/Shapes/Triangle_Meshes)、
+[PBRT BVH](https://www.pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies)。
+独立 Moller–Trumbore 对照、边界/数量/取消/并发、极值缩放 fuzz 与三平台门禁用于验证本实现，
+不能用微基准推导整应用 FPS 或硬件 GPU 性能。
