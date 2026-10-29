@@ -52,6 +52,11 @@ signed/notarized standalone apps.
   draw order or picking IDs; capability checks retain the ordinary-draw/CPU fallback paths.
   The [final regression matrix](SCENE_RELEASE_QA_20261028.md) distinguishes actual hardware,
   software GL, native desktop flows, skipped fixtures and unsupported capabilities.
+- Reusable `scene3d.Culler` adds spatial Morton-ordered BVH queries with stable original draw/
+  pick order, conservative numerical handling, incremental bound refits and bounded linear fallback.
+  CPU and GPU renderers share the culling API; unchanged GPU snapshots reuse matrix/budget
+  validation. `CullingStats` and `ValidatedInstances` expose work rather than guessed FPS.
+  See the [BVH regression and measured limits](SCENE_BVH_QA_20261029.md).
 - The CPU reference and initial **OpenGL readback backend** do not provide PBR/textures or a complete
   industrial editor. Windows native CPU-fallback interaction is verified; Windows hardware GPU
   and Linux physical-desktop UI verification remain open. Linux Xvfb/Mesa llvmpipe is

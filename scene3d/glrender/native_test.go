@@ -61,6 +61,11 @@ func nativeProbe() error {
 	if nativeFrustumErr != nil {
 		return nativeFrustumErr
 	}
+	nativeBVHRan = true
+	nativeBVHErr = nativeBVHProbe()
+	if nativeBVHErr != nil {
+		return nativeBVHErr
+	}
 	r, e := NewCurrent()
 	if e != nil {
 		return e

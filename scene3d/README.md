@@ -32,14 +32,15 @@ if err != nil { return err }
 - `Scene` 和 `Renderer` 是 **单所有者** 对象，不可并发读写。`Scene.Snapshot()`
   生成不可变状态；后台可用自己的 `Renderer` 渲染旧快照，同时 UI 修改原 Scene。
 - 节点稳定 ID、父节点、局部变换、可见性、颜色；先添加父节点，再添加子节点。
-  隐藏/删除父节点影响整个子树。父颜色不覆盖子材质；尚无重挂父节点 API。
+  隐藏/删除父节点影响整个子树。父颜色不覆盖子材质；创作时使用
+  `EditSession.Reparent` 重挂父节点，可选择保留世界变换并支持撤销/重做。
 - 矩阵列主序、列向量；`a.Mul(b)` 表示 `a*b`。`RotationXYZ` 使用弧度，依次 X、Y、Z。
   Node 的零矩阵初始化为单位阵，零颜色初始化为蓝色。材质目前必须不透明。
 - `Frame`/`Image` 属于 Renderer，下次 Render 可改写；按只读处理，跨线程前自行复制。
   相同快照、相机、尺寸、背景会复用帧；`Sequence` 只在成功光栅化后递增，`Reset` 清零。
   出错可能留下部分内部缓冲，不可继续使用旧 Frame；再次成功 Render 后才可读取。
 - 六平面齐次裁剪、深度缓冲、ID 拾取、双面平面光照；暂无纹理、平滑法线、透明度、
-  阴影、抗锯齿、BVH/LOD 或多线程分块。`Pixels` 统计深度测试通过的写入次数，
+  阴影、抗锯齿、LOD 或多线程分块。`Pixels` 统计深度测试通过的写入次数，
   不是唯一可见像素数；缓存查询保留上一次渲染计数并置 `Cached=true`。
 
 ## 输入与工作量限制
@@ -159,8 +160,9 @@ if err != nil { return err }
   `.silkscene` 使用 JSON 高亮，不冒充 Go 文件启动 LSP。
 
 示例资产：`examples/scene3d/assembly.silkscene`，由仓库自有几何生成。当前不包含
-节点新增/删除、交互变换 gizmo、完整 TRS 表单、PBR/纹理或现场驱动配置。不能把这个
-阶段等同于完整工业编辑器；测试记录见 [本轮 QA](../SCENE_DOCUMENT_QA_20261028.md)。
+交互变换 gizmo、完整 TRS 表单、PBR/纹理或现场驱动配置。节点新增/复制/删除及改父级
+已由下文 `EditSession` 和 Node actions 补齐；早期文档编辑链的阶段测试记录见
+[场景文档 QA](../SCENE_DOCUMENT_QA_20261028.md)，不代表完整工业编辑器已经完成。
 
 ## 设备模板与批量产线组装
 
@@ -224,7 +226,8 @@ CPU 与 OpenGL 后端均自动使用它：屏外实例不再变换全部顶点/�
 Snapshot 及实例顺序不改写，拾取 ID 保持原索引；点位把设备移回视野时正常重绘。
 `CulledInstances` / `CulledTriangles` 记录拒绝的实例与原索引三角形（含退化三角形）。
 `Triangles` 仍表示实际进入后续处理的工作；缓存帧保留上次实际绘制的统计，并标记 Cached。
-视锥裁剪不会放宽导入、Snapshot 或 GPU 内存预算，不是 BVH、遮挡剔除或硬件实例化。
+逐实例视锥测试不会放宽导入、Snapshot 或 GPU 内存预算；分层加速见下文的 Culler，
+遮挡剔除和硬件实例化仍是不同能力。
 
 裁剪体依据：[OpenGL 2.1 specification §2.12](https://registry.khronos.org/OpenGL/specs/gl/glspec21.pdf)。
 当前隔离开发与验证记录见 [视锥裁剪 QA](../SCENE_FRUSTUM_QA_20261028.md)。
@@ -273,3 +276,44 @@ History retains at most 32 states / 32 MiB estimated metadata, excluding shared
 geometry and current/initial state; normal document geometry limits still apply.
 Renames/inert binding edits reuse unchanged draw snapshots and compiled meshes.
 See `SCENE_AUTHORING_QA_20261028.md` for test contracts and acceptance boundaries.
+
+## Morton BVH 与稳定顺序可见性查询
+
+`Culler` 为 CPU 和 GPU 共用的纯 Go 空间索引。内部按包围盒中心的 Morton 编码排序、
+建立平衡 BVH；使用位集合恢复原始实例顺序，因此不改变拾取 ID、等深度先绘制者或
+连续共享 mesh 的实例化分组。内部排序不修改 Snapshot、节点或 mesh。
+
+```go
+var culler scene3d.Culler // 每个调用线程/渲染 owner 单独持有
+snapshot, err := scene.Snapshot()
+if err != nil { return err }
+vp, err := camera.ViewProjection(16.0 / 9.0)
+if err != nil { return err }
+indices, stats := culler.Cull(nil, snapshot, scene3d.NewFrustum(vp))
+for _, index := range indices {
+    instance, _ := snapshot.Instance(index)
+    _ = instance // 供自定义后端使用；顺序与原 Snapshot 相同
+}
+_ = stats.BoundsTests
+// 下一次调用可以复用 indices 的容量；返回切片归调用者所有。
+indices, _ = culler.Cull(indices, snapshot, scene3d.NewFrustum(vp))
+culler.Reset() // 释放上一快照、BVH、排序/位集合 scratch
+```
+
+- 64 个实例以下走线性路径；最大实例数仍受 `MaxNodes` 和原 Snapshot 预算限制。
+  每叶最多 8 个实例，树深有界，查询使用固定栈；容量充分的热查询不分配内存。
+- 同一 Snapshot 的相机变换不重建索引。新的同长度 Snapshot 比较 mesh/世界变换：
+  颜色/ID 编辑不改空间树；几何变更只重算相关叶和祖先。实例数变化重建空间排序。
+  这不是任意动态场景的 O(1) 更新：新快照仍有 O(N) 比较，初建还需要整数排序。
+- 反射、剪切、退化缩放、边界附近和消减误差沿用保守浮点语义；不确定包围盒、
+  超出 float32 中间范围的变换不得被分层裁剪隐藏。渲染器依然验证非法几何与预算。
+- 大量重叠包围盒或长期移动可能降低索引质量；每次查询有节点访问预算，达到上限
+  后对剩余不相交索引区间线性测试，不持续支付低效的完整树遍历开销。
+- `CullingStats` 报告 BoundsTests、InstanceTests、RefittedNodes、HierarchyNodes、
+  LinearFallbackInstances 和被裁剪实例/三角形；CPU/GPU Frame 的 `Stats.Culling`
+  同样暴露本次实际绘制的统计，缓存帧保留上次统计，不代表再次执行了这些工作。
+- 不是 SAH 树、三角形级加速、遮挡检测、LOD、多线程渲染或零读回合成。
+  查询微基准不等于完整 GUI FPS；构建/更新成本也必须单独考虑。
+
+概念参考：[PBRT 的 BVH 与 Morton 空间排序](https://www.pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies)。
+本实现使用普通 Go 整数排序、平衡分组及稳定原序输出，不复用 PBRT 的 HLBVH/SAH 实现。

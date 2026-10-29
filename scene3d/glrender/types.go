@@ -28,6 +28,9 @@ type Stats struct {
 	ResidentBytes, ReadbackBytes      int64
 	Cached                            bool
 	CulledInstances, CulledTriangles  int
+	Culling                           scene3d.CullingStats
+	// ValidatedInstances is zero on camera-only frames of an unchanged snapshot.
+	ValidatedInstances int
 	// Instances counts submitted instances, not draw calls. Batching never reorders them.
 	Instances, InstancedDrawCalls, InstancedInstances int
 	// Instance buffers are bounded separately from the existing mesh budget.

@@ -183,7 +183,9 @@ func (r *Renderer) drawBatch(mesh *scene3d.Mesh, count int, vp *[16]float32) err
 }
 
 func (r *Renderer) drawInstances(s *scene3d.Snapshot, vp scene3d.Mat4, vp32 *[16]float32) error {
-	frustum := scene3d.NewFrustum(vp)
+	r.visible, r.frame.Stats.Culling = r.culler.Cull(r.visible, s, scene3d.NewFrustum(vp))
+	r.frame.Stats.CulledInstances = r.frame.Stats.Culling.CulledInstances
+	r.frame.Stats.CulledTriangles = r.frame.Stats.Culling.CulledTriangles
 	var first scene3d.RenderInstance
 	firstID, count := 0, 0
 	r.instanceData = r.instanceData[:0]
@@ -201,14 +203,9 @@ func (r *Renderer) drawInstances(s *scene3d.Snapshot, vp scene3d.Mat4, vp32 *[16
 		r.instanceData = r.instanceData[:0]
 		return err
 	}
-	for i := 0; i < s.InstanceCount(); i++ {
+	for _, i := range r.visible {
 		in, _ := s.Instance(i)
 		if in.Mesh.TriangleCount() == 0 {
-			continue
-		}
-		if !frustum.Intersects(in.Mesh, in.Transform) {
-			r.frame.Stats.CulledInstances++
-			r.frame.Stats.CulledTriangles += in.Mesh.TriangleCount()
 			continue
 		}
 		if r.instanceProgram == 0 {

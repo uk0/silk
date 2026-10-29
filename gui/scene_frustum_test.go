@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"fmt"
 	"image/color"
 	"testing"
 
@@ -9,6 +10,14 @@ import (
 )
 
 func TestSceneViewFrustumTagReentryPickUploadAndClose(t *testing.T) {
+	testSceneViewFrustumLifecycle(t, 0)
+}
+
+func TestSceneViewBVHTagReentryPickUploadAndClose(t *testing.T) {
+	testSceneViewFrustumLifecycle(t, 997)
+}
+
+func testSceneViewFrustumLifecycle(t *testing.T, padding int) {
 	isolateTagBridge(t)
 	scene := scene3d.NewScene()
 	box := scene3d.Box()
@@ -18,6 +27,11 @@ func TestSceneViewFrustumTagReentryPickUploadAndClose(t *testing.T) {
 		{ID: "stationary-third", Mesh: box, Transform: scene3d.Translation(scene3d.Vec3{X: -1.4}), Color: color.RGBA{R: 20, G: 220, B: 30, A: 255}},
 	} {
 		if err := scene.Add(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < padding; i++ {
+		if err := scene.Add(scene3d.Node{ID: fmt.Sprintf("padding-%d", i), Mesh: box, Transform: scene3d.Translation(scene3d.Vec3{X: 2e4 + float64(i)*3})}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -54,6 +68,16 @@ func TestSceneViewFrustumTagReentryPickUploadAndClose(t *testing.T) {
 	beforePixel := color.RGBAModel.Convert(before.At(80, 60)).(color.RGBA)
 	if view.PickNode(80, 60) != "" {
 		t.Fatal("offscreen instance picked")
+	}
+	if padding != 0 {
+		frame, err := view.renderScene(old, view.camera(), 160, 120)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats := frame.(*scene3d.Frame).Stats.Culling
+		if stats.HierarchyNodes == 0 || stats.InstanceTests >= 32 || stats.CulledInstances < padding {
+			t.Fatal("SceneView did not prune padded device groups", stats)
+		}
 	}
 	sequence := view.RenderCount()
 	paintScene(t, view)

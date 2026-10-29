@@ -16,6 +16,7 @@ type RenderStats struct {
 	// CulledTriangles counts source index triangles, including degenerate ones.
 	// Cached frames retain the statistics from the last actual render.
 	CulledInstances, CulledTriangles int
+	Culling                          CullingStats
 }
 
 // Frame is renderer-owned and valid until its next Render. Treat pixels as
@@ -45,12 +46,14 @@ func (f *Frame) Pick(x, y int) string {
 // no goroutines/timers. The CPU implementation is a reference/fallback backend,
 // not a claim of GPU or large-scene performance.
 type Renderer struct {
-	frame  Frame
-	key    *Snapshot
-	camera Camera
-	bg     color.RGBA
-	world  []Vec3
-	clip   []vec4
+	frame   Frame
+	key     *Snapshot
+	camera  Camera
+	bg      color.RGBA
+	world   []Vec3
+	clip    []vec4
+	culler  Culler
+	visible []int
 }
 
 func (r *Renderer) Sequence() uint64 { return r.frame.Sequence }
@@ -89,13 +92,11 @@ func (r *Renderer) Render(s *Snapshot, c Camera, width, height int, bg color.RGB
 		filled += copy(pixels[filled:], pixels[:filled])
 	}
 	light := Vec3{.35, .8, .45}.Unit()
-	frustum := NewFrustum(vp)
-	for ii, in := range s.instances {
-		if !frustum.Intersects(in.mesh, in.world) {
-			f.Stats.CulledInstances++
-			f.Stats.CulledTriangles += in.mesh.TriangleCount()
-			continue
-		}
+	r.visible, f.Stats.Culling = r.culler.Cull(r.visible, s, NewFrustum(vp))
+	f.Stats.CulledInstances = f.Stats.Culling.CulledInstances
+	f.Stats.CulledTriangles = f.Stats.Culling.CulledTriangles
+	for _, ii := range r.visible {
+		in := s.instances[ii]
 		count := len(in.mesh.vertices)
 		if cap(r.world) < count {
 			r.world = make([]Vec3, count)

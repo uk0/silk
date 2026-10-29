@@ -14,8 +14,12 @@
 | 平台 | 普通全量 | race 全量 | 包通过 / 无测试 |
 | --- | --- | --- | --- |
 | macOS arm64 | 8361 pass / 24 skip | 8361 pass / 24 skip | 92 / 19 |
-| Linux amd64 | 8300 pass / 32 skip | 8300 pass / 32 skip | 92 / 19 |
+| Linux arm64 | 8300 pass / 32 skip | 8300 pass / 32 skip | 92 / 19 |
 | Windows amd64 | 8138 pass / 76 skip | 8138 pass / 76 skip | 93 / 18 |
+
+Linux 架构勘误（2026-10-29）：原表误写 amd64，实际 `linux/go-version.txt` 为
+`go version go1.26.10 linux/arm64`，测试镜像检查同为 arm64；计数与原测试结果不变，
+不据此声称 Linux amd64 已验收。
 
 计数包含子测试与 fuzz seed。所有全量均 `-count=1`，不用缓存结果，单独核对退出码、
 JSON 终态、失败/race 标记与新增测试名称。未把 skip、无测试包或编译成功算作通过。

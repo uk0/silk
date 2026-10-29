@@ -59,6 +59,9 @@ type Renderer struct {
 	epoch                                        uint64
 	frame                                        Frame
 	readback                                     []byte
+	prepared                                     *scene3d.Snapshot
+	culler                                       scene3d.Culler
+	visible                                      []int
 	key                                          *scene3d.Snapshot
 	camera                                       scene3d.Camera
 	bg                                           color.RGBA
@@ -235,7 +238,9 @@ func (r *Renderer) CloseCurrent() error {
 	r.instanceBufferBytes = 0
 	r.frame = Frame{}
 	r.readback = nil
-	r.key = nil
+	r.key, r.prepared = nil, nil
+	r.culler.Reset()
+	r.visible = nil
 	r.api.Close()
 	return nil
 }
@@ -352,31 +357,36 @@ func (r *Renderer) Render(s *scene3d.Snapshot, c scene3d.Camera, w, h int, bg co
 	if e != nil {
 		return nil, e
 	}
-	// Validate before touching the previous frame and mark the complete resident
-	// set before eviction, so a new first mesh cannot evict a later shared mesh.
-	r.epoch++
-	var total int64
-	for i := 0; i < s.InstanceCount(); i++ {
-		in, _ := s.Instance(i)
-		if _, e = matrix32(in.Transform); e != nil {
-			return nil, e
+	validated := 0
+	if r.prepared != s {
+		// Validate before touching the previous frame and mark the complete resident
+		// set before eviction, so a new first mesh cannot evict a later shared mesh.
+		r.epoch++
+		var total int64
+		for i := 0; i < s.InstanceCount(); i++ {
+			in, _ := s.Instance(i)
+			if _, e = matrix32(in.Transform); e != nil {
+				return nil, e
+			}
+			if b := r.meshes[in.Mesh]; b != nil {
+				b.seen = r.epoch
+			}
+			total += int64(in.Mesh.VertexCount())*12 + int64(in.Mesh.TriangleCount())*12
 		}
-		if b := r.meshes[in.Mesh]; b != nil {
-			b.seen = r.epoch
+		// Conservative per-instance upper bound also bounds cold-cache uploads.
+		if total > maxResidentBytes {
+			return nil, scene3d.ErrLimit
 		}
-		total += int64(in.Mesh.VertexCount())*12 + int64(in.Mesh.TriangleCount())*12
-	}
-	// Conservative per-instance upper bound also bounds cold-cache uploads.
-	if total > maxResidentBytes {
-		return nil, scene3d.ErrLimit
-	}
-	for mesh, b := range r.meshes {
-		if b.seen != r.epoch {
-			r.deleteMesh(mesh, b)
+		for mesh, b := range r.meshes {
+			if b.seen != r.epoch {
+				r.deleteMesh(mesh, b)
+			}
 		}
+		r.prepared = s
+		validated = s.InstanceCount()
 	}
 	r.key = nil
-	r.frame.Stats = Stats{}
+	r.frame.Stats = Stats{ValidatedInstances: validated}
 	if e = r.target(w, h); e != nil {
 		return nil, e
 	}

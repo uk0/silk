@@ -62,7 +62,7 @@ Windows WGL 探针区分 GPU 成功与驱动不支持时的 CPU 回退，验证�
 128 帧，以及 CPU/GPU 使用相同相机序列。还有含读回的 25.6 万三角形对照，不是纯 GPU timer、桌面 FPS 或普遍性能承诺。
 
 限制：顶点/矩阵使用 float32；暂不支持大坐标相机相对精度方案、纹理/PBR、透明材质、
-平滑法线、MSAA、跨不相邻 mesh 的重排批处理、BVH/LOD、零读回合成。每变化帧同步读取颜色+ID
+平滑法线、MSAA、跨不相邻 mesh 的重排批处理、SAH/遮挡裁剪/LOD、零读回合成。每变化帧同步读取颜色+ID
 两个附件，在简单场景中可能比 CPU 慢。后续需要避免读回并维持正确的控件合成顺序，
 不能为了性能改回悬空 overlay。参见 [总路线](../../SCENE3D_ROADMAP.md)。
 
@@ -124,3 +124,16 @@ if r != nil {
 参考：[ARB instanced arrays](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_instanced_arrays.txt)、
 [ARB draw instanced](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_draw_instanced.txt)、
 [EXT gpu shader4](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_gpu_shader4.txt)。
+
+## 空间索引与不可变快照准备缓存
+
+CPU/GPU 同用 `scene3d.Culler` 的 Morton BVH，只把可见的原始索引送入有序实例化。
+相机移动只查询已有空间树，不为每个屏外设备重复完整 mesh-frustum 测试。
+GPU 的矩阵可表示性、完整场景预算与驻留集合验证按不可变 Snapshot 缓存；
+`Stats.ValidatedInstances` 在相机独立变化帧为 0，在新的 Snapshot 上重新验证所有实例。
+这不会绕过非法新快照：验证仍在裁剪/修改上一帧之前执行。
+
+`Stats.Culling` 给出索引构建、增量 refit、包围盒/实例测试及线性回退统计。新快照只改
+颜色时不重建空间树；移入视野的冷网格仍按需上传；移除的网格仍被回收；关闭时释放
+空间 scratch 和缓存快照。`Render` 仍返回顶端起始 CPU 图像，颜色和 ID 同步 readback
+没有在本阶段移除，不能据此宣称解决了所有驱动/所有场景的呈现瓶颈。

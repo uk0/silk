@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -40,8 +41,56 @@ func startBroker(t *testing.T) (*mqtt.Server, string) {
 		t.Fatal("no free port for the test mqtt broker")
 	}
 	go func() { _ = srv.Serve() }()
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		closeTestBrokerListeners(srv)
+		_ = srv.Close()
+	})
 	return srv, "tcp://" + addr
+}
+
+// closeTestBrokerListeners avoids mochi v2.7.9's shutdown lock inversion:
+// GetByListener holds Clients.RLock and calls Len, which takes RLock again.
+// A concurrent disconnect waiting in Clients.Delete then blocks both readers.
+// Snapshot clients with GetAll (one lock), and disconnect outside the lock.
+// CloseAll still closes listeners and waits for their clients. TCP.Close is
+// idempotent, so the subsequent Server.Close releases hooks/server resources
+// without invoking the broken client enumeration a second time.
+// This adapter belongs only to the integration-test broker, not our MQTT SDK.
+func closeTestBrokerListeners(srv *mqtt.Server) {
+	srv.Listeners.CloseAll(func(listener string) {
+		for _, client := range srv.Clients.GetAll() {
+			if client.Net.Listener == listener && !client.Closed() {
+				_ = srv.DisconnectClient(client, packets.ErrServerShuttingDown)
+			}
+		}
+	})
+}
+
+func TestMQTTBrokerShutdownWhileClientDisconnects(t *testing.T) {
+	srv, url := startBroker(t)
+	d := NewMQTT(url, "silk-test-shutdown")
+	if err := d.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		d.Close()
+		close(done)
+	}()
+	closeTestBrokerListeners(srv)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client disconnect did not finish during broker shutdown")
+	}
+	// Exercise the idempotent listener close used by t.Cleanup/Server.Close,
+	// and verify teardown really closed the socket rather than hiding a hang.
+	closeTestBrokerListeners(srv)
+	conn, err := net.DialTimeout("tcp", url[len("tcp://"):], time.Second)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("broker listener remained open after shutdown")
+	}
 }
 
 // connectMQTT stands up a broker and returns a connected driver against it.
