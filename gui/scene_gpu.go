@@ -70,6 +70,18 @@ func (v *SceneView) releaseGPU() {
 	v.uploadedSequence = ^uint64(0)
 }
 func (v *SceneView) ensureSceneGPU() {
+	// An ancestor can migrate between windows without calling SceneView.SetParent.
+	// Never keep rendering into a borrowed context owned by the old window.
+	if IsUIThread() {
+		if b, ok := v.gpu.(interface{ sceneWindow() *Window }); ok {
+			if owner := b.sceneWindow(); owner != nil && owner != v.OwnerWindow() {
+				v.releaseGPU()
+				v.gpuAttempted = false
+				v.gpuError = nil
+			}
+		}
+	}
+
 	if v.backendMode != "cpu" && !v.gpuAttempted && IsUIThread() && v.OwnerWindow() != nil {
 		v.gpuAttempted = true
 		v.gpu, v.gpuError = newSceneGPUBackend()

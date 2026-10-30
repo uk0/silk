@@ -242,6 +242,11 @@ func (f *demo) snapshot() {
 	if transferErr != nil {
 		state["gpu_transfer_error"] = transferErr.Error()
 	}
+	if f.Window() != nil {
+		enabled, reason := f.Window().SceneGPUCompositionStatus()
+		state["gpu_composition"] = enabled
+		state["gpu_composition_fallback"] = reason
+	}
 	b, _ := json.Marshal(state)
 	fmt.Println("SCENE_STATE", string(b))
 	text := fmt.Sprintf("Node: %s  |  Y: %.3f  |  Selected: %s  |  Loads: %d  |  Renders: %d", id, n.Transform[13], f.view.SelectedNode(), f.loaded, f.view.RenderCount())
@@ -277,6 +282,7 @@ func (f *demo) OnResize() {
 	f.surfaceStatus.SetBounds(12, bottom+52, max(0, w-24), 24)
 }
 func main() {
+	direct := flag.Bool("gpu-compose", false, "experimental direct GPU composition (GLFW only; defaults off)")
 	backend := flag.String("backend", "auto", "render backend: auto, cpu, opengl")
 	model := flag.String("model", "examples/scene3d/pump.obj", "explicit OBJ, glTF, GLB or .silkscene path")
 	sceneOutput := flag.String("scene-output", "", "enable explicit save/reload controls for this .silkscene destination")
@@ -316,6 +322,11 @@ func main() {
 	}
 	if err := f.TryAttachWindow(gui.WtForm); err != nil {
 		panic(err)
+	}
+	if *direct {
+		if err := f.Window().SetSceneGPUComposition(true); err != nil {
+			fmt.Println("COMPOSITION_UNAVAILABLE", err)
+		}
 	}
 	f.Window().SetSize(980, 680)
 	f.Window().MoveToCenter()

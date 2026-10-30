@@ -164,3 +164,16 @@ SceneView 绘制只捕获颜色，点击拾取独立读取 4 字节光栅 ID；�
 后续 Draw 补取同一代颜色而不重绘。SDK 新增 ReadColor/ColorFrame，与完整 Readback 共享颜色缓存。
 保持 Cairo 树合成、裁剪与覆盖顺序，增加 GUI 传输计数与原生上下文恢复/错误线程拒绝验证。
 有序 GPU 直接合成、纹理/PBR 及 Windows 硬件 GPU 性能仍属于未完成目标，不能以本轮替代。
+
+
+## GLFW 有序 GPU 直接合成试验
+
+新增默认关闭的 Window.SetSceneGPUComposition 与示例 -gpu-compose：
+窗口上下文驻留场景、精确矩形裁剪、按控件树顺序的不透明 underlay + 预乘 Cairo 层，
+避免合格视口的颜色读回；原生检测覆盖重叠、后绘遮挡、亚像素/曲线回退、缓存拾取、
+窗口 resize、PBO、旧帧拒绝、重挂载及 owner/worker 关闭。
+
+首版仍全树重绘/整窗上传 UI 层；非 OVER、图标回调与 Target 检查保守拒绝该帧并安排
+Cairo 重试，不默认用于编辑器。Windows GDI、增量 damage GPU 合成、图标隔离与通用
+GPU 截图接口尚未实现；纹理/PBR 和 Windows 实际 GPU 驱动性能也仍待验收。
+整体目标继续，不将实验性路径等同于全面完成。

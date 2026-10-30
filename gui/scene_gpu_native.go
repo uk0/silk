@@ -15,6 +15,7 @@ import (
 type nativeSceneDevice struct {
 	window  *glfw.Window
 	clients map[*nativeSceneGPU]struct{}
+	owner   *Window // non-nil: borrowed visible context, never destroy here
 }
 type nativeSceneGPU struct {
 	device   *nativeSceneDevice
@@ -22,6 +23,8 @@ type nativeSceneGPU struct {
 	info     glrender.Info
 	frame    glrender.ColorFrame
 }
+
+var windowSceneDevices = make(map[*Window]*nativeSceneDevice)
 
 var sceneDevice *nativeSceneDevice // UI-thread-only, like the window registry
 
@@ -83,6 +86,9 @@ func (b *nativeSceneGPU) withCurrent(fn func(*glrender.Renderer) error) error {
 	previous := glfw.GetCurrentContext()
 	b.device.window.MakeContextCurrent()
 	defer sceneRestoreContext(previous)
+	if b.device.owner != nil {
+		defer resetSceneHostGL()
+	}
 	return fn(b.renderer)
 }
 func (b *nativeSceneGPU) Close() {
@@ -101,10 +107,19 @@ func (b *nativeSceneGPU) Close() {
 	b.renderer = nil
 	b.frame = glrender.ColorFrame{}
 	delete(d.clients, b)
-	if previous == d.window {
+	if d.owner == nil && previous == d.window {
 		previous = nil
 	}
+	if d.owner != nil {
+		resetSceneHostGL()
+	}
 	sceneRestoreContext(previous)
+	if d.owner != nil {
+		if len(d.clients) == 0 {
+			delete(windowSceneDevices, d.owner)
+		}
+		return
+	}
 	if len(d.clients) == 0 {
 		d.window.Destroy()
 		d.window = nil
@@ -117,6 +132,12 @@ func (b *nativeSceneGPU) Close() {
 // Called before the native event loop destroys/terminates graphics contexts.
 // Views may outlive their window; subsequent Close remains idempotent.
 func closeSceneGPUDevice() {
+	if !IsUIThread() {
+		return
+	}
+	for w := range windowSceneDevices {
+		closeWindowSceneGPUDevice(w)
+	}
 	if sceneDevice == nil {
 		return
 	}

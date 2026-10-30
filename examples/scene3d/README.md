@@ -92,3 +92,34 @@ go run ./examples/scene3d -model examples/scene3d/assembly.gltf -scene-output /t
 `Snapshot` 的 `SCENE_STATE` 日志包含 `gpu_transfers`（累计 ColorReads/IDReads 与字节数）；
 CPU 回退时为零。这是显式按钮/事件诊断，不安装采样定时器。可对比拖动前后与点击前后的计数：
 GPU 绘制只读颜色，点击单次读取 4 字节 ID，静止缓存不持续传输。
+
+
+## 实验性 GPU 直接合成（默认关闭）
+
+macOS / Linux GLFW 窗口可显式试用：
+
+```sh
+go run ./examples/scene3d -gpu-compose -model examples/scene3d/assembly.gltf
+```
+
+SDK 在 UI 线程、窗口 attach 后、Draw 之外调用
+`form.Window().SetSceneGPUComposition(true)`；用 `SceneGPUCompositionStatus()`
+查询启用状态与回退原因。普通 `SceneView.Draw`、离屏导出与未启用窗口保持原来的 Cairo 路径。
+Windows/GDI 与 pure-Go 明确返回 `glrender.ErrUnavailable`；示例打印诊断后正常使用原路径，
+不代表 Windows 没有 GPU 光栅化能力。
+
+- 合格视口直接在所属窗口的上下文渲染和 blit，`GPUTransfers().ColorReads` 不增加；
+  光栅点击仍只读 4 字节。Cairo UI 纹理仍需要上传，不是全应用零传输。
+- 仅接受正向轴对齐、整数物理像素位置、精确单矩形 clip；曲线/多区 clip、旋转、
+  亚像素位置局部退回 Cairo，不用 clip 包围盒冒充遮罩。
+- 按控件树顺序处理不透明场景与 CPU 像素，后绘菜单、提示与编辑手柄仍遮挡场景；
+  重叠场景保持先后顺序。预乘透明叠加允许与全 Cairo 参考最多 1 个 8-bit 色阶的舍入差异。
+- 场景之后遇到非 OVER 算子、图标回调或 Target 检查，以及过期 GPU 帧，拒绝提交该帧、
+  排队完整 Cairo 重绘并关闭此路径；不会自动反复重试。图标限制是保守回退，不是缺失图标。
+- 首版每次实际重绘采用完整树/整窗 UI 纹理上传；不新增定时器，空闲不重绘。
+  小脏区或复杂 UI 不保证更快，因此尚未默认开启或启用到 SilkIDE 全部窗口。
+- 所有 window-owned GPU 资源在原生上下文销毁前释放；工作线程不能渲染/拾取/释放它们。
+
+`SCENE_STATE` 新增 `gpu_composition` / `gpu_composition_fallback`，可与传输计数一起核验实际路径。
+裁剪查询遵循 [Cairo 的精确 rectangle-list 契约](https://www.cairographics.org/manual/cairo-cairo-t.html#cairo-copy-clip-rectangle-list)，
+而不是仅使用 `ClipBounds`。

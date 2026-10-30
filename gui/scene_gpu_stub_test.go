@@ -7,3 +7,7 @@ import "github.com/uk0/silk/scene3d/glrender"
 var sceneNativeErr error
 
 func runSceneNativeProbe() error { return glrender.ErrUnavailable }
+
+var sceneDirectErr error
+
+func runSceneDirectProbe() error { return glrender.ErrUnavailable }

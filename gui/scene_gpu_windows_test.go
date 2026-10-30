@@ -3,6 +3,8 @@
 package gui
 
 import (
+	"errors"
+	"github.com/uk0/silk/scene3d/glrender"
 	"os"
 	"testing"
 
@@ -45,6 +47,15 @@ func TestSceneNativeWindowsWGLCompositionAndFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Window().destroy()
+	if err := f.Window().SetSceneGPUComposition(true); !errors.Is(err, glrender.ErrUnavailable) {
+		t.Fatal("GDI claimed direct composition", err)
+	}
+	if enabled, reason := f.Window().SceneGPUCompositionStatus(); enabled || reason != "" {
+		t.Fatal("unsupported composition changed state")
+	}
+	if err := f.Window().SetSceneGPUComposition(false); err != nil {
+		t.Fatal(err)
+	}
 	defer closeSceneGPUDevice()
 	v := NewSceneView()
 	v.SetParent(f)

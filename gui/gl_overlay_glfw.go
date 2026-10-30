@@ -4,7 +4,7 @@ package gui
 
 import "github.com/go-gl/gl/v2.1/gl"
 
-func (this *Window) supportsGLOverlay() bool { return true }
+func (this *Window) supportsGLOverlay() bool { return !this.sceneComposition.enabled }
 
 // enqueueChartOverlay queues one chart's series lines for GPU drawing this
 // frame. Called from a widget's Draw (Cairo pass); consumed by drawGLOverlays

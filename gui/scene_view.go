@@ -380,7 +380,15 @@ func (v *SceneView) Draw(g paint.Painter) {
 	}
 	v.renderScaleX, v.renderScaleY = sx, sy
 	snap, err := v.scene.Snapshot()
+	direct := false
 	if err == nil {
+		if p, ok := g.(interface {
+			drawScene(*SceneView, *scene3d.Snapshot, scene3d.Camera, int, int) (bool, error)
+		}); ok {
+			direct, err = p.drawScene(v, snap, v.camera(), int(rw), int(rh))
+		}
+	}
+	if err == nil && !direct {
 		var f sceneViewFrame
 		f, err = v.renderScene(snap, v.camera(), int(rw), int(rh))
 		if err == nil {

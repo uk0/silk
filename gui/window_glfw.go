@@ -123,7 +123,8 @@ type Window struct {
 	// glOverlays holds per-frame GPU chart-series draw requests. Populated by
 	// GPU-mode LineCharts during the Cairo pass and drawn after the texture
 	// blit (see gl_overlay.go / gl_overlay_glfw.go).
-	glOverlays []chartOverlay
+	glOverlays       []chartOverlay
+	sceneComposition sceneCompositionWindow
 
 	pointer      pointerEventState
 	mouseEntered bool
@@ -422,6 +423,8 @@ func (this *Window) destroy() {
 		this.destroyAfterPaint = true
 		return
 	}
+	closeWindowSceneGPUDevice(this)
+	this.sceneComposition.layers = nil
 	this.releaseNativeKeyRouting()
 	this.dismissOwnedPopups()
 	dismissOwnedToasts(this.widget)
@@ -563,7 +566,7 @@ func (this *Window) paint() {
 	// GPU overlays are not stored in the Cairo surface. A clipped tree pass
 	// would forget unchanged charts after the fullscreen blit. Keep those
 	// windows (and the dynamic perf overlay) on the conservative full path.
-	fullDirty = fullDirty || this.glTexture == 0 || len(this.glOverlays) > 0 || GlobalPerfStats.IsVisible() ||
+	fullDirty = fullDirty || this.sceneComposition.enabled || this.glTexture == 0 || len(this.glOverlays) > 0 || GlobalPerfStats.IsVisible() ||
 		this.textureWidth != int32(fbw) || this.textureHeight != int32(fbh)
 
 	// A replacement invalidates all previous pixels. Explicit release occurs
@@ -613,6 +616,13 @@ func (this *Window) paint() {
 	// charts re-enqueue their series lines this frame (drawn after the blit).
 	this.resetGLOverlays()
 
+	// Experimental direct composition uses a full tree pass, never an incomplete
+	// damage list. The default path retains its existing partial upload behavior.
+	var treePainter paint.Painter = backPainter
+	if this.sceneComposition.enabled {
+		treePainter = this.beginSceneComposition(backPainter)
+	}
+
 	// Scale Cairo context: logical coords -> physical pixels.
 	// Wrap the widget tree draw in panic recovery so a single broken widget
 	// cannot crash the entire paint cycle.
@@ -623,9 +633,10 @@ func (this *Window) paint() {
 		defer func() {
 			if r := recover(); r != nil {
 				core.Warn("paint panic in DrawWidgetAll: ", r)
+				this.sceneComposition.reject("widget paint panic")
 			}
 		}()
-		DrawWidgetAll(this.widget, backPainter, 0, 0, 0, 0, width, height)
+		DrawWidgetAll(this.widget, treePainter, 0, 0, 0, 0, width, height)
 	}()
 	GlobalPerfStats.RecordPaint(time.Since(paintStart))
 
@@ -634,12 +645,18 @@ func (this *Window) paint() {
 	// correct size. Only renders when visible (cheap otherwise).
 	if GlobalPerfStats.IsVisible() {
 		GlobalPerfStats.SetWidgetCount(CountWidgets(this.widget))
-		GlobalPerfStats.Draw(backPainter, width, height)
+		GlobalPerfStats.Draw(treePainter, width, height)
 	}
 
 	backPainter.Restore()
 	if this.destroyAfterPaint {
 		return // teardown after the frame unwinds; do not present a closed owner
+	}
+	if this.sceneComposition.failed != "" && this.sceneComposition.enabled {
+		this.sceneComposition.enabled = false
+		this.sceneComposition.layers = nil
+		this.MarkFullDirty()
+		return // never present a partially cut-out/unsupported frame
 	}
 	backBuffer.Flush()
 
@@ -710,7 +727,19 @@ func (this *Window) paint() {
 
 	// Draw fullscreen quad at framebuffer resolution
 	gl.Viewport(0, 0, int32(fbw), int32(fbh))
-	drawFullscreenQuadSurface(this.glTexture, int32(fbw), int32(fbh), texU, texV, this.transparentFramebuffer)
+	if len(this.sceneComposition.layers) > 0 {
+		if err := this.presentSceneComposition(fbw, fbh); err != nil {
+			this.sceneComposition.failed = err.Error()
+			this.sceneComposition.enabled = false
+			this.sceneComposition.layers = nil
+			this.MarkFullDirty()
+			return
+		}
+		drawFullscreenQuadLayer(this.glTexture, int32(fbw), int32(fbh), texU, texV)
+	} else {
+		drawFullscreenQuadSurface(this.glTexture, int32(fbw), int32(fbh), texU, texV, this.transparentFramebuffer)
+	}
+	this.sceneComposition.layers = nil
 
 	// GPU chart fast-path: draw queued series line strips over the blit.
 	this.drawGLOverlays(int32(fbw), int32(fbh))

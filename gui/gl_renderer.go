@@ -117,18 +117,19 @@ func drawFullscreenQuadUV(texture uint32, fbWidth, fbHeight int32, texU, texV fl
 // Transparent native surfaces preserve Cairo premultiplied RGBA all the way
 // through presentation. Ordinary opaque forms keep their previous clear color.
 func drawFullscreenQuadSurface(texture uint32, fbWidth, fbHeight int32, texU, texV float32, transparent bool) {
-	// Cairo ARGB32 already contains RGB multiplied by alpha. Multiplying
-	// again (SRC_ALPHA) darkens anti-aliased edges and translucent UI surfaces.
-	// GPU chart vertices use straight alpha, so restore their blend convention.
-	gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-	defer gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 	if transparent {
 		gl.ClearColor(0, 0, 0, 0)
 	} else {
 		gl.ClearColor(0.2, 0.2, 0.2, 1)
 	}
 	gl.Clear(gl.COLOR_BUFFER_BIT)
+	drawFullscreenQuadLayer(texture, fbWidth, fbHeight, texU, texV)
+}
 
+// Cairo pixels are premultiplied. This variant preserves earlier GPU layers.
+func drawFullscreenQuadLayer(texture uint32, fbWidth, fbHeight int32, texU, texV float32) {
+	gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+	defer gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 	gl.MatrixMode(gl.PROJECTION)
 	gl.LoadIdentity()
 	gl.Ortho(0, float64(fbWidth), float64(fbHeight), 0, -1, 1)
