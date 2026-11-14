@@ -137,9 +137,18 @@ func (t *Tag) SetValue(raw interface{}) {
 //
 // The subscriber set is snapshotted under the lock and invoked unlocked, so a
 // callback that (un)subscribes cannot deadlock. Callable from any goroutine.
-func (t *Tag) Publish(v Value) {
+func (t *Tag) Publish(v Value) { t.publish(v, false) }
+
+// Observe refreshes the latest timestamp even when payload/quality are unchanged.
+// Like Publish it notifies only on value/quality changes: acquisition heartbeats
+// do not wake the UI. Use for polling; history can record observations separately.
+func (t *Tag) Observe(v Value) { t.publish(v, true) }
+func (t *Tag) publish(v Value, refreshTime bool) {
 	t.mu.Lock()
 	if rawEqual(t.cur.Raw, v.Raw) && t.cur.Quality == v.Quality {
+		if refreshTime {
+			t.cur = v
+		}
 		t.mu.Unlock()
 		return
 	}
@@ -231,3 +240,24 @@ func (db *TagDB) All() []*Tag {
 
 // Default is the singleton registry the designer binding resolves against.
 var Default = NewTagDB()
+
+// MarkStale atomically downgrades an old Good sample without replacing its last
+// value/time. A newer observation cannot be overwritten between read and write.
+func (t *Tag) MarkStale(before time.Time) bool {
+	t.mu.Lock()
+	if t.cur.Quality != QualityGood || t.cur.Time.IsZero() || !t.cur.Time.Before(before) {
+		t.mu.Unlock()
+		return false
+	}
+	t.cur.Quality = QualityUncertain
+	v := t.cur
+	fan := make([]Subscriber, 0, len(t.subs))
+	for _, s := range t.subs {
+		fan = append(fan, s)
+	}
+	t.mu.Unlock()
+	for _, s := range fan {
+		s(v)
+	}
+	return true
+}

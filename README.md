@@ -19,6 +19,41 @@ signed/notarized standalone apps.
 
 ---
 
+## Industrial 2D HMI workbench
+
+```bash
+go run ./cmd/silkhmi
+# Open a saved document without automatically starting its HTTP sources:
+go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
+```
+
+![Silk industrial process designer](docs/images/hmi-workbench-editor.png)
+
+- Nine vector node types, snapped dragging, connected ports, orthogonal pipes,
+  route waypoints, zoom/pan, bounded undo/redo and staged visual configuration.
+- DI/AI/BI point definitions, typed SQLite latest/history, shared HTTP acquisition
+  with request bodies/headers, JSON Pointer extraction, conversion/comparison,
+  conditional colors/state text and dynamic position/rotation/visibility.
+- Explicit Run/Stop, quality/staleness handling, bounded retention, document
+  save/load, designer palette integration and runnable Go generation.
+- Loading/drawing never starts acquisition; I/O stays off the UI thread and
+  workers are cancelled/joined. This is a 2D foundation, not certified SCADA or
+  a complete P&ID/PLC control system; routing is not obstacle avoidance.
+
+[Workflow, screenshots, SDK and limitations](docs/HMI-WORKBENCH.md) ·
+[Typed point SDK](point/README.md) ·
+[Local synthetic HTTP demo](examples/process2d/README.md) ·
+[Verification report](SCADA_POINT_PROGRESS_20261114.md)
+
+<details>
+<summary>Visual point configuration</summary>
+
+![Silk point manager](docs/images/hmi-workbench-points.png)
+
+</details>
+
+---
+
 ## Industrial 3D scene SDK (development)
 
 - New dependency-free `scene3d` package: immutable shared meshes, hierarchy snapshots,

@@ -209,6 +209,8 @@ func bindIndustrial(s *Services, w gui.IWidget, opt ScreenOptions) func() {
 	tag := s.Tags.GetOrCreate(name, core.Meta{})
 
 	switch sink := w.(type) {
+	case interface{ SetSample(core.Value) }:
+		return gui.BindTagUI(tag, sink.SetSample)
 	case interface {
 		SetValue(float64)
 		SigCommit(func(float64))

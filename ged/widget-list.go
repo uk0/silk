@@ -394,12 +394,12 @@ func drawWidgetIconContents(g paint.Painter, factoryName string, x, y, size floa
 	}
 
 	switch shortName {
-	case "SpriteView", "ProcessValue", "Tank", "Valve", "Gauge":
+	case "SpriteView", "ProcessValue", "ProcessEquipment", "ProcessDiagram", "ProcessEditor", "Tank", "Valve", "Gauge":
 		name := "gauge"
 		if shortName == "SpriteView" || shortName == "Valve" {
 			name = "valve"
 		}
-		if shortName == "Tank" {
+		if shortName == "Tank" || shortName == "ProcessEquipment" {
 			name = "tank"
 		}
 		icon, _ := paint.SatinIcon(name)

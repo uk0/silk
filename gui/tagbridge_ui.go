@@ -12,7 +12,6 @@ import (
 // invalidates queued work; an already executing setter is allowed to finish.
 func BindTagUI(tag *core.Tag, set func(core.Value)) func() {
 	var mu sync.Mutex
-	var latest core.Value
 	pending, stopped := false, false
 	cancel := tag.Subscribe(func(v core.Value) {
 		mu.Lock()
@@ -20,7 +19,6 @@ func BindTagUI(tag *core.Tag, set func(core.Value)) func() {
 			mu.Unlock()
 			return
 		}
-		latest = v
 		if pending {
 			mu.Unlock()
 			return
@@ -29,11 +27,11 @@ func BindTagUI(tag *core.Tag, set func(core.Value)) func() {
 		mu.Unlock()
 		Post(func() {
 			mu.Lock()
-			v, dead := latest, stopped
+			dead := stopped
 			pending = false
 			mu.Unlock()
 			if !dead {
-				set(v)
+				set(tag.Value())
 			}
 		})
 	})

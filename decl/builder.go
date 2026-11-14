@@ -158,3 +158,15 @@ func TransferProgress(attrs ...Attr) *Node { return New("gui.TransferProgress", 
 // SceneView builds an embedded 3D viewport. Model Source is configuration only;
 // call LoadModel explicitly after construction to start background model I/O.
 func SceneView(attrs ...Attr) *Node { return New("gui.SceneView", attrs...) }
+
+// ProcessValue builds a numeric point display with persisted conversion/color rules.
+func ProcessValue(attrs ...Attr) *Node { return New("gui.ProcessValue", attrs...) }
+
+// ProcessEquipment builds a clipped vector reactor/exchanger/separator symbol.
+func ProcessEquipment(attrs ...Attr) *Node { return New("gui.ProcessEquipment", attrs...) }
+
+// ProcessDiagram builds an inert 2D process document viewport.
+func ProcessDiagram(attrs ...Attr) *Node { return New("gui.ProcessDiagram", attrs...) }
+
+// ProcessEditor creates a visual 2D process workbench; loading is inert.
+func ProcessEditor(attrs ...Attr) *Node { return New("gui.ProcessEditor", attrs...) }

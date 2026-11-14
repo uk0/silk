@@ -517,6 +517,12 @@ func findInParentCoord(this IWidget, xp, yp, cx, cy, cw, ch float64) IWidget {
 			}
 		}
 
+		// Some infrastructure layers own children (e.g. scroll bars) but have
+		// no pointer-interactive body. Test after descending so those children
+		// still win; the containing control receives hits in the empty body.
+		if transparent, ok := this.(interface{ pointerPassThrough() bool }); ok && transparent.pointerPassThrough() {
+			return nil
+		}
 		return this.Self()
 	}
 	return nil

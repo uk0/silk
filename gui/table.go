@@ -339,6 +339,11 @@ func NewTable() *Table {
 	return p
 }
 
+// Bars remain hit-testable, while the empty scroll-area body belongs to Table.
+type tableScrollArea struct{ ScrollArea }
+
+func (*tableScrollArea) pointerPassThrough() bool { return true }
+
 // Init builds the scroll area and seeds the "nothing selected / nothing
 // hovered" sentinels. All of it lives here rather than in NewTable because the
 // factory (core.RegisterFactory above) constructs a Table by reflection and
@@ -357,7 +362,9 @@ func (this *Table) Init(iw IWidget) {
 	this.lastClickRow = -1
 	this.lastClickCol = -1
 	this.selectAnchor = -1
-	this.scrollArea = NewScrollArea()
+	area := new(tableScrollArea)
+	area.Init(area)
+	this.scrollArea = &area.ScrollArea
 	this.scrollArea.SetParent(iw)
 }
 
@@ -855,7 +862,13 @@ func (this *Table) Draw(g paint.Painter) {
 	for c := 0; c < colCount; c++ {
 		cw := this.columnWidth(c)
 		// Header background
+		g.Save()
+		g.Translate(xPos, 0)
 		t.drawHeaderBg(g, cw, hh)
+		g.Restore()
+		g.Save()
+		g.Rectangle(xPos, 0, cw, hh)
+		g.Clip()
 		// Header text
 		g.SetBrush1(t.TextColor)
 		txt := this.model.HeaderText(c)
@@ -865,6 +878,7 @@ func (this *Table) Draw(g paint.Painter) {
 		if c == this.sortColumn {
 			this.drawSortArrow(g, xPos+cw-12, hh*0.5, this.sortAscending)
 		}
+		g.Restore()
 		xPos += cw
 	}
 	g.Restore()

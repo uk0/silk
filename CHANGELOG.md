@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — industrial 2D authoring and typed point runtime (2026-11-14)
+
+- Add ProcessDiagram / ProcessEditor and the opt-in `cmd/silkhmi` workbench:
+  vector equipment/value/text nodes, snapped dragging, connected ports,
+  orthogonal routes/waypoints, zoom/pan, bounded undo/redo and Go generation.
+- Add staged visual tables for points, HTTP sources/mappings/headers, node
+  bindings, conversions, color/state rules, dynamic properties and pipes.
+  Preserve advanced pipelines and reject invalid references without mutation.
+- Add portable inert `.silkhmi` documents, atomic save/validated load and
+  designer drag/drop, persistence, preview and code-generation coverage.
+- Add strict scalar conversion, a bounded non-executing expression language,
+  shared cancellable HTTP sources and optional typed SQLite latest/history.
+  Restore persisted points; provide SDK publishing, TTL and bounded retention.
+- Keep I/O off the GUI thread, join workers on stop/close, coalesce Tag bursts
+  against current state, and separate authored previews from acquired samples.
+  Bad/Uncertain samples do not masquerade as valid zeros.
+- Fix table header backgrounds erasing the first caption; clip column captions.
+  Let table body clicks pass through the internal scroll layer while keeping
+  scrollbar/editor input intact, including nested modal configuration tables.
+  Correct equipment nozzle/pipe alignment and avoid parsing documents per drag.
+- Document actual UI screenshots, workflow, tests and industrial limitations.
+
 ## Unreleased — PDF editor feedback and LSP reliability
 
 - Fix Windows indentation tofu by displaying tabs at consistent tab stops across
