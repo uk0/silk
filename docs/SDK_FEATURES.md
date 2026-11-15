@@ -81,6 +81,44 @@ func bindOutline(editor *gui.CodeEditor, setNavigationEnabled func(bool),
   `CancelCompletion()`。关闭不会等待后台退出；既有 90 ms 合并等待和双 worker 上限不变，
   不新增空闲轮询。性能和平台验收范围见 [补全索引 QA](../COMPLETION_LEXICAL_QA_20261115.md)。
 
+## 工业实时点位监视与条件写入
+
+- `core.Tag.Snapshot()` 同时取得点值／质量／时间与版本。相同值的采集心跳仍更新版本，
+  但不唤醒只关心数值／质量变化的绑定。版本属于单个 Tag，不是持久化或跨运行时的 ID。
+- `hmi.Runtime.PointState/PointStates` 只读内存，不等待 SQL 写入锁；返回的 `PointToken`
+  只能用于当前运行时／点位。后台 `WritePoint(ctx, name, token, value)` 检查旧版本、
+  强制类型转换、先持久化再发布。启用 HTTP 采集管理的点位拒绝第二个写入者。
+- `History/RecentHistory` 使用可选的 `point.HistoryReader`；范围查询保持时间正序，
+  最近记录按时间／插入顺序倒序，限制 1–10,000 条，并检查结果边界、点名、类型、质量与时间。
+  SQLite 原有 `StoredSample/History` API 保持兼容。
+- 新控件 `gui.ProcessPointMonitor` 可拖入设计器、生成 Go，默认不启动 I/O。UI 线程调用
+  `SetRuntime(rt)` 后按点位合并最新变化，支持精确整数排序、质量提示、显式确认写入及
+  后台读取最近 200 条历史。取消、换运行时或关闭会撤销旧回调并关闭所属弹窗。
+- 宿主负责运行时／数据库所有权：停止前 `monitor.SetRuntime(nil)`；销毁时 `Close()`，
+  在事件循环外／后台 `Wait(ctx)`。不要直接修改 `runtime.Tags` 作为竞争写入者。
+  取消不是事务回滚保证；失败后核对当前值／历史，不能自动重试。
+- UI 行内写入限制 8 KiB；`WritePoint` 及标准 SQLite 字符串样本限制 1 MiB。
+  超限会拒绝，不会静默截断；这是点位存储，不是大对象／文件存储。
+- `hmiapp.Config.RuntimeChanged` 在 UI 线程提供／撤销借用的运行时，方便接入自己的驱动，
+  不需要轮询；回调不可阻塞或同步 `Join`。工作台加入 Live points 面板，运行模式隐藏
+  禁用的编辑工具栏，避免小窗口内组态图被覆盖。
+
+```go
+// UI 线程：绑定已有运行时；这里不启动网络采集或数据库。
+monitor := gui.NewProcessPointMonitor()
+monitor.SetParent(parent)
+monitor.SetRuntime(runtime)
+
+// 显式后台操作：state 是用户确认时读到的快照，不要悄悄换成更新的 token 重试。
+state, err := runtime.PointState("DI11")
+if err == nil {
+    _, err = runtime.WritePoint(ctx, "DI11", state.Token, true)
+}
+```
+
+验收范围与限制：[实时点位 QA](../LIVE_POINT_MONITOR_QA_20261115.md)。这不是 PLC 命令协议、
+报警闭环或经过工业安全认证的联锁系统。
+
 ## 工业 3D 场景基础（开发中）
 
 - `scene3d`：纯 Go 不可变网格、层级节点/快照、Box/Cylinder、受限 OBJ 加载器、

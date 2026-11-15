@@ -93,6 +93,41 @@ compatible existing points explicitly. No data source starts while browsing.
 
 </details>
 
+### Live point monitoring and explicit writes
+
+The workbench's **Live points** panel shows typed values, quality, observed time
+and acquisition ownership. The same inert `ProcessPointMonitor` can be dropped
+from the designer's SCADA palette; hosts explicitly call `SetRuntime` and own
+the runtime lifecycle. Merely opening the panel starts no HTTP or database work.
+
+- Manual/driver writes require an explicit confirmation against an opaque
+  sample-version baseline. Changed samples and HTTP-owned points are rejected;
+  persistence precedes live notification. Failed writes never retry themselves.
+- Cancel and invalid input do not write. After an ambiguous failure, inspect
+  current state/history before attempting another explicit write.
+- Recent history is an explicit, cancellable background query, capped at 200
+  observations. Live changes coalesce onto the UI thread; unchanged heartbeats
+  stay quiet. No per-widget acquisition or polling timer is added.
+
+![Windows native live points and recovered HTTP binding](docs/images/hmi-live-points-windows.png)
+
+Actual Windows SDK-consumer/workbench capture: HTTP JSON extraction and scaling
+recover to **77.5 bar** with a green conditional color. The monitor preserves
+`9223372036854775807` exactly. The existing float-based process card deliberately
+shows a dash for that out-of-range integer rather than silently rounding it.
+
+<details>
+<summary>Explicit bounded point history</summary>
+
+![Windows native recent point history](docs/images/hmi-live-point-history-windows.png)
+
+Owned read-only history dialog, including the controlled HTTP failure/recovery.
+
+</details>
+
+[SDK APIs and lifecycle](docs/SDK_FEATURES.md#工业实时点位监视与条件写入) ·
+[Native, persistence and platform verification](LIVE_POINT_MONITOR_QA_20261115.md)
+
 ---
 
 ## Incremental local completion candidates (2026-11-15)

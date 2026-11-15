@@ -100,10 +100,11 @@ type Tag struct {
 	name string
 	meta Meta
 
-	mu   sync.RWMutex
-	cur  Value
-	subs map[uint64]Subscriber
-	next uint64
+	mu       sync.RWMutex
+	cur      Value
+	revision uint64
+	subs     map[uint64]Subscriber
+	next     uint64
 }
 
 func newTag(name string, m Meta) *Tag {
@@ -121,6 +122,23 @@ func (t *Tag) Value() Value {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.cur
+}
+
+// Snapshot atomically reads the stored sample and its tag-local revision.
+// Observe heartbeats and quality transitions advance it even if they do not
+// notify value-only subscribers. An unchanged Publish remains a true no-op.
+// Revisions are not persistent identifiers or interchangeable between tags.
+func (t *Tag) Snapshot() (Value, uint64) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.cur, t.revision
+}
+
+func (t *Tag) advanceRevisionLocked() {
+	t.revision++
+	if t.revision == 0 {
+		t.revision++
+	}
 }
 
 // SetValue stamps the payload QualityGood at time.Now and publishes it.
@@ -148,11 +166,13 @@ func (t *Tag) publish(v Value, refreshTime bool) {
 	if rawEqual(t.cur.Raw, v.Raw) && t.cur.Quality == v.Quality {
 		if refreshTime {
 			t.cur = v
+			t.advanceRevisionLocked()
 		}
 		t.mu.Unlock()
 		return
 	}
 	t.cur = v
+	t.advanceRevisionLocked()
 	fan := make([]Subscriber, 0, len(t.subs))
 	for _, s := range t.subs {
 		fan = append(fan, s)
@@ -250,6 +270,7 @@ func (t *Tag) MarkStale(before time.Time) bool {
 		return false
 	}
 	t.cur.Quality = QualityUncertain
+	t.advanceRevisionLocked()
 	v := t.cur
 	fan := make([]Subscriber, 0, len(t.subs))
 	for _, s := range t.subs {

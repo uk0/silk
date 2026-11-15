@@ -698,7 +698,7 @@ func drawWidgetIconContents(g paint.Painter, factoryName string, x, y, size floa
 		g.Rectangle(x, y+5, s, s-6)
 		g.Stroke()
 
-	case "Table":
+	case "Table", "ProcessPointMonitor":
 		// Grid with header row
 		g.SetBrush1(paint.Color{R: 180, G: 195, B: 220, A: 255})
 		g.Rectangle(x, y, s, 5)

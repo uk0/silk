@@ -104,3 +104,114 @@ func TestWorkbenchControlsRepresentIOAndRuntimeAvailability(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkbenchPointPanelToggleIsInertAndLiveLayoutDoesNotOverlap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "points.db")
+	f, err := New(Config{DatabasePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Join()
+	defer f.Close()
+	f.SetSize(640, 560)
+	f.TogglePoints()
+	if !f.Points.IsVisible() || len(f.Points.PointStates()) != 0 || f.session != nil {
+		t.Fatal("view toggle started a runtime")
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("inert panel opened database", err)
+	}
+	// A synthetic active session exercises the actual live viewport policy
+	// without introducing a timing-only startup/pump assertion into this test.
+	f.session = &session{cancel: func() {}, done: make(chan struct{})}
+	close(f.session.done)
+	f.refreshControls()
+	f.OnResize()
+	if f.Editor.Y()+f.Editor.Height() > f.Points.Y() || f.Points.Y()+f.Points.Height() > f.status.Y() {
+		t.Fatal("runtime panel overlaps canvas/status")
+	}
+	if f.Editor.Diagram.Height() < 150 {
+		t.Fatal("disabled authoring toolbar obscures live diagram")
+	}
+	f.TogglePoints()
+	if f.Points.IsVisible() || len(f.Points.PointStates()) != 0 {
+		t.Fatal("hidden panel kept active view")
+	}
+}
+
+func TestWorkbenchRuntimeAvailabilityEventsAreOnceAndReentrantStopSafe(t *testing.T) {
+	var events []*hmi.Runtime
+	f, err := New(Config{RuntimeChanged: func(rt *hmi.Runtime) { events = append(events, rt) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Join()
+	defer f.Close()
+	if f.Runtime() != nil {
+		t.Fatal("inert workbench has runtime")
+	}
+	rt, err := hmi.NewRuntime(context.Background(), hmi.Template(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Stop()
+	s := &session{runtime: rt, cancel: func() {}, done: make(chan struct{})}
+	close(s.done)
+	f.session = s
+	f.notifyRuntime(s, rt)
+	f.notifyRuntime(s, rt)
+	if f.Runtime() != rt || len(events) != 1 || events[0] != rt {
+		t.Fatal("ready event missing/duplicated")
+	}
+	f.cfg.RuntimeChanged = func(rt *hmi.Runtime) {
+		events = append(events, rt)
+		if rt == nil {
+			f.StopRuntime()
+		}
+	}
+	f.StopRuntime()
+	f.StopRuntime()
+	if f.Runtime() != nil || len(events) != 2 || events[1] != nil {
+		t.Fatal("stop did not revoke availability once")
+	}
+	f.Close()
+	if len(events) != 2 {
+		t.Fatal("close repeated unavailable event")
+	}
+}
+
+func TestWorkbenchPointPanelCannotRebindUnavailableRuntime(t *testing.T) {
+	f, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Join()
+	defer f.Close()
+	rt, err := hmi.NewRuntime(context.Background(), hmi.Template(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Stop()
+	s := &session{runtime: rt, cancel: func() {}, done: make(chan struct{})}
+	close(s.done)
+	f.session = s
+	f.TogglePoints()
+	if len(f.Points.PointStates()) != 0 {
+		t.Fatal("panel bound a runtime before its availability event")
+	}
+	f.TogglePoints()
+	f.notifyRuntime(s, rt)
+	f.TogglePoints()
+	if len(f.Points.PointStates()) == 0 {
+		t.Fatal("available runtime did not bind")
+	}
+	f.StopRuntime()
+	// The session may remain while its workers/store drain. Showing the panel
+	// again must not resurrect the revoked runtime or its subscriptions.
+	f.TogglePoints()
+	f.TogglePoints()
+	if !f.Points.IsVisible() || len(f.Points.PointStates()) != 0 {
+		t.Fatal("panel rebound a stopping runtime")
+	}
+}

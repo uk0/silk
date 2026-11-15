@@ -19,6 +19,8 @@ type Runtime struct {
 	Tags            *core.TagDB
 	project         Project
 	store           Store
+	pointIndex      map[string]int
+	writers         map[string]string
 	sources         []*point.HTTPSource
 	configs         []Source
 	mu              sync.Mutex
@@ -44,8 +46,9 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 	if e != nil {
 		return nil, e
 	}
-	r := &Runtime{Tags: core.NewTagDB(), project: p, store: store, errors: map[string]string{}}
-	for _, d := range p.Points {
+	r := &Runtime{Tags: core.NewTagDB(), project: p, store: store, errors: map[string]string{}, pointIndex: make(map[string]int, len(p.Points)), writers: map[string]string{}}
+	for i, d := range p.Points {
+		r.pointIndex[d.Name] = i
 		if store != nil {
 			if e = store.Define(ctx, d.Definition); e != nil {
 				return nil, e
@@ -75,7 +78,10 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 				return nil, err
 			}
 			if found {
-				value = stored
+				value, err = normalizePointSample(stored, d.Kind)
+				if err != nil {
+					return nil, fmt.Errorf("hmi: restored point %q: %w", d.Name, err)
+				}
 			}
 		}
 		r.Tags.GetOrCreate(d.Name, core.Meta{Unit: d.Unit, Desc: d.Description}).Observe(value)
@@ -104,6 +110,7 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 		r.sources = append(r.sources, source)
 		r.configs = append(r.configs, s)
 		for _, m := range s.Mappings {
+			r.writers[m.Name] = s.ID
 			t, _ := r.Tags.Get(m.Name)
 			v := t.Value()
 			v.Quality = core.QualityUncertain
@@ -123,24 +130,31 @@ func (r *Runtime) Publish(ctx context.Context, name string, v core.Value) error 
 	}
 	r.publishMu.Lock()
 	defer r.publishMu.Unlock()
+	return r.publishLocked(ctx, name, v, nil)
+}
+
+// publishLocked is called only under the runtime-managed writer lock. Direct
+// mutation of Tags bypasses persistence/ownership and is not an operator API.
+func (r *Runtime) publishLocked(ctx context.Context, name string, v core.Value, expected *PointToken) error {
 	r.mu.Lock()
 	closed := r.closed
 	r.mu.Unlock()
 	if closed {
 		return fmt.Errorf("hmi: runtime closed")
 	}
-	for _, source := range r.configs {
-		for _, m := range source.Mappings {
-			if m.Name == name {
-				return fmt.Errorf("hmi: point owned by HTTP source")
-			}
-		}
+	if _, owned := r.writers[name]; owned {
+		return fmt.Errorf("%w: point owned by HTTP source", ErrPointReadOnly)
 	}
-	var kind point.Kind
-	for _, p := range r.project.Points {
-		if p.Name == name {
-			kind = p.Kind
-			break
+	i, found := r.pointIndex[name]
+	if !found {
+		return ErrPointNotFound
+	}
+	kind := r.project.Points[i].Kind
+	tag, _ := r.Tags.Get(name)
+	if expected != nil {
+		_, revision := tag.Snapshot()
+		if expected.runtime != r || expected.tag != tag || expected.revision != revision {
+			return ErrPointConflict
 		}
 	}
 	if kind == "" || v.Quality > core.QualityGood || v.Time.IsZero() {
@@ -161,7 +175,6 @@ func (r *Runtime) Publish(ctx context.Context, name string, v core.Value) error 
 			return err
 		}
 	}
-	tag, _ := r.Tags.Get(name)
 	tag.Observe(v)
 	return nil
 }

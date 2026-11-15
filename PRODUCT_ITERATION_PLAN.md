@@ -9,7 +9,30 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: exact incremental local completion candidates
+## Current increment: industrial live-point monitoring and explicit writes
+
+- [x] Add atomic tag sample/revision snapshots, runtime-local optimistic write
+      tokens, typed/manual writes, HTTP-writer protection and durable-before-live
+      publication without blocking memory reads behind store I/O.
+- [x] Add bounded recent/range history capabilities without changing the legacy
+      SQLite StoredSample type; validate restored/history samples and reader bounds.
+- [x] Add an inert, designer-placeable ProcessPointMonitor with coalesced live
+      updates, precise integer sorting, explicit owned write/history dialogs,
+      cancellation and close/rebind guards. No per-widget acquisition/poll loop.
+- [x] Integrate the standalone workbench and event-driven RuntimeChanged lifecycle;
+      hide inactive authoring tools in live mode to preserve the diagram viewport.
+- [x] Exercise SDK, GUI/dialog lifecycle, palette/codegen and layout regressions
+      under race detection. Keep final full/native acceptance separate.
+- [x] Complete broad regressions, real Windows UI/SQLite readback and frozen-source
+      full three-platform ordinary/race + strict bundled-gopls gates; update README
+      screenshots, SDK/changelog and commit/push only the verified implementation.
+- [x] Reproduce and fix panel hide/show rebinding a stopping/unavailable runtime;
+      independently refreeze and rerun all platform gates, not the earlier source.
+- [ ] Continue IDE-host runtime integration, alarms, device routing and remaining
+      Qt Creator/editor/macOS-native and default SDK icon gaps. This is not a
+      certified control system.
+
+## Validated increment: exact incremental local completion candidates (`275e1c8`)
 
 - [x] Re-profile the published body-projection baseline with a separate, minimal
       allocation-capture overlay. Local lexical scanning is about 54% of sampled

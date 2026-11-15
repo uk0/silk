@@ -120,18 +120,28 @@ func (v *ProcessEditor) SetProjectJSON(s string) {
 }
 func (v *ProcessEditor) SigChanged(fn func()) { v.changed = fn }
 func (v *ProcessEditor) SetRunning(b bool) {
+	changed := v.running != b
 	if b && v.closeDeviceLibrary != nil {
 		v.closeDeviceLibrary()
 	}
 	v.running = b
 	v.Diagram.SetEditing(!b)
 	for _, button := range v.buttons {
+		button.SetVisible(!b)
 		button.SetEnabled(!b && !v.locked)
 		if b || v.locked {
 			button.HideSubPopup()
 		}
 	}
 	v.refreshActions()
+	if changed {
+		if b {
+			v.status.SetText("Live preview · authoring locked · live points are transient")
+		} else {
+			v.status.SetText("Shift-click / drag a box to select · blue ports connect · Esc cancels")
+		}
+		v.OnResize()
+	}
 }
 func (v *ProcessEditor) EnumProperties(p core.IPropertyList) {
 	p.AddProperty("Project JSON", v.ProjectJSON, v.SetProjectJSON)
@@ -152,6 +162,11 @@ func (v *ProcessEditor) Draw(g paint.Painter) {
 
 func (v *ProcessEditor) OnResize() {
 	w, h := v.Size()
+	if v.running {
+		v.Diagram.SetBounds(0, 0, w, max(0, h-28))
+		v.status.SetBounds(8, max(0, h-26), max(0, w-16), 24)
+		return
+	}
 	cols := max(1, int(max(0, w-16)/126))
 	rows := (len(v.buttons) + cols - 1) / cols
 	bw := max(0, (w-16)/float64(cols))

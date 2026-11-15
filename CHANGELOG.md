@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — industrial live-point monitoring and guarded writes (2026-11-15)
+
+- Add atomic tag sample/revision snapshots, memory-only runtime point views,
+  quiet change subscriptions and opaque runtime-local optimistic write tokens.
+- Add typed manual writes with HTTP-source ownership checks and durable-before-
+  live publication. Reject stale/foreign/ABA baselines; do not retry ambiguous
+  failures automatically. Direct `Tags` mutation remains outside this contract.
+- Add optional bounded recent/range history APIs without changing the existing
+  SQLite `StoredSample` type. Validate restored samples and custom-reader output.
+- Add the inert designer-placeable `ProcessPointMonitor`: stable live selection,
+  exact int64 sorting/display, quality markers, owned explicit write/history
+  dialogs, bounded background jobs and close/rebind cancellation guards.
+- Integrate the standalone workbench's Live points panel and event-driven
+  `RuntimeChanged` hook. Hide inactive authoring controls in live mode so they
+  cannot cover the diagram viewport. No new widget polling/acquisition timer.
+- Verify native Windows confirm/cancel/invalid/conflict/read-only/history actions,
+  HTTP body/transform/failure/recovery, normal exit and independent read-only
+  SQLite persistence. Add actual Windows README images and SDK documentation.
+- Pass final-source full ordinary/race suites on macOS, Linux and Windows, plus
+  12 strict real bundled-gopls probes. Audit all 1,997 compiled/resource inputs.
+- Keep full platform-suite results and macOS native-observation limitations in
+  [the QA report](LIVE_POINT_MONITOR_QA_20261115.md). This is not an alarm engine,
+  PLC write protocol, access-control system or complete Qt Creator parity.
+
 ## Unreleased — exact incremental local completion candidates (2026-11-15)
 
 - Re-lex changed lexical chunks and neighbours instead of rebuilding the whole

@@ -20,19 +20,26 @@ import (
 
 type Config struct {
 	RequestHeaders func(string) http.Header
+	// RuntimeChanged runs on the owning UI thread when a borrowed runtime is
+	// ready, and once with nil when it becomes unavailable. Return promptly;
+	// cancel driver work here, but never synchronously Join the workbench.
+	RuntimeChanged func(*hmi.Runtime)
 	ProjectJSON    string
 	ProjectPath    string
 	DatabasePath   string
 }
 type session struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	runtime *hmi.Runtime
+	cancel              context.CancelFunc
+	done                chan struct{}
+	runtime             *hmi.Runtime
+	available, stopping bool
 }
 type Workbench struct {
 	gui.Form
 	ioDone       chan struct{}
 	Editor       *gui.ProcessEditor
+	Points       *gui.ProcessPointMonitor
+	showPoints   bool
 	buttons      []*gui.Button
 	status       *gui.Label
 	cfg          Config
@@ -65,6 +72,9 @@ func New(c Config) (*Workbench, error) {
 	if f.cfg.DatabasePath == "" {
 		f.cfg.DatabasePath = filepath.Join(core.LocalDataDir(), "process-points.db")
 	}
+	f.Points = gui.NewProcessPointMonitor()
+	f.Points.SetParent(f)
+	f.Points.SetVisible(false)
 	add := func(text string, fn func()) {
 		b := gui.NewButton1(text, nil)
 		b.SetParent(f)
@@ -78,6 +88,7 @@ func New(c Config) (*Workbench, error) {
 	add("Generate Go", f.ExportGo)
 	add("Fit", f.Fit)
 	add("Snapshot", f.Snapshot)
+	add("Live points", f.TogglePoints)
 	f.status = gui.NewLabel("Editor · no I/O until Run / Save / Load · blue ports connect pipes")
 	f.status.SetParent(f)
 	f.refreshControls()
@@ -92,11 +103,32 @@ func (f *Workbench) OnResize() {
 		b.SetBounds(8+float64(i%columns)*bw, 8+float64(i/columns)*36, max(0, bw-5), 30)
 	}
 	top := 16 + float64(rows)*36
-	f.Editor.SetBounds(0, top, w, max(0, h-top-30))
+	available := max(0, h-top-30)
+	pointHeight := 0.0
+	if f.showPoints {
+		pointHeight = min(260, available*0.4)
+	}
+	f.Editor.SetBounds(0, top, w, max(0, available-pointHeight))
+	f.Points.SetBounds(0, top+available-pointHeight, w, pointHeight)
 	f.status.SetBounds(8, h-28, max(0, w-16), 24)
 	f.Fit()
 }
 func (f *Workbench) Fit() { f.Editor.Diagram.FitToView() }
+
+// TogglePoints only shows/hides a borrowed runtime view. It does not start I/O.
+func (f *Workbench) TogglePoints() {
+	if f.closed {
+		return
+	}
+	f.showPoints = !f.showPoints
+	f.Points.SetVisible(f.showPoints)
+	if f.showPoints {
+		f.Points.SetRuntime(f.Runtime())
+	} else {
+		f.Points.SetRuntime(nil)
+	}
+	f.OnResize()
+}
 
 func (f *Workbench) StartRuntime() {
 	if f.closed || f.session != nil || f.busy {
@@ -106,7 +138,10 @@ func (f *Workbench) StartRuntime() {
 	ctx, cancel := context.WithCancel(f.ctx)
 	s := &session{cancel: cancel, done: make(chan struct{})}
 	f.session = s
+	f.showPoints = true
+	f.Points.SetVisible(true)
 	f.refreshControls()
+	f.OnResize()
 	f.status.SetText("Starting shared point store and source workers…")
 	go func() {
 		var finalErr error
@@ -128,14 +163,19 @@ func (f *Workbench) StartRuntime() {
 			return
 		}
 		_ = gui.PostContext(ctx, func() {
-			if !f.closed && f.session == s {
+			if !f.closed && f.session == s && !s.stopping {
 				s.runtime = runtime
+				if f.showPoints {
+					f.Points.SetRuntime(runtime)
+				}
 				_, e := f.Editor.Diagram.BindTags(runtime.Tags)
 				if e != nil {
+					f.Points.SetRuntime(nil)
 					f.status.SetText(e.Error())
 					s.cancel()
 				} else {
 					f.status.SetText("Running · shared points / bounded HTTP / quality / staleness")
+					f.notifyRuntime(s, runtime)
 				}
 			}
 		})
@@ -149,6 +189,7 @@ func (f *Workbench) finish(s *session, e error) {
 			return
 		}
 		f.Editor.Diagram.UnbindTags()
+		f.Points.SetRuntime(nil)
 		f.session = nil
 		f.refreshControls()
 		if e != nil {
@@ -156,12 +197,41 @@ func (f *Workbench) finish(s *session, e error) {
 		} else {
 			f.status.SetText("Stopped; authoring unlocked")
 		}
+		f.notifyRuntime(s, nil)
 	})
 }
 func (f *Workbench) StopRuntime() {
-	if f.session != nil {
+	if f.session != nil && !f.session.stopping {
+		f.session.stopping = true
+		f.Points.SetRuntime(nil)
 		f.session.cancel()
 		f.status.SetText("Stopping…")
+		f.notifyRuntime(f.session, nil)
+	}
+}
+
+// Runtime returns the currently ready borrowed runtime, or nil during startup,
+// stopping or close. UI-thread only; use RuntimeChanged instead of polling.
+func (f *Workbench) Runtime() *hmi.Runtime {
+	if f.closed || f.session == nil || f.session.stopping || !f.session.available {
+		return nil
+	}
+	return f.session.runtime
+}
+func (f *Workbench) notifyRuntime(s *session, rt *hmi.Runtime) {
+	if rt != nil {
+		if f.closed || f.session != s || s.stopping || s.available {
+			return
+		}
+		s.available = true
+	} else {
+		if !s.available {
+			return
+		}
+		s.available = false
+	}
+	if f.cfg.RuntimeChanged != nil {
+		f.cfg.RuntimeChanged(rt)
 	}
 }
 func (f *Workbench) ioTask(path string, fn func() error) {
@@ -279,12 +349,14 @@ func (f *Workbench) Close() {
 		return
 	}
 	f.closed = true
+	f.Points.Close()
 	f.refreshControls()
 	f.cancel()
 	f.StopRuntime()
 	f.Editor.Close()
 }
 func (f *Workbench) Join() {
+	_ = f.Points.Wait(context.Background())
 	if f.ioDone != nil {
 		<-f.ioDone
 	}
@@ -322,7 +394,7 @@ func (f *Workbench) refreshControls() {
 	for _, i := range []int{2, 3, 4} {
 		f.buttons[i].SetEnabled(idle)
 	}
-	for _, i := range []int{5, 6} {
+	for _, i := range []int{5, 6, 7} {
 		f.buttons[i].SetEnabled(!f.closed)
 	}
 	f.Editor.SetRunning(f.session != nil)

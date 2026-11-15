@@ -43,6 +43,35 @@ Tables use staged edits: double-click a cell; Enter/click away commits the cell;
 Apply validates the complete candidate; invalid candidates remain open; Cancel
 leaves the document unchanged. IDs identify rows independently of table sorting.
 
+### Live point inspection, writes and history
+
+**Live points** toggles a runtime view, not the authored point-definition table.
+Opening it before Run is inert. Run shows the panel below the diagram, with
+authoring tools hidden rather than covering the live viewport.
+
+1. Select a row to inspect its scalar type, quality, observed UTC time and writer.
+   Unchanged acquisition heartbeats remain quiet; **Refresh values** explicitly
+   reads their latest time/version. Selection survives sorting and live changes.
+2. **Write value...** is available only for manual/driver points. Review the
+   baseline, edit a typed scalar, then confirm. Cancel or invalid input does not
+   write. If another managed writer changed the sample, reopen and review it;
+   the old dialog cannot overwrite it or automatically retry. HTTP-owned points
+   remain read-only while their source is enabled.
+3. **Recent history...** explicitly queries at most 200 newest observations on a
+   cancellable worker, including quality. It is not an automatic trend poll or
+   lossless alarm/event stream. Closing or stopping retires owned dialogs.
+
+Writes are committed to the configured store before live publication. A
+cancelled/failed operation is not a rollback guarantee: verify current value and
+history before retrying. These are local point writes, **not PLC commands or
+safety interlocks**. Showing the panel while a session stops cannot rebind the
+revoked runtime.
+
+`ProcessPointMonitor` is also an inert SCADA-palette widget for `.silkui` and Go
+generation. A custom host explicitly binds it with `SetRuntime`, detaches before
+stopping, and owns runtime/store lifetime. See [SDK lifecycle APIs](SDK_FEATURES.md#工业实时点位监视与条件写入)
+and [native/persistence verification](../LIVE_POINT_MONITOR_QA_20261115.md).
+
 ### SilkIDE source and visual coordination
 
 ![Owned visual editor with theme-aware chrome](images/hmi-ide-editor-windows.png)
