@@ -68,11 +68,12 @@ type LSPClient struct {
 	// handlerMu 单独护住 "宿主注册的回调 + 握手拿到的服务器状态".
 	// 刻意不复用 mu: mu 在 readLoop 路由消息期间被持有, 而回 server->client
 	// 请求时要读这几个字段; 分成两把锁, 即便将来把回包挪回路由锁内也不会自锁.
-	handlerMu   sync.Mutex
-	configFn    LSPConfigurationFunc
-	applyEditFn LSPApplyEditFunc
-	folders     []LSPWorkspaceFolder
-	serverCaps  json.RawMessage // initialize 响应里的 capabilities 对象 (原始 JSON)
+	handlerMu       sync.Mutex
+	configFn        LSPConfigurationFunc
+	applyEditFn     LSPApplyEditFunc
+	folders         []LSPWorkspaceFolder
+	serverCaps      json.RawMessage // initialize 响应里的 capabilities 对象 (原始 JSON)
+	incrementalSync bool            // guarded by handlerMu; negotiated once, not decoded per edit
 
 	notifications chan *LSPMessage // 服务器主动发的 notification 缓存给上层
 	workProgress  lspProgressState // opt-in, bounded lane; never displaces diagnostics
@@ -732,6 +733,7 @@ func (c *LSPClient) storeServerCapabilities(initResult json.RawMessage) {
 	}
 	c.handlerMu.Lock()
 	c.serverCaps = r.Capabilities
+	c.incrementalSync = lspSupportsIncrementalSync(r.Capabilities)
 	c.handlerMu.Unlock()
 }
 
@@ -1911,21 +1913,7 @@ func (c *LSPClient) DocumentHighlight(uri string, line, character int) ([]LSPDoc
 // 判别响应里的位置是基于哪个版本算出来的.
 // 通知不会有响应; 失败仅意味着写 pipe 失败.
 func (c *LSPClient) DidChange(uri string, version int, fullText string) error {
-	type textDocument struct {
-		URI     string `json:"uri"`
-		Version int    `json:"version"`
-	}
-	type contentChange struct {
-		Text string `json:"text"`
-	}
-	type params struct {
-		TextDocument   textDocument    `json:"textDocument"`
-		ContentChanges []contentChange `json:"contentChanges"`
-	}
-	return c.SendNotification("textDocument/didChange", params{
-		TextDocument:   textDocument{URI: uri, Version: version},
-		ContentChanges: []contentChange{{Text: fullText}},
-	})
+	return c.sendContentChange(uri, version, LSPContentChange{Text: fullText})
 }
 
 // Notifications 暴露服务器主动推送的通知通道

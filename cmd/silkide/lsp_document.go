@@ -14,6 +14,12 @@ type lspDocumentTransport interface {
 	DidClose(string) error
 	CompletionContext(context.Context, string, int, int) ([]core.LSPCompletionItem, error)
 }
+
+// Optional: SDK/custom transports implementing only full sync remain compatible.
+type lspIncrementalDocumentTransport interface {
+	DidChangeFrom(string, int, string, string) error
+}
+
 type lspSnapshot struct {
 	text               string
 	version, line, col int
@@ -34,6 +40,7 @@ type lspDocument struct {
 	wireMu           sync.Mutex
 	opened           bool
 	sent             int
+	sentText         string // wireMu-owned, exactly the last successful wire snapshot
 	wake, stop, done chan struct{}
 	previous         <-chan struct{}
 	deliver          func(lspSnapshot, []core.LSPCompletionItem, error)
@@ -91,12 +98,18 @@ func (d *lspDocument) sync() (lspSnapshot, error) {
 			return s, err
 		}
 		d.opened = true
-		d.sent = s.version
+		d.sent, d.sentText = s.version, s.text
 	} else if s.version > d.sent {
-		if err := d.client.DidChange(d.uri, s.version, s.text); err != nil {
+		var err error
+		if incremental, ok := d.client.(lspIncrementalDocumentTransport); ok {
+			err = incremental.DidChangeFrom(d.uri, s.version, d.sentText, s.text)
+		} else {
+			err = d.client.DidChange(d.uri, s.version, s.text)
+		}
+		if err != nil {
 			return s, err
 		}
-		d.sent = s.version
+		d.sent, d.sentText = s.version, s.text
 	}
 	return s, nil
 }
@@ -108,6 +121,7 @@ func (d *lspDocument) run() {
 		if d.opened {
 			_ = d.client.DidClose(d.uri)
 		}
+		d.sentText = ""
 		d.mu.Lock()
 		d.latest.text = ""
 		d.deliver = nil

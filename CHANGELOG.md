@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — negotiated incremental LSP synchronization (2026-11-15)
+
+- Add SDK `LSPContentChange`, `ComputeLSPTextChange`, `SupportsIncrementalSync`
+  and `DidChangeFrom`; keep the existing full-text `DidChange` wire contract.
+- Enable deltas only for explicitly negotiated UTF-16 incremental sync. Preserve
+  rune/CRLF boundaries and conservative full fallback for unsupported or unsafe
+  inputs; no new idle polling or longer completion debounce.
+- Keep the last successfully sent source across coalesced edits and explicit
+  flushes. Failed sends do not advance it; close releases retained wire text.
+  Full-only custom document transports remain compatible.
+- Matched Windows release controls reduce cumulative allocation 462 → 349 MiB
+  (comment input) and 1,367 → 1,175 MiB (function-body string input); do not
+  interpret the small CPU differences as a confirmed general speedup.
+- Add strict wire/capability, differential/fuzz, failed/in-flight-send lifecycle
+  and real-gopls unsaved Unicode/CRLF regression; require four real probes in
+  the bundled language-service test script. Document the additive SDK API.
+- Verify full ordinary/race suites on all three platforms, 12 strict real
+  bundled-gopls probes, 201,721 text-diff fuzz mutations and no-CGO external SDK
+  consumers on macOS/Linux/Windows. Refresh the actual Windows gallery image.
+
 ## Unreleased — incremental symbol projections and outline snapshots (2026-11-15)
 
 - Add nonblocking `CodeEditor.SymbolsSnapshotSince`, with editor-local content

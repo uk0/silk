@@ -95,6 +95,22 @@ compatible existing points explicitly. No data source starts while browsing.
 
 ---
 
+## Negotiated LSP text synchronization (2026-11-15)
+
+SilkIDE can now send a compact text delta instead of serializing the entire
+buffer after each edit, but only when the server explicitly negotiates UTF-16
+incremental sync. Coalesced edits use the last **successfully sent** source;
+explicit-command ordering, Unicode/CRLF boundaries and the old SDK full-text
+API are preserved. No extra idle loop or longer completion delay is added.
+
+Matched Windows release controls reduce cumulative Go allocation from
+**462 → 349 MiB** for comment input and **1,367 → 1,175 MiB** for function-body
+string input. CPU changes are not yet conclusive; these figures are not FPS or
+retained heap. The native gallery below now shows this candidate build.
+
+[SDK APIs and fallback rules](docs/SDK_FEATURES.md#lsp-增量文本同步) ·
+[Protocol, differential checks and performance evidence](LSP_INCREMENTAL_SYNC_QA_20261115.md)
+
 ## Editor rendering and incremental analysis (2026-11-15)
 
 The outline now consumes copy-on-change SDK symbol snapshots and preserves

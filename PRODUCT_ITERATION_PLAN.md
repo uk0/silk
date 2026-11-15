@@ -9,7 +9,23 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: incremental analysis and SDK snapshots
+## Current increment: negotiated incremental LSP synchronization
+
+- [x] Trace the real full-text transport and verify LSP capability, ordering,
+      UTF-16 and CRLF requirements before changing the protocol.
+- [x] Add additive SDK delta APIs, safe full fallback, last-successful wire
+      baselines and differential/ownership/order regression.
+- [x] Reject the slower first diff prototype; profile and optimize unchanged
+      prefix/position work without weakening text equivalence checks.
+- [x] Complete frozen-source ordinary/race and strict real-gopls regression on
+      all three platforms, plus matched uninstrumented Windows native replay.
+- [x] Reconcile 1,978 publication build inputs, refresh the native screenshot,
+      SDK docs/changelog and exact QA evidence; all release gates are ready.
+- [ ] Continue ordinary-body symbol analysis, completion-index/server CPU,
+      macOS keyboard/IME and designer/runtime roadmap gaps. An isolated body
+      projection prototype is not part of this transport publication.
+
+## Validated increment: incremental analysis and SDK snapshots (`8f802d6`)
 
 - [x] Capture a sampled-allocation profile of the actual Windows typing flow;
       distinguish AST, outline rebuilding, completion and JSON allocations.

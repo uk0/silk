@@ -16,4 +16,4 @@ go test -c -o "$probe" ./cmd/silkide
 export SILKIDE_GOPLS=''
 export SILK_TEST_REQUIRE_GOPLS=1
 export SILK_TEST_REQUIRE_BUNDLED_GOPLS=1
-"$probe" -test.v -test.timeout=4m -test.run='^Test(GoplsUnsavedUnicodeCompletionAndFormatting|EditorRenameRealGoplsKeepsUnsavedDefinition|RealGoplsNavigationUnsavedTypeImplementationAndBack)$'
+"$probe" -test.v -test.timeout=4m -test.run='^Test(GoplsUnsavedUnicodeCompletionAndFormatting|EditorRenameRealGoplsKeepsUnsavedDefinition|RealGoplsNavigationUnsavedTypeImplementationAndBack|RealGoplsIncrementalUnicodeCRLFEdits)$'

@@ -3,6 +3,35 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## LSP 增量文本同步
+
+- `LSPClient.SupportsIncrementalSync()`：只有握手明确声明数值 `2` 或
+  `{change: 2}`、且坐标编码为默认/显式 UTF-16 时才允许范围更新；能力只解码一次。
+- `DidChangeFrom(uri, version, previous, next)`：`previous` 必须是上次**成功发送**的
+  文本，而不是上次键盘事件的文本。兼容已有 `DidChange` 全文 API；不支持增量的
+  服务器沿用旧全文路径，不新增动态注册或 UTF-8/UTF-32 坐标支持。
+- `ComputeLSPTextChange(previous, next)` 返回一个 `LSPContentChange`。
+  `Range == nil` 表示全文替换；非空时按 UTF-16 坐标替换，`Text` 可以为空（删除）。
+  自动合并多处变更，不切断 Unicode 字符/代理对或 CRLF；非法 UTF-8、独立 CR、
+  近乎整篇替换和小文档等情况保守回退全文。结果的文本可能引用输入字符串存储。
+- 文档宿主仍负责 Open → Change → 请求 → Close 的顺序。IDE 仅在发送成功后推进
+  基线，合并/取消不会将尚未发送的版本作为基线；关闭释放旧文本。已有全文传输宿主
+  不必实现新的可选方法。没有增加 UI 线程 I/O、空闲轮询或更长的补全延迟。
+
+```go
+// 在文档的串行后台 worker 中调用；先完成 DidOpen，关闭前停止新请求。
+func sendSnapshot(client *core.LSPClient, uri string, version int,
+    lastSent *string, next string) error {
+    if err := client.DidChangeFrom(uri, version, *lastSent, next); err != nil {
+        return err // 发送失败时不能推进基线，也不能假定服务器接受了新文本。
+    }
+    *lastSent = next
+    return nil
+}
+```
+
+协议依据：[LSP didChange](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_didChange)。
+
 ## 非阻塞符号快照与增量大纲
 
 - `CodeEditor.SymbolsSnapshotSince(previous)` 返回 `(symbols, contentRevision, ready)`。
