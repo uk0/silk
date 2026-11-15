@@ -40,6 +40,9 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
   conditional colors/state text and dynamic position/rotation/visibility.
 - Explicit Run/Stop, quality/staleness handling, bounded retention, document
   save/load, designer palette integration and runnable Go generation.
+- Open `.silkhmi` as JSON in SilkIDE and use **Tools → Edit 2D Process...** for
+  staged visual editing of the current buffer. Use changes is one host undo
+  transaction; Cancel discards, and ordinary Save / Save All persists.
 - Loading/drawing never starts acquisition; I/O stays off the UI thread and
   workers are cancelled/joined. This is a 2D foundation, not certified SCADA or
   a complete P&ID/PLC control system; routing is not obstacle avoidance.
@@ -48,12 +51,23 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 [Typed point SDK](point/README.md) ·
 [Local synthetic HTTP demo](examples/process2d/README.md) ·
 [Foundation verification](SCADA_POINT_PROGRESS_20261114.md) ·
-[Group authoring QA](HMI_AUTHORING_QA_20261114.md)
+[Group authoring QA](HMI_AUTHORING_QA_20261114.md) ·
+[IDE source/visual QA](HMI_IDE_QA_20261114.md)
 
 ![Windows native group authoring and owned Arrange menu](docs/images/hmi-authoring-arrange-windows.png)
 
 Windows native desktop capture: two selected devices, enabled alignment commands
 and disabled commands whose selection requirements are not met.
+
+<details>
+<summary>SilkIDE source-backed visual editor</summary>
+
+![SilkIDE owned 2D visual editor on Windows](docs/images/hmi-ide-editor-windows.png)
+
+The current source buffer stays authoritative. Use changes creates one Undo
+transaction; Cancel discards the draft, and ordinary Save persists it.
+
+</details>
 
 <details>
 <summary>Visual point configuration</summary>

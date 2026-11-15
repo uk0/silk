@@ -43,6 +43,35 @@ Tables use staged edits: double-click a cell; Enter/click away commits the cell;
 Apply validates the complete candidate; invalid candidates remain open; Cancel
 leaves the document unchanged. IDs identify rows independently of table sorting.
 
+### SilkIDE source and visual coordination
+
+![Owned visual editor with theme-aware chrome](images/hmi-ide-editor-windows.png)
+
+Open a `.silkhmi` file in the ordinary IDE editor. It uses the JSON dialect,
+including normal source navigation, instead of pretending to be Go source.
+**Tools → Edit 2D Process...** (also in the command palette) opens an owned visual
+editor over that exact buffer, including unsaved edits. Resize fitting keeps the
+document within the modal viewport; nested point/binding tables remain staged.
+
+**Use changes** publishes all visual edits as one normal source-buffer undo
+transaction. It does not save the file. Ctrl/Cmd+S or Save All uses the ordinary
+IDE save/dirty/recovery workflow; Cancel or closing the visual editor discards
+its draft. An unchanged draft does not dirty the source. Late decode/commit
+results are rejected if the source tab, path, revision or writable state changed.
+Read-only/formatting documents and concurrent file operations disable/reject the
+command. No independent shadow document or hidden file writer is introduced.
+
+This modal is deliberately inert: it does not start SQL, HTTP or point workers.
+Use the standalone workbench with `-project <saved-file>` for explicit Run/Stop.
+Bidirectional node-to-JSON-caret selection and full runtime panels inside the IDE
+remain later integration work.
+
+![Context-sensitive Arrange menu inside the IDE modal](images/hmi-ide-arrange-windows.png)
+
+See [IDE workflow/native verification](../HMI_IDE_QA_20261114.md) for source
+identity, full test results, screenshots and remaining first-frame/platform
+verification boundaries.
+
 ### Direct manipulation
 
 ![Windows native multi-selection and Arrange menu](images/hmi-authoring-arrange-windows.png)
@@ -133,8 +162,8 @@ are not an atomic PLC scan or a cross-point database transaction. Condition
 rules are first-match, not an alarm lifecycle (no hysteresis, delay or ack).
 Invalid dynamic-property samples retain the preceding visual property; do not
 use visual enable/visibility as a safety interlock. Obstacle-aware piping,
-equipment-template libraries, alarm lifecycles and normal IDE `.silkhmi` document
-integration remain product gaps; a standalone workbench is not IDE feature parity.
+equipment-template libraries, alarm lifecycles and deeper IDE source/runtime
+coordination remain product gaps; this is not full IDE feature parity.
 
 SQLite requires CGO. `point` conversion/expression/HTTP and `hmi` without a SQL
 adapter work without CGO. `gui` does not import SQL/SQLite. Workbench binaries

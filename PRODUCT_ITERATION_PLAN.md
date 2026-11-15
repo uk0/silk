@@ -33,8 +33,24 @@ Do not substitute a small passing test for the whole product-readiness gate.
 
 ## Next product gaps (not completed by the current authoring work)
 
-- Open `.silkhmi` in the normal IDE document/tab workflow, with dirty/save/load
-  semantics, source navigation and generated-file overwrite protection.
+- In progress: `.silkhmi` JSON source mode, Tools/palette visual editing,
+  revision-guarded async decoding, one host undo transaction and ordinary Save
+  integration are implemented and tested after `bd3019d`.
+  Node-to-source-caret selection and integrated runtime panels remain open.
+  The first candidate passed functional native editing/byte-exact host history,
+  but its debug-enabled screenshot exposed inherited placeholder painting.
+  It was retired. Explicit themed composite painting and light/dark raster
+  checks now pass (including debug and pure-Go renderer checks); the frozen
+  final candidate passed fresh three-platform full suites and Windows native
+  regression recorded at
+  `bin/qa-artifacts/hmi-ide-final-20261114/`.
+  Final Windows debug-enabled native editing/history/ownership and a separate
+  non-debug session-restore/cancel run have passed, including normal exits.
+  Strict real bundled gopls cases passed on all three platforms (three each).
+  One initial capture under compiler/test activity showed partial equipment;
+  a fresh quiet run's initial/+1s/+4s client-area pixels were identical and complete.
+  Distinguishing capture/compositor timing from application first-frame damage
+  remains open; do not claim it diagnosed or permanently fixed.
 - Obstacle-aware pipe routing with explicit port directions, bounded work,
   deterministic fallback diagnostics and geometry-revision caches.
 - Reusable equipment/subgraph templates, point-prefix mapping and a practical

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — IDE process-document coordination (2026-11-14)
+
+- Recognize `.silkhmi` as JSON source and add Tools / command-palette **Edit 2D
+  Process...** with actual document-sensitive availability and an existing
+  vector preview icon.
+- Stage visual changes in an owned, resize-fitted modal editor. Nested point and
+  binding tables stay inert; Cancel does not write or dirty the source.
+- Apply changed drafts as one ordinary host buffer undo transaction, preserving
+  source line endings and reusing Save All, dirty-close guards and recovery.
+- Decode on an owned bounded worker; reject late results and stale commits after
+  source identity/revision/read-only changes or conflicting file operations.
+- Paint ProcessEditor's own theme background instead of inheriting a bare
+  Widget's debug placeholder, keeping the toolbar/footer readable in light/dark
+  themes and debug-enabled builds, including modal wrappers.
+
 ## Unreleased — precise 2D group authoring (2026-11-14)
 
 - Add validated, non-mutating `hmi` editing operations for group movement,

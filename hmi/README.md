@@ -58,6 +58,13 @@ commands without applying runtime property bindings; `SetEditing(false)` selects
 runtime rendering behavior. Selection/action callbacks and GUI methods are
 UI-thread-owned, not safe worker entry points.
 
+`gui.ShowProcessDocumentEditor(owner, project, commit)` embeds the same authoring
+workflow in an owned modal. Drafts are independent and inert; Cancel is a no-op,
+Use changes submits only changed authored state, and a failing host commit keeps
+the editor open. The host must guard its source revision, publish one undo
+transaction and decide when to persist. SilkIDE's **Edit 2D Process...** command
+demonstrates this against the normal JSON source buffer and Save All workflow.
+
 Orthogonal routes are deterministic doglegs, not obstacle avoidance. This is a
 schematic authoring foundation, not a certified control/safety system, alarm
 lifecycle or PLC write driver. See [current product plan](../PRODUCT_ITERATION_PLAN.md).

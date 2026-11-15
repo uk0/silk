@@ -105,6 +105,9 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Edit 3D Scene...", "", func() { editSceneAsset(editorTabs, designCanvas, nil) })
 	paletteCommands[len(paletteCommands)-1].Available = func() bool { return sceneAssetEditorAvailable(visibleCaretEditor(editorTabs, designCanvas)) }
 	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindSceneAssetEditor(editorTabs, designCanvas) }
+	add("Edit 2D Process...", "", func() { editProcessAsset(editorTabs, designCanvas, nil) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { return processAssetEditorAvailable(visibleCaretEditor(editorTabs, designCanvas)) }
+	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindProcessAssetEditor(editorTabs, designCanvas) }
 	// File actions.
 	add("New", "Cmd+N", func() { newDesignCanvas(designCanvas) })
 	add("Open", "Cmd+O", func() {

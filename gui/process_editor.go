@@ -9,6 +9,7 @@ import (
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/hmi"
+	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/point"
 )
 
@@ -124,6 +125,16 @@ func (v *ProcessEditor) EnumProperties(p core.IPropertyList) {
 func (v *ProcessEditor) SizeHints() SizeHints {
 	return SizeHints{Width: 1040, Height: 720, Policy: GrowHorizontal | GrowVertical}
 }
+
+// ProcessEditor is a complete composite, not an unimplemented Widget. Draw its
+// own theme-aware surface so debug placeholder crosses and pale fallback fills
+// never leak behind the toolbar/status text, including in private modal wrappers.
+func (v *ProcessEditor) Draw(g paint.Painter) {
+	g.SetBrush1(Theme().FormColor)
+	g.Rectangle(0, 0, v.Width(), v.Height())
+	g.Fill()
+}
+
 func (v *ProcessEditor) OnResize() {
 	w, h := v.Size()
 	cols := max(1, int(max(0, w-16)/126))

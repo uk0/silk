@@ -18,7 +18,7 @@ func editorLanguageForPath(path string) string {
 	if strings.EqualFold(filepath.Ext(path), ".silkgo") {
 		return "silkgo"
 	}
-	if strings.EqualFold(filepath.Ext(path), ".json") || strings.EqualFold(filepath.Ext(path), ".silkscene") {
+	if strings.EqualFold(filepath.Ext(path), ".json") || strings.EqualFold(filepath.Ext(path), ".silkscene") || strings.EqualFold(filepath.Ext(path), ".silkhmi") {
 		return "json"
 	}
 	return "plaintext"
