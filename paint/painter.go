@@ -1,6 +1,7 @@
 package paint
 
 import (
+	"image"
 	"math"
 	"runtime"
 	"sync/atomic"
@@ -117,16 +118,18 @@ type Painter interface {
 }
 
 type painterStateEx struct {
-	pen   Pen
-	brush Brush
-	font  *font
+	pen                          Pen
+	brush                        Brush
+	font                         *font
+	clipRectangular, axisAligned bool
 }
 
 type cairoPainter struct {
 	cairo *cairo.Context
 
-	state      painterStateEx
-	stateStack []painterStateEx
+	state                    painterStateEx
+	stateStack               []painterStateEx
+	pathEmpty, pathRectangle bool
 
 	sfont *scaledFont
 
@@ -342,6 +345,22 @@ func (this *cairoPainter) Target() Surface {
 	return this.surface
 }
 
+// SupportsRasterCache is an optional capability, not part of Painter. Vector
+// and custom painters keep receiving the original drawing commands. Only an
+// ordinary OVER operation on an image target can reuse opaque device pixels.
+func (this *cairoPainter) SupportsRasterCache() bool {
+	if this.cairo == nil || this.cairo.Target().Type() != cairo.SURFACE_TYPE_IMAGE || this.cairo.Operator() != cairo.OPERATOR_OVER {
+		return false
+	}
+	// Pure-Go/custom backends retain their ordinary paths. Native Cairo's
+	// rectangle-list API rejects fractional rectangles too; track the actual
+	// path/clip operations instead of mistaking their bounding box for proof.
+	_, native := any(this.cairo).(interface {
+		DeviceClipRectangle() (image.Rectangle, bool)
+	})
+	return native && this.state.clipRectangular
+}
+
 func (this *cairoPainter) SetSourceSurface(src Surface, xSrc, ySrc float64) {
 	switch p := src.(type) {
 	case *cairoSurface:
@@ -514,6 +533,8 @@ func (this *cairoPainter) Restore() (ret int) {
 
 	if ret >= 0 {
 		this.cairo.Restore()
+		this.state.clipRectangular = this.stateStack[ret].clipRectangular
+		this.state.axisAligned = this.stateStack[ret].axisAligned
 		this.stateStack = this.stateStack[:ret]
 		this.sfont = nil
 	} else {
@@ -571,16 +592,20 @@ func (this *cairoPainter) ClipBounds1() geom.Rect {
 //}
 
 func (this *cairoPainter) Clip() {
+	this.state.clipRectangular = this.state.clipRectangular && this.pathRectangle
 	this.cairo.Clip()
+	this.pathEmpty, this.pathRectangle = true, false
 }
 
 func (this *cairoPainter) ClipPreserve() {
+	this.state.clipRectangular = this.state.clipRectangular && this.pathRectangle
 	this.cairo.ClipPreserve()
 }
 
 func (this *cairoPainter) Fill() {
 	this.applyBrush()
 	this.cairo.Fill()
+	this.pathEmpty, this.pathRectangle = true, false
 }
 
 func (this *cairoPainter) FillPreserve() {
@@ -589,6 +614,7 @@ func (this *cairoPainter) FillPreserve() {
 }
 
 func (this *cairoPainter) SetMatrix(m *geom.Mat3x2) {
+	this.state.axisAligned = m.Xy == 0 && m.Yx == 0
 	this.cairo.SetMatrix(m)
 }
 
@@ -597,23 +623,28 @@ func (this *cairoPainter) GetMatrix(m *geom.Mat3x2) {
 }
 
 func (this *cairoPainter) Line(x1, y1, x2, y2 float64) {
+	this.pathEmpty, this.pathRectangle = false, false
 	this.cairo.Line(x1, y1, x2, y2)
 }
 
 func (this *cairoPainter) LineTo(x, y float64) {
+	this.pathEmpty, this.pathRectangle = false, false
 	this.cairo.LineTo(x, y)
 }
 
 func (this *cairoPainter) MoveTo(x, y float64) {
+	this.pathEmpty, this.pathRectangle = false, false
 	this.cairo.MoveTo(x, y)
 }
 
 func (this *cairoPainter) Rectangle(x, y, width, height float64) {
+	this.pathRectangle = this.pathEmpty && this.state.axisAligned
+	this.pathEmpty = false
 	this.cairo.Rectangle(x, y, width, height)
 }
 
 func (this *cairoPainter) Rectangle1(rect geom.Rect) {
-	this.cairo.Rectangle(rect.X, rect.Y, rect.Width, rect.Height)
+	this.Rectangle(rect.X, rect.Y, rect.Width, rect.Height)
 }
 
 func (this *cairoPainter) CurrentPoint() (x, y float64) {
@@ -621,14 +652,17 @@ func (this *cairoPainter) CurrentPoint() (x, y float64) {
 }
 
 func (this *cairoPainter) Arc(xc, yc, radius, angle1, angle2 float64) {
+	this.pathEmpty, this.pathRectangle = false, false
 	this.cairo.Arc(xc, yc, radius, angle1, angle2)
 }
 
 func (this *cairoPainter) ArcNegative(xc, yc, radius, angle1, angle2 float64) {
+	this.pathEmpty, this.pathRectangle = false, false
 	this.cairo.ArcNegative(xc, yc, radius, angle1, angle2)
 }
 
 func (this *cairoPainter) CurveTo(x1, y1, x2, y2, x3, y3 float64) {
+	this.pathEmpty, this.pathRectangle = false, false
 	this.cairo.CurveTo(x1, y1, x2, y2, x3, y3)
 }
 
@@ -640,6 +674,7 @@ func (this *cairoPainter) Paint() {
 func (this *cairoPainter) Stroke() {
 	this.applyPen()
 	this.cairo.Stroke()
+	this.pathEmpty, this.pathRectangle = true, false
 }
 
 func (this *cairoPainter) StrokePreserve() {
@@ -648,10 +683,12 @@ func (this *cairoPainter) StrokePreserve() {
 }
 
 func (this *cairoPainter) ResetClip() {
+	this.state.clipRectangular = true
 	this.cairo.ResetClip()
 }
 
 func (this *cairoPainter) ResetMatrix() {
+	this.state.axisAligned = true
 	this.cairo.ResetMatrix()
 }
 
@@ -665,11 +702,15 @@ func (this *cairoPainter) Scale(sx, sy float64) {
 }
 
 func (this *cairoPainter) Rotate(radians float64) {
+	if radians != 0 {
+		this.state.axisAligned = false
+	}
 	this.cairo.Rotate(radians)
 
 }
 
 func (this *cairoPainter) Transform(m *geom.Mat3x2) {
+	this.state.axisAligned = this.state.axisAligned && m.Xy == 0 && m.Yx == 0
 	this.cairo.Transform(m)
 }
 

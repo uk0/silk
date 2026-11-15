@@ -356,6 +356,7 @@ type CodeEditor struct {
 	minimapDragging   bool
 	minimapGrabOffset float64
 	minimapCache      editorMinimapCache
+	minimapRaster     editorMinimapRaster
 
 	// --- Word Wrap ---
 	wordWrap bool
@@ -1073,6 +1074,9 @@ func (this *CodeEditor) IsWordWrap() bool {
 // SetShowMinimap toggles the minimap display.
 func (this *CodeEditor) SetShowMinimap(on bool) {
 	this.showMinimap = on
+	if !on {
+		this.minimapRaster.release()
+	}
 	this.minimapDragging = false
 	this.Self().Update()
 }
@@ -3149,27 +3153,14 @@ func (this *CodeEditor) drawMinimap(g paint.Painter, x, y, mmW, mmH, lh float64)
 	g.Rectangle(x, y, mmW, mmH)
 	g.Clip()
 	pal := this.editorColors()
-	g.SetBrush1(pal.minimapBG)
-	g.Rectangle(x, y, mmW, mmH)
-	g.Fill()
-	g.SetPen1(pal.minimapBorder, 1)
-	g.Line(x, y, x, y+mmH)
-	g.Stroke()
 	vis := this.visibleLineIndices()
 	m := makeEditorMinimapLayout(len(vis), y, mmH, lh, this.scrollY)
+	segments := this.minimapSegments(m, vis)
+	if !this.minimapRaster.draw(g, x, y, mmW, mmH, m, pal, segments) {
+		drawMinimapContent(g, x, y, mmW, mmH, m, pal, segments, 0, mmH)
+	}
 	if m.samples == 0 {
 		return
-	}
-	rowHeight := m.contentHeight / float64(m.samples)
-	mmScale := math.Max(0, mmW-6)
-	for _, segment := range this.minimapSegments(m, vis) {
-		color := pal.minimapDim
-		if c, ok := pal.tokens[segment.typ]; ok && segment.typ != tokNormal {
-			color = paint.Color{R: c.R, G: c.G, B: c.B, A: 200}
-		}
-		g.SetBrush1(color)
-		g.Rectangle(x+3+mmScale*float64(segment.col)/80, y+float64(segment.sample)*rowHeight, mmScale*float64(segment.columns)/80, rowHeight)
-		g.Fill()
 	}
 	g.SetBrush1(paint.Color{R: 60, G: 100, B: 180, A: 50})
 	g.Rectangle(x, m.viewportTop, mmW, m.viewportHeight)

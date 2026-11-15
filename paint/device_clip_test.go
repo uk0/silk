@@ -9,6 +9,79 @@ import (
 	"testing"
 )
 
+func TestRasterCacheCapabilityRequiresExactRectangleAndOver(t *testing.T) {
+	for _, kind := range []string{"full", "fractional", "circle", "disjoint", "empty", "source"} {
+		t.Run(kind, func(t *testing.T) {
+			pm := NewPixmap(80, 60)
+			defer CloseSurface(pm)
+			p := pm.NewPainter()
+			defer ClosePainter(p)
+			switch kind {
+			case "fractional":
+				p.Rectangle(1.25, 2.5, 30.5, 40.25)
+				p.Clip()
+			case "circle":
+				p.Arc(30, 30, 20, 0, 2*math.Pi)
+				p.Clip()
+			case "disjoint":
+				p.Rectangle(0, 0, 10, 10)
+				p.Rectangle(40, 40, 10, 10)
+				p.Clip()
+			case "empty":
+				p.Rectangle(100, 100, 10, 10)
+				p.Clip()
+			case "source":
+				p.SetOperator(OpSource)
+			}
+			capability := p.(interface{ SupportsRasterCache() bool }).SupportsRasterCache()
+			// An empty rectangular clip is safe too; the minimap rejects it
+			// separately because its bounds do not contain any content.
+			if want := kind == "full" || kind == "fractional" || kind == "empty"; capability != want {
+				t.Fatalf("cache capability=%v want=%v", capability, want)
+			}
+		})
+	}
+}
+
+func TestRasterCacheClipKnowledgeFollowsPathAndSavedState(t *testing.T) {
+	pm := NewPixmap(80, 60)
+	defer CloseSurface(pm)
+	p := pm.NewPainter()
+	defer ClosePainter(p)
+	c := p.(interface{ SupportsRasterCache() bool })
+	p.Save()
+	p.Rotate(.2)
+	p.Rectangle(0, 0, 30, 30)
+	p.ResetMatrix() // path stays rotated even after changing the CTM
+	p.Clip()
+	if c.SupportsRasterCache() {
+		t.Fatal("rotated path treated as its rectangular bounds")
+	}
+	p.Restore()
+	if !c.SupportsRasterCache() {
+		t.Fatal("saved rectangular clip knowledge was not restored")
+	}
+	p.Rectangle(1.25, 2.5, 30, 30)
+	p.FillPreserve()
+	p.ClipPreserve()
+	if !c.SupportsRasterCache() {
+		t.Fatal("preserved single rectangle lost its clip knowledge")
+	}
+	p.Rectangle(5, 5, 4, 4) // prior path survives ClipPreserve
+	p.Clip()
+	if c.SupportsRasterCache() {
+		t.Fatal("multiple paths treated as one rectangle")
+	}
+	p.ResetClip()
+	p.Rectangle(0, 0, 10, 10)
+	p.Fill()
+	p.Rectangle1(geom.Rect{X: 1.5, Y: 1.5, Width: 20, Height: 20})
+	p.Clip()
+	if !c.SupportsRasterCache() {
+		t.Fatal("cleared path and fresh fractional rectangle not recognized")
+	}
+}
+
 func TestDeviceClipExactAndCutoutPreservesState(t *testing.T) {
 	pm := NewPixmap(80, 60)
 	defer CloseSurface(pm)

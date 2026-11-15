@@ -277,6 +277,7 @@ func (e *CodeEditor) CancelFind() {
 	}
 }
 func (e *CodeEditor) OnHide() {
+	e.minimapRaster.release()
 	e.closeEditorContextMenu()
 	e.CancelFind()
 	e.CancelFormat()

@@ -95,6 +95,36 @@ compatible existing points explicitly. No data source starts while browsing.
 
 ---
 
+## Windows editor rendering (2026-11-15)
+
+The editor minimap now reuses native-device-resolution pixels and updates only
+changed sample bands, including fractional dock positions. It does not scale a
+low-resolution bitmap or disable antialiasing. Independent pixel comparisons
+cover both themes, 100/125/150/200/250% scales, fractional edges, edits and syntax
+changes. Unsupported/custom/vector painters and pure Go keep the original path.
+
+Real Windows release-build captures, OS CPU measurements, saved-file readback,
+the rejected first prototype and remaining CPU/allocation limitations are
+documented in [editor performance QA](WINDOWS_EDITOR_PERFORMANCE_QA_20261115.md).
+This is a targeted drawing improvement, **not a claim that all editor/gopls CPU
+or latency issues are solved**.
+
+<details>
+<summary>Windows native 5,000-function editor replay</summary>
+
+![Windows release-build editor with live outline and device-resolution minimap](docs/images/silkide-editor-minimap-windows.png)
+
+Actual final-candidate native desktop capture after typed-file save/readback;
+the source, outline and connected bundled gopls remain visible.
+
+![macOS Retina SDK editor after native minimap dragging](docs/images/silk-editor-minimap-macos.png)
+
+Separate macOS Retina **SDK consumer**, not the full IDE: mouse-driven minimap
+dragging, hide/show, theme buttons and saved-state readback were verified.
+macOS keyboard/IME automation and full designer authoring remain separate gates.
+
+</details>
+
 ## Industrial 3D scene SDK (development)
 
 - New dependency-free `scene3d` package: immutable shared meshes, hierarchy snapshots,

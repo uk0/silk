@@ -9,7 +9,23 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: pump lifecycle and SDK resource ownership
+## Current increment: measured Windows editor performance
+
+- [x] Capture the real non-race release build, OS process/child CPU, native
+      keyboard input, saved-file readback, rendering and normal shutdown.
+- [x] Reject a passing isolated cache prototype that did not improve the real
+      IDE; trace the live fractional dock coordinates before extending it.
+- [x] Preserve exact device pixels, alpha and fractional edge clipping while
+      updating only changed minimap sample bands; bound native resource use.
+- [x] Finish final frozen-source three-platform ordinary/race regression and
+      identical Windows native replay; publish actual numbers and screenshot.
+- [x] Recheck macOS capture: Retina SDK mouse-driven hide/show, theme, minimap
+      drag, independent unchanged-source readback and normal close now pass.
+- [ ] Continue large-file allocations, outline/completion/gopls CPU and native
+      macOS keyboard/IME and full designer QA. One drawing optimization is not
+      full Qt parity. The new native mouse test is not a keyboard acceptance.
+
+## Validated increment: pump lifecycle and SDK resource ownership (`9b142b7`)
 
 - [x] Reproduce a post-loop false stall with an explicit native baseline and
       final-candidate control, rather than just hiding a log message.
@@ -72,8 +88,9 @@ does not complete the remaining runtime, alarms, routing or platform QA gaps.
       heartbeat warning; authored-file reload and actual Go export succeeded.
 - [x] Compile the actual native Go export with race instrumentation; run that
       generated application, save/read back authored coordinates, close normally.
-- [ ] Finish native macOS authoring. Capture currently fails with ScreenCaptureKit
-      -3811; no native authoring PASS is claimed for that platform.
+- [ ] Finish native macOS authoring. The older ScreenCaptureKit -3811 capture
+      failure no longer reproduced in the November 15 isolated SDK editor test;
+      full IDE/HMI authoring and keyboard/IME readback are still not accepted.
 - [ ] Investigate the one Windows heartbeat delay observed during concurrent
       compiler/test activity. Isolated repetition did not reproduce it; do not
       infer a root cause or declare all performance targets achieved.

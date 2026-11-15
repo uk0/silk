@@ -90,6 +90,7 @@ func (this *cairoSurface) SurfaceType() cairo.SurfaceType {
 
 func (this *cairoSurface) NewPainter() Painter {
 	painter := new(cairoPainter)
+	painter.state.clipRectangular, painter.state.axisAligned, painter.pathEmpty = true, true, true
 	painter.setFinalizer()
 	painter.cairo = this.Surface.NewContext()
 	painter.SetPen(NewPen(Color{0, 0, 0, 255}, 1))

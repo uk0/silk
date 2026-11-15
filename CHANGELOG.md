@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — device-pixel editor overview cache (2026-11-15)
+
+- Cache the minimap at native device resolution and repaint only changed
+  sample bands; scrolling keeps its viewport indicator live without redrawing
+  thousands of unchanged translucent token rectangles.
+- Handle fractional dock/layout coordinates without rounding the UI or scaling
+  a low-resolution bitmap. Retain original Cairo clipping/alpha rounding with
+  guarded scratch pixels and vector-rendered fractional edges.
+- Bound the two native raster surfaces to 8 MiB per editor; release them when
+  the editor is hidden, reparented/detached or the minimap is disabled.
+- Preserve uncached paths for custom/vector painters, unsupported transforms
+  and partial parent clips. Track rectangular-clip eligibility across paths,
+  transforms and save/restore without extending `Painter` or approximating
+  complex masks by their bounds. Add independent exact-pixel regressions across
+  both themes, five DPI scales, fractional origins, edits and syntax changes.
+
 ## Unreleased — pump-owned diagnostics and SDK cleanup (2026-11-15)
 
 - Own UI stall diagnostics from actual main, modal and drag message pumps.
