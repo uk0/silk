@@ -10,13 +10,14 @@ import (
 type goOutlineSpan struct{ start, end int }
 type goOutlineMetadata struct {
 	valid    bool
+	bodies   []goOutlineSpan // interiors only, excluding the outer braces
 	comments []goOutlineSpan // line-comment payloads only; never the // delimiter
 	headers  []goOutlineSpan // function/receiver details can include comment text
 }
 
 func (m *goOutlineMetadata) finish() {
 	if !m.valid {
-		m.comments, m.headers = nil, nil
+		m.comments, m.headers, m.bodies = nil, nil, nil
 		return
 	}
 	// Both streams are in physical source order. Never do a quadratic walk
@@ -35,7 +36,7 @@ func (m *goOutlineMetadata) finish() {
 }
 
 // Worker-owned incremental projection, never a mutable editor buffer or AST.
-// A successful parse records where line-comment payload edits cannot change
+// A successful parse records where line-comment and proven body edits cannot change
 // ANY exposed symbol field. Every structural/uncertain edit falls back to the
 // original tolerant AST parser; this is not a substitute regex parser.
 type goSymbolIndex struct {
@@ -43,38 +44,89 @@ type goSymbolIndex struct {
 	text     string
 	symbols  []CodeSymbol // immutable; may also be held by a delivered cache
 	comments []goOutlineSpan
+	bodies   []goOutlineSpan
 }
 
-// A delivered projection is immutable. The UI can advance a proven trivia
+// A delivered projection is immutable. The UI can advance a proven body/trivia
 // edit immediately, without reading/mutating the worker's private index or
 // waiting through another background debounce/placeholder frame.
 type goSymbolProjection struct {
 	text     string
 	comments []goOutlineSpan
+	bodies   []goOutlineSpan
 }
 
 func (p *goSymbolIndex) projection() *goSymbolProjection {
 	if !p.valid {
 		return nil
 	}
-	return &goSymbolProjection{p.text, slices.Clone(p.comments)}
+	return &goSymbolProjection{p.text, slices.Clone(p.comments), slices.Clone(p.bodies)}
 }
 
 func (p *goSymbolProjection) advance(text string) *goSymbolProjection {
 	i, delta, ok := goCommentEdit(p.text, text, p.comments)
+	if ok {
+		if i < 0 {
+			return p
+		}
+		// Equal byte lengths leave every recorded offset exact. EOF comments also
+		// do not move any preceding function body: share immutable spans instead
+		// of copying thousands of unchanged body ranges on every comment key.
+		comments, bodies := p.comments, p.bodies
+		copyComments := delta != 0
+		copyBodies := delta != 0 && len(bodies) > 0 && bodies[len(bodies)-1].end >= comments[i].start
+		if projectionSpanCopies(comments, bodies, copyComments, copyBodies) > goProjectionUISpans {
+			return nil
+		}
+		if copyBodies {
+			bodies = slices.Clone(bodies)
+			rebaseBodySpans(bodies, comments[i].start, comments[i].end, delta)
+		}
+		if copyComments {
+			comments = slices.Clone(comments)
+			rebaseGoComments(comments, i, delta)
+		}
+		return &goSymbolProjection{text, comments, bodies}
+	}
+	i, delta, ok = goBodyEdit(p.text, text, p.bodies, goBodyProjectionUIBytes)
 	if !ok {
 		return nil
 	}
-	if i < 0 {
-		return p
+	comments, bodies := p.comments, p.bodies
+	copyComments := bodyCommentsNeedRebase(comments, bodies[i], delta)
+	copyBodies := delta != 0
+	if projectionSpanCopies(comments, bodies, copyComments, copyBodies) > goProjectionUISpans {
+		return nil
 	}
-	comments := slices.Clone(p.comments)
-	rebaseGoComments(comments, i, delta)
-	return &goSymbolProjection{text, comments}
+	if copyComments {
+		comments = rebaseBodyComments(slices.Clone(comments), bodies[i], delta)
+	}
+	if copyBodies {
+		bodies = slices.Clone(bodies)
+		rebaseBodySpans(bodies, bodies[i].start, bodies[i].end, delta)
+	}
+	return &goSymbolProjection{text, comments, bodies}
+}
+func projectionSpanCopies(comments, bodies []goOutlineSpan, copyComments, copyBodies bool) int {
+	count := 0
+	if copyComments {
+		count += len(comments)
+	}
+	if copyBodies {
+		count += len(bodies)
+	}
+	return count
+}
+func bodyCommentsNeedRebase(comments []goOutlineSpan, body goOutlineSpan, delta int) bool {
+	i := sort.Search(len(comments), func(i int) bool { return comments[i].end > body.start })
+	if i == len(comments) {
+		return false
+	}
+	return comments[i].start < body.end || delta != 0
 }
 
 func (p *goSymbolIndex) parse(text string) []CodeSymbol {
-	if p.reuseCommentEdit(text) {
+	if p.reuseCommentEdit(text) || p.reuseBodyEdit(text) {
 		return p.symbols
 	}
 	var metadata goOutlineMetadata
@@ -88,6 +140,7 @@ func (p *goSymbolIndex) parse(text string) []CodeSymbol {
 			}
 		}
 		p.valid, p.text, p.symbols, p.comments = true, text, symbols, comments
+		p.bodies = metadata.bodies
 	}
 	return symbols
 }
@@ -97,12 +150,26 @@ func (p *goSymbolIndex) reuseCommentEdit(text string) bool {
 		return false
 	}
 	i, delta, ok := goCommentEdit(p.text, text, p.comments)
+	if ok {
+		if i >= 0 {
+			rebaseBodySpans(p.bodies, p.comments[i].start, p.comments[i].end, delta)
+			rebaseGoComments(p.comments, i, delta)
+		}
+		p.text = text
+		return true
+	}
+	return false
+}
+func (p *goSymbolIndex) reuseBodyEdit(text string) bool {
+	if !p.valid {
+		return false
+	}
+	i, delta, ok := goBodyEdit(p.text, text, p.bodies, 0)
 	if !ok {
 		return false
 	}
-	if i >= 0 {
-		rebaseGoComments(p.comments, i, delta)
-	}
+	p.comments = rebaseBodyComments(p.comments, p.bodies[i], delta)
+	rebaseBodySpans(p.bodies, p.bodies[i].start, p.bodies[i].end, delta)
 	p.text = text
 	return true
 }

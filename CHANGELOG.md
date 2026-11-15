@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — exact bounded function-body symbol projections (2026-11-15)
+
+- Reuse exact Go outline symbols for proven function-body edits, using Go's
+  lexer rather than brace substring matching. Preserve physical positions and
+  full tolerant-AST fallback for newline, signature, boundary or uncertain edits.
+- Bound synchronous body scanning to 8 KiB and immutable span copying to
+  16,384 entries. Share unchanged metadata and retire stale internal comment
+  offsets; no new polling timer or longer completion delay is introduced.
+- Prime projections through synchronous SDK queries as well as background
+  indexing. Preserve ready rows, selection and expansion through body edits,
+  Undo/Redo; cover provider/language invalidation and safe close ownership.
+- Matched Windows body-string replay in both run orders reduces IDE typing CPU
+  31–37% and 45-second cumulative allocation 1,177 → 372 MiB. The comment-only
+  control and gopls CPU do not show a gain; do not generalize this to FPS/latency.
+- Add 202,927 differential fuzz executions, exact rendering/navigation and
+  metadata-budget regressions. Refresh the native Windows README image and
+  document measured results, source identity and remaining acceptance limits.
+- Pass full ordinary/race suites on macOS arm64, Linux arm64/Xvfb and Windows
+  amd64; 12 strict real bundled-gopls probes; seven Windows native controls
+  and macOS SDK mouse Edit/Undo/Save with independently saved state.
+
 ## Unreleased — negotiated incremental LSP synchronization (2026-11-15)
 
 - Add SDK `LSPContentChange`, `ComputeLSPTextChange`, `SupportsIncrementalSync`

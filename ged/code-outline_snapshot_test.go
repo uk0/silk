@@ -108,3 +108,58 @@ func BenchmarkOutlineIdenticalSnapshotRefresh(b *testing.B) {
 		p.RefreshIfStale()
 	}
 }
+
+func TestOutlineBodyEditsKeepExactReadyRowsAndNavigation(t *testing.T) {
+	e := gui.NewCodeEditor()
+	e.SetText("package p\n" + strings.Repeat("// padding\n", 4000) + "type T struct{}\nfunc(t *T) MethodM(){ _ = \"a\" }\n")
+	original := e.ParseSymbols()
+	methodLine := -1
+	for _, s := range original {
+		if s.Name == "MethodM" {
+			methodLine = s.Line
+		}
+	}
+	p := NewCodeOutlinePanel()
+	p.SetSize(320, 240)
+	p.SetEditor(e)
+	defer p.SetEditor(nil)
+	defer e.CancelSymbolIndex()
+	if methodLine < 0 || len(p.flatList) != 2 || p.symbolsLoading {
+		t.Fatal("bad ready outline fixture")
+	}
+	storage := &p.flatList[0]
+	p.selectedIdx = 1
+	next := strings.Replace(e.Text(), `"a"`, `"longer text"`, 1)
+	e.ReplaceAllText(next)
+	if !p.RefreshIfStale() || p.symbolsLoading || &p.flatList[0] != storage || p.selectedIdx != 1 || !p.tree[0].expanded {
+		t.Fatal("body edit rebuilt or hid exact rows")
+	}
+	pixmap := paint.NewPixmap(320, 240)
+	defer paint.CloseSurface(pixmap)
+	painter := pixmap.NewPainter()
+	defer paint.ClosePainter(painter)
+	recording := &explorerDrawRecorder{Painter: painter}
+	p.Draw(recording)
+	found := false
+	for _, s := range recording.texts {
+		if strings.Contains(s.text, "MethodM") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("ready body edit did not draw its method")
+	}
+	line := -1
+	p.SetNavigateCallback(func(v int) { line = v })
+	p.OnLeftDown(40, p.headerHeight()+p.rowHeight+4)
+	if line != methodLine {
+		t.Fatal("body edit shifted navigation", line, methodLine)
+	}
+	// Enter/newline is outside the proof: old rows must immediately stop being
+	// drawn/hit-testable until fresh physical coordinates are delivered.
+	e.ReplaceAllText(strings.Replace(e.Text(), "_ =", "\n_ =", 1))
+	p.RefreshIfStale()
+	if !p.symbolsLoading || p.hitTest(p.headerHeight()+4) != -1 {
+		t.Fatal("newline reused stale ready rows")
+	}
+}

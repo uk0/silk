@@ -7,6 +7,9 @@ import (
 
 func FuzzGoSymbolIndexEditsMatchFullParser(f *testing.F) {
 	for _, source := range []string{
+		"package p\nfunc F(){}\nfunc G(){}", "package p\nfunc F(){_ = \"\"}\nfunc G(){}",
+		"package p\nvar f = func(){ x:=1;_ =x };func G(){}",
+
 		"package p\nfunc F() {}\n// comment",
 		"// before\npackage p\nfunc F(x int) int {\n// body\nreturn x\n}",
 		"//line v.go:10\npackage p\nfunc (t *T[P]) F(\n// header\nx P,\n) {}\n// tail",

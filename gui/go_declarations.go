@@ -227,6 +227,9 @@ func blankGoOutlineBodies(source []byte, metadata *goOutlineMetadata, prefix int
 				braces--
 				if braces == 0 {
 					bodies = append(bodies, span{bodyStart, offset})
+					if metadata != nil {
+						metadata.bodies = append(metadata.bodies, goOutlineSpan{bodyStart - prefix, offset - prefix})
+					}
 					bodyStart = -1
 					header = false
 				}

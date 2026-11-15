@@ -9,7 +9,27 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: negotiated incremental LSP synchronization
+## Current increment: exact bounded function-body symbol projections
+
+- [x] Reprove body interiors with the existing Go lexer; preserve physical
+      lines and every exposed symbol field, with full AST fallback otherwise.
+- [x] Bound UI lexical work and metadata copying; share unchanged immutable
+      spans rather than regress EOF-comment typing with whole-array copies.
+- [x] Prime metadata through both SDK synchronous and background paths; cover
+      Undo/Redo, provider/language invalidation, close, ready draw/navigation.
+- [x] Add repeated-edit differential fuzzing alongside full-parser comparison.
+- [x] Reconcile seven native Windows controls, independent saved-source AST
+      readbacks and normal exits. Body input in both run orders cuts IDE CPU
+      31–37% / cumulative allocation 68%; comment-only and gopls CPU do not gain.
+- [x] Verify native macOS SDK mouse Edit/Undo/Save and normal shutdown. Keep
+      later ScreenCaptureKit failure and untested keyboard/IME branches explicit.
+- [x] Finish frozen-source ordinary/race suites on all three platforms and
+      12 strict real-gopls probes. Reconcile all 2,676 manifest files and 1,981
+      staged build inputs; refresh native README image, SDK docs and changelog.
+- [ ] Continue completion-index/server CPU, native macOS keyboard/IME and the
+      broader designer/runtime roadmap. This is not an incremental Go compiler.
+
+## Validated increment: negotiated incremental LSP synchronization (`d11ffd5`)
 
 - [x] Trace the real full-text transport and verify LSP capability, ordering,
       UTF-16 and CRLF requirements before changing the protocol.
@@ -40,12 +60,16 @@ Do not substitute a small passing test for the whole product-readiness gate.
       macOS keyboard/IME and full designer authoring. Do not call a partial
       analysis optimization a complete compiler or a complete product.
 
-The measured candidate allocation profile now puts local completion scans at
-about 42% and JSON serialization at about 25%. Next performance work should
-preserve candidate ordering/ownership and negotiate any incremental LSP sync
-against server capabilities. Require UTF-16/CRLF/unsaved-text differential
-tests, explicit-command flush/order checks and matched native replay; do not
-merely lengthen every debounce or suppress language features to lower CPU.
+The earlier symbol-snapshot allocation profile attributed about 42% to local
+completion scans and 25% to JSON serialization. Negotiated incremental LSP
+sync and the current body projections subsequently change that distribution;
+re-profile the final native candidate before quoting those shares as current.
+The local completion worker already caches one revision, but text changes
+invalidate its entire lexical identifier scan. Investigate exact incremental
+identifier occurrence/dedup ordering without sharing mutable UI state, changing
+candidate semantics or retaining unbounded source snapshots. Keep differential
+and lifecycle/race checks, strict real-gopls probes and matched native replay;
+do not merely lengthen debounce or suppress language features to lower CPU.
 
 ## Validated increment: measured Windows editor performance (`cd5da66`)
 

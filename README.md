@@ -114,18 +114,29 @@ retained heap. The native gallery below now shows this candidate build.
 ## Editor rendering and incremental analysis (2026-11-15)
 
 The outline now consumes copy-on-change SDK symbol snapshots and preserves
-unchanged trees. Proven Go line-comment edits reuse immutable exact symbol
-projections immediately; structural, signature, directive and uncertain edits
-still use the tolerant AST parser. Pending old rows cannot draw or navigate.
+unchanged trees. Proven Go line-comment and function-body edits reuse immutable
+exact symbol projections immediately. Body boundaries are re-proved using Go's
+lexer, including strings, comments and nested closures; physical newlines,
+signatures, boundary damage and uncertain edits keep the tolerant AST parser.
+UI lexical work and metadata copying have explicit budgets. Pending old rows
+cannot draw or navigate, and Undo/Redo preserves unchanged ready outline rows.
 
-In one matched, uninstrumented Windows release replay typing in an EOF Go
+The latest matched Windows body-string replay, including reverse run order,
+reduces IDE typing CPU by **31–37%** and 45-second cumulative Go allocation from
+**1,177 → 372 MiB** against the incremental-LSP baseline. Saved source is parsed
+independently and all four body runs produce identical bytes. This is a narrow
+workload result, not a general latency/FPS claim: gopls CPU does not improve,
+and the comment-only control does not demonstrate a CPU gain.
+See [exact body-projection QA and limits](BODY_SYMBOL_PROJECTION_QA_20261115.md).
+
+In the earlier matched, uninstrumented Windows release replay typing in an EOF Go
 line comment of a 5,000-function file, IDE CPU fell from **19.42 s to 12.42 s**
 and 45-second cumulative Go
 allocation from **1,941 MiB to 483 MiB**. These are workload-specific process
 measurements, not FPS, input-to-photon latency or a gopls CPU improvement.
-Two function-body/string controls, including reverse run order, reduce
-allocations by **31–33%** but do not demonstrate a CPU improvement; general
-code-editing CPU remains ongoing work.
+The earlier function-body controls only reduced allocations; the latest body
+projection above addresses the remaining whole-source outline parse on that
+input path. General code-editing and language-server CPU remain ongoing work.
 See [analysis pipeline QA](EDITOR_SYMBOL_PIPELINE_QA_20261115.md) and the
 [nonblocking snapshot SDK contract](docs/SDK_FEATURES.md#非阻塞符号快照与增量大纲).
 
@@ -144,7 +155,7 @@ or latency issues are solved**.
 <details>
 <summary>Windows native 5,000-function editor replay</summary>
 
-![Windows release-build editor with immutable outline snapshots and device-resolution minimap](docs/images/silkide-editor-symbols-windows.png)
+![Windows release-build editor after exact function-body projection replay](docs/images/silkide-editor-symbols-windows.png)
 
 Actual final-candidate native desktop capture after typed-file save/readback;
 the source, outline and connected bundled gopls remain visible.

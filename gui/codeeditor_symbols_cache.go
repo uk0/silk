@@ -107,7 +107,18 @@ func (e *CodeEditor) cachedSymbols() []CodeSymbol {
 	}
 	pending := e.symbolPending
 	e.cancelSymbolRequest()
-	symbols := e.symbolCache.store(key, mergeCodeSymbols(e.Text(), e.usesGoSyntax(), e.currentAdditionalSymbols()))
+	// Explicit SDK queries and the small-file synchronous path must publish
+	// the same exact immutable metadata as the large-file background worker.
+	var index goSymbolIndex
+	var base []CodeSymbol
+	if e.usesGoSyntax() {
+		base = index.parse(e.Text())
+	}
+	additional := e.currentAdditionalSymbols()
+	symbols := e.symbolCache.store(key, mergeAdditionalCodeSymbols(base, additional))
+	if len(additional) == 0 {
+		e.symbolCache.projection = index.projection()
+	}
 	if pending {
 		e.symbolsRevision++
 		e.notifySymbolsChanged()

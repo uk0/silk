@@ -62,19 +62,24 @@ func TestSymbolSnapshotSinceAsyncPendingAndCommentPublication(t *testing.T) {
 	previousProjection := e.symbolCache.projection
 	previousText := previousProjection.text
 	previousComments := append([]goOutlineSpan(nil), previousProjection.comments...)
+	previousBodies := append([]goOutlineSpan(nil), previousProjection.bodies...)
 	e.ReplaceAllText(strings.Replace(e.Text(), "// padding", "// changed padding", 1))
 	if got, current, ready := e.SymbolsSnapshotSince(revision); !ready || got != nil || current != revision || e.symbolPending {
 		t.Fatal("proven comment edit unnecessarily became pending", got, current, ready)
 	}
-	if previousProjection.text != previousText || !reflect.DeepEqual(previousProjection.comments, previousComments) {
+	if previousProjection.text != previousText || !reflect.DeepEqual(previousProjection.comments, previousComments) || !reflect.DeepEqual(previousProjection.bodies, previousBodies) {
 		t.Fatal("UI edit mutated an immutable delivered projection")
 	}
 	if len(posts) != 0 {
 		t.Fatal("proven comment edit queued another index publication")
 	}
-	// A body edit still takes the asynchronous full-parser path, even if its
-	// resulting declaration set is identical. Pending data cannot be used.
+	// Proven small body edits now stay exact and ready too.
 	e.ReplaceAllText(strings.Replace(e.Text(), "TestAlpha() {}", "TestAlpha() { x := 1; _ = x }", 1))
+	if got, current, ready := e.SymbolsSnapshotSince(revision); !ready || got != nil || current != revision || e.symbolPending {
+		t.Fatal("proven body edit became pending", got, current, ready)
+	}
+	// A physical newline still requires fresh coordinates from the worker.
+	e.ReplaceAllText(strings.Replace(e.Text(), "x := 1;", "x := 1;\n", 1))
 	if got, current, ready := e.SymbolsSnapshotSince(revision); ready || got != nil || current != revision {
 		t.Fatal("pending revision returned stale coordinates")
 	}
@@ -120,7 +125,7 @@ func TestSymbolIndexCloseRetiresPrivateProjectionAfterActiveParse(t *testing.T) 
 	waitSymbolWorker(t, w)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.index.valid || w.index.text != "" || w.index.symbols != nil || w.index.comments != nil || w.language != "" {
+	if w.index.valid || w.index.text != "" || w.index.symbols != nil || w.index.comments != nil || w.index.bodies != nil || w.language != "" {
 		t.Fatal("closed worker retained source/projection")
 	}
 }
@@ -145,5 +150,63 @@ func TestSymbolContentRevisionAdoptionAndWrap(t *testing.T) {
 	}
 	if nextSymbolContentRevision(^uint64(0)) != 1 {
 		t.Fatal("zero snapshot token was emitted")
+	}
+}
+
+func TestSymbolSnapshotBodyProjectionSDKUndoAndProviderInvalidation(t *testing.T) {
+	for _, padding := range []string{"", strings.Repeat("// padding\n", 4000)} {
+		e := NewCodeEditor()
+		e.filePath = "example.silkgo"
+		e.SetText("package p\n" + padding + "func F(){ _ = \"a\" }\n")
+		posts := make(chan func(), 8)
+		e.symbolPost = func(f func()) { posts <- f }
+		// This explicit synchronous SDK query must prime the same projection as
+		// background publication, including for small documents.
+		first := e.ParseSymbols()
+		_, revision, ready := e.SymbolsSnapshotSince(0)
+		if !ready || e.symbolCache.projection == nil || len(first) != 1 {
+			t.Fatal("SDK query did not publish body metadata")
+		}
+		changed := strings.Replace(e.Text(), `"a"`, `"longer"`, 1)
+		e.ReplaceAllText(changed)
+		if got, current, ready := e.SymbolsSnapshotSince(revision); !ready || got != nil || current != revision || e.symbolPending || len(posts) != 0 {
+			t.Fatal("body edit lost exact ready SDK snapshot")
+		}
+		e.Undo()
+		if _, current, ready := e.SymbolsSnapshotSince(revision); !ready || current != revision || e.Text() == changed {
+			t.Fatal("undo lost body metadata")
+		}
+		e.Redo()
+		if _, current, ready := e.SymbolsSnapshotSince(revision); !ready || current != revision || e.Text() != changed {
+			t.Fatal("redo lost exact body metadata")
+		}
+		textRevision := e.TextRevision()
+		if !e.SetAdditionalSymbols(textRevision, []CodeSymbol{{Name: "Macro", Kind: SymMacro, Line: 0}}) {
+			t.Fatal("current provider result rejected")
+		}
+		e.ParseSymbols()
+		if e.symbolCache.projection != nil {
+			t.Fatal("base-only proof published for macro/provider symbols")
+		}
+		e.ReplaceAllText(strings.Replace(e.Text(), "longer", "new body", 1))
+		if e.SetAdditionalSymbols(textRevision, []CodeSymbol{{Name: "Stale", Kind: SymMacro, Line: 0}}) {
+			t.Fatal("stale macro provider accepted")
+		}
+		// Explicit SDK queries still return exact base symbols while retiring the
+		// old provider revision. No stale macro can hitchhike on the body fast path.
+		got := e.ParseSymbols()
+		if len(got) != 1 || got[0].Name != "F" || e.symbolCache.projection == nil {
+			t.Fatal("old provider leaked after a body edit", got)
+		}
+		e.filePath = "notes.txt"
+		e.resetDocumentLanguage()
+		if got := e.ParseSymbols(); len(got) != 0 || e.symbolCache.projection != nil {
+			t.Fatal("Go body metadata survived plain-text language switch")
+		}
+		w := e.symbolWorker
+		e.CancelSymbolIndex()
+		if w != nil {
+			waitSymbolWorker(t, w)
+		}
 	}
 }
