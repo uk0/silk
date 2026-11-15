@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — exact incremental local completion candidates (2026-11-15)
+
+- Re-lex changed lexical chunks and neighbours instead of rebuilding the whole
+  local candidate source on every revision. Preserve static precedence, lexical
+  first-occurrence/dedup order, distant candidates, fuzzy ranking and providers.
+- Bound the optional sidecar to 2 MiB source / 32,768 stored chunk words;
+  larger inputs use the complete scanner, never a truncated candidate window.
+  Handle repaired invalid UTF-8 seams and canceled/coalesced edits exactly.
+- Own identifier bytes and reuse only private worker scratch. Keep deliveries
+  independent; retire prior cache aliases, clear removed tails, release on
+  shrink/language/close, and preserve UI generation/caret/open-intent guards.
+- Matched Windows release controls reduce 45-second cumulative allocation
+  371–372 → 175–176 MiB for body input and 349 → 155 MiB for comments. Body
+  IDE CPU time falls 7–10% in both run orders; gopls CPU has no consistent gain.
+- Add final-source differential fuzz (14,495 sequences), scanner parity,
+  ownership/budget/cancellation and editor Undo/Redo/lifecycle regression.
+  Update SDK docs, native README capture and explicit performance limits.
+- Pass complete ordinary/race suites on macOS arm64, Linux arm64/Xvfb and
+  Windows amd64, 12 strict real bundled-gopls probes and seven Windows native
+  controls with independent source readback and normal process exits.
+
 ## Unreleased — exact bounded function-body symbol projections (2026-11-15)
 
 - Reuse exact Go outline symbols for proven function-body edits, using Go's

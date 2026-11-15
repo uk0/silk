@@ -95,6 +95,30 @@ compatible existing points explicitly. No data source starts while browsing.
 
 ---
 
+## Incremental local completion candidates (2026-11-15)
+
+Large-file local completion now re-lexes changed chunks and their neighbours,
+not the entire document after every key. Static precedence, first-occurrence
+deduplication, distant identifiers, fuzzy ranking and provider merging remain
+unchanged. A bounded, worker-private sidecar owns identifier bytes; oversized
+inputs retain the complete scanner. Close, language changes and shrink release
+the old worker without a UI-thread wait or a new polling timer.
+
+Matched Windows release replay against the body-projection baseline reduces
+45-second cumulative Go allocation **371–372 → 175–176 MiB** for body-string
+input and **349 → 155 MiB** for EOF comments. Body typing IDE CPU time falls
+**7–10%** in both run orders. These are workload-specific process measurements,
+not retained-heap, FPS or input-to-photon improvements; child-gopls CPU does not
+show a consistent gain.
+
+[Native results, differential checks and limits](COMPLETION_LEXICAL_QA_20261115.md) ·
+[SDK lifecycle and fallback rules](docs/SDK_FEATURES.md#增量本地补全索引)
+
+![Windows native editor after the saved function-body replay](docs/images/silkide-editor-completion-windows.png)
+
+Actual current release candidate; this separate read-only capture leaves the
+verified source unchanged and restores the original test fixture afterward.
+
 ## Negotiated LSP text synchronization (2026-11-15)
 
 SilkIDE can now send a compact text delta instead of serializing the entire
@@ -106,7 +130,7 @@ API are preserved. No extra idle loop or longer completion delay is added.
 Matched Windows release controls reduce cumulative Go allocation from
 **462 → 349 MiB** for comment input and **1,367 → 1,175 MiB** for function-body
 string input. CPU changes are not yet conclusive; these figures are not FPS or
-retained heap. The native gallery below now shows this candidate build.
+retained heap. The native gallery below shows the current release-candidate build.
 
 [SDK APIs and fallback rules](docs/SDK_FEATURES.md#lsp-增量文本同步) ·
 [Protocol, differential checks and performance evidence](LSP_INCREMENTAL_SYNC_QA_20261115.md)
@@ -121,7 +145,7 @@ signatures, boundary damage and uncertain edits keep the tolerant AST parser.
 UI lexical work and metadata copying have explicit budgets. Pending old rows
 cannot draw or navigate, and Undo/Redo preserves unchanged ready outline rows.
 
-The latest matched Windows body-string replay, including reverse run order,
+The body-symbol projection replay, including reverse run order,
 reduces IDE typing CPU by **31–37%** and 45-second cumulative Go allocation from
 **1,177 → 372 MiB** against the incremental-LSP baseline. Saved source is parsed
 independently and all four body runs produce identical bytes. This is a narrow
@@ -155,7 +179,7 @@ or latency issues are solved**.
 <details>
 <summary>Windows native 5,000-function editor replay</summary>
 
-![Windows release-build editor after exact function-body projection replay](docs/images/silkide-editor-symbols-windows.png)
+![Windows release-build editor with incremental local candidates and exact outline snapshots](docs/images/silkide-editor-symbols-windows.png)
 
 Actual final-candidate native desktop capture after typed-file save/readback;
 the source, outline and connected bundled gopls remain visible.

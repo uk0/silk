@@ -748,6 +748,9 @@ func (this *CodeEditor) cacheText(text string) {
 		if this.completion != nil {
 			this.completion.Dismiss()
 			this.completion.cancelLocal(true)
+			if len(text) <= completionAsyncBytes {
+				this.completion.retireLocalIndexWorker()
+			}
 		}
 		this.symbolsRevision++
 		if len(text) < symbolAsyncBytes {

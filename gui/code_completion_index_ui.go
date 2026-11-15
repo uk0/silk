@@ -1,17 +1,12 @@
 package gui
 
-import "context"
-
 // The fields here and CompletionPopup are UI-thread owned. The worker receives
 // only immutable strings/value snapshots, never an editor or its mutable lines.
 func (p *CompletionPopup) asynchronousItems(ed *CodeEditor, text string) []CompletionItem {
 	r := completionIndexRequest{revision: ed.TextRevision(), prefix: p.prefix, line: ed.cursorLine, col: ed.cursorCol, language: ed.Language()}
 	if p.localKey.language != r.language {
 		p.cancelLocal(true)
-		if p.indexWorker != nil {
-			p.indexWorker.close()
-			p.indexWorker = nil
-		}
+		p.retireLocalIndexWorker()
 	}
 	if p.localReady && p.localKey.revision == r.revision && p.localKey.prefix == r.prefix {
 		return append([]CompletionItem(nil), p.localItems...)
@@ -28,15 +23,12 @@ func (p *CompletionPopup) asynchronousItems(ed *CodeEditor, text string) []Compl
 				post = Post
 			}
 			var worker *completionIndexWorker
-			language := r.language // do not retain the whole mutable request/snapshot
 			worker = newCompletionIndexWorker(post, func(result completionIndexResult) {
 				if p.indexWorker != worker {
 					return
 				}
 				p.receiveLocalIndex(ed, result)
-			}, func(ctx context.Context, text string) ([]CompletionItem, error) {
-				return scanCompletionItemsForLanguage(ctx, text, language)
-			})
+			}, nil) // default scanner owns a bounded incremental lexical sidecar
 			p.indexWorker = worker
 		}
 		r.text = text
@@ -92,6 +84,13 @@ func (p *CompletionPopup) cancelLocal(clearCache bool) {
 	}
 }
 
+func (p *CompletionPopup) retireLocalIndexWorker() {
+	if p.indexWorker != nil {
+		p.indexWorker.close()
+		p.indexWorker = nil
+	}
+}
+
 // CancelCompletion stops pending local indexing, releases retained snapshots
 // and dismisses the list. Call on the UI thread when permanently removing an
 // SDK editor/before stopping its event loop. A later request starts fresh.
@@ -99,10 +98,7 @@ func (ed *CodeEditor) CancelCompletion() {
 	if p := ed.completion; p != nil {
 		visible := p.visible
 		p.Dismiss()
-		if p.indexWorker != nil {
-			p.indexWorker.close()
-			p.indexWorker = nil
-		}
+		p.retireLocalIndexWorker()
 		p.localItems = nil
 		p.localReady = false
 		p.items = nil

@@ -192,6 +192,7 @@ func (this *CompletionPopup) buildItems(editor *CodeEditor) {
 		return
 	}
 	this.cancelLocal(true)
+	this.retireLocalIndexWorker()
 	this.items, _ = scanCompletionItemsForLanguage(context.Background(), text, editor.Language())
 }
 

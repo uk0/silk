@@ -9,7 +9,33 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: exact bounded function-body symbol projections
+## Current increment: exact incremental local completion candidates
+
+- [x] Re-profile the published body-projection baseline with a separate, minimal
+      allocation-capture overlay. Local lexical scanning is about 54% of sampled
+      allocation; independently parse the saved native input and retain the patch.
+- [x] Add worker-private lexical chunks, stable first-occurrence dedup ordering,
+      owned identifier bytes and bounded sidecar fallback; preserve all candidates.
+- [x] Retire sidecar/cache payloads on shrink, language change and close without
+      blocking the UI. Keep existing 90 ms debounce, two-worker permits and
+      generation/revision/caret delivery guards, not a new timer or polling loop.
+- [x] Check complete-scanner parity, invalid UTF-8 seams, budgets, cancellation,
+      owned results and real editor Undo/Redo/provider behavior with race tests.
+- [x] Complete final-source differential fuzz, seven matched Windows native
+      controls and independent saved-source parsing. Body allocations fall
+      53% / IDE CPU time 7–10%; keep gopls and latency limits explicit.
+- [x] Pass frozen-source macOS/Linux full ordinary/race and strict bundled-gopls
+      gates; verify all 2,680 source files and current 1,986 build inputs.
+- [x] Complete full three-platform ordinary/race and 12 strict real-gopls
+      probes; independently reconcile Windows post-run identity and extra-Go
+      checks. All runners exit zero; publish only the exact tested build inputs.
+- [x] Finish final read-only native gallery, restored-fixture readback and
+      documentation/index audit. All publication gates are ready; keep
+      unrelated user artifacts outside this commit/push batch.
+- [ ] Continue language-server CPU, native macOS keyboard/IME and the full
+      designer/runtime roadmap; this increment is not the whole product.
+
+## Validated increment: exact bounded function-body symbol projections (`8f49636`)
 
 - [x] Reprove body interiors with the existing Go lexer; preserve physical
       lines and every exposed symbol field, with full AST fallback otherwise.

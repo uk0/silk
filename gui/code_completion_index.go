@@ -39,12 +39,15 @@ type completionIndexWorker struct {
 	done            chan struct{}
 	cacheRevision   uint64
 	cacheValid      bool
-	cache           []CompletionItem // immutable; guarded by mu, never GUI-owned
+	cache           []CompletionItem // valid between scans; worker-owned, never GUI-owned
 	scan            func(context.Context, string) ([]CompletionItem, error)
+	index           completionLexicalIndex // owned by the running worker, never the UI
 	delivery        *async.Latest[completionIndexResult]
 }
 
 func newCompletionIndexWorker(post func(func()), consume func(completionIndexResult), scan func(context.Context, string) ([]CompletionItem, error)) *completionIndexWorker {
+	// A nil scanner selects the bounded, worker-private incremental index.
+	// Injected scanners retain their existing cache/cancellation contract.
 	delivery, _ := async.NewLatest(post, consume)
 	return &completionIndexWorker{delivery: delivery, scan: scan}
 }
@@ -71,7 +74,8 @@ func (w *completionIndexWorker) request(r completionIndexRequest) {
 }
 
 // cancel retires work without waiting on the UI thread. clearCache is used on
-// text changes; cursor/prefix changes can reuse the immutable identifier index.
+// text changes; cursor/prefix changes can reuse the candidate cache. The optional
+// bounded lexical sidecar survives revisions, and is retired on close/shrink.
 func (w *completionIndexWorker) cancel(clearCache bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -99,6 +103,9 @@ func (w *completionIndexWorker) close() {
 	}
 	w.cache = nil
 	w.cacheValid = false
+	if !w.running {
+		w.index.reset()
+	}
 	w.mu.Unlock()
 	w.delivery.Close() // releases the editor closure and queued payload
 }
@@ -110,6 +117,9 @@ func (w *completionIndexWorker) run(done chan struct{}) {
 		job := w.latest
 		w.latest = nil
 		if w.closed || job == nil {
+			if w.closed {
+				w.index.reset()
+			}
 			w.running = false
 			w.activeCancel = nil
 			w.mu.Unlock()
@@ -140,10 +150,19 @@ func (w *completionIndexWorker) compute(job *completionIndexJob) {
 	defer func() { <-completionIndexPermits }()
 	w.mu.Lock()
 	items, valid := w.cache, w.cacheValid && w.cacheRevision == job.request.revision
+	// Retire aliases before the private scanner reuses its candidate storage.
+	if !valid {
+		w.cache, w.cacheValid = nil, false
+	}
+	scan := w.scan
 	w.mu.Unlock()
 	if !valid {
 		var err error
-		items, err = w.scan(job.ctx, job.request.text)
+		if scan != nil {
+			items, err = scan(job.ctx, job.request.text)
+		} else {
+			items, err = w.index.scan(job.ctx, job.request.text, job.request.language)
+		}
 		if err != nil {
 			return
 		}
