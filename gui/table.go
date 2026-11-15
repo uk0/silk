@@ -344,6 +344,11 @@ type tableScrollArea struct{ ScrollArea }
 
 func (*tableScrollArea) pointerPassThrough() bool { return true }
 
+// Table paints the viewport itself. Its scroll-area child exists only for
+// scrolling and bar ownership: painting Widget's debug placeholder here would
+// cover every cell after Table.Draw has already rendered it.
+func (*tableScrollArea) Draw(paint.Painter) {}
+
 // Init builds the scroll area and seeds the "nothing selected / nothing
 // hovered" sentinels. All of it lives here rather than in NewTable because the
 // factory (core.RegisterFactory above) constructs a Table by reflection and

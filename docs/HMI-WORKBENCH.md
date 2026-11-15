@@ -72,6 +72,32 @@ See [IDE workflow/native verification](../HMI_IDE_QA_20261114.md) for source
 identity, full test results, screenshots and remaining first-frame/platform
 verification boundaries.
 
+### Reusable device library
+
+![Windows native device library](images/hmi-device-library-windows.png)
+
+**Device library** opens an owned, inert preview with searchable pump-station,
+heat-recovery and valve-station compositions. Choose an instance ID, point
+prefix and document-space position, then **Insert device**. The entire subgraph
+and its point definitions form one Undo step; failed validation changes nothing.
+
+Default point names are independent for each instance. **Point mapping...**
+explicitly reuses compatible existing points without replacing their definitions
+or acquisition owners. Type/category/unit must match. **Capture selection**
+copies selected nodes, internal pipes/bends and referenced definitions only:
+HTTP sources, runtime samples and retention policies are never duplicated.
+
+**Open library / Save library** explicitly load/store `.silkhmilibrary` files on
+owned workers. Closing or locking the editor retires nested library dialogs;
+cancelled or stale load callbacks cannot replace newer state. Preview never
+starts acquisition. These are schematic templates, not certified P&ID symbols,
+PLC drivers, or persistent linked prefab instances.
+
+Catalogs are session-local in the standalone/IDE workbench until explicitly
+saved; `.silkhmi` stores the placed content. The **Device library JSON** widget
+property also round-trips through `.silkui`, preview and generated constructors.
+See the [runnable SDK example and file-I/O limits](../examples/processlibrary/README.md).
+
 ### Direct manipulation
 
 ![Windows native multi-selection and Arrange menu](images/hmi-authoring-arrange-windows.png)

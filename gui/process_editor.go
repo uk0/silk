@@ -19,6 +19,7 @@ import (
 type ProcessEditor struct {
 	Widget
 	locked                                                bool
+	closed                                                bool
 	Diagram                                               *ProcessDiagram
 	buttons                                               []*Button
 	status                                                *Label
@@ -27,6 +28,11 @@ type ProcessEditor struct {
 	err                                                   error
 	undoButton, redoButton, duplicateButton, deleteButton *Button
 	arrangeItems                                          []processArrangeAction
+	deviceLibrary                                         hmi.DeviceLibrary
+	deviceLibraryReady                                    bool
+	deviceLibraryRevision                                 uint64
+	closeDeviceLibrary                                    func()
+	deviceLibraryChanged                                  func()
 }
 
 type processConfigTable struct{ Table }
@@ -80,9 +86,14 @@ func (v *ProcessEditor) Init(self IWidget) {
 	v.deleteButton = add("Delete", v.Diagram.DeleteSelected)
 	arrange := add("Arrange", func() {})
 	v.initArrange(arrange)
+	add("Device library", v.ShowDeviceLibrary)
 	v.Diagram.SigSelectionChanged(func() {
 		v.refreshActions()
-		v.status.SetText(fmt.Sprintf("%d selected · pipe %s · Shift-click toggles · arrows nudge", len(v.Diagram.SelectedNodes()), v.Diagram.SelectedLink()))
+		text := fmt.Sprintf("%d selected", len(v.Diagram.SelectedNodes()))
+		if pipe := v.Diagram.SelectedLink(); pipe != "" {
+			text += " · pipe " + pipe
+		}
+		v.status.SetText(text + " · Shift-click toggles · arrows nudge")
 	})
 	v.Diagram.SigChanged(func() {
 		if v.changed != nil {
@@ -109,6 +120,9 @@ func (v *ProcessEditor) SetProjectJSON(s string) {
 }
 func (v *ProcessEditor) SigChanged(fn func()) { v.changed = fn }
 func (v *ProcessEditor) SetRunning(b bool) {
+	if b && v.closeDeviceLibrary != nil {
+		v.closeDeviceLibrary()
+	}
 	v.running = b
 	v.Diagram.SetEditing(!b)
 	for _, button := range v.buttons {
@@ -121,6 +135,7 @@ func (v *ProcessEditor) SetRunning(b bool) {
 }
 func (v *ProcessEditor) EnumProperties(p core.IPropertyList) {
 	p.AddProperty("Project JSON", v.ProjectJSON, v.SetProjectJSON)
+	p.AddProperty("Device library JSON", v.DeviceLibraryJSON, v.SetDeviceLibraryJSON)
 }
 func (v *ProcessEditor) SizeHints() SizeHints {
 	return SizeHints{Width: 1040, Height: 720, Policy: GrowHorizontal | GrowVertical}
@@ -148,6 +163,13 @@ func (v *ProcessEditor) OnResize() {
 	v.status.SetBounds(8, max(top, h-26), max(0, w-16), 24)
 }
 func (v *ProcessEditor) Close() {
+	if v.closed {
+		return
+	}
+	v.closed = true
+	if v.closeDeviceLibrary != nil {
+		v.closeDeviceLibrary()
+	}
 	v.SetReadOnly(true)
 	for _, b := range v.buttons {
 		b.HideSubPopup()
@@ -662,6 +684,9 @@ func rowSteps(row []string, column int, fallback []point.Step) ([]point.Step, er
 // SetReadOnly locks authoring without entering live-data preview mode, e.g.
 // while an application-owned document load/save transaction is in progress.
 func (v *ProcessEditor) SetReadOnly(b bool) {
+	if b && v.closeDeviceLibrary != nil {
+		v.closeDeviceLibrary()
+	}
 	v.locked = b
 	v.Diagram.SetReadOnly(b)
 	for _, button := range v.buttons {

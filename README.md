@@ -46,13 +46,18 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 - Loading/drawing never starts acquisition; I/O stays off the UI thread and
   workers are cancelled/joined. This is a 2D foundation, not certified SCADA or
   a complete P&ID/PLC control system; routing is not obstacle avoidance.
+- **Device library**: searchable inert pump/heat-recovery/valve subgraphs,
+  selection capture, independent point prefixes, explicit compatible point
+  reuse and one-step insertion Undo. Save/load catalogs explicitly; templates
+  never duplicate acquisition sources. [SDK example and limits](examples/processlibrary/README.md).
 
 [Workflow, screenshots, SDK and limitations](docs/HMI-WORKBENCH.md) ·
 [Typed point SDK](point/README.md) ·
 [Local synthetic HTTP demo](examples/process2d/README.md) ·
 [Foundation verification](SCADA_POINT_PROGRESS_20261114.md) ·
 [Group authoring QA](HMI_AUTHORING_QA_20261114.md) ·
-[IDE source/visual QA](HMI_IDE_QA_20261114.md)
+[IDE source/visual QA](HMI_IDE_QA_20261114.md) ·
+[Reusable equipment QA](HMI_DEVICE_LIBRARY_QA_20261114.md)
 
 ![Windows native group authoring and owned Arrange menu](docs/images/hmi-authoring-arrange-windows.png)
 
@@ -66,6 +71,18 @@ and disabled commands whose selection requirements are not met.
 
 The current source buffer stays authoritative. Use changes creates one Undo
 transaction; Cancel discards the draft, and ordinary Save persists it.
+
+</details>
+
+<details>
+<summary>Reusable device library and explicit point reuse</summary>
+
+![Windows native reusable device library](docs/images/hmi-device-library-windows.png)
+
+Owned inert preview; insert a whole device with independent point names or map
+compatible existing points explicitly. No data source starts while browsing.
+
+![Windows native device point mapping](docs/images/hmi-device-point-map-windows.png)
 
 </details>
 

@@ -4,7 +4,8 @@ package gui
 
 /*
 #cgo LDFLAGS: -framework Cocoa
-void *silkBeginFileDialog(void *owner, int kind);
+void *silkBeginFileDialog(void *owner, int kind, const char *extension);
+void free(void *);
 int silkFileDialogDone(void *session);
 const char *silkFileDialogPath(void *session);
 void silkCancelFileDialog(void *session);
@@ -43,7 +44,18 @@ func (s *cocoaFileDialogSession) close() {
 func platformOpenFileDialog() string { return runCocoaFileDialog(nativeFileDialogOpen) }
 func platformSaveFileDialog() string { return runCocoaFileDialog(nativeFileDialogSave) }
 
+func platformOpenExtensionDialog(ext string) string {
+	return runCocoaExtensionDialog(nativeFileDialogOpen, ext)
+}
+func platformSaveExtensionDialog(ext string) string {
+	return runCocoaExtensionDialog(nativeFileDialogSave, ext)
+}
+
 func runCocoaFileDialog(kind nativeFileDialogKind) string {
+	return runCocoaExtensionDialog(kind, "")
+}
+
+func runCocoaExtensionDialog(kind nativeFileDialogKind, extension string) string {
 	if err := nativeDesktopError("file dialog"); err != nil {
 		core.Warn(err)
 		return ""
@@ -58,7 +70,9 @@ func runCocoaFileDialog(kind nativeFileDialogKind) string {
 		return ""
 	}
 	owner.dismissOwnedPopups()
-	handle := C.silkBeginFileDialog(owner.glfwWin.GetCocoaWindow(), C.int(kind))
+	ext := C.CString(extension)
+	defer C.free(unsafe.Pointer(ext))
+	handle := C.silkBeginFileDialog(owner.glfwWin.GetCocoaWindow(), C.int(kind), ext)
 	if handle == nil {
 		core.Warn("file dialog: cannot attach native sheet (owner unavailable or already has a sheet)")
 		return ""

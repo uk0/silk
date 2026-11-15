@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — reusable 2D equipment library (2026-11-14)
+
+- Add immutable subgraph capture/placement SDK, default independent point
+  prefixes and explicit compatible point reuse. Remap all node/property/pipe
+  bindings together; reject partial, conflicting or out-of-bounds insertions.
+- Add three schematic device templates and an owned searchable library with
+  inert preview, selection capture, point mapping and one-step insert Undo.
+- Add strict bounded `.silkhmilibrary` load/save on cancellable owned workers,
+  no-replace publication and explicit overwrite confirmation. Reject stale UI
+  completions; retire nested dialogs when the editor closes or becomes locked.
+- Persist custom catalog configuration in ProcessEditor's designer property.
+  Fix its missing concrete Go setter and verify concrete, scene-declarative and
+  silkgen output in an independently compiled/running consumer module.
+- Add a no-CGO assembly example and persisted project/catalog readback tests.
+  Templates never clone acquisition sources or live history; placed content
+  remains ordinary editable nodes, not linked prefab instances.
+- Fix Table's internal scroll-area child painting a debug placeholder over
+  rendered cells. Add a transparent-overlay raster regression, including debug
+  and pure-Go rendering runs.
+- Add extension-specific native open/save SDK dialogs on Windows, Linux and
+  macOS. Device catalogs no longer inherit the form-only `.silkui` save filter
+  and unwanted suffix; legacy form-dialog behavior remains unchanged.
+
 ## Unreleased — IDE process-document coordination (2026-11-14)
 
 - Recognize `.silkhmi` as JSON source and add Tools / command-palette **Edit 2D

@@ -25,7 +25,7 @@ static void silkFileDialogUnref(SilkFileDialog *session) {
     }
 }
 
-void *silkBeginFileDialog(void *ownerHandle, int kind) {
+void *silkBeginFileDialog(void *ownerHandle, int kind, const char *extension) {
     if (!ownerHandle || ![NSThread isMainThread] || kind < 0 || kind > 2) {
         return NULL;
     }
@@ -34,10 +34,11 @@ void *silkBeginFileDialog(void *ownerHandle, int kind) {
         return NULL;
     }
     NSSavePanel *panel;
+    NSString *ext = extension && *extension ? [NSString stringWithUTF8String:extension] : nil;
     if (kind == 2) {
         panel = [NSSavePanel savePanel];
         [panel setTitle:@"Save File"];
-        [panel setNameFieldStringValue:@"design.silkui"];
+        [panel setNameFieldStringValue:ext ? [@"document." stringByAppendingString:ext] : @"design.silkui"];
         [panel setCanCreateDirectories:YES];
     } else {
         NSOpenPanel *open = [NSOpenPanel openPanel];
@@ -47,6 +48,10 @@ void *silkBeginFileDialog(void *ownerHandle, int kind) {
         [open setAllowsMultipleSelection:NO];
         [open setResolvesAliases:YES];
         panel = open;
+    }
+    if (ext) {
+        [panel setAllowedFileTypes:@[ext]];
+        [panel setAllowsOtherFileTypes:YES];
     }
     SilkFileDialog *session = calloc(1, sizeof(*session));
     if (!session) {

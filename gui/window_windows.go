@@ -1132,6 +1132,28 @@ func silkUIFilterUTF16() []uint16 {
 }
 
 func OpenFileDialog() string {
+	return windowsOpenFileDialog("")
+}
+
+func platformOpenExtensionDialog(ext string) string { return windowsOpenFileDialog(ext) }
+func platformSaveExtensionDialog(ext string) string { return windowsSaveFileDialog(ext) }
+
+func extensionFileFilterUTF16(ext string) []uint16 {
+	if ext == "" {
+		return silkUIFilterUTF16()
+	}
+	// ext was validated as ASCII letters/digits at the public API boundary.
+	var filter []uint16
+	for _, s := range []string{ext + " files (*." + ext + ")", "*." + ext, "All Files (*.*)", "*.*"} {
+		for _, c := range s {
+			filter = append(filter, uint16(c))
+		}
+		filter = append(filter, 0)
+	}
+	return append(filter, 0)
+}
+
+func windowsOpenFileDialog(extension string) string {
 	defer uiNativeWait.begin(uiHeartbeat)()
 	var fileBuf = make([]uint16, 32768)
 	ofn := win32.OPENFILENAME{}
@@ -1142,7 +1164,7 @@ func OpenFileDialog() string {
 	ofn.File = &fileBuf[0]
 	fileBuf[0] = 0
 	ofn.MaxFile = uint32(len(fileBuf))
-	filter := silkUIFilterUTF16()
+	filter := extensionFileFilterUTF16(extension)
 	ofn.Filter = &filter[0]
 	ofn.FilterIndex = 1
 	ofn.Flags = win32.OFN_PATHMUSTEXIST | win32.OFN_FILEMUSTEXIST | win32.OFN_HIDEREADONLY | win32.OFN_NOCHANGEDIR
@@ -1159,6 +1181,10 @@ func OpenFileDialog() string {
 }
 
 func SaveFileDialog() string {
+	return windowsSaveFileDialog("")
+}
+
+func windowsSaveFileDialog(extension string) string {
 	defer uiNativeWait.begin(uiHeartbeat)()
 	var fileBuf = make([]uint16, 32768)
 	ofn := win32.OPENFILENAME{}
@@ -1169,11 +1195,14 @@ func SaveFileDialog() string {
 	ofn.File = &fileBuf[0]
 	fileBuf[0] = 0
 	ofn.MaxFile = uint32(len(fileBuf))
-	filter := silkUIFilterUTF16()
+	filter := extensionFileFilterUTF16(extension)
 	ofn.Filter = &filter[0]
 	ofn.FilterIndex = 1
 	// Default extension used when the user types a name without one.
-	defExt := []uint16{'s', 'i', 'l', 'k', 'u', 'i', 0}
+	if extension == "" {
+		extension = "silkui"
+	}
+	defExt, _ := syscall.UTF16FromString(extension)
 	ofn.DefExt = &defExt[0]
 	ofn.Flags = win32.OFN_HIDEREADONLY | win32.OFN_OVERWRITEPROMPT | win32.OFN_PATHMUSTEXIST | win32.OFN_NOCHANGEDIR
 	ok := win32.GetSaveFileName(&ofn)

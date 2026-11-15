@@ -9,6 +9,33 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Current increment: reusable device authoring
+
+- [x] Capture immutable subgraphs with internal pipes/bends and referenced
+      point definitions; never clone sources, live samples or retention policy.
+- [x] Place independent prefixed instances atomically; explicitly share only
+      compatible point definitions and preserve the host acquisition owner.
+- [x] Add inert searchable device library, point mapping, selection capture,
+      responsive owned dialogs and a single insertion Undo transaction.
+- [x] Add bounded catalog files, owned asynchronous GUI I/O, explicit overwrite
+      consent, revision checks and nested-dialog/worker retirement.
+- [x] Verify `.silkui` persistence, preview and independently compiled concrete,
+      scene-declarative and silkgen consumer constructors. Fix the missing
+      concrete catalog-property setter exposed by that regression.
+- [x] Finish frozen-source three-platform ordinary/race regression, native
+      Windows placement/capture/save/reopen readback and README screenshots.
+- Publication uses the tested increment's Git commit plus matching remote SHA;
+  README screenshots, changelog and QA evidence accompany that commit.
+- [ ] Continue Windows startup/shutdown latency tracing. A new concurrent-load
+      repetition recorded a 5.882-second heartbeat delay; another bounded probe
+      warned after Close. The final post-suite file/UI replay passed, but that
+      does not prove the intermittent latency/detector issue fixed.
+
+This increment produces ordinary editable nodes, not persistent linked prefab
+instances. Catalogs require explicit file persistence in the workbench/IDE;
+`.silkhmi` stores placed content, not the separate catalog. Device authoring
+does not complete the remaining runtime, alarms, routing or platform QA gaps.
+
 ## In progress: direct 2D authoring
 
 - [x] Implement pure-Go, validated, non-mutating group edit SDK operations.
@@ -53,8 +80,9 @@ Do not substitute a small passing test for the whole product-readiness gate.
   remains open; do not claim it diagnosed or permanently fixed.
 - Obstacle-aware pipe routing with explicit port directions, bounded work,
   deterministic fallback diagnostics and geometry-revision caches.
-- Reusable equipment/subgraph templates, point-prefix mapping and a practical
-  device library / inspector workflow, not only individual primitive symbols.
+- Equipment templates, point-prefix mapping and the first practical device
+  library are implemented in the current increment. Persistent linked-prefab
+  updates and a fuller inspector workflow remain future work.
 - Typed live-point monitoring and explicit operator/driver writes; preserve
   history/quality and reject competing writers or stale UI completions.
 - Alarm lifecycle SDK: hysteresis, delay, quality gating, latching/acknowledgment
