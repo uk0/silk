@@ -91,9 +91,28 @@ Read-only/formatting documents and concurrent file operations disable/reject the
 command. No independent shadow document or hidden file writer is introduced.
 
 This modal is deliberately inert: it does not start SQL, HTTP or point workers.
-Use the standalone workbench with `-project <saved-file>` for explicit Run/Stop.
-Bidirectional node-to-JSON-caret selection and full runtime panels inside the IDE
-remain later integration work.
+Return to the source editor and choose **Tools → Run 2D Process**, F5, or the
+ordinary Run button to run the exact current `.silkhmi` buffer, including dirty
+unsaved text. The embedded **Process Runtime** dock has a read-only live diagram,
+typed point monitor, manual-write/history actions and **Go to source** navigation.
+Its Diagram/Points buttons select alternate full-width views for compact docks.
+
+Source changes, source close/rename, runtime-tab/dock hide and IDE shutdown retire
+pending loads and active acquisition. Revealing a dock or Undoing source edits
+never restarts it automatically. Stop cancels promptly; workers/store are joined
+outside the event loop. A stale async decode cannot start a different buffer.
+
+The IDE isolates point stores by canonical source-path identity under application
+data; it does not place a database next to the source or save live values into
+the document. Compatible point definitions retain their persisted values across
+explicit runs. A point kind cannot silently change in an existing typed store;
+use compatible point names. Database-profile/migration UI is separate work.
+
+**View → Show Process Runtime** restores a hidden/removed tool instance without
+starting it. The generic Stop action also stops a process runtime; Go build/debug
+commands keep their existing meaning. The standalone workbench's `-project` /
+`-db` workflow remains available. Bidirectional node-to-JSON-caret selection,
+hot reload, alarm lifecycle and PLC command protocols remain later integration.
 
 ![Context-sensitive Arrange menu inside the IDE modal](images/hmi-ide-arrange-windows.png)
 

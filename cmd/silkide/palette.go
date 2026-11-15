@@ -108,6 +108,22 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	add("Edit 2D Process...", "", func() { editProcessAsset(editorTabs, designCanvas, nil) })
 	paletteCommands[len(paletteCommands)-1].Available = func() bool { return processAssetEditorAvailable(visibleCaretEditor(editorTabs, designCanvas)) }
 	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindProcessAssetEditor(editorTabs, designCanvas) }
+	add("Run 2D Process", "F5", func() { runProcessRuntime(editorTabs, designCanvas, nil) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool {
+		return processRuntimeAvailable(editorTabs, designCanvas, visibleCaretEditor(editorTabs, designCanvas))
+	}
+	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand { return bindProcessRuntime(editorTabs, designCanvas) }
+	add("Stop 2D Process", "", func() { stopIDEProcessRuntime() })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool {
+		p := processRuntimeFor(editorTabs, designCanvas)
+		return p != nil && (p.loading || p.view.Busy())
+	}
+	add("Show Process Runtime", "", func() {
+		if p := processRuntimeFor(editorTabs, designCanvas); p != nil {
+			p.reveal()
+		}
+	})
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { return processRuntimeFor(editorTabs, designCanvas) != nil }
 	// File actions.
 	add("New", "Cmd+N", func() { newDesignCanvas(designCanvas) })
 	add("Open", "Cmd+O", func() {

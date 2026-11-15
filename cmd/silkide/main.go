@@ -168,6 +168,12 @@ func main() {
 
 	frame.Show()
 	core.EventLoop()
+	if globalWorkbench != nil && globalWorkbench.processRuntime != nil {
+		globalWorkbench.processRuntime.shutdown()
+		if err := globalWorkbench.processRuntime.wait(context.Background()); err != nil {
+			core.Warn("Process runtime shutdown: ", err)
+		}
+	}
 	if globalWorkbench != nil {
 		globalWorkbench.closeHistoryActions()
 		globalWorkbench.closeNavigationActions()
@@ -717,6 +723,8 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// logEvent. Distinct from BuildOutput's raw toolchain stream.
 		w.notifications = newNotificationsPane(frame, bottomDock)
 		bottomDock.AddView(w.notifications)
+		w.processRuntime = newProcessRuntimePane(w, bottomDock)
+		bottomDock.AddView(w.processRuntime)
 
 		globalLog = ged.NewLogPanel()
 		bottomDock.AddView(globalLog)
@@ -1037,6 +1045,7 @@ func detachEditorTab(tabs *gui.TabWidget, target gui.IWidget, ed *gui.CodeEditor
 		closed = editorSession{Path: path, Line: ed.CursorLine(), Column: ed.CursorCol(), ScrollY: ed.ScrollY()}
 	}
 	if ed != nil {
+		retireProcessRuntime(ed)
 		if c := bookmarkController(tabs); c != nil {
 			c.detach(ed)
 		}
@@ -1247,6 +1256,9 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 	// documentMode can no longer distinguish design from a hidden editor.
 	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
 	frame.SetClosedCallback(func(*gui.Frame) {
+		if w := globalWorkbench; w != nil && w.processRuntime != nil {
+			w.processRuntime.shutdown()
+		}
 		if globalSearch != nil {
 			globalSearch.CloseSearch()
 		}
@@ -1933,6 +1945,9 @@ func reportBuildOutput(line string) {
 // back to the terminal's existing cwd, which is the silkide
 // process's working directory.
 func runProjectInTerminal(canvas *ged.GedView) {
+	if dispatchProcessRuntime(canvas) {
+		return
+	}
 	if globalTerminal == nil {
 		// Force-build the terminal pane so the user sees output.
 		buildTerminalPane()
@@ -3484,6 +3499,7 @@ func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 		if openEditors[path] != ed {
 			return
 		}
+		invalidateProcessRuntime(ed)
 		refreshEditorTab(tabs, ed, path)
 		if fileRenameAffects(path) {
 			return

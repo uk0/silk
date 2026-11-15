@@ -119,6 +119,40 @@ if err == nil {
 验收范围与限制：[实时点位 QA](../LIVE_POINT_MONITOR_QA_20261115.md)。这不是 PLC 命令协议、
 报警闭环或经过工业安全认证的联锁系统。
 
+## 可嵌入运行视图与控件树可见性事件
+
+- `hmiapp.NewRuntimeView(RuntimeViewOptions)` 是普通控件，不新建原生窗口。
+  `SetSnapshot(project, databasePath)` 只暂存独立、已验证的项目；显式 `Start()` 才在后台
+  创建可选目录、打开 SQLite 并启动采集。与独立工作台共用运行时启动／关闭逻辑。
+- `SetPointsMode` 切换实时图与点表，隐藏的子视图撤销绑定，重新显示时读取最新状态；
+  切换子视图不停止运行时。新项目按自己的尺寸适应画布，不沿用模板的缩放。
+- `Runtime()` 只在就绪时提供借用引用；`RuntimeChanged` 在 UI 线程提供／撤销引用。
+  `Stop()` 立即撤销绑定并取消后台任务；`Close()` 永久关闭；在事件循环外调用 `Wait(ctx)`。
+  这些是本地点值写入和 HTTP 采集，不是 PLC 命令或安全联锁。
+- `SetStartGuard` 是宿主的纯可用性检查；不可递归启动任务。`Invalidate()` 同时停止并撤销旧
+  快照重启权限。IDE 使用编辑器身份／路径／版本守卫，保留原文件、脏状态与 Undo 历史。
+- 新的 `gui.IEventTreeVisibility.OnTreeVisibilityChanged(bool)` 是显式选择加入的 UI 事件，
+  在自身／祖先显示、隐藏及重新挂接时通知，可能重复相同值。它不广播原有局部
+  `OnShow/OnHide`，也不自动重启控制器。`WidgetTreeVisible` 仅检查逻辑控件树，
+  不代表原生窗口未遮挡／未最小化。没有新增空闲轮询或计时器。
+- `RuntimeView` 在祖先逻辑隐藏时停止采集；恢复可见只恢复操作入口，必须显式运行。
+  `EnsureDatabaseDirectory` 只接受文件系统路径，其目录创建也只发生在显式运行的后台。
+
+```go
+view := hmiapp.NewRuntimeView(hmiapp.RuntimeViewOptions{
+    EnsureDatabaseDirectory: true,
+})
+view.SetParent(parent) // UI 线程；只构造界面
+if err := view.SetSnapshot(project, "state/points.db"); err != nil {
+    return err
+}
+view.Start() // 显式用户操作
+// 关闭时：UI 线程 view.Close()；事件循环退出后 view.Wait(ctx)。
+```
+
+IDE 使用当前缓冲区的固定快照，不是热更新；修改、关闭、重命名与隐藏面板会撤销会话。
+完整验证与限制见 [IDE 组态运行 QA](../IDE_PROCESS_RUNTIME_QA_20261115.md)。
+
 ## 工业 3D 场景基础（开发中）
 
 - `scene3d`：纯 Go 不可变网格、层级节点/快照、Box/Cylinder、受限 OBJ 加载器、

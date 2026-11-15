@@ -21,6 +21,9 @@ func notifyBusyAnimationVisibility(root IWidget) {
 		if observer, ok := w.(busyAnimationVisibilityObserver); ok {
 			observer.syncBusyAnimationVisibility()
 		}
+		if observer, ok := w.(IEventTreeVisibility); ok {
+			observer.OnTreeVisibilityChanged(WidgetTreeVisible(w))
+		}
 		pending = append(pending, w.Children()...)
 	}
 }

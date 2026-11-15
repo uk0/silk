@@ -185,6 +185,11 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				revealToolView(tabs, canvas, panel.dock, panel.view, preferredToolMode(panel.view))
 			})
 		}
+		add("view.processRuntime", "Show Process Runtime", "preview", "", processRuntimeFor(tabs, canvas) != nil, func() {
+			if p := processRuntimeFor(tabs, canvas); p != nil {
+				p.reveal()
+			}
+		})
 		add("view.notifications", "Show Notifications", "notifications", "", notificationsFor(globalFrame) != nil, func() { showNotifications(globalFrame) })
 		addWorkbenchPanelsMenu(menu)
 	case "Design":
@@ -228,6 +233,17 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 		add("tools.processEditor", "Edit 2D Process...", "preview", "", processAssetEditorAvailable(processEditor), func() {
 			if processEditor != nil {
 				editProcessAsset(tabs, canvas, processEditor)
+			}
+		})
+		add("tools.processRun", "Run 2D Process", "run", "F5", processRuntimeAvailable(tabs, canvas, processEditor), func() {
+			if processEditor != nil {
+				runProcessRuntime(tabs, canvas, processEditor)
+			}
+		})
+		runtimePane := processRuntimeFor(tabs, canvas)
+		add("tools.processStop", "Stop 2D Process", "stop", "", runtimePane != nil && (runtimePane.loading || runtimePane.view.Busy()), func() {
+			if runtimePane != nil {
+				runtimePane.stop()
 			}
 		})
 		sceneEditor := visibleCaretEditor(tabs, canvas)

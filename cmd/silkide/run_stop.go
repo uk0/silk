@@ -138,10 +138,11 @@ func (a *debugLaunchAttempt) launch(dir string, args []string, bps []debugInitia
 // (including application teardown) retain stopDebugger's narrow semantics.
 // StopRunning deliberately leaves independently opened PTY shells alone.
 func stopProjectExecution() {
+	processStopped := stopIDEProcessRuntime()
 	debugActive := globalDebug != nil || globalDebugAttempt != nil
 	runStopped := globalTerminal != nil && globalTerminal.StopRunning()
 	stopDebugger()
-	if runStopped {
+	if runStopped || processStopped {
 		silkideToast(i18n.T("Run stopped"), gui.ToastInfo)
 	} else if !debugActive {
 		silkideToast(i18n.T("No running process"), gui.ToastInfo)

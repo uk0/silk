@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — source-backed process runtime inside SilkIDE (2026-11-15)
+
+- Add an inert, embeddable `hmiapp.RuntimeView` with alternate live diagram/point
+  views, shared background SQLite/acquisition ownership, explicit Start/Stop and
+  off-loop Wait. Preserve standalone workbench APIs and generated applications.
+- Run the exact current `.silkhmi` buffer from Tools, palette and F5/Run in an
+  owned IDE dock. Isolate stores by source identity; keep source, dirty state,
+  Undo and file persistence separate from runtime point values.
+- Cancel stale loads and retire sessions on source edit/close/rename, tool hide
+  and frame shutdown. Reopening a tool or Undo never silently restarts HTTP.
+- Add opt-in widget-tree visibility notifications without broadcasting local
+  OnShow/OnHide or adding polling. Hidden ancestors now retire runtime work.
+- Fix new snapshots retaining the default template's camera scale; keep the
+  existing HTTP-error backoff and wait for confirmed recovery in native replay.
+- Document the SDK, lifecycle boundaries and actual Windows IDE workflow; final
+  native/platform gates are recorded in the iteration QA report.
+- Pass final-source full ordinary/race suites on all three platforms, 12 strict
+  real bundled-gopls probes and corrected Windows IDE/SQLite replay. Audit all
+  2,004 build/resource inputs and add actual point/diagram README captures.
+  Keep the unresolved macOS-native startup observation explicit in
+  [the QA report](IDE_PROCESS_RUNTIME_QA_20261115.md); automated passes are not
+  native keyboard/IME approval.
+
 ## Unreleased — industrial live-point monitoring and guarded writes (2026-11-15)
 
 - Add atomic tag sample/revision snapshots, memory-only runtime point views,

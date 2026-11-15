@@ -9,7 +9,32 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: industrial live-point monitoring and explicit writes
+## Validated increment: source-backed industrial runtime inside SilkIDE
+
+- [x] Add a reusable inert runtime view with shared background acquisition/store
+      ownership, responsive diagram/point views, explicit Run/Stop and off-loop Wait.
+- [x] Run the exact current `.silkhmi` buffer in an owned IDE dock; isolate its
+      local point store by document identity and preserve source/Undo/disk state.
+- [x] Wire menu/palette/F5, source navigation, source-change/close/rename/quit
+      retirement, stale asynchronous-load guards and hidden-pane stop behavior.
+- [x] Prove typed HTTP-to-view, manual writes/history and cancellation from a clean
+      baseline; run SDK/IDE/layout races and final full platform/native gates.
+- [x] Update real screenshots, README/SDK/changelog; verify final three-platform
+      ordinary/race, 12 strict gopls probes, Windows native/SQLite replay and all
+      2,004 publication build inputs before commit/push. Keep macOS-native gaps open.
+
+## Next increment: startup I/O and remaining industrial workflow
+
+- [ ] Trace and remove UI-thread file-open stalls during workspace restoration;
+      prove cancellation, retained source identity and late-result guards before
+      changing startup behavior. The current native macOS observation is not a pass.
+- [ ] Complete real macOS-native startup, keyboard/IME and source-runtime checks
+      without changing personal preferences or bypassing OS permissions.
+- [ ] Continue point-source configuration, explicit store/type migration, alarms,
+      device routing and SDK icon gaps with separate persistence/native evidence.
+      Do not label these or complete Qt Creator parity as already delivered.
+
+## Validated increment: industrial live-point monitoring and explicit writes (`087c8a2`)
 
 - [x] Add atomic tag sample/revision snapshots, runtime-local optimistic write
       tokens, typed/manual writes, HTTP-writer protection and durable-before-live
@@ -28,7 +53,7 @@ Do not substitute a small passing test for the whole product-readiness gate.
       screenshots, SDK/changelog and commit/push only the verified implementation.
 - [x] Reproduce and fix panel hide/show rebinding a stopping/unavailable runtime;
       independently refreeze and rerun all platform gates, not the earlier source.
-- [ ] Continue IDE-host runtime integration, alarms, device routing and remaining
+- [ ] Continue alarms, device routing and remaining
       Qt Creator/editor/macOS-native and default SDK icon gaps. This is not a
       certified control system.
 

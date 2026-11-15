@@ -112,6 +112,7 @@ func prepareEditorRename(tabs *gui.TabWidget, canvas *ged.GedView, oldPath, newP
 	// old diagnostics/completions while the editor remains freely editable.
 	var previous []<-chan struct{}
 	for _, move := range tx.moves {
+		retireProcessRuntime(move.editor)
 		move.editor.CancelGitStatus()
 		if doc := lspDocuments[move.old]; doc != nil {
 			previous = append(previous, doc.done)

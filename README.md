@@ -128,6 +128,44 @@ Owned read-only history dialog, including the controlled HTTP failure/recovery.
 [SDK APIs and lifecycle](docs/SDK_FEATURES.md#工业实时点位监视与条件写入) ·
 [Native, persistence and platform verification](LIVE_POINT_MONITOR_QA_20261115.md)
 
+### Run process source inside SilkIDE
+
+Open `.silkhmi`, then use **Tools → Run 2D Process** or **F5 / Run**. The owned
+**Process Runtime** dock runs the exact current buffer, including unsaved edits.
+Switch between its live diagram and point monitor without opening an independent
+window. **Go to source** returns to the owning editor.
+
+- Editing, closing or renaming the source cancels pending startup and stops its
+  active session. Undo never implicitly restarts acquisition. Hiding/collapsing
+  the runtime dock also stops it; revealing it is inert until explicit Run.
+- Each document has an isolated, typed point store under application data.
+  Runtime writes/history never rewrite the source or its Undo state. Existing
+  point kinds remain immutable; incompatible type changes are rejected, not
+  silently coerced or erased.
+- The authoring modal remains inert. This is a frozen-buffer runtime, not live
+  hot reload or PLC command execution. Ordinary Go Run/Debug remains separate.
+
+![SilkIDE native embedded process runtime and point monitor](docs/images/hmi-ide-runtime-points-windows.png)
+
+Actual Windows IDE capture: the unsaved buffer's BI11 initial value is **42**;
+the source file on disk remains **41**. HTTP extraction/scaling and operator
+point writes use the same runtime and store.
+
+<details>
+<summary>Embedded live diagram and confirmed HTTP recovery</summary>
+
+![SilkIDE native embedded live diagram after HTTP recovery](docs/images/hmi-ide-runtime-diagram-windows.png)
+
+The same session recovers from HTTP 503 to **77.5 bar** and applies the configured
+green threshold rule. The source buffer is still dirty; runtime data does not
+save or replace it. New snapshots fit their own geometry rather than the template.
+
+</details>
+
+[Workflow and lifecycle](docs/HMI-WORKBENCH.md#silkide-source-and-visual-coordination) ·
+[SDK runtime view](docs/SDK_FEATURES.md#可嵌入运行视图与控件树可见性事件) ·
+[Native/platform verification](IDE_PROCESS_RUNTIME_QA_20261115.md)
+
 ---
 
 ## Incremental local completion candidates (2026-11-15)

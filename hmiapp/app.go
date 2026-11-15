@@ -15,7 +15,6 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hmi"
-	pointsql "github.com/uk0/silk/point/sqlite"
 )
 
 type Config struct {
@@ -146,23 +145,7 @@ func (f *Workbench) StartRuntime() {
 	go func() {
 		var finalErr error
 		defer func() { close(s.done); f.finish(s, finalErr) }()
-		store, e := pointsql.Open(f.cfg.DatabasePath)
-		if e != nil {
-			finalErr = e
-			return
-		}
-		defer store.Close()
-		runtime, e := hmi.NewRuntime(ctx, p, store, f.cfg.RequestHeaders)
-		if e != nil {
-			finalErr = e
-			return
-		}
-		defer runtime.Stop()
-		if e = runtime.Start(ctx); e != nil {
-			finalErr = e
-			return
-		}
-		_ = gui.PostContext(ctx, func() {
+		finalErr = runStoredRuntime(ctx, p, f.cfg.DatabasePath, f.cfg.RequestHeaders, gui.PostContext, func(runtime *hmi.Runtime) {
 			if !f.closed && f.session == s && !s.stopping {
 				s.runtime = runtime
 				if f.showPoints {
@@ -179,8 +162,6 @@ func (f *Workbench) StartRuntime() {
 				}
 			}
 		})
-		<-ctx.Done()
-		runtime.Stop()
 	}()
 }
 func (f *Workbench) finish(s *session, e error) {
