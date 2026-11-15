@@ -68,3 +68,39 @@ func TestWorkbenchCloseJoinsStartupAndRemainsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkbenchControlsRepresentIOAndRuntimeAvailability(t *testing.T) {
+	f, err := New(Config{ProjectPath: filepath.Join(t.TempDir(), "plant.silkhmi"), DatabasePath: filepath.Join(t.TempDir(), "points.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Join()
+	defer f.Close()
+	if !f.buttons[0].IsEnabled() || f.buttons[1].IsEnabled() || !f.buttons[2].IsEnabled() {
+		t.Fatal("initial actions inconsistent")
+	}
+	f.busy = true
+	f.refreshControls()
+	if f.buttons[0].IsEnabled() || f.buttons[2].IsEnabled() || !f.Editor.Diagram.IsEditing() || !f.Editor.Diagram.IsReadOnly() {
+		t.Fatal("IO lock failed or entered live preview")
+	}
+	f.busy = false
+	f.refreshControls()
+	if !f.Editor.Diagram.IsEditing() || f.Editor.Diagram.IsReadOnly() {
+		t.Fatal("IO lock did not restore editing")
+	}
+	f.Save()
+	if !f.busy || !f.Editor.Diagram.IsReadOnly() {
+		t.Fatal("save not represented synchronously")
+	}
+	f.Close()
+	f.Join()
+	if _, err = hmi.Load(f.cfg.ProjectPath); err != nil {
+		t.Fatal("joined save did not persist", err)
+	}
+	for _, b := range f.buttons {
+		if b.IsEnabled() {
+			t.Fatal("closed workbench has enabled actions")
+		}
+	}
+}

@@ -3,6 +3,7 @@ package gui
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -16,12 +17,15 @@ import (
 // SetRunning to lock authoring while the document drives live equipment.
 type ProcessEditor struct {
 	Widget
-	Diagram *ProcessDiagram
-	buttons []*Button
-	status  *Label
-	running bool
-	changed func()
-	err     error
+	locked                                                bool
+	Diagram                                               *ProcessDiagram
+	buttons                                               []*Button
+	status                                                *Label
+	running                                               bool
+	changed                                               func()
+	err                                                   error
+	undoButton, redoButton, duplicateButton, deleteButton *Button
+	arrangeItems                                          []processArrangeAction
 }
 
 type processConfigTable struct{ Table }
@@ -40,13 +44,20 @@ func (v *ProcessEditor) Init(self IWidget) {
 	v.Diagram = NewProcessDiagram()
 	v.Diagram.SetParent(self)
 	v.Diagram.SetEditing(true)
-	v.status = NewLabel("Drag devices · click two blue ports to connect · wheel to zoom")
+	v.status = NewLabel("Shift-click / drag a box to select · corners resize · blue ports connect · Esc cancels")
 	v.status.SetParent(self)
-	add := func(label string, fn func()) {
+	add := func(label string, fn func()) *Button {
 		b := NewButton1(label, nil)
 		b.SetParent(self)
-		b.Action().BindFunc0(fn)
+		b.Action().BindFunc0(func() {
+			fn()
+			v.refreshActions()
+			if !v.running && !v.locked {
+				v.Diagram.SetFocus()
+			}
+		})
 		v.buttons = append(v.buttons, b)
+		return b
 	}
 	for _, kind := range []string{"reactor", "exchanger", "separator", "pump", "valve", "tank", "value", "indicator", "text"} {
 		k := kind
@@ -62,16 +73,24 @@ func (v *ProcessEditor) Init(self IWidget) {
 	add("Properties", v.EditBindings)
 	add("Pipes", v.EditLinks)
 	add("Bends", v.EditBends)
-	add("Duplicate", func() { v.setError(v.Diagram.DuplicateSelected()) })
-	add("Undo", v.Diagram.Undo)
-	add("Redo", v.Diagram.Redo)
-	add("Delete", v.Diagram.DeleteSelected)
+	v.duplicateButton = add("Duplicate", func() { v.setError(v.Diagram.DuplicateSelected()) })
+	v.undoButton = add("Undo", v.Diagram.Undo)
+	v.redoButton = add("Redo", v.Diagram.Redo)
+	v.deleteButton = add("Delete", v.Diagram.DeleteSelected)
+	arrange := add("Arrange", func() {})
+	v.initArrange(arrange)
+	v.Diagram.SigSelectionChanged(func() {
+		v.refreshActions()
+		v.status.SetText(fmt.Sprintf("%d selected · pipe %s · Shift-click toggles · arrows nudge", len(v.Diagram.SelectedNodes()), v.Diagram.SelectedLink()))
+	})
 	v.Diagram.SigChanged(func() {
 		if v.changed != nil {
 			v.changed()
 		}
-		v.status.SetText("Document updated; Undo available")
+		v.status.SetText("Document updated · Ctrl/Cmd+Z undo · Shift+arrows move 10 units")
+		v.refreshActions()
 	})
+	v.refreshActions()
 }
 func (v *ProcessEditor) setError(e error) {
 	v.err = e
@@ -92,8 +111,12 @@ func (v *ProcessEditor) SetRunning(b bool) {
 	v.running = b
 	v.Diagram.SetEditing(!b)
 	for _, button := range v.buttons {
-		button.SetEnabled(!b)
+		button.SetEnabled(!b && !v.locked)
+		if b || v.locked {
+			button.HideSubPopup()
+		}
 	}
+	v.refreshActions()
 }
 func (v *ProcessEditor) EnumProperties(p core.IPropertyList) {
 	p.AddProperty("Project JSON", v.ProjectJSON, v.SetProjectJSON)
@@ -113,13 +136,20 @@ func (v *ProcessEditor) OnResize() {
 	v.Diagram.SetBounds(0, top, w, max(0, h-top-28))
 	v.status.SetBounds(8, max(top, h-26), max(0, w-16), 24)
 }
-func (v *ProcessEditor) Close() { v.Diagram.Close(); v.changed = nil }
+func (v *ProcessEditor) Close() {
+	v.SetReadOnly(true)
+	for _, b := range v.buttons {
+		b.HideSubPopup()
+	}
+	v.Diagram.Close()
+	v.changed = nil
+}
 
 // EditRows creates an isolated staged table. Apply validates the complete
 // candidate; Cancel never mutates the live document. Rows carry explicit IDs
 // so sorting cannot silently address another point/source/node.
 func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string, newRow []string, apply func([][]string) error) {
-	if v.running {
+	if v.running || v.locked {
 		return
 	}
 	model := NewSimpleTableModel(headers)
@@ -180,6 +210,12 @@ func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string
 	dlg.SetSize(600, 500)
 	dlg.ShowModal()
 }
+func rawCell(r []string, i int) string {
+	if i < len(r) {
+		return r[i]
+	}
+	return ""
+}
 func cell(r []string, i int) string {
 	if i < len(r) {
 		return strings.TrimSpace(r[i])
@@ -195,11 +231,15 @@ func (v *ProcessEditor) ApplyPointRows(rows [][]string) error {
 			return fmt.Errorf("stale ms must be an integer")
 		}
 		k := point.Kind(cell(r, 1))
-		initial, e := point.Convert(cell(r, 4), k)
+		initialText := cell(r, 4)
+		if k == point.String {
+			initialText = rawCell(r, 4)
+		}
+		initial, e := point.Convert(initialText, k)
 		if e != nil {
 			return e
 		}
-		p.Points = append(p.Points, hmi.Point{Definition: point.Definition{Name: cell(r, 0), Kind: k, Category: cell(r, 2), Unit: cell(r, 3), Description: cell(r, 6)}, Initial: initial, StaleMS: age})
+		p.Points = append(p.Points, hmi.Point{Definition: point.Definition{Name: cell(r, 0), Kind: k, Category: cell(r, 2), Unit: cell(r, 3), Description: rawCell(r, 6)}, Initial: initial, StaleMS: age})
 	}
 	return v.Diagram.ApplyProject(p)
 }
@@ -246,7 +286,7 @@ func (v *ProcessEditor) ApplySourceRows(rows [][]string) error {
 		if e != nil {
 			return e
 		}
-		s.Body = cell(r, 7)
+		s.Body = rawCell(r, 7)
 		if len(s.Mappings) == 0 {
 			for _, pt := range p.Points {
 				s.Mappings = []point.Mapping{{Name: pt.Name, Kind: pt.Kind, Pointer: "/data/value"}}
@@ -328,7 +368,7 @@ func (v *ProcessEditor) ApplyNodeRows(rows [][]string) error {
 			return fmt.Errorf("unknown or duplicate node")
 		}
 		seen[n.ID] = true
-		n.Label = cell(r, 1)
+		n.Label = rawCell(r, 1)
 		n.Tag = cell(r, 2)
 		n.Unit = cell(r, 3)
 		vals := []*float64{&n.X, &n.Y, &n.Width, &n.Height}
@@ -391,7 +431,7 @@ func (v *ProcessEditor) ApplyColorRows(rows [][]string) error {
 	}
 	p.Nodes[i].Colors = nil
 	for _, r := range rows {
-		p.Nodes[i].Colors = append(p.Nodes[i].Colors, hmi.ColorRule{When: cell(r, 0), Color: cell(r, 1), Text: cell(r, 2)})
+		p.Nodes[i].Colors = append(p.Nodes[i].Colors, hmi.ColorRule{When: cell(r, 0), Color: cell(r, 1), Text: rawCell(r, 2)})
 	}
 	return v.Diagram.ApplyProject(p)
 }
@@ -513,7 +553,7 @@ func (v *ProcessEditor) ApplyHeaderRows(rows [][]string) error {
 		for i := range p.Sources {
 			if p.Sources[i].ID == cell(r, 0) {
 				found = true
-				p.Sources[i].Headers[cell(r, 1)] = cell(r, 2)
+				p.Sources[i].Headers[cell(r, 1)] = rawCell(r, 2)
 			}
 		}
 		if !found {
@@ -590,11 +630,34 @@ func rowSteps(row []string, column int, fallback []point.Step) ([]point.Step, er
 		return fallback, nil
 	}
 	var steps []point.Step
-	if err := json.Unmarshal([]byte(cell(row, column)), &steps); err != nil {
+	if len(rawCell(row, column)) > 65536 {
+		return nil, fmt.Errorf("pipeline JSON exceeds 64 KiB")
+	}
+	decoder := json.NewDecoder(strings.NewReader(rawCell(row, column)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&steps); err != nil {
 		return nil, err
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return nil, fmt.Errorf("trailing pipeline data")
 	}
 	if _, err := point.NewPipeline(steps); err != nil {
 		return nil, err
 	}
 	return steps, nil
+}
+
+// SetReadOnly locks authoring without entering live-data preview mode, e.g.
+// while an application-owned document load/save transaction is in progress.
+func (v *ProcessEditor) SetReadOnly(b bool) {
+	v.locked = b
+	v.Diagram.SetReadOnly(b)
+	for _, button := range v.buttons {
+		button.SetEnabled(!v.running && !b)
+		if b {
+			button.HideSubPopup()
+		}
+	}
+	v.refreshActions()
 }

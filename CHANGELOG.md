@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — precise 2D group authoring (2026-11-14)
+
+- Add validated, non-mutating `hmi` editing operations for group movement,
+  resizing, alignment, equal-gap distribution, layering, subgraph duplication,
+  deletion and pipe-waypoint editing. Preserve exact scalar initial values.
+- Add Shift/Ctrl/Cmd multi-selection, directional marquee, corner resizing,
+  keyboard nudging/duplication/history and an owned Arrange menu. Preview a
+  gesture transiently and commit one undo step; cancel restores widget geometry.
+- Move internal pipe waypoints with a device group; select pipes and drag,
+  insert or remove authored waypoints without unintentionally deleting a pipe.
+- Separate live-bound geometry/visibility from editable authored geometry;
+  separate runtime preview from temporary I/O read-only locking.
+- Reflect Undo/Redo, selection, runtime and I/O availability in actual controls.
+  Preserve string values, labels and HTTP body whitespace; reject misspelled or
+  trailing advanced-pipeline JSON rather than silently ignoring it.
+
 ## Unreleased — industrial 2D authoring and typed point runtime (2026-11-14)
 
 - Add ProcessDiagram / ProcessEditor and the opt-in `cmd/silkhmi` workbench:

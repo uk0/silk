@@ -27,8 +27,10 @@ cancels and joins them before authoring is unlocked. Closing also cancels/joins.
    for dynamic visible/enabled/x/y/rotation bindings. **Node / bindings** edits
    labels, point names, units and bounds. Removing a node removes incident pipes.
 6. **Pipes** edits endpoint ports and optional flow point; **Bends** edits ordered
-   route waypoints. Routing is deterministic orthogonal doglegs, **not obstacle
-   avoidance**. Waypoints currently use the table, not draggable bend handles.
+   route waypoints. Click a pipe, then use **Arrange → Add pipe waypoint** and
+   drag its square handle. Delete removes the selected waypoint first, otherwise
+   the selected pipe. Routing is deterministic orthogonal doglegs, **not obstacle
+   avoidance**. Automatic dogleg corners are not authored waypoints.
 7. **Save / Load** use `.silkhmi` documents. Save replaces atomically; Load
    validates before replacing and resets undo history. **Generate Go** writes
    `<project>.go`, refuses overwrite, and generates an inert runnable workbench.
@@ -40,6 +42,48 @@ cancels and joins them before authoring is unlocked. Closing also cancels/joins.
 Tables use staged edits: double-click a cell; Enter/click away commits the cell;
 Apply validates the complete candidate; invalid candidates remain open; Cancel
 leaves the document unchanged. IDs identify rows independently of table sorting.
+
+### Direct manipulation
+
+![Windows native multi-selection and Arrange menu](images/hmi-authoring-arrange-windows.png)
+
+- Shift-click or Ctrl/Cmd-click toggles nodes. Drag from empty canvas left to
+  right to select fully contained nodes; right to left includes intersecting
+  nodes. Hold Shift/Ctrl/Cmd to add a box selection.
+- Drag a selected device to move the whole selection without changing relative
+  spacing. Internal pipe waypoints move too; external waypoints stay anchored.
+  Boundary clamping uses one common delta. Shift constrains a move to an axis;
+  Alt bypasses grid snapping.
+- Select one device and drag a corner square to resize; Shift preserves aspect
+  ratio. A gesture changes only the preview until release, then records one undo
+  step. Escape, capture cancellation, resize/zoom/document replacement or closing
+  discards the preview. Exported/saved state never contains an unfinished drag.
+- **Arrange** provides six alignments, equal horizontal/vertical gaps (at least
+  three nodes), front/back ordering and waypoint commands. Impossible equal-gap
+  layouts report an error rather than creating negative gaps/overlap.
+- Ctrl/Cmd+A selects all; Ctrl/Cmd+D duplicates the selected subgraph and its
+  internal pipes; Ctrl/Cmd+Z / Shift+Z (or Y) undo/redo. Arrow keys nudge one unit,
+  Shift+Arrow ten. Delete/Backspace removes selection. F or Ctrl/Cmd+0 fits.
+  Duplicated devices deliberately keep their point bindings; they do not create
+  a second acquisition source or silently rename industrial points.
+- Editing displays authored positions, enabled state and visibility even when
+  live bindings would move/hide a device. Run enables live properties and locks
+  authoring. Save/Load/Generate also lock authoring while their worker owns I/O,
+  without entering runtime preview. Unavailable commands are disabled.
+
+The pure-Go editing SDK can be used independently of the GUI:
+
+```go
+candidate, err := hmi.MoveNodes(project, []string{"reactor", "exchanger"}, 40, 20)
+// On success, candidate owns independent slices/maps; project is unchanged.
+// Publish candidate on the UI thread if a ProcessDiagram is its consumer.
+```
+
+![Saved group movement on Windows](images/hmi-authoring-group-windows.png)
+
+These are native desktop captures, not generated mockups. For the exact source
+identity, platform test scope and remaining native-macOS capture limitation, see
+[authoring QA](../HMI_AUTHORING_QA_20261114.md).
 
 ## Runtime, database and SDK
 
@@ -88,8 +132,9 @@ A response may update valid fields alongside Bad fields: multi-point updates
 are not an atomic PLC scan or a cross-point database transaction. Condition
 rules are first-match, not an alarm lifecycle (no hysteresis, delay or ack).
 Invalid dynamic-property samples retain the preceding visual property; do not
-use visual enable/visibility as a safety interlock. Nodes are individually
-selectable; multiselect alignment and obstacle-aware piping remain future work.
+use visual enable/visibility as a safety interlock. Obstacle-aware piping,
+equipment-template libraries, alarm lifecycles and normal IDE `.silkhmi` document
+integration remain product gaps; a standalone workbench is not IDE feature parity.
 
 SQLite requires CGO. `point` conversion/expression/HTTP and `hmi` without a SQL
 adapter work without CGO. `gui` does not import SQL/SQLite. Workbench binaries

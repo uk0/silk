@@ -55,6 +55,7 @@ func New(c Config) (*Workbench, error) {
 		f.Editor.SetProjectJSON(c.ProjectJSON)
 		if e := f.Editor.LastError(); e != nil {
 			f.cancel()
+			f.Editor.Close()
 			return nil, e
 		}
 	}
@@ -79,6 +80,7 @@ func New(c Config) (*Workbench, error) {
 	add("Snapshot", f.Snapshot)
 	f.status = gui.NewLabel("Editor · no I/O until Run / Save / Load · blue ports connect pipes")
 	f.status.SetParent(f)
+	f.refreshControls()
 	return f, nil
 }
 func (f *Workbench) OnResize() {
@@ -104,7 +106,7 @@ func (f *Workbench) StartRuntime() {
 	ctx, cancel := context.WithCancel(f.ctx)
 	s := &session{cancel: cancel, done: make(chan struct{})}
 	f.session = s
-	f.Editor.SetRunning(true)
+	f.refreshControls()
 	f.status.SetText("Starting shared point store and source workers…")
 	go func() {
 		var finalErr error
@@ -147,8 +149,8 @@ func (f *Workbench) finish(s *session, e error) {
 			return
 		}
 		f.Editor.Diagram.UnbindTags()
-		f.Editor.SetRunning(false)
 		f.session = nil
+		f.refreshControls()
 		if e != nil {
 			f.status.SetText(e.Error())
 		} else {
@@ -167,6 +169,8 @@ func (f *Workbench) ioTask(path string, fn func() error) {
 		return
 	}
 	f.busy = true
+	f.refreshControls()
+	f.status.SetText("Saving / exporting document…")
 	done := make(chan struct{})
 	f.ioDone = done
 	go func() {
@@ -175,6 +179,7 @@ func (f *Workbench) ioTask(path string, fn func() error) {
 		gui.Post(func() {
 			f.busy = false
 			if !f.closed {
+				f.refreshControls()
 				if e != nil {
 					f.status.SetText(e.Error())
 				} else {
@@ -193,6 +198,8 @@ func (f *Workbench) Load() {
 		return
 	}
 	f.busy = true
+	f.refreshControls()
+	f.status.SetText("Loading document…")
 	done := make(chan struct{})
 	f.ioDone = done
 	f.generation++
@@ -205,6 +212,7 @@ func (f *Workbench) Load() {
 			if f.closed || f.generation != gen {
 				return
 			}
+			f.refreshControls()
 			if e != nil {
 				f.status.SetText(e.Error())
 				return
@@ -262,7 +270,7 @@ func (f *Workbench) Snapshot() {
 			}
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"mode": mode, "nodes": len(p.Nodes), "links": len(p.Links), "points": len(p.Points), "selected": f.Editor.Diagram.SelectedNode(), "errors": errors, "samples": samples})
+	b, _ := json.Marshal(map[string]any{"mode": mode, "nodes": len(p.Nodes), "links": len(p.Links), "points": len(p.Points), "selected": f.Editor.Diagram.SelectedNode(), "selected_nodes": f.Editor.Diagram.SelectedNodes(), "selected_pipe": f.Editor.Diagram.SelectedLink(), "errors": errors, "samples": samples})
 	fmt.Println("HMI_STATE " + string(b))
 	f.status.SetText(fmt.Sprintf("%s · %d devices · %d pipes · %d points · %d source errors", mode, len(p.Nodes), len(p.Links), len(p.Points), len(errors)))
 }
@@ -271,6 +279,7 @@ func (f *Workbench) Close() {
 		return
 	}
 	f.closed = true
+	f.refreshControls()
 	f.cancel()
 	f.StopRuntime()
 	f.Editor.Close()
@@ -300,4 +309,22 @@ func Run(c Config) error {
 	f.Show()
 	core.EventLoop()
 	return nil
+}
+
+// State is reflected in controls rather than silently ignoring enabled buttons.
+func (f *Workbench) refreshControls() {
+	if len(f.buttons) < 7 {
+		return
+	}
+	idle := !f.closed && !f.busy && f.session == nil
+	f.buttons[0].SetEnabled(idle)
+	f.buttons[1].SetEnabled(!f.closed && f.session != nil)
+	for _, i := range []int{2, 3, 4} {
+		f.buttons[i].SetEnabled(idle)
+	}
+	for _, i := range []int{5, 6} {
+		f.buttons[i].SetEnabled(!f.closed)
+	}
+	f.Editor.SetRunning(f.session != nil)
+	f.Editor.SetReadOnly(f.closed || f.busy)
 }

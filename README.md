@@ -29,8 +29,12 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 
 ![Silk industrial process designer](docs/images/hmi-workbench-editor.png)
 
-- Nine vector node types, snapped dragging, connected ports, orthogonal pipes,
-  route waypoints, zoom/pan, bounded undo/redo and staged visual configuration.
+- Nine vector node types, multi-selection/directional box selection, group
+  dragging, corner resizing, alignment/distribution/layering, connected ports,
+  draggable pipe waypoints, zoom/pan and bounded undo/redo.
+- A gesture previews without changing the saved document, then commits one undo
+  step on release. Escape/capture cancellation restores the authored state;
+  internal pipe waypoints move with a selected device group.
 - DI/AI/BI point definitions, typed SQLite latest/history, shared HTTP acquisition
   with request bodies/headers, JSON Pointer extraction, conversion/comparison,
   conditional colors/state text and dynamic position/rotation/visibility.
@@ -43,7 +47,13 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 [Workflow, screenshots, SDK and limitations](docs/HMI-WORKBENCH.md) ·
 [Typed point SDK](point/README.md) ·
 [Local synthetic HTTP demo](examples/process2d/README.md) ·
-[Verification report](SCADA_POINT_PROGRESS_20261114.md)
+[Foundation verification](SCADA_POINT_PROGRESS_20261114.md) ·
+[Group authoring QA](HMI_AUTHORING_QA_20261114.md)
+
+![Windows native group authoring and owned Arrange menu](docs/images/hmi-authoring-arrange-windows.png)
+
+Windows native desktop capture: two selected devices, enabled alignment commands
+and disabled commands whose selection requirements are not met.
 
 <details>
 <summary>Visual point configuration</summary>

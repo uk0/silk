@@ -26,7 +26,7 @@ type processNodeView struct {
 type ProcessDiagram struct {
 	Widget
 	panX, panY, panStartX, panStartY float64
-	panning, moved                   bool
+	panning                          bool
 	targets                          map[string][]*processNodeView
 	project                          hmi.Project
 	text                             string
@@ -34,15 +34,18 @@ type ProcessDiagram struct {
 	samples                          map[string]core.Value
 	stops                            []func()
 	editing, closed                  bool
+	readOnly                         bool
 	selected                         string
+	selection                        map[string]bool
+	selectedLink                     string
+	selectedBend                     int
+	selectionChanged                 func()
+	gesture                          *processGesture
+	pointerX, pointerY               float64
 	zoom                             float64
 	undo, redo                       []string
 	changed                          func()
 	err                              error
-	drag                             bool
-	startX, startY                   float64
-	beforeDrag                       string
-	dragNode                         hmi.Node
 	from                             *hmi.Endpoint
 }
 
@@ -51,6 +54,7 @@ func NewProcessDiagram() *ProcessDiagram { v := new(ProcessDiagram); v.Init(v); 
 func (v *ProcessDiagram) Init(self IWidget) {
 	v.Widget.Init(self)
 	v.zoom = 1
+	v.selectedBend = -1
 	v.SetFocusPolicy(TabFocus)
 	_ = v.SetProject(hmi.Template())
 }
@@ -135,9 +139,7 @@ func (v *ProcessDiagram) SetProject(p hmi.Project) error {
 		}
 		v.applySample(d.Name, core.Value{Raw: raw, Quality: core.QualityGood})
 	}
-	if v.views[v.selected] == nil {
-		v.selected = ""
-	}
+	v.pruneSelection()
 	v.Update()
 	return nil
 }
@@ -236,7 +238,7 @@ func (v *ProcessDiagram) applySample(name string, s core.Value) {
 		}
 
 		for _, b := range view.node.Bindings {
-			if b.Tag != name || s.Quality != core.QualityGood {
+			if v.editing || b.Tag != name || s.Quality != core.QualityGood {
 				continue
 			}
 			out, e := view.bindings[b.Property].Apply(s.Raw)
@@ -275,6 +277,7 @@ func (v *ProcessDiagram) Close() {
 	v.UnbindTags()
 	v.closed = true
 	v.changed = nil
+	v.selectionChanged = nil
 }
 func (v *ProcessDiagram) SetParent(p IWidget) {
 	if p != v.Parent() {
@@ -287,6 +290,10 @@ func (v *ProcessDiagram) SetEditing(b bool) {
 	if v.editing != b {
 		v.OnPointerCancel()
 		v.editing = b
+		v.resetAuthoredGeometry()
+		for name, sample := range v.samples {
+			v.applySample(name, sample)
+		}
 		v.Update()
 	}
 }
@@ -295,7 +302,11 @@ func (v *ProcessDiagram) SelectedNode() string { return v.selected }
 func (v *ProcessDiagram) Zoom() float64        { return v.zoom }
 func (v *ProcessDiagram) SetZoom(z float64) {
 	if finiteProcess(z) {
-		v.zoom = max(.25, min(3, z))
+		next := max(.25, min(3, z))
+		if next != v.zoom {
+			v.OnPointerCancel()
+			v.zoom = next
+		}
 		v.Update()
 	}
 }
@@ -333,13 +344,16 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 		if a == nil || b == nil || !a.visible || !b.visible {
 			continue
 		}
-		pts := hmi.Route(v.port(a, l.From.Port), v.port(b, l.To.Port), l.Bends)
+		pts := hmi.Route(v.port(a, l.From.Port), v.port(b, l.To.Port), v.linkBends(l))
 		color := paint.Color{R: 90, G: 110, B: 130, A: 255}
 		sample, ok := v.samples[l.Tag]
 		if ok && sample.Quality == core.QualityGood {
 			if on, e := point.Convert(sample.Raw, point.Bool); e == nil && on == true {
 				color = paint.Color{R: 37, G: 210, B: 158, A: 255}
 			}
+		}
+		if v.editing && v.selectedLink == l.ID {
+			color = paint.Color{R: 85, G: 172, B: 255, A: 255}
 		}
 		g.SetPen1(color, 3)
 		for i := 1; i < len(pts); i++ {
@@ -388,7 +402,7 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 			g.Fill()
 			g.Restore()
 		}
-		if v.editing && v.selected == n.ID {
+		if v.editing && v.nodeSelected(n.ID) {
 			g.SetPen1(paint.Color{R: 68, G: 160, B: 255, A: 255}, 1)
 			g.Rectangle(0, 0, n.Width, n.Height)
 			g.Stroke()
@@ -403,6 +417,7 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 			}
 		}
 	}
+	v.drawInteractionOverlay(g)
 	if v.err != nil {
 		g.SetBrush1(paint.Color{R: 255, G: 155, B: 140, A: 255})
 		g.DrawText1(12, 22, elideToWidth(Theme().Font, v.err.Error(), max(0, w/v.zoom-24)))
@@ -438,9 +453,9 @@ func (v *ProcessDiagram) edit(p hmi.Project) error {
 func (v *ProcessDiagram) ApplyProject(p hmi.Project) error { return v.edit(p) }
 
 // ClearHistory starts a new document boundary after an explicit Load.
-func (v *ProcessDiagram) ClearHistory() { v.undo, v.redo = nil, nil }
+func (v *ProcessDiagram) ClearHistory() { v.undo, v.redo = nil, nil; v.notifySelection() }
 func (v *ProcessDiagram) Undo() {
-	if len(v.undo) == 0 {
+	if !v.canEdit() || len(v.undo) == 0 {
 		return
 	}
 	s := v.undo[len(v.undo)-1]
@@ -455,7 +470,7 @@ func (v *ProcessDiagram) Undo() {
 	}
 }
 func (v *ProcessDiagram) Redo() {
-	if len(v.redo) == 0 {
+	if !v.canEdit() || len(v.redo) == 0 {
 		return
 	}
 	s := v.redo[len(v.redo)-1]
@@ -470,6 +485,9 @@ func (v *ProcessDiagram) Redo() {
 	}
 }
 func (v *ProcessDiagram) AddNode(kind string) error {
+	if !v.canEdit() {
+		return fmt.Errorf("hmi: authoring is locked")
+	}
 	p := v.Project()
 	id := ""
 	for i := 1; i < 10000; i++ {
@@ -486,150 +504,8 @@ func (v *ProcessDiagram) AddNode(kind string) error {
 	if e := v.edit(p); e != nil {
 		return e
 	}
-	v.selected = id
+	v.SelectNodes([]string{id})
 	return nil
-}
-func (v *ProcessDiagram) DeleteSelected() {
-	p := v.Project()
-	id := v.selected
-	nodes := p.Nodes[:0]
-	for _, n := range p.Nodes {
-		if n.ID != id {
-			nodes = append(nodes, n)
-		}
-	}
-	p.Nodes = nodes
-	links := p.Links[:0]
-	for _, l := range p.Links {
-		if l.From.Node != id && l.To.Node != id {
-			links = append(links, l)
-		}
-	}
-	p.Links = links
-	_ = v.edit(p)
-}
-func (v *ProcessDiagram) OnLeftDown(x, y float64) {
-	if !v.editing || !v.IsEnabled() || !finiteProcess(x) || !finiteProcess(y) {
-		return
-	}
-	x, y = (x-v.panX)/v.zoom, (y-v.panY)/v.zoom
-	v.SetFocus()
-	for _, n := range v.project.Nodes {
-		view := v.views[n.ID]
-		if !view.visible || !view.enabled {
-			continue
-		}
-		for _, port := range []string{"west", "east", "north", "south"} {
-			p := v.port(view, port)
-			if math.Hypot(x-p.X, y-p.Y) < 8 {
-				end := hmi.Endpoint{Node: n.ID, Port: port}
-				if v.from == nil {
-					v.from = &end
-					v.Update()
-					return
-				}
-				if v.from.Node != end.Node {
-					p := v.Project()
-					p.Links = append(p.Links, hmi.Link{ID: nextProcessLinkID(p), From: *v.from, To: end})
-					v.from = nil
-					v.err = v.edit(p)
-				}
-				return
-			}
-		}
-	}
-	for i := len(v.project.Nodes) - 1; i >= 0; i-- {
-		n := v.project.Nodes[i]
-		view := v.views[n.ID]
-		if !view.visible || !view.enabled {
-			continue
-		}
-		n = view.node
-		if x >= n.X && x <= n.X+n.Width && y >= n.Y && y <= n.Y+n.Height {
-			v.selected = n.ID
-			v.drag = true
-			v.moved = false
-			v.startX, v.startY = x, y
-			v.beforeDrag = v.text
-			v.dragNode = n
-			v.PushCapture()
-			v.Update()
-			return
-		}
-	}
-	v.selected = ""
-	v.from = nil
-	v.Update()
-}
-func (v *ProcessDiagram) OnMouseMove(x, y float64) {
-	if v.panning && finiteProcess(x) && finiteProcess(y) {
-		v.panX += x - v.panStartX
-		v.panY += y - v.panStartY
-		v.panStartX, v.panStartY = x, y
-		v.Update()
-		return
-	}
-	if !v.drag || !finiteProcess(x) || !finiteProcess(y) {
-		return
-	}
-	if math.Hypot((x-v.panX)/v.zoom-v.startX, (y-v.panY)/v.zoom-v.startY) < 3 && !v.moved {
-		return
-	}
-	v.moved = true
-	if !v.IsEnabled() {
-		v.OnPointerCancel()
-		return
-	}
-	n := v.dragNode
-	if view := v.views[n.ID]; view != nil {
-		view.node.X = max(0, min(v.project.Width-n.Width, math.Round((n.X+(x-v.panX)/v.zoom-v.startX)/10)*10))
-		view.node.Y = max(0, min(v.project.Height-n.Height, math.Round((n.Y+(y-v.panY)/v.zoom-v.startY)/10)*10))
-		v.Update()
-		return
-	}
-}
-func (v *ProcessDiagram) OnLeftUp(x, y float64) {
-	if !v.drag {
-		return
-	}
-	if !finiteProcess(x) || !finiteProcess(y) {
-		v.OnPointerCancel()
-		return
-	}
-	v.OnMouseMove(x, y)
-	if !v.moved {
-		v.drag = false
-		v.PopCapture()
-		v.beforeDrag = ""
-		return
-	}
-	view := v.views[v.selected]
-	p := v.Project()
-	for i := range p.Nodes {
-		if p.Nodes[i].ID == v.selected {
-			p.Nodes[i].X, p.Nodes[i].Y = view.node.X, view.node.Y
-		}
-	}
-	v.drag = false
-	v.PopCapture()
-	v.beforeDrag = ""
-	v.err = v.edit(p)
-}
-func (v *ProcessDiagram) OnPointerCancel() {
-	if v.panning {
-		v.panning = false
-		v.PopCapture()
-	}
-	if v.drag {
-		v.drag = false
-		v.PopCapture()
-		if view := v.views[v.dragNode.ID]; view != nil {
-			view.node = v.dragNode
-		}
-		v.beforeDrag = ""
-	}
-	v.from = nil
-	v.Update()
 }
 func (v *ProcessDiagram) OnHide() { v.OnPointerCancel() }
 func (v *ProcessDiagram) OnMouseWheel(x, y, z float64) {
@@ -666,31 +542,6 @@ func (v *ProcessDiagram) FitToView() {
 	w, h := v.Size()
 	v.panX, v.panY = 0, 0
 	v.SetZoom(min(w/v.project.Width, h/v.project.Height))
-}
-
-func (v *ProcessDiagram) DuplicateSelected() error {
-	p := v.Project()
-	for _, n := range p.Nodes {
-		if n.ID != v.selected {
-			continue
-		}
-		for i := 1; ; i++ {
-			id := fmt.Sprintf("%s_copy%d", n.ID, i)
-			if v.views[id] == nil {
-				n.ID = id
-				break
-			}
-		}
-		n.X = min(p.Width-n.Width, n.X+20)
-		n.Y = min(p.Height-n.Height, n.Y+20)
-		p.Nodes = append(p.Nodes, n)
-		if e := v.edit(p); e != nil {
-			return e
-		}
-		v.selected = n.ID
-		return nil
-	}
-	return fmt.Errorf("select a node first")
 }
 
 func nextProcessLinkID(p hmi.Project) string {
