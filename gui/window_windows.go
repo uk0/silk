@@ -1881,6 +1881,7 @@ func MainLoop() {
 		//		core.OnExit()
 	}()
 
+	defer uiMonitor.enter()()
 	if len(winMap) == 0 {
 		core.Warn("no windows.")
 		return
@@ -2085,6 +2086,7 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 			}
 		}
 	}()
+	defer uiMonitor.enter()()
 
 	for pw := this.ParentWindow(); pw != nil; pw = pw.ParentWindow() {
 		if pw.IsEnabled() {

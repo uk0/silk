@@ -1714,6 +1714,8 @@ func MainLoop() {
 		}
 	}()
 
+	stopWatchdog := uiMonitor.enter()
+	defer stopWatchdog()
 	if len(winMap) == 0 {
 		flushNativeDestruction()
 		core.Warn("no windows.")
@@ -1752,6 +1754,7 @@ func MainLoop() {
 		}
 	}
 
+	stopWatchdog() // no pump remains during native/GPU teardown
 	flushNativeDestruction()
 	SetUIWakeup(nil)
 	glfwWakeup.stop() // join producers that already copied the old hook
@@ -2575,6 +2578,7 @@ func (this *Window) ShowModal(cbOnShow func()) (retParam interface{}) {
 			focusReturn.queue()
 		}
 	}()
+	defer uiMonitor.enter()()
 
 	for pw := this.ParentWindow(); pw != nil; pw = pw.ParentWindow() {
 		if pw.IsEnabled() {

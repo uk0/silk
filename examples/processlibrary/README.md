@@ -13,6 +13,11 @@ It refuses to replace either existing output. The two files are published
 independently, not as a multi-file transaction; a later failure can leave the
 first successfully written file in place.
 
+The CLI closes its framework run marker/resources on both success and failure,
+including argument errors and help. Exit codes are `0` for success/help, `1` for
+operation failure and `2` for invalid arguments. A failed no-overwrite run does
+not make the next legitimate invocation look like an abnormal prior shutdown.
+
 Open `plant.silkhmi` using `go run ./cmd/silkhmi -project <file>`, or open it in
 SilkIDE and use **Tools → Edit 2D Process...**. **Device library** previews and
 inserts equipment; **Open library** explicitly loads the companion catalog.

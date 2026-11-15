@@ -187,6 +187,7 @@ func (this *Window) DoDragDrop(from interface{},
 	content paint.Pixmap,
 	availableActions DndAction,
 	data ...interface{}) DndAction {
+	defer uiMonitor.enter()()
 
 	privateDndData = nil
 

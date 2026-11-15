@@ -85,6 +85,7 @@ func (this *Window) DoDragDrop(from interface{},
 	if dndActive {
 		return DndIgnore
 	}
+	defer uiMonitor.enter()()
 	privateDndData = nil
 
 	if len(data) == 0 {

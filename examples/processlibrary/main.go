@@ -3,20 +3,39 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/uk0/silk/hmi"
 	"os"
 	"path/filepath"
+
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/hmi"
 )
 
 func main() {
-	out := flag.String("out", "", "output directory (default: a fresh temporary directory)")
-	flag.Parse()
+	// os.Exit bypasses defers; close the framework run marker on failures too.
+	code := runCLI()
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+func runCLI() int {
+	defer core.Close()
+	flags := flag.NewFlagSet("processlibrary", flag.ContinueOnError)
+	out := flags.String("out", "", "output directory (default: a fresh temporary directory)")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 	if err := run(*out); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 func run(out string) error {
 	var err error

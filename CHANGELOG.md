@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — pump-owned diagnostics and SDK cleanup (2026-11-15)
+
+- Own UI stall diagnostics from actual main, modal and drag message pumps.
+  Nested pumps share one worker; last-owner exit cancels polling, and later
+  pumps get fresh state rather than inheriting a stale deadline.
+- Use a process-relative monotonic heartbeat clock. Retain the five-second
+  blocked-work detector, native-dialog wait scopes and recovery diagnostics;
+  do not wait on arbitrary user logging callbacks from the UI thread.
+- Fix false post-pump stall warnings reproduced in native baseline/candidate
+  controls on Windows, macOS and Linux. Deliberate active UI blocking remains
+  detectable; this is not a blanket CPU/FPS or startup-latency fix.
+- Close the processlibrary example's framework resources/run marker on success,
+  file failures, invalid arguments and help. Preserve operation/usage exit codes
+  and no-overwrite semantics; add real child-process restart/error-path tests.
+
 ## Unreleased — reusable 2D equipment library (2026-11-14)
 
 - Add immutable subgraph capture/placement SDK, default independent point

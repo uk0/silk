@@ -1642,6 +1642,14 @@ avoid repeated full-document work while idle. These are code-level fixes;
 Windows native idle/resource samples are recorded in [Windows UI QA](WINDOWS_UI_QA.md);
 **a full before/after CPU reduction or input-latency improvement is not established**.
 
+Stall diagnostics are owned by actual main/modal/drag pumps, use a monotonic
+clock and cancel their poller when the last pump exits. They no longer treat
+post-loop cleanup as a stalled event loop. Native baseline/candidate controls
+retain detection of deliberately blocked UI work; see
+[pump lifecycle verification](UI_PUMP_LIFECYCLE_QA_20261115.md).
+This fixes a diagnostic lifecycle defect, not every observed Windows startup,
+shutdown or first-frame delay.
+
 Windows previously requested macOS's Menlo font and resolved a proportional
 fallback, disabling the editor's ASCII measurement fast path. Platform defaults
 are now Consolas / Menlo / monospace. On the Windows QA machine, the isolated
