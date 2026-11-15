@@ -92,9 +92,16 @@ func parseGoCodeSymbols(lines []string) []CodeSymbol {
 
 func parseGoCodeSymbolsText(text string) []CodeSymbol {
 	declarations := goDeclarations(text)
-	var symbols []CodeSymbol
-	for _, declaration := range declarations {
-		symbols = append(symbols, declaration.symbol)
+	return symbolsFromGoDeclarations(declarations)
+}
+
+func symbolsFromGoDeclarations(declarations []goDeclaration) []CodeSymbol {
+	if len(declarations) == 0 {
+		return nil
+	}
+	symbols := make([]CodeSymbol, len(declarations))
+	for i, declaration := range declarations {
+		symbols[i] = declaration.symbol
 	}
 	return symbols
 }

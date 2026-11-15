@@ -3,6 +3,37 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 非阻塞符号快照与增量大纲
+
+- `CodeEditor.SymbolsSnapshotSince(previous)` 返回 `(symbols, contentRevision, ready)`。
+  首次读取或切换编辑器传 `0`；版本号属于当前编辑器，不是文本版本或 LSP 版本。
+- `ready == false` 时不可使用旧行号导航；保留自己的视图可行，但应禁用跳转。
+  `ready == true` 且版本未变时不复制符号；版本变了而 `symbols == nil` 表示大纲确实变空。
+  返回的变更快照归调用方所有，修改不会污染编辑器缓存。
+- 配合 `SubscribeSymbolsChanged` 在 UI 线程消费。相同声明不必重建树，也不会丢失展开、选择状态。
+  旧的 `SymbolsSnapshot()` 和同步精确查询 `ParseSymbols()` 保持兼容。
+- 已验证的 Go 行注释正文编辑可立即沿用精确符号投影；签名内注释、指令、换行、结构、
+  非法编码及无法证明安全的编辑仍使用完整容错 AST 解析。没有新增空闲轮询或持续绘制计时器。
+
+```go
+// 在 UI 线程绑定；更换 editor 时先取消旧订阅，再重新绑定。
+func bindOutline(editor *gui.CodeEditor, setNavigationEnabled func(bool),
+    rebuildOutline func([]gui.CodeSymbol)) func() {
+    var version uint64
+    refresh := func() {
+        symbols, next, ready := editor.SymbolsSnapshotSince(version)
+        setNavigationEnabled(ready)
+        if ready && next != version {
+            version = next
+            rebuildOutline(symbols)
+        }
+    }
+    unsubscribe := editor.SubscribeSymbolsChanged(refresh)
+    refresh()
+    return unsubscribe
+}
+```
+
 ## 工业 3D 场景基础（开发中）
 
 - `scene3d`：纯 Go 不可变网格、层级节点/快照、Box/Cylinder、受限 OBJ 加载器、

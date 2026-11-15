@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — incremental symbol projections and outline snapshots (2026-11-15)
+
+- Add nonblocking `CodeEditor.SymbolsSnapshotSince`, with editor-local content
+  identity, owned changed snapshots and no copying when declarations are equal.
+- Matched uninstrumented Windows release replay of EOF line-comment input:
+  IDE typing CPU 19.42 →
+  12.42 seconds; cumulative Go allocation over 45 seconds 1,941 → 483 MiB.
+  These are workload-specific measurements; gopls CPU is not improved.
+  Function-body/string controls in both run orders reduce allocations 31–33%
+  but do not demonstrate a CPU speedup.
+- Reuse exact Go symbol projections for proven line-comment payload edits.
+  Keep the complete tolerant AST fallback for signatures, directives, newlines,
+  invalid encoding and structural/uncertain edits; preserve physical positions.
+- Publish immutable metadata so safe UI edits do not race a worker or flash an
+  indexing placeholder. Retire private large-source snapshots on close/shrink.
+- Reuse unchanged outline trees, selection and expansion. Gate retained pending
+  rows from painting, hit testing and keyboard navigation; reset editor/provider
+  identity correctly. Preallocate full-parser declaration/result storage.
+- Add differential/fuzz, snapshot-ownership and lifecycle/race regression, and
+  document the SDK consumption pattern and actual native performance evidence.
+- Verify full ordinary/race suites on macOS arm64, Linux arm64/Xvfb and Windows
+  amd64, nine strict real bundled-gopls probes, and 181,886 differential fuzz
+  executions. Add the final native Windows screenshot and explicit skip counts.
+
 ## Unreleased — device-pixel editor overview cache (2026-11-15)
 
 - Cache the minimap at native device resolution and repaint only changed

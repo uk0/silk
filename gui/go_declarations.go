@@ -19,6 +19,10 @@ type goDeclaration struct {
 }
 
 func parseRecoverableGo(content string, outline bool) (source []byte, fset *gotoken.FileSet, file *ast.File, prefix, prefixLines int) {
+	return parseGoSource(content, outline, nil)
+}
+
+func parseGoSource(content string, outline bool, metadata *goOutlineMetadata) (source []byte, fset *gotoken.FileSet, file *ast.File, prefix, prefixLines int) {
 	source = []byte(content)
 	// The editor also supports package-less snippets. Insert only a synthetic
 	// package clause, keeping an explicit offset/line correction for all results.
@@ -32,22 +36,33 @@ func parseRecoverableGo(content string, outline bool) (source []byte, fset *goto
 		prefix, prefixLines = len(header), 1
 	}
 	if outline {
-		blankOutlineFunctionBodies(source)
+		blankGoOutlineBodies(source, metadata, prefix)
 	}
 	fset = gotoken.NewFileSet()
-	file, _ = parser.ParseFile(fset, "", source, parser.AllErrors|parser.SkipObjectResolution)
+	var err error
+	file, err = parser.ParseFile(fset, "", source, parser.AllErrors|parser.SkipObjectResolution)
+	if metadata != nil {
+		metadata.valid = file != nil && err == nil
+	}
 	return
 }
 
 func goDeclarations(content string) []goDeclaration {
+	return parseGoDeclarations(content, nil)
+}
+
+func parseGoDeclarations(content string, metadata *goOutlineMetadata) []goDeclaration {
 	if content == "" {
 		return nil
 	}
-	source, fset, file, prefix, prefixLines := parseRecoverableGo(content, true)
+	source, fset, file, prefix, prefixLines := parseGoSource(content, true, metadata)
 	if file == nil {
 		return nil
 	}
 	var result []goDeclaration
+	if len(file.Decls) > 0 {
+		result = make([]goDeclaration, 0, len(file.Decls))
+	}
 	add := func(id *ast.Ident, kind int, detail, receiver string) {
 		if id == nil || id.Name == "_" || !gotoken.IsIdentifier(id.Name) || !id.Pos().IsValid() {
 			return
@@ -88,6 +103,12 @@ func goDeclarations(content string) []goDeclaration {
 			if d.Name == nil || d.Type == nil {
 				continue
 			}
+			if metadata != nil && metadata.valid {
+				metadata.headers = append(metadata.headers, goOutlineSpan{
+					fset.PositionFor(d.Pos(), false).Offset - prefix,
+					fset.PositionFor(d.Type.End(), false).Offset - prefix,
+				})
+			}
 			kind, recv := SymFunc, ""
 			if d.Recv != nil && len(d.Recv.List) > 0 {
 				kind = SymMethod
@@ -122,6 +143,12 @@ func goDeclarations(content string) []goDeclaration {
 				}
 			}
 		}
+	}
+	if metadata != nil {
+		metadata.finish()
+	}
+	if len(result) == 0 {
+		return nil
 	}
 	return result
 }
@@ -159,9 +186,17 @@ func declarationKind(kind int) string {
 // The scanner, not substring searches, distinguishes comments/strings; struct
 // and interface result types and generic constraints remain intact.
 func blankOutlineFunctionBodies(source []byte) {
+	blankGoOutlineBodies(source, nil, 0)
+}
+
+func blankGoOutlineBodies(source []byte, metadata *goOutlineMetadata, prefix int) {
 	var scan scanner.Scanner
 	file := gotoken.NewFileSet().AddFile("", -1, len(source))
-	scan.Init(file, source, nil, 0)
+	mode := scanner.Mode(0)
+	if metadata != nil {
+		mode = scanner.ScanComments
+	}
+	scan.Init(file, source, nil, mode)
 	braces, parens, brackets := 0, 0, 0
 	header := false
 	bodyStart := -1
@@ -174,6 +209,16 @@ func blankOutlineFunctionBodies(source []byte) {
 			break
 		}
 		offset := file.Offset(pos)
+		if tok == gotoken.COMMENT {
+			if metadata != nil && offset+1 < len(source) && source[offset+1] == '/' {
+				end := offset
+				for end < len(source) && source[end] != '\n' {
+					end++
+				}
+				metadata.comments = append(metadata.comments, goOutlineSpan{offset + 2 - prefix, end - prefix})
+			}
+			continue // comments must not replace the preceding struct/interface token
+		}
 		if bodyStart >= 0 {
 			if tok == gotoken.LBRACE {
 				braces++

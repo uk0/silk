@@ -107,10 +107,11 @@ type CodeOutlinePanel struct {
 	// The editor owns its content revision, so unchanged Draw calls check one
 	// integer instead of walking every line. Hosts can additionally invalidate
 	// semantic data through SetRevision without changing the editor text.
-	lastTextRevision    uint64
-	lastSymbolsRevision uint64
-	revision            int
-	dirty               bool
+	lastTextRevision      uint64
+	lastSymbolsRevision   uint64
+	symbolContentRevision uint64 // editor-local immutable snapshot identity
+	revision              int
+	dirty                 bool
 
 	// Fonts and visible labels are cached; idle paints do not allocate fonts,
 	// remeasure long names, or scan every symbol to follow an unchanged caret.
@@ -147,6 +148,8 @@ func (this *CodeOutlinePanel) SetEditor(editor *gui.CodeEditor) {
 		this.symbolsUnsubscribe = nil
 	}
 	this.editor = editor
+	this.symbolContentRevision = 0
+	this.symbols, this.tree, this.flatList = nil, nil, nil
 	if editor != nil {
 		this.symbolsUnsubscribe = editor.SubscribeSymbolsChanged(func() { this.Self().Update() })
 	}
@@ -169,6 +172,7 @@ func (this *CodeOutlinePanel) SetNavigateCallback(fn func(line int)) {
 // which is also what an editor with no language server keeps using.
 func (this *CodeOutlinePanel) SetSymbols(syms []OutlineSymbol) {
 	this.semantic = cloneOutlineSymbols(syms)
+	this.symbolContentRevision = 0 // this tree now has an explicit provider source
 	this.seedContentCache()
 	this.RefreshSymbols()
 	this.Self().Update()
@@ -304,24 +308,38 @@ func (this *CodeOutlinePanel) RefreshSymbols() {
 		// A server response for old text must never hide the edited declarations.
 		this.semantic = nil
 	}
-	this.seedContentCache()
-	this.selectedIdx, this.hoverIdx = -1, -1
 	this.cursorCached = false
-	this.symbols = nil
-	this.symbolsLoading = false
-	this.tree = nil
-	this.flatList = nil
 
 	if len(this.semantic) == 0 {
 		if this.editor == nil {
+			this.symbols, this.tree, this.flatList = nil, nil, nil
+			this.symbolContentRevision = 0
+			this.symbolsLoading = false
+			this.selectedIdx, this.hoverIdx = -1, -1
 			this.scrollY = 0
+			this.seedContentCache()
 			return
 		}
-		var ready bool
-		this.symbols, ready = this.editor.SymbolsSnapshot()
+		symbols, revision, ready := this.editor.SymbolsSnapshotSince(this.symbolContentRevision)
 		this.symbolsLoading = !ready
+		this.seedContentCache()
+		if !ready {
+			// Retain owned storage/expansion state, not actionable stale rows.
+			// Draw and every navigation entry point gate on symbolsLoading.
+			this.hoverIdx = -1
+			return
+		}
+		if revision == this.symbolContentRevision {
+			return
+		}
+		this.symbols, this.symbolContentRevision = symbols, revision
+	} else {
+		this.symbolsLoading = false
+		this.symbolContentRevision = 0
+		this.seedContentCache()
 	}
 
+	this.selectedIdx, this.hoverIdx = -1, -1
 	this.buildTree()
 	this.rebuildFlatList()
 }
@@ -659,7 +677,7 @@ func (this *CodeOutlinePanel) Draw(g paint.Painter) {
 	}
 	g.Rectangle(0, hh, w, h-hh)
 	g.Clip()
-	if len(this.flatList) == 0 {
+	if this.symbolsLoading || len(this.flatList) == 0 {
 		label := i18n.T("No symbols")
 		if this.symbolsLoading {
 			label = i18n.T("Indexing symbols...")
@@ -724,6 +742,9 @@ func (this *CodeOutlinePanel) Draw(g paint.Painter) {
 
 // hitTest returns the flat list index for a given y coordinate, or -1.
 func (this *CodeOutlinePanel) hitTest(y float64) int {
+	if this.symbolsLoading {
+		return -1
+	}
 	this.clampScroll()
 	headerH := this.headerHeight()
 	if y < headerH || y >= this.Height() {
@@ -822,6 +843,9 @@ func (this *CodeOutlinePanel) OnKeyDown(key int, repeat bool) {
 		return
 	}
 	this.RefreshIfStale()
+	if this.symbolsLoading {
+		return
+	}
 	this.ensureFonts()
 	if len(this.flatList) == 0 {
 		return

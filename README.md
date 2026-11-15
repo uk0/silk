@@ -95,7 +95,23 @@ compatible existing points explicitly. No data source starts while browsing.
 
 ---
 
-## Windows editor rendering (2026-11-15)
+## Editor rendering and incremental analysis (2026-11-15)
+
+The outline now consumes copy-on-change SDK symbol snapshots and preserves
+unchanged trees. Proven Go line-comment edits reuse immutable exact symbol
+projections immediately; structural, signature, directive and uncertain edits
+still use the tolerant AST parser. Pending old rows cannot draw or navigate.
+
+In one matched, uninstrumented Windows release replay typing in an EOF Go
+line comment of a 5,000-function file, IDE CPU fell from **19.42 s to 12.42 s**
+and 45-second cumulative Go
+allocation from **1,941 MiB to 483 MiB**. These are workload-specific process
+measurements, not FPS, input-to-photon latency or a gopls CPU improvement.
+Two function-body/string controls, including reverse run order, reduce
+allocations by **31–33%** but do not demonstrate a CPU improvement; general
+code-editing CPU remains ongoing work.
+See [analysis pipeline QA](EDITOR_SYMBOL_PIPELINE_QA_20261115.md) and the
+[nonblocking snapshot SDK contract](docs/SDK_FEATURES.md#非阻塞符号快照与增量大纲).
 
 The editor minimap now reuses native-device-resolution pixels and updates only
 changed sample bands, including fractional dock positions. It does not scale a
@@ -112,7 +128,7 @@ or latency issues are solved**.
 <details>
 <summary>Windows native 5,000-function editor replay</summary>
 
-![Windows release-build editor with live outline and device-resolution minimap](docs/images/silkide-editor-minimap-windows.png)
+![Windows release-build editor with immutable outline snapshots and device-resolution minimap](docs/images/silkide-editor-symbols-windows.png)
 
 Actual final-candidate native desktop capture after typed-file save/readback;
 the source, outline and connected bundled gopls remain visible.
@@ -2092,8 +2108,11 @@ GOOS=linux GOARCH=amd64 go build -o myapp hello.go
 ### Running Tests
 
 ```bash
-# All tests
-go test -short ./...
+# Full suite (do not reuse successful result-cache entries)
+go test -count=1 ./...
+
+# Race regression (requires a supported native toolchain)
+go test -race -count=1 ./...
 
 # Specific package with verbose output
 go test -v ./gui/
@@ -2102,7 +2121,10 @@ go test -v ./gui/
 go test -bench=. -benchmem ./gui/
 ```
 
-Current test suite: **398+ tests**, 100% pass rate.
+Results are platform- and environment-specific; native/UI/LSP prerequisites
+can cause explicit skips. Do not count skips as passes or short-mode tests as
+the complete suite. See the latest [platform verification and named-test
+counts](EDITOR_SYMBOL_PIPELINE_QA_20261115.md#verification-gates).
 
 ### Development Cycle
 

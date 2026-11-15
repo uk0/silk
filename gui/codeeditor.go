@@ -726,6 +726,11 @@ func (this *CodeEditor) TextRevision() uint64 {
 // Keep the old string on equality so no-op edits preserve the cached storage.
 func (this *CodeEditor) cacheText(text string) {
 	changed := text != this.text
+	var symbolProjection *goSymbolProjection
+	if changed && this.symbolCache.valid && this.symbolCache.key.revision == this.textRevision &&
+		this.symbolCache.projection != nil && this.symbolCache.projection.text == this.text {
+		symbolProjection = this.symbolCache.projection.advance(text)
+	}
 	if changed && !this.bookmarkState.mapped {
 		this.reanchorBookmarks(this.text)
 	}
@@ -733,13 +738,25 @@ func (this *CodeEditor) cacheText(text string) {
 		this.CancelFormat()
 		this.text = text
 		this.textRevision++
+		this.symbolCache.projection = symbolProjection
+		if symbolProjection != nil {
+			// Exact symbol fields did not change. Keep the snapshot ready and
+			// avoid a parse, tree rebuild and transient "Indexing" frame.
+			this.symbolCache.key.revision = this.textRevision
+		}
 		this.findScopeTextChanged()
 		if this.completion != nil {
 			this.completion.Dismiss()
 			this.completion.cancelLocal(true)
 		}
 		this.symbolsRevision++
-		this.cancelSymbolRequest()
+		if len(text) < symbolAsyncBytes {
+			// A shrunken/replaced document must not pin its former large
+			// worker snapshot while the synchronous small-file path is used.
+			this.CancelSymbolIndex()
+		} else {
+			this.cancelSymbolRequest()
+		}
 		this.invalidateHoverHint()
 		this.ClearExternalCompletions()
 		this.textRuneCount = utf8.RuneCountInString(text)

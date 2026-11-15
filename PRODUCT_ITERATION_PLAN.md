@@ -9,7 +9,29 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
-## Current increment: measured Windows editor performance
+## Current increment: incremental analysis and SDK snapshots
+
+- [x] Capture a sampled-allocation profile of the actual Windows typing flow;
+      distinguish AST, outline rebuilding, completion and JSON allocations.
+- [x] Add immutable exact comment projections and content-versioned SDK
+      snapshots without disabling completion features or replacing Go parsing.
+- [x] Reuse equal outline trees while forbidding stale pending draw/navigation;
+      test ownership, editor/provider identity and nonblocking worker retirement.
+- [x] Complete uninstrumented native release replay and frozen-source full
+      three-platform ordinary/race regression plus nine strict bundled-gopls
+      probes. Keep the publication index byte-identical to tested build inputs.
+- [ ] Continue local-completion indexing, LSP full-text transport/server CPU,
+      macOS keyboard/IME and full designer authoring. Do not call a partial
+      analysis optimization a complete compiler or a complete product.
+
+The measured candidate allocation profile now puts local completion scans at
+about 42% and JSON serialization at about 25%. Next performance work should
+preserve candidate ordering/ownership and negotiate any incremental LSP sync
+against server capabilities. Require UTF-16/CRLF/unsaved-text differential
+tests, explicit-command flush/order checks and matched native replay; do not
+merely lengthen every debounce or suppress language features to lower CPU.
+
+## Validated increment: measured Windows editor performance (`cd5da66`)
 
 - [x] Capture the real non-race release build, OS process/child CPU, native
       keyboard input, saved-file readback, rendering and normal shutdown.

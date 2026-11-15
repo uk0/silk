@@ -40,16 +40,33 @@ type symbolIndexWorker struct {
 	done            chan struct{}
 	debounce        time.Duration
 	parse           func(symbolIndexRequest) codeSymbolCache
+	index           goSymbolIndex // owned by the one running worker, not the UI
+	language        string
 	delivery        *async.Latest[symbolIndexResult]
 }
 
 func newSymbolIndexWorker(post func(func()), consume func(symbolIndexResult)) *symbolIndexWorker {
 	delivery, _ := async.NewLatest(post, consume)
-	return &symbolIndexWorker{delivery: delivery, debounce: 90 * time.Millisecond, parse: func(r symbolIndexRequest) codeSymbolCache {
+	w := &symbolIndexWorker{delivery: delivery, debounce: 90 * time.Millisecond}
+	w.parse = func(r symbolIndexRequest) codeSymbolCache {
+		if w.language != r.key.language {
+			w.index = goSymbolIndex{}
+			w.language = r.key.language
+		}
+		var symbols []CodeSymbol
+		if goSyntaxLanguage(r.key.language) {
+			symbols = w.index.parse(r.text)
+		} else {
+			w.index = goSymbolIndex{}
+		}
 		var c codeSymbolCache
-		c.store(r.key, mergeCodeSymbols(r.text, goSyntaxLanguage(r.key.language), r.additional))
+		c.store(r.key, mergeAdditionalCodeSymbols(symbols, r.additional))
+		if len(r.additional) == 0 {
+			c.projection = w.index.projection()
+		}
 		return c
-	}}
+	}
+	return w
 }
 func (w *symbolIndexWorker) cancelLocked() {
 	if w.latest != nil {
@@ -80,6 +97,10 @@ func (w *symbolIndexWorker) close() {
 	w.mu.Lock()
 	w.closed = true
 	w.cancelLocked()
+	if !w.running {
+		w.index = goSymbolIndex{}
+		w.language = ""
+	}
 	w.mu.Unlock()
 	w.delivery.Close()
 }
@@ -90,6 +111,10 @@ func (w *symbolIndexWorker) run(done chan struct{}) {
 		job := w.latest
 		w.latest = nil
 		if w.closed || job == nil {
+			if w.closed {
+				w.index = goSymbolIndex{}
+				w.language = ""
+			}
 			w.running = false
 			w.activeCancel = nil
 			w.mu.Unlock()
@@ -153,7 +178,7 @@ func (e *CodeEditor) ensureSymbols() bool {
 				return
 			}
 			e.symbolPending = false
-			e.symbolCache = r.cache
+			e.symbolCache.adopt(r.cache)
 			e.symbolsRevision++ // notify outline consumers even though text is unchanged
 			e.Update()
 			e.notifySymbolsChanged()
@@ -178,6 +203,27 @@ func (e *CodeEditor) SymbolsSnapshot() (symbols []CodeSymbol, ready bool) {
 		return nil, false
 	}
 	return append([]CodeSymbol(nil), e.symbolCache.symbols...), true
+}
+
+// SymbolsSnapshotSince is a nonblocking, copy-on-change version of
+// SymbolsSnapshot. Pass zero on first use or when changing editors. Revisions
+// are local to this editor, not text/LSP versions. While indexing, ready=false
+// and no old coordinates are returned. When ready=true and revision==previous,
+// symbols is omitted: the caller's owned snapshot is still exact. A changed
+// revision with nil symbols means the new outline is genuinely empty.
+//
+// Only ready snapshots advance the caller's token. Changed results are owned
+// copies; callers can mutate them without changing any editor/index state.
+// UI-thread only, like SymbolsSnapshot and SubscribeSymbolsChanged.
+func (e *CodeEditor) SymbolsSnapshotSince(previous uint64) (symbols []CodeSymbol, revision uint64, ready bool) {
+	if !e.ensureSymbols() {
+		return nil, e.symbolCache.contentRevision, false
+	}
+	revision = e.symbolCache.contentRevision
+	if revision == previous {
+		return nil, revision, true
+	}
+	return append([]CodeSymbol(nil), e.symbolCache.symbols...), revision, true
 }
 func (e *CodeEditor) cancelSymbolRequest() {
 	e.symbolPending = false
