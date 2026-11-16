@@ -25,6 +25,35 @@ func regenerateCompanion(silkuiPath string) error {
 	if err != nil {
 		return err
 	}
+	var captured *ged.CodeSnapshot
+	if machine.Exists() && hasCompanionHeader(string(machine.Bytes()), ged.GeneratedCodeHeader) {
+		// Legacy synchronous entrypoint only. The async save path captures the
+		// existing scene on UI and never constructs widgets on its worker.
+		scene := ged.NewGedScene()
+		if err := scene.LoadDesign(doc); err != nil {
+			return err
+		}
+		captured = scene.CaptureCodeSnapshot()
+	}
+	return regenerateCompanionCaptured(silkuiPath, doc, captured, machine)
+}
+
+// regenerateCompanionSnapshot consumes independently captured inputs, not the
+// latest primary file on disk. Typed code capture happens on UI, while package
+// scanning, AST rendering, validation and physical writes happen on the worker.
+// A primary save may succeed even if companion generation returns a warning.
+func regenerateCompanionSnapshot(silkuiPath string, doc *core.TDoc, captured *ged.CodeSnapshot) error {
+	if doc == nil {
+		return fmt.Errorf("companion: missing captured document")
+	}
+	machine, err := filetxn.Read(strings.TrimSuffix(silkuiPath, ".silkui") + ".silk.go")
+	if err != nil {
+		return err
+	}
+	return regenerateCompanionCaptured(silkuiPath, doc, captured, machine)
+}
+
+func regenerateCompanionCaptured(silkuiPath string, doc *core.TDoc, captured *ged.CodeSnapshot, machine filetxn.Snapshot) error {
 	packageName, err := companionPackage(filepath.Dir(silkuiPath))
 	if err != nil {
 		return err
@@ -35,23 +64,10 @@ func regenerateCompanion(silkuiPath string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", machine.Path(), err)
 		}
-		// Auto-save must never synthesize a missing user file/main() behind the
-		// developer's back. Explicit export is the recovery action for that case.
-		user, err := filetxn.Read(stem + ".go")
-		if err != nil {
-			return err
+		if captured == nil {
+			return fmt.Errorf("companion: typed export requires a captured code snapshot")
 		}
-		if !user.Exists() {
-			return fmt.Errorf("%s: split export has no user file; restore it or explicitly export to a new path", user.Path())
-		}
-		scene := ged.NewGedScene()
-		if err := scene.LoadDesign(doc); err != nil {
-			return err
-		}
-		if missing := scene.MissingWidgets(); len(missing) != 0 {
-			return fmt.Errorf("cannot regenerate with missing widgets: %v", missing)
-		}
-		result, err := scene.GenerateCodeFile(machine.Path(), ged.CodeGenOptions{PackageName: packageName, TypeName: typeName})
+		result, err := captured.RegenerateCodeFile(machine.Path(), ged.CodeGenOptions{PackageName: packageName, TypeName: typeName})
 		if err != nil {
 			return err
 		}

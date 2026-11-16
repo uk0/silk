@@ -98,12 +98,15 @@ type IUndoStack interface {
 
 // 支持撤销恢复的命令堆栈
 type UndoStack struct {
-	name       string
-	cmds       []ICommand
-	current    int
-	clean      int
-	undoAction *Action
-	redoAction *Action
+	name         string
+	cmds         []ICommand
+	current      int
+	clean        int
+	revision     uint64
+	editRevision uint64 // command changes, excluding the saved-position marker
+	executing    int
+	undoAction   *Action
+	redoAction   *Action
 }
 
 func NewUndoStack(name string) *UndoStack {
@@ -132,6 +135,10 @@ func (this *UndoStack) Push(cmd ICommand) {
 	if cmd == nil {
 		return
 	}
+	this.revision++
+	this.editRevision++
+	this.executing++
+	defer func() { this.executing-- }()
 	// Pushing after Undo creates a new branch. A saved state on the discarded
 	// redo branch is no longer reachable, even if the new branch later has the
 	// same numeric index. Keep clean points at/before the branch point intact.
@@ -170,6 +177,10 @@ func (this *UndoStack) Undo() {
 	if !this.CanUndo() {
 		return
 	}
+	this.revision++
+	this.editRevision++
+	this.executing++
+	defer func() { this.executing-- }()
 	this.current--
 	this.cmds[this.current].Undo()
 	this.syncActions()
@@ -193,6 +204,10 @@ func (this *UndoStack) Redo() {
 	if !this.CanRedo() {
 		return
 	}
+	this.revision++
+	this.editRevision++
+	this.executing++
+	defer func() { this.executing-- }()
 	this.cmds[this.current].Redo()
 	this.current++
 	this.syncActions()
@@ -223,6 +238,7 @@ func (this *UndoStack) Command(index int) ICommand {
 
 func (this *UndoStack) SetClean() {
 	if this.clean != this.current {
+		this.revision++
 		this.clean = this.current
 		this.emitCheanChanged()
 	}
@@ -245,6 +261,8 @@ func (this *UndoStack) emitCheanChanged() {
 }
 
 func (this *UndoStack) Clear() {
+	this.revision++
+	this.editRevision++
 	if this.IsClean() {
 		this.clean = 0
 	} else {

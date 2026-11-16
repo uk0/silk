@@ -34,6 +34,8 @@ type GedScene struct {
 	pendingEditSeq  int
 	committingEdits bool
 	saving          bool
+	saveIntent      *designSaveIntent
+	designRevision  uint64
 	graph.SceneItem
 	filename string
 	title    string
@@ -172,6 +174,7 @@ func (this *GedScene) NotifyDesignChanged() {
 }
 
 func (this *GedScene) notifyDesignChanged(refreshProperties bool) {
+	this.designRevision++
 	if this.cbDesignChanged != nil {
 		this.cbDesignChanged()
 	}
@@ -309,6 +312,7 @@ func (this *GedScene) Save() bool {
 }
 
 func (this *GedScene) LoadDesign(doc *core.TDoc) error {
+	this.designRevision++
 	var bounds geom.Rect
 	doc.ReadAttr("bounds", &bounds)
 	this.SetBounds1(bounds)
@@ -398,6 +402,9 @@ func (this *GedScene) Filename() string {
 }
 
 func (this *GedScene) SetFilename(f string) {
+	if this.filename != f {
+		this.designRevision++
+	}
 	this.filename = f
 }
 

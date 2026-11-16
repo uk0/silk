@@ -40,6 +40,11 @@ type workbench struct {
 	restore           *workspaceRestore
 	opens             *editorOpenController
 	designOpen        *designOpenController
+	designSaves       *ownedDesignSaver
+	designDisk        designDiskBinding
+	sourceSaves       *ownedSourceSaver
+	saveBatch         *documentSaveBatch
+	transitions       *documentTransitionController
 	notifications     *notificationsPane
 	closedEditors     closedEditorHistory
 	toolViews         map[workspaceMode]workbenchToolViews

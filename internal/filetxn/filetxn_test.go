@@ -56,6 +56,33 @@ func TestCommitConflictNoopAndPermissions(t *testing.T) {
 		t.Fatal("temp files leaked", files)
 	}
 }
+
+func TestCommitReadOnlyPlanRefusesEveryMutationBeforeStaging(t *testing.T) {
+	dir := t.TempDir()
+	a := snapshot(t, filepath.Join(dir, "writable"), "a")
+	path := filepath.Join(dir, "readonly")
+	snapshot(t, path, "b")
+	if err := os.Chmod(path, 0444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0600) })
+	b, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Commit(Change{b, []byte("b")}); err != nil {
+		t.Fatal("read-only no-op refused", err)
+	}
+	if err := Commit(Change{a, []byte("new a")}, Change{b, []byte("new b")}); !errors.Is(err, os.ErrPermission) {
+		t.Fatal("read-only replacement not refused", err)
+	}
+	assertContents(t, a.path, "a")
+	assertContents(t, path, "b")
+	files, _ := os.ReadDir(dir)
+	if len(files) != 2 {
+		t.Fatal("preflight left staging files", files)
+	}
+}
 func TestCommitPreflightAndRollback(t *testing.T) {
 	dir := t.TempDir()
 	a := snapshot(t, filepath.Join(dir, "a.go"), "a-old")

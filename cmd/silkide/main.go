@@ -367,7 +367,7 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 		}
 	})
 	addIconAction("", "save", "Save", func() {
-		saveCurrentDocument(editorTabs, designCanvas)
+		requestCurrentDocumentSave(editorTabs, designCanvas, nil)
 	})
 	tb.AddSeparator()
 
@@ -971,7 +971,7 @@ func buildEditorTabs(centerDock *gui.Dock) *gui.TabWidget {
 	// closeEditorTab's answer back keeps a cancelled close from looking to
 	// TabBar like the tab went away.
 	tabs.TabBar().SetCloseCallback(func(tb *gui.TabBar, idx int) bool {
-		return closeEditorTab(tabs, idx)
+		return requestCloseEditorTab(tabs, idx)
 	})
 	tabs.TabBar().SetContextMenuCallback(func(_ *gui.TabBar, menu *gui.Menu, idx int) {
 		buildEditorTabContextMenu(menu, tabs, idx)
@@ -1075,6 +1075,9 @@ func detachEditorTab(tabs *gui.TabWidget, target gui.IWidget, ed *gui.CodeEditor
 		ed.CancelGitStatus()
 		delete(editorGitManualRefresh, ed)
 		delete(openEditors, path)
+		if w := globalWorkbench; w != nil && w.sourceSaves != nil {
+			w.sourceSaves.forget(ed)
+		}
 		lspDidCloseFile(path) // tell gopls + drop diag/version state
 	}
 	tabs.RemoveTab(idx)
@@ -1255,7 +1258,15 @@ func installQuitGuard(frame *gui.Frame, canvas *ged.GedView) {
 	if frame == nil {
 		return
 	}
-	frame.SetCanCloseCallback(func(*gui.Frame) bool { return canQuit(canvas) })
+	frame.SetCanCloseCallback(func(f *gui.Frame) bool {
+		w := globalWorkbench
+		if w != nil && w.frame == f {
+			requestQuitDocuments(w.tabs, canvas, func() { f.Close() })
+		}
+		// Frame.Close itself is a committed teardown (does not call CanClose).
+		// The admitted continuation invokes it only after the guard succeeds.
+		return false
+	})
 }
 
 // installClosedPersist captures the session before frame teardown and ends the
@@ -1969,6 +1980,9 @@ func reportBuildOutput(line string) {
 // back to the terminal's existing cwd, which is the silkide
 // process's working directory.
 func runProjectInTerminal(canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if dispatchProcessRuntime(canvas) {
 		return
 	}
@@ -2350,6 +2364,9 @@ func firstPackageLineIsMain(src string) bool {
 // idempotent and replaces the prior content, so the pane shows the
 // latest run's full result).
 func buildProject(canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if globalBuildOutput == nil {
 		buildOutputPane()
 	}
@@ -2402,6 +2419,9 @@ func buildProject(canvas *ged.GedView) {
 //
 // Wired to F7 + the "Run Tests" menu/palette command.
 func runProjectTests(canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if globalBuildOutput == nil {
 		buildOutputPane()
 	}
@@ -2468,6 +2488,9 @@ func testResultCounts() (passed, failed, skipped int) {
 // it when it is done reading. Bound to Cmd+Shift+F7 + the "Run with
 // Coverage" palette command.
 func runProjectWithCoverage(canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if globalBuildOutput == nil {
 		buildOutputPane()
 	}
@@ -2745,6 +2768,9 @@ func slashSep(p string, sep rune) string {
 //
 // Bound to Shift+F6 + the "Run go vet" palette command.
 func runProjectVet(canvas *ged.GedView) {
+	if rejectDuringRename() {
+		return
+	}
 	if globalBuildOutput == nil {
 		buildOutputPane()
 	}
@@ -3129,6 +3155,7 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 		ed.ReplaceAllText(out)
 	}
 	ed.MarkSaved()
+	noteSynchronousSourceSave(ed, path, out)
 	ed.RefreshGitStatus()
 	if parent := ed.Parent(); parent != nil {
 		if tabs, ok := parent.Parent().(*gui.TabWidget); ok {
@@ -3241,18 +3268,23 @@ func newDesignCanvas(canvas *ged.GedView) {
 			w.restore.retireDesign()
 		}
 	}
-	if !confirmDiscardDirty(canvas) {
-		return
-	}
-	scene := ged.NewGedScene()
-	canvas.SetScene(scene)
-	if globalInspector != nil {
-		globalInspector.SetScene(scene)
-		globalInspector.Rebuild()
-	}
-	rebindAutoSaver(scene)
-	showDesignWorkspace(canvas)
-	canvas.Update()
+	requestDesignTransition("new", canvas, func(ok bool) {
+		if !ok {
+			return
+		}
+		scene := ged.NewGedScene()
+		canvas.SetScene(scene)
+		if globalInspector != nil {
+			globalInspector.SetScene(scene)
+			globalInspector.Rebuild()
+		}
+		rebindAutoSaver(scene)
+		showDesignWorkspace(canvas)
+		canvas.Update()
+		if w := globalWorkbench; w != nil && w.canvas == canvas {
+			syncDocumentWindowTitle(w.frame, canvas)
+		}
+	})
 }
 
 // rebindAutoSaver retargets the package-level auto-saver at `scene`.
@@ -3274,6 +3306,7 @@ func rebindAutoSaver(scene *ged.GedScene) {
 		globalAutoSaver.Stop()
 	}
 	globalAutoSaver.Start(scene)
+	globalAutoSaver.SetSaveRequest(requestDesignRecovery)
 }
 
 // confirmRecoverFromAutosave prompts the user when an .autosave
@@ -3323,6 +3356,10 @@ var askDiscardDirtyDesign = func(canvas *ged.GedView) gui.DialogResult {
 }
 
 func confirmDiscardDirty(canvas *ged.GedView) bool {
+	if anySaveBusy() || saveBatchBusy() {
+		rejectDuringRename()
+		return false
+	}
 	if canvas == nil {
 		return true
 	}

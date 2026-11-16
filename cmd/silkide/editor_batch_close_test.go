@@ -388,6 +388,73 @@ func TestEditorBatchCloseFormatsGoAndPreservesNewerText(t *testing.T) {
 		t.Fatal("formatted state not reopened")
 	}
 }
+
+func TestEditorBatchCloseCRLFAndSavedBaselineAfterNewInput(t *testing.T) {
+	w := testWorkbench(t)
+	q := batchQueue(t)
+	path := writeFile(t, t.TempDir(), "main.go", "package p\r\n")
+	if !openTestEditorReady(t, w.tabs, path) {
+		t.Fatal("open")
+	}
+	ed := openEditors[path]
+	ed.ReplaceAllText("package p\r\nvar X=1\r\n")
+	// A previous owned save binding must also advance with the batch's real
+	// output, even when newer input prevents closing/adopting the whole buffer.
+	saver, posts := installTestSourceSaver(t, w)
+	saver.bindings[ed] = &sourceDiskBinding{path: path, uiText: ed.SavedTextSnapshot(), state: newSourceDiskState(ed.SavedTextSnapshot()), owner: new(saveReservationOwner)}
+	askCloseEditors = func(*gui.TabWidget, []string) gui.DialogResult { return gui.DialogOK }
+	if !startEditorBatchClose(w.tabs, nil, closeAllEditors) {
+		t.Fatal("admission")
+	}
+	q.worker(t)
+	q.post(t)
+	q.worker(t)
+	ed.ReplaceAllText("package p\r\nvar X=2\r\n")
+	q.drain(t)
+	want := "package p\r\n\r\nvar X = 1\r\n"
+	if diskText(t, path) != want || ed.SavedTextSnapshot() != want || !ed.Modified() || ed.Text() != "package p\r\nvar X=2\r\n" || w.tabs.Count() != 1 {
+		t.Fatal("saved baseline/CRLF/newer input lost", ed.Text(), ed.SavedTextSnapshot())
+	}
+	completed := false
+	if !requestSourceDocumentSave(ed, path, func(ok bool) {
+		if !ok {
+			t.Error("next own save conflicted")
+		}
+		completed = true
+	}) {
+		t.Fatal("next save admission")
+	}
+	pumpOwnedSaves(t, posts, func() bool { return completed })
+	if ed.Modified() || diskText(t, path) != "package p\r\n\r\nvar X = 2\r\n" {
+		t.Fatal("next own save failed")
+	}
+}
+
+func TestEditorBatchCloseReadOnlySaveKeepsAllEditorsAndFiles(t *testing.T) {
+	w := testWorkbench(t)
+	q := batchQueue(t)
+	paths, eds := batchFiles(t, w)
+	for _, ed := range eds {
+		ed.ReplaceAllText("changed")
+	}
+	if err := os.Chmod(paths[1], 0444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(paths[1], 0600) })
+	askCloseEditors = func(*gui.TabWidget, []string) gui.DialogResult { return gui.DialogOK }
+	if !startEditorBatchClose(w.tabs, nil, closeAllEditors) {
+		t.Fatal("admission")
+	}
+	q.drain(t)
+	if w.tabs.Count() != 3 {
+		t.Fatal("read-only failure closed editors")
+	}
+	for i, p := range paths {
+		if diskText(t, p) != filepath.Base(p) || !eds[i].Modified() {
+			t.Fatal("read-only transaction partially adopted", p)
+		}
+	}
+}
 func TestEditorBatchCloseRejectsMutationInsidePromptAndOwnerReplacement(t *testing.T) {
 	for _, mutate := range []string{"prompt-edit", "owner"} {
 		t.Run(mutate, func(t *testing.T) {

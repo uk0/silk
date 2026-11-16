@@ -3,12 +3,34 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/ged"
 )
+
+func TestGitPaneDirectoryIsPureAndKeepsExplicitRoot(t *testing.T) {
+	old := globalProjectRoot
+	t.Cleanup(func() { globalProjectRoot = old })
+	globalProjectRoot = ""
+	if gitPaneDirectory(nil) != gitPaneCWD {
+		t.Fatal("startup cwd lost")
+	}
+	v := ged.NewGedView()
+	// Deliberately nonexistent: this key must not require module/file existence.
+	parent := filepath.Join(t.TempDir(), "not-created", "panels")
+	v.GedScene().SetFilename(filepath.Join(parent, "form.silkui"))
+	if got := gitPaneDirectory(v); got != parent {
+		t.Fatal("design parent was resolved through filesystem", got)
+	}
+	globalProjectRoot = filepath.Join(t.TempDir(), "explicit")
+	if gitPaneDirectory(v) != globalProjectRoot {
+		t.Fatal("explicit project root ignored")
+	}
+}
 
 func gitTestPosted(t *testing.T, ch <-chan func()) func() {
 	t.Helper()

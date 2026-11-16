@@ -349,37 +349,42 @@ func registerSilkideTranslations() {
 		"Run stopped":                          "运行已停止",
 		"All documents are saved":              "所有文档均已保存",
 		"Save All did not complete":            "全部保存未完成",
-		"No running process":                   "当前没有运行中的任务",
-		"build ok":                             "构建成功",
-		"build: error":                         "构建失败",
-		"build: %d errors":                     "构建错误: %d",
-		"Command Palette":                      "命令面板",
-		"Open Recent":                          "打开最近",
-		"Open Recent...":                       "打开最近...",
-		"(empty)":                              "(空)",
-		"Fit to View":                          "适应视口",
-		"Find in Files":                        "在文件中查找",
-		"Outline":                              "大纲",
-		"No symbols":                           "暂无符号",
-		"Indexing symbols...":                  "正在索引符号…",
-		"All Panels":                           "所有面板",
-		"Hide Panel":                           "隐藏面板",
-		"Maximize Panel":                       "最大化面板",
-		"Restore Panel":                        "还原面板",
-		"Restore Panel Layout":                 "还原面板布局",
-		"Show Outline":                         "显示大纲",
-		"Show Files":                           "显示文件列表",
-		"Filter Project Files":                 "筛选项目文件",
-		"Refresh Editor Git Markers":           "刷新编辑器 Git 标记",
-		"Git markers refreshed":                "Git 标记已刷新",
-		"Refresh Project Files":                "刷新项目文件",
-		"Toggle Hidden Files":                  "切换隐藏文件显示",
-		"Close Other Editors":                  "关闭其他编辑器",
-		"Close Editors to the Right":           "关闭右侧编辑器",
-		"Close All Editors":                    "关闭全部编辑器",
-		"Cancel Closing Editors":               "取消关闭编辑器",
-		"Close editors":                        "关闭编辑器",
-		"Discard All":                          "全部丢弃",
+		"Save All is still running":            "全部保存仍在进行中",
+		"Finish the current document operation before saving": "请先完成当前文档操作，再进行保存",
+		"Finish the current file operation before continuing": "请先完成当前文件操作，再继续",
+		"Replace existing design?":                            "替换已有设计？",
+		"%s already exists. Replace it with the current design? External changes made after this check will still be refused.": "%s 已存在。是否替换为当前设计？检查后发生的外部修改仍将被拒绝覆盖。",
+		"No running process":         "当前没有运行中的任务",
+		"build ok":                   "构建成功",
+		"build: error":               "构建失败",
+		"build: %d errors":           "构建错误: %d",
+		"Command Palette":            "命令面板",
+		"Open Recent":                "打开最近",
+		"Open Recent...":             "打开最近...",
+		"(empty)":                    "(空)",
+		"Fit to View":                "适应视口",
+		"Find in Files":              "在文件中查找",
+		"Outline":                    "大纲",
+		"No symbols":                 "暂无符号",
+		"Indexing symbols...":        "正在索引符号…",
+		"All Panels":                 "所有面板",
+		"Hide Panel":                 "隐藏面板",
+		"Maximize Panel":             "最大化面板",
+		"Restore Panel":              "还原面板",
+		"Restore Panel Layout":       "还原面板布局",
+		"Show Outline":               "显示大纲",
+		"Show Files":                 "显示文件列表",
+		"Filter Project Files":       "筛选项目文件",
+		"Refresh Editor Git Markers": "刷新编辑器 Git 标记",
+		"Git markers refreshed":      "Git 标记已刷新",
+		"Refresh Project Files":      "刷新项目文件",
+		"Toggle Hidden Files":        "切换隐藏文件显示",
+		"Close Other Editors":        "关闭其他编辑器",
+		"Close Editors to the Right": "关闭右侧编辑器",
+		"Close All Editors":          "关闭全部编辑器",
+		"Cancel Closing Editors":     "取消关闭编辑器",
+		"Close editors":              "关闭编辑器",
+		"Discard All":                "全部丢弃",
 		"Finish the current file operation before closing editors":                          "请等待当前文件操作结束后再关闭编辑器",
 		"Finish or cancel closing editors before another file operation":                    "请完成或取消关闭编辑器后再进行文件操作",
 		"Close fewer editors at once (64 MiB snapshot limit)":                               "请减少一次关闭的编辑器数量（快照上限 64 MiB）",
@@ -644,8 +649,8 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		}
 		openFromTree(path, editorTabs, designCanvas, nil)
 	})
-	gui.RegisterShortcut(gui.ModAction, 'S', func() { saveCurrentDocument(editorTabs, designCanvas) })
-	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'S', func() { performSaveAll(editorTabs, designCanvas) })
+	gui.RegisterShortcut(gui.ModAction, 'S', func() { requestCurrentDocumentSave(editorTabs, designCanvas, nil) })
+	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'S', func() { requestSaveAllDocuments(editorTabs, designCanvas, nil) })
 	gui.RegisterShortcut(gui.ModAction, 'Z', func() { undoCurrentDocument(editorTabs, designCanvas, false) })
 	redo := func() { undoCurrentDocument(editorTabs, designCanvas, true) }
 	gui.RegisterShortcut(gui.ModAction|gui.ModShift, 'Z', redo)
@@ -674,7 +679,7 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 			// prompt, openEditors untrack and gopls didClose the tab's X button
 			// gets. closeEditorTab drops the tab itself once the close is agreed
 			// to, so there is nothing left to remove here.
-			closeEditorTab(editorTabs, idx)
+			requestCloseEditorTab(editorTabs, idx)
 		}
 	})
 	gui.RegisterShortcut(gui.ModAction, 'Q', func() {
@@ -683,20 +688,17 @@ func registerShortcuts(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		// and session restore reopening the files from disk made the
 		// lost edits look like a restore that worked. canQuit is a
 		// quick no-op when nothing has drifted.
-		if !canQuit(designCanvas) {
-			return
-		}
 		// Out through Frame.Close, the same door the title bar's close button
 		// uses. Ending the loop directly skips the frame's closed callback,
 		// which is where the window geometry and the open-file set get
 		// written — so a Cmd+Q quit used to leave the PREVIOUS launch's
 		// session on disk and restore it next time. Frame.Close never
 		// consults the can-close guard, so canQuit above is still asked once.
-		if closeApp != nil {
-			closeApp()
-			return
+		proceed := closeApp
+		if proceed == nil {
+			proceed = quitApp
 		}
-		quitApp()
+		requestQuitDocuments(editorTabs, designCanvas, proceed)
 	})
 
 	// Cmd+Shift+A: dump the accessibility tree of the active frame.

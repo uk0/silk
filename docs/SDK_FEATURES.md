@@ -13,7 +13,7 @@
   补 `.silkui`，保留旧 `.cml` 等扩展名。草稿回调重入 Save 或切换路径会被拒绝。
 - 不修改旧 `TDoc.SaveFile` 的直接写语义；原子替换不复制扩展 ACL/所有权，硬链接
   别名仍指向旧内容，不能代替跨进程锁，也不保证所有文件系统和断电场景。
-- **并非已经实现异步 IDE Save**。后台调用只能处理 UI 先捕获的独立快照；不能
+- **此同步 SDK API 本身不等于异步 IDE Save**。后台调用只能处理 UI 先捕获的独立快照；不能
   在 worker 上调用 `SaveTo` 或遍历控件，更不能把排队成功当成退出/打开的保存成功。
 
 ```go
@@ -26,6 +26,53 @@ err = doc.SaveFileAtomic(path) // 同步 I/O，不在 worker 上访问 scene。
 ```
 
 [验收与边界](../SAVE_SAFETY_QA_20261116.md)。
+
+## 开发中：两阶段保存与纯代码快照
+
+当前未发布源码已接入 Save／Save All／恢复调度及关闭／退出／打开／新建的异步续行，
+能等待已开始的保存／批次完整结束；Save As 先后台观察，再明确确认覆盖，拒绝之后的
+外部修改。最终冻结代码已通过 macOS／Linux／Windows 全量与 race、真实 bundled gopls
+测试及 macOS／Windows 原生保存／退出验收；这不是新二进制发布，也不能认为所有卡顿已修复。
+现有同步 API 返回实际结果，不是入队成功。
+
+- **UI 捕获**：`GedScene.PrepareSave(path)` 提交草稿并返回 UI 专属
+  `PreparedDesignSave`。凭据持有历史检查点，不可交给 worker。仅将 `Writer()`
+  返回的独立 `DesignWriteSnapshot` 交给后台；`Write()` 只执行一次并缓存实际结果。
+- **磁盘基线**：`core.FingerprintBytes`／`MissingFingerprint` 区分已观察内容、
+  已知不存在和未知零值。`TDoc.SaveFileAtomicAgainst`／`Writer.WriteAgainst` 在
+  原子写内部对比已观察的存在性／内容；不是锁，不替代宿主的路径／生命周期身份。
+  `WrittenFingerprint()` 只在真实成功后返回实际编码基线；宿主的纯共享状态即使
+  UI 凭据已退休也要推进，以免后续排队写入把自己的前次提交误判为外部冲突。
+- **代码捕获**：UI 调用 `CaptureCodeSnapshot()` 复制已提交的属性、布局、事件映射、
+  原始事件源码和标签定义，不保留控件引用，也不在这里解析 handler AST。捕获后
+  用 `PreparedSaveCurrent(receipt)` 再验状态，避免重入 getter 配对两版数据。
+- **后台生成**：`CodeSnapshot.Generate(opts)` 可并发渲染；`GenerateCodeFile` 写
+  机器／用户文件对，`RegenerateCodeFile` 只允许已有机器／用户文件自动更新。
+  不会为缺失的用户文件暗中补 main，不覆盖用户已有 handler／导入／排版。
+  写文件必须串行；文件对不是断电级原子事务。`Writer.DocumentCopy()` 另给消费者
+  一份独立 TDoc，避免解析的索引缓存或修改影响主文件编码。
+- **UI 完成**：宿主先检查 canvas、窗口与请求所有权，再调用
+  `scene.CompleteSave(receipt)`。`false` 也可能表示磁盘已写但 UI 有了新编辑，
+  不能直接清空 dirty、替换输入或继续退出。通过命令／`NotifyDesignChanged`
+  发布修改；绕开设计器变更合同的直接控件写入不受版本保护。
+- **有界写入**：`async.WriteQueue[T]` 只有一个活动任务和一个可替换的最新排队任务；
+  被替换项返回 `ErrSuperseded`。取消／`Close` 不强行结束 OS 写入，也不抹掉真实
+  提交结果。需要物理收敛时在 UI 线程外 `Wait`，空闲无轮询或驻留 worker。
+- **恢复宿主**：`AutoSaver.SetSaveRequest` 是可选 UI 调度入口；回调必须在 UI 捕获，
+  后台只处理独立快照。回调接收不代表实际恢复文件已写入；nil 保留原 SDK 同步行为。
+  IDE 在同一物理 writer 上安排恢复／手动写／清理，不让 tick 替换排队手动保存。
+- **历史与输入**：UI 专属 `UndoStack.Checkpoint()` 用 epoch 身份检查 Push／合并／
+  分支／Undo／Redo／Clear，拒绝命令执行中的检查点。编辑器的 `SavedTextSnapshot`
+  与 `MarkSnapshotSaved` 分离保存基线和新输入；宿主仍要保证路径和实际写入顺序。
+  `CodeEditor.SealTypingUndoGroup()` 在 Save 接收时分隔此前打字，不在晚到的完成回调
+  中切断新输入。`UndoCheckpoint.SameEdits` 仅忽略 clean 标记，不忽略命令／ABA。
+- **延迟决策**：`GedScene.EditCheckpoint()` 捕获模型／历史／草稿身份，不提交或
+  编码草稿。`IsCurrent` 可保护延迟 Discard；可选 `PendingEditVersion` 提供每次草稿
+  变化都不同的可比较值。脏草稿无版本或返回不可比较值时保守拒绝延迟丢弃。
+  `ModelCurrent` 只判断模型，供明确 Save 捕获最新草稿；`AfterSave` 只可在实际
+  `CompleteSave` 成功后，重定位保存路径／clean 标记，仍拒绝新编辑／草稿／Undo ABA。
+
+![开发中的保存线程所有权，不是原生界面截图](images/save-worker-ownership.svg)
 
 ## LSP 增量文本同步
 

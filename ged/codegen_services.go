@@ -13,19 +13,24 @@ import (
 // the SCADA-services emission helpers below can operate on the same slice the
 // constructor emission builds.
 type fieldInfo struct {
-	name          string
-	goType        string
-	constructor   string
-	factoryName   string
-	x, y, w, h    float64
-	defaultText   string
-	tagName       string      // design-time SCADA/组态 tag bound to this widget's value
-	widget        interface{} // live designed widget, for reflecting design-time property values
-	eventHandlers map[string]string
-	code          string      // user-written event handler code
-	parentField   string      // owning container field; "" = top-level (ui.Form)
-	parentAdd     bool        // parent is a simple-AddWidget container
-	fake          *FakeWidget // the designed item this field was collected from
+	name           string
+	goType         string
+	constructor    string
+	factoryName    string
+	diagnosticName string // original UI name, before Go identifier sanitization
+	x, y, w, h     float64
+	defaultText    string
+	tagName        string      // design-time SCADA/组态 tag bound to this widget's value
+	widget         interface{} // live designed widget, for reflecting design-time property values
+	eventHandlers  map[string]string
+	code           string      // user-written event handler code
+	parentField    string      // owning container field; "" = top-level (ui.Form)
+	parentAdd      bool        // parent is a simple-AddWidget container
+	fake           *FakeWidget // the designed item this field was collected from
+	// Captured on UI before widget/fake are stripped from a CodeSnapshot.
+	layoutManaged, gridParent                      bool
+	placement                                      [4]int
+	textSetter, iconName, propertyCode, layoutCode string
 }
 
 // scadaServiceFactories are the factory names that, by themselves, make a design

@@ -130,6 +130,11 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 
 func writeAtomic(path string, mode os.FileMode, encode func(io.Writer) error,
 	create func(string, string) (atomicOutput, error), replace func(string, string) error) (err error) {
+	return writeAtomicGuarded(path, mode, encode, create, replace, nil)
+}
+
+func writeAtomicGuarded(path string, mode os.FileMode, encode func(io.Writer) error,
+	create func(string, string) (atomicOutput, error), replace func(string, string) error, guard func(atomicTarget) error) (err error) {
 	if path == "" || encode == nil {
 		return &os.PathError{Op: "atomic-write", Path: path, Err: os.ErrInvalid}
 	}
@@ -140,6 +145,11 @@ func writeAtomic(path string, mode os.FileMode, encode func(io.Writer) error,
 	before, err := inspectAtomicTarget(path)
 	if err != nil {
 		return err
+	}
+	if guard != nil {
+		if err := guard(before); err != nil {
+			return err
+		}
 	}
 	if before.info != nil {
 		mode = before.info.Mode().Perm()

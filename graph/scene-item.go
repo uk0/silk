@@ -170,7 +170,9 @@ func (this *SceneItem) DirtyList() []string {
 }
 
 func (this *SceneItem) IsClean() bool {
-	return this.undoStack.IsClean()
+	// A newly constructed scene has no history yet. Queries must not panic or
+	// allocate actions/icons just to ask for the initial title/dirty state.
+	return this.undoStack == nil || this.undoStack.IsClean()
 }
 
 func (this *SceneItem) Title() string {

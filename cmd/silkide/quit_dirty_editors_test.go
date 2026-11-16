@@ -58,7 +58,12 @@ func cmdQ(t *testing.T, tabs *gui.TabWidget) func() {
 	if press == nil {
 		t.Fatal("registerShortcuts left Cmd+Q unbound")
 	}
-	return press
+	return func() {
+		press()
+		if w := globalWorkbench; !dirtyPromptUp && w != nil && w.tabs == tabs {
+			pumpTestTransitions(t, w)
+		}
+	}
 }
 
 // openSecondEditedTab opens another file into an already-wired TabWidget and
@@ -180,15 +185,25 @@ func TestCmdQSaveAllSurvivesATabClosedUnderIt(t *testing.T) {
 	tabs, _, _ := openEditedTab(t, pathA, quitEditedA)
 	edB := openSecondEditedTab(t, tabs, pathB, quitEditedB)
 	quits := recordQuit(t)
+	w := globalWorkbench
+	newOwnedSourceSaver(w, sourceSaveSettings{queue: w.transitions.settings.queue, post: w.transitions.settings.post})
 
 	saved := askQuitDirtyEditors
 	askQuitDirtyEditors = func([]string) gui.DialogResult {
 		// Cmd+S then Cmd+W on b.go while the prompt is up: the save makes the
 		// buffer match disk, so the close goes through without a prompt of its
 		// own and b.go leaves openEditors.
-		if !saveEditorToDisk(edB, pathB) {
-			t.Fatal("saving the background tab failed")
+		complete := false
+		if !requestSourceDocumentSave(edB, pathB, func(ok bool) {
+			if !ok {
+				t.Error("nested save did not land")
+			}
+			complete = true
+		}) {
+			t.Fatal("nested save not admitted")
 		}
+		// This is the dialog's nested UI loop, not a join on a physical worker.
+		pumpTestTransitionUntil(t, w, func() bool { return complete })
 		if idx := editorTabIndex(tabs, edB); !tabs.TabBar().CloseTab(idx) {
 			t.Fatal("closing the saved background tab failed")
 		}
@@ -294,11 +309,17 @@ func TestCloseButtonAsksBeforeQuittingOverUnsavedEditors(t *testing.T) {
 		_, ed, _ := openEditedTab(t, path, quitEditedA)
 		asked := answerQuitDirty(t, gui.DialogCancel)
 
-		frame := gui.NewFrame()
+		frame := globalWorkbench.frame
+		closed := 0
+		frame.SetClosedCallback(func(*gui.Frame) { closed++ })
 		installQuitGuard(frame, nil)
 
 		if frame.CanClose() {
 			t.Error("the close button was allowed to quit over an unsaved buffer")
+		}
+		pumpTestTransitions(t, globalWorkbench)
+		if closed != 0 {
+			t.Error("canceled native close proceeded")
 		}
 		if len(*asked) != 1 {
 			t.Errorf("prompt put up %d times; want 1", len(*asked))
@@ -317,11 +338,17 @@ func TestCloseButtonAsksBeforeQuittingOverUnsavedEditors(t *testing.T) {
 		openEditedTab(t, path, quitEditedA)
 		answerQuitDirty(t, gui.DialogOK)
 
-		frame := gui.NewFrame()
+		frame := globalWorkbench.frame
+		closed := 0
+		frame.SetClosedCallback(func(*gui.Frame) { closed++ })
 		installQuitGuard(frame, nil)
 
-		if !frame.CanClose() {
-			t.Error("the close button was refused after the prompt was answered with Save All")
+		if frame.CanClose() {
+			t.Error("native close returned admission as durable approval")
+		}
+		pumpTestTransitions(t, globalWorkbench)
+		if closed != 1 {
+			t.Error("native close did not resume after Save All")
 		}
 		if disk := diskText(t, path); disk != quitEditedA {
 			t.Errorf("a.go = %q; Save All must write %q", disk, quitEditedA)
@@ -334,11 +361,17 @@ func TestCloseButtonAsksBeforeQuittingOverUnsavedEditors(t *testing.T) {
 		openEditedTab(t, path, quitOriginal)
 		asked := answerQuitDirty(t, gui.DialogCancel)
 
-		frame := gui.NewFrame()
+		frame := globalWorkbench.frame
+		closed := 0
+		frame.SetClosedCallback(func(*gui.Frame) { closed++ })
 		installQuitGuard(frame, nil)
 
-		if !frame.CanClose() {
-			t.Error("the close button was refused with nothing unsaved")
+		if frame.CanClose() {
+			t.Error("native close bypassed posted teardown")
+		}
+		pumpTestTransitions(t, globalWorkbench)
+		if closed != 1 {
+			t.Error("clean native close did not resume")
 		}
 		if len(*asked) != 0 {
 			t.Errorf("prompted about %v; nothing had drifted from disk", *asked)
@@ -498,13 +531,19 @@ func TestSecondCmdWDoesNotStackASecondPrompt(t *testing.T) {
 	askCloseDirtyEditor = func(*gui.CodeEditor, string) gui.DialogResult {
 		asks++
 		if asks == 1 {
-			press() // the user's second Cmd+W, landing while this prompt is up
+			press()
+			if !dirtyPromptUp {
+				pumpTestTransitions(t, globalWorkbench)
+			} // the user's second Cmd+W, landing while this prompt is up
 		}
 		return gui.DialogCancel
 	}
 	t.Cleanup(func() { askCloseDirtyEditor = saved })
 
 	press()
+	if !dirtyPromptUp {
+		pumpTestTransitions(t, globalWorkbench)
+	}
 
 	if asks != 1 {
 		t.Errorf("prompt put up %d times for one tab; the second Cmd+W stacked another", asks)
@@ -519,6 +558,9 @@ func TestSecondCmdWDoesNotStackASecondPrompt(t *testing.T) {
 	// The guard is for the duration of one prompt, not for the session: the
 	// next Cmd+W has to ask again or the dirty check is dead after the first.
 	press()
+	if !dirtyPromptUp {
+		pumpTestTransitions(t, globalWorkbench)
+	}
 	if asks != 2 {
 		t.Errorf("prompt put up %d times in total; a later Cmd+W must ask again", asks)
 	}

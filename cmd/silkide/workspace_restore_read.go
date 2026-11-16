@@ -125,7 +125,7 @@ func readRestoredFile(ctx context.Context, path string, design bool) (restoredFi
 	if err != nil {
 		return restoredFile{}, err
 	}
-	value := restoredFile{doc: doc, modified: info.ModTime(), size: info.Size()}
+	value := restoredFile{doc: doc, modified: info.ModTime(), size: info.Size(), fingerprint: core.FingerprintBytes(data)}
 	// Recovery metadata, reading and decoding stay off the UI thread too. The UI
 	// later asks the existing explicit recovery question using these snapshots.
 	if recovery := ged.CheckRecovery(path); recovery != "" {

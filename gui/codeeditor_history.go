@@ -17,6 +17,11 @@ func (e *CodeEditor) breakTypingUndoGroup() {
 	}
 }
 
+// SealTypingUndoGroup is a UI-only command boundary, not a save/clean marker.
+// Async save hosts call it at admission, before subsequent typing starts. Late
+// completion must use MarkSnapshotSaved, not end a newer typing group.
+func (e *CodeEditor) SealTypingUndoGroup() { e.breakTypingUndoGroup() }
+
 // CanUndo and CanRedo query the edit history in constant time, independently of
 // Modified (saved content can still have undo history). Read-only mode hides
 // availability without clearing stored history. UI-thread-only.

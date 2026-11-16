@@ -48,6 +48,29 @@ func admitTestReload(t *testing.T, w *workbench, owner *hotreload.Reloader, path
 	}
 }
 
+func TestDesignReloadOwnSaveReservationIsSilent(t *testing.T) {
+	w, owner, path := reloadWorkbench(t)
+	ticket, ok := reserveSavePaths(new(saveReservationOwner), designSavePaths(path))
+	if !ok {
+		t.Fatal("reserve save")
+	}
+	t.Cleanup(func() { ticket.finish(true); ticket.finish(false) })
+	oldToast := silkideToast
+	warnings := 0
+	silkideToast = func(_ string, level gui.ToastLevel) {
+		if level == gui.ToastWarning {
+			warnings++
+		}
+	}
+	t.Cleanup(func() { silkideToast = oldToast })
+	if accepted, err := reloadOwnedCleanDesign(owner, w.canvas, path); err != nil || accepted {
+		t.Fatal("own-save invalidation admitted", accepted, err)
+	}
+	if warnings != 0 {
+		t.Fatal("automatic own-save event generated busy warning", warnings)
+	}
+}
+
 func blockReloadReader(t *testing.T, w *workbench) (<-chan string, func()) {
 	t.Helper()
 	entered, release := make(chan string, 4), make(chan struct{})

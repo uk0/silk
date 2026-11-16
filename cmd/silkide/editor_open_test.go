@@ -75,6 +75,37 @@ func TestEditorOpenPublicFlowReturnsBeforePhysicalReader(t *testing.T) {
 	t.Log("public_open_accepted=true return_before_reader_released=true; ready UI and MRU delivered later")
 }
 
+func TestEditorOpenReadySnapshotDuringSaveDoesNotInstallStaleBuffer(t *testing.T) {
+	w := testWorkbench(t)
+	p := writeFile(t, t.TempDir(), "pending.txt", "old bytes")
+	if !openFileInEditor(w.tabs, p) {
+		t.Fatal("open admission")
+	}
+	var ready func()
+	select {
+	case ready = <-testEditorOpenPosts[w]:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reader completion")
+	}
+	ticket, ok := reserveSavePaths(new(saveReservationOwner), []string{p})
+	if !ok {
+		t.Fatal("reserve")
+	}
+	t.Cleanup(func() { ticket.finish(true); ticket.finish(false) })
+	if err := os.WriteFile(p, []byte("new bytes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ready()
+	if w.opens.Busy() || openEditors[p] != nil || w.tabs.Count() != 0 {
+		t.Fatal("stale snapshot installed or loading page stranded")
+	}
+	ticket.finish(true)
+	ticket.finish(false)
+	if !openTestEditorReady(t, w.tabs, p) || openEditors[p].Text() != "new bytes" {
+		t.Fatal("retry did not reread actual output")
+	}
+}
+
 func TestEditorOpenDeduplicatesLatestLocationAndRetainsDirtyBuffer(t *testing.T) {
 	w := testWorkbench(t)
 	root := t.TempDir()

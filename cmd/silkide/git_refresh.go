@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/uk0/silk/core"
@@ -122,6 +124,23 @@ var changesRefreshOwner *ged.GitChangesPanel
 var historyRefreshOwner *ged.GitLogPanel
 var gitChangesRoot, gitHistoryRoot string
 
+// Capture cwd before the UI loop. Git can find its repository directly from a
+// design's lexical parent; walking go.mod parents on Save/apply/row actions adds
+// synchronous Stat calls to otherwise asynchronous refreshes for no benefit.
+var gitPaneCWD, _ = os.Getwd()
+
+func gitPaneDirectory(canvas *ged.GedView) string {
+	if globalProjectRoot != "" {
+		return globalProjectRoot
+	}
+	if canvas != nil {
+		if s := canvas.GedScene(); s != nil && s.Filename() != "" {
+			return filepath.Dir(s.Filename())
+		}
+	}
+	return gitPaneCWD
+}
+
 func gitPanelFailure(err error) ged.PanelLoadState {
 	title, detail := "Git query failed", "Check Toolchain Status and repository access, then retry."
 	switch {
@@ -145,7 +164,7 @@ func refreshGitChangesWith(canvas *ged.GedView, force bool) {
 	if panel == nil {
 		return
 	}
-	dir := projectDir(canvas)
+	dir := gitPaneDirectory(canvas)
 	if dir == "" {
 		return
 	}
@@ -166,7 +185,7 @@ func refreshGitChangesWith(canvas *ged.GedView, force bool) {
 				panel.SetLoadState(ged.PanelLoadState{Phase: ged.PanelLoading, Title: i18n.T("Refreshing Git changes"), Detail: i18n.T("Editing remains available while Git runs."), RetryLabel: i18n.T("Retry")})
 			},
 			apply: func(key string, result gitChangesSnapshot, err error) {
-				if globalGitChanges != panel || projectDir(canvas) != key {
+				if globalGitChanges != panel || gitPaneDirectory(canvas) != key {
 					return
 				}
 				if err != nil {
@@ -199,7 +218,7 @@ func refreshGitLogWith(canvas *ged.GedView, force bool) {
 	if panel == nil {
 		return
 	}
-	dir := projectDir(canvas)
+	dir := gitPaneDirectory(canvas)
 	if dir == "" {
 		return
 	}
@@ -220,7 +239,7 @@ func refreshGitLogWith(canvas *ged.GedView, force bool) {
 				panel.SetLoadState(ged.PanelLoadState{Phase: ged.PanelLoading, Title: i18n.T("Refreshing Git history"), Detail: i18n.T("Editing remains available while Git runs."), RetryLabel: i18n.T("Retry")})
 			},
 			apply: func(key string, result gitHistorySnapshot, err error) {
-				if globalGitLog != panel || projectDir(canvas) != key {
+				if globalGitLog != panel || gitPaneDirectory(canvas) != key {
 					return
 				}
 				if err != nil {
@@ -257,7 +276,7 @@ func gitChangesRootFor(canvas *ged.GedView) string {
 	if changesRefresh == nil || globalGitChanges == nil {
 		return ""
 	}
-	if changesRefresh.key != projectDir(canvas) {
+	if changesRefresh.key != gitPaneDirectory(canvas) {
 		refreshGitChangesWith(canvas, false)
 		return ""
 	}
@@ -270,7 +289,7 @@ func gitHistoryRootFor(canvas *ged.GedView) string {
 	if historyRefresh == nil || globalGitLog == nil {
 		return ""
 	}
-	if historyRefresh.key != projectDir(canvas) {
+	if historyRefresh.key != gitPaneDirectory(canvas) {
 		refreshGitLogWith(canvas, false)
 		return ""
 	}

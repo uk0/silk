@@ -58,6 +58,7 @@ func TestFileMenuInventoryAndEnabledRouting(t *testing.T) {
 
 func TestFileMenuSaveWritesVisibleEditor(t *testing.T) {
 	w := testWorkbench(t)
+	saves, posts := installTestSourceSaver(t, w)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
 	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
@@ -66,6 +67,10 @@ func TestFileMenuSaveWritesVisibleEditor(t *testing.T) {
 	activeTestEditorReady(t, w.tabs).ReplaceAllText("package main\n// menu save\n")
 	b := menuCommandButton(buildHamburgerMenu(gui.NewButton(), w.tabs, w.canvas), "file.save")
 	b.Action().Trigger(b)
+	if saves.pending == nil {
+		t.Fatal("file menu save not admitted")
+	}
+	pumpOwnedSaves(t, posts, func() bool { return saves.pending == nil })
 	data, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(data), "// menu save") {
 		t.Fatalf("menu saved wrong document: %s %v", data, err)

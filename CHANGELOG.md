@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased — asynchronous save and owned document transitions (2026-11-16)
+
+- Add UI-only save receipts, Undo epoch checkpoints and independent once-only
+  document writers. Separate physical write success from current UI adoption;
+  keep newer text/history and reject stale path/edit/owner completion.
+- Add a bounded side-effect queue: one active physical task plus one latest
+  queued task; cancellation/retirement cannot free blocked I/O or erase a real
+  committed result. Preserve a failing completion-reentry replay and its fix.
+- Capture typed code inputs without live widgets or scene references. Defer
+  handler parsing, formatting and split-file generation to a worker; preserve
+  machine ownership, developer source/stubs/import checks and output compatibility.
+- Pair primary and companion inputs in the owned internal save API; retain the
+  physical slot through companion completion and report companion failures as
+  warnings, including panics after primary success.
+- Connect toolbar/File/shortcut/palette/source-tab Save to actual owned admission;
+  format source on the worker and validate observed content baselines inside the
+  atomic writer. Advance pure physical baselines even if UI adoption was retired.
+- Sequence Save All documents without silently superseding unrelated targets;
+  preserve newer input and stop remaining targets after a conflict/change.
+- Serialize recovery and manual cleanup with primary/companion writes. Preserve
+  a recovery changed during primary I/O and keep cleanup errors as warnings.
+- Reserve outputs through both physical completion and UI publication; refuse
+  conflicting rename/search/close/quit and protect edited generated buffers.
+- Add captured async tab-close/New/Open/native-close/shortcut-quit continuations.
+  Wait for prior writes and the UI gaps of an already-pending Save All; post and
+  revalidate one-shot teardown, preserving later text, command/draft revisions.
+- Inspect Save As targets in the background and require explicit replacement
+  consent. Match the reviewed fingerprint inside the writer; cancel/retire never
+  dispatches late writes. Keep replacement confirmation defaulted to Cancel.
+- Seal typing groups at source Save admission, not late completion. Preserve
+  CRLF and actual saved baselines during batch-close, including newer input;
+  reject read-only replacement plans before any transaction staging.
+- Remove Git refresh's UI-thread module walk. Refuse build/run/test/vet/coverage
+  during pending save/document operations, without implying automatic saving.
+- Give restore/save conflicts a terminal retry state instead of a stranded loading
+  page; reject manual-open stale snapshots and retire an opener's own save guard.
+- Synchronize design Save/Open/New/restore window titles at completion instead
+  of waiting for the 500 ms poll. Reject nested noncomparable draft-version
+  values without a checkpoint-comparison panic.
+- Refresh the labeled ownership diagram and add unedited final-candidate native
+  macOS/Windows captures, including default-Cancel replacement review.
+- Pass exact frozen-source full/race suites: macOS 9,438 named passes /
+  29 skips each; Linux 9,377 / 37 each; Windows
+  9,226 / 43 each. Four strict real bundled-gopls checks pass on each.
+  Add 1,480 focused race passes, native GL transfer/pure-Go rendering and script
+  checks; independent source exports match all 2,803 frozen files / 2,060 Go files.
+- Native macOS verifies late overwrite conflict/default Cancel and quit-save
+  refusal/retry; Windows verifies read-only/sharing refusal, dirty quit Save All,
+  Undo/Redo and retry. Disk/model/session readback and normal exit 0 pass.
+  CI-scoped vet passes; full-repository vet retains 501 unchanged baseline
+  diagnostics (no new). Preserve setup failures and an aborted initial Mac
+  startup separately. This is a verified development increment, not a package
+  release or whole-product/performance-completion claim.
+  [Verification and limits](ASYNC_SAVE_PROGRESS_20261116.md).
+
 ## Unreleased — fail-safe document save foundation (2026-11-16)
 
 - Add opt-in plain/gzip atomic TDoc saving without changing legacy direct-write

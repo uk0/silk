@@ -9,6 +9,77 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: actual asynchronous Save integration (2026-11-16)
+
+This verified **unreleased development-source** increment is based on `8828150`. Explicit Ctrl+S/Save All now
+use owned admission in current source; captured close/quit/open/New flows now wait
+for actual saves and revalidate their UI intent before proceeding.
+Frozen full/race/strict and native readback gates are recorded separately below.
+This is source-build acceptance, not a standalone binary release.
+The full Qt Creator-style product objective remains unchanged and active.
+
+- [x] Add UI-owned design preparation/receipt and a separately retained pure
+      writer snapshot. Physical success does not automatically imply UI adoption.
+- [x] Add opaque Undo checkpoint identity (including merge, branch, Undo/Redo,
+      clear and command-in-progress guards) and editor saved-text publication
+      independent of newer input/caret/history.
+- [x] Implement a one-active/one-latest queued side-effect writer. Retain actual
+      success/failure after cancellation; Close never replaces blocked OS work.
+      Preserve a failing completion-reentry busy-interval test and fix it.
+- [x] Reproduce/fix fresh-scene title/dirty queries dereferencing an absent Undo
+      stack, without allocating history/actions just for initial status queries.
+- [x] Implement/test an owned save admission API with revocable UI mailboxes,
+      explicit retirement outcomes, a shared physical queue across owner changes,
+      newer-input protection and no worker widget traversal. Initial API-only
+      validation precedes the production command wiring below.
+- [x] Frozen local affected-package ordinary/race: 7,271 named passes / 20 skips
+      each; 50 repeated focused race rounds: 1,950 named passes, no skips.
+- [x] Wire actual explicit Save/Save All/source context routes with independent
+      content baselines, worker source formatting, physical-baseline advancement
+      across retired UI receipts and reservations through UI publication.
+- [x] Add unknown-existing Save As background inspection/overwrite review and
+      guarded native cleanup; remove synchronous module walks from Git refresh.
+      Keep final native dialog/focus permutations in the platform gate below.
+- [x] Extract companion generation's pure document/code inputs; snapshot typed
+      properties/layout/bindings/tags on UI, defer handler AST/rendering/file work
+      to the writer. Keep developer source and separate companion warnings;
+      integrate with owned saves and subsequently actual explicit commands.
+      Confirm 288 old/new generator cases byte-identical. Add an explicitly
+      labeled README architecture diagram; native captures remain a later gate.
+- [x] Freeze this next local increment: affected ordinary/race each 7,380 named
+      passes / 20 skips; 20 focused race repetitions total 2,960 passes. Verify
+      source pre/post identity and retain the first fixture-assumption failure.
+      [Evidence and remaining gate](ASYNC_SAVE_PROGRESS_20261116.md), not a
+      full-repository/all-platform/native or public Cmd+S acceptance claim.
+- [x] Order automatic recovery/cleanup with manual saves on the same physical
+      writer; coordinate batch-close/rename/workspace mutation reservations.
+      Preserve backup changes during primary I/O and retain cleanup warnings.
+- [x] Capture and resolve close/open/New/native quit/shortcut quit continuations
+      exactly once, only after required durable writes and current ownership.
+      Include already-pending source/design Save and Save All UI gaps; never
+      inherit a discard/close decision across later text/model/draft changes.
+- [x] Exercise actual source/design command admission with a held real writer:
+      both return before release. Keep the old synchronous helper's failing
+      overlay in proposal1/production-negative as a historical baseline, not the
+      current explicit-command route. Verify shortcut/menu/palette/toolbar Save.
+- [x] Freeze current explicit integration (proposal4): macOS seven affected
+      packages ordinary/race each 7,433 named passes / 20 skips; 20 focused race
+      rounds 3,520 passes. Source pre/post and exact worktree identity pass. This
+      still is not a full-repository/all-platform/native publication gate.
+- [x] Seal source typing Undo group at Save admission, preserve newer groups at
+      completion; finish busy action feedback/zh strings and audit Build/Run
+      ordering against actual asynchronous Save admission. Build-family commands
+      refuse pending saves; automatic Save-before-Build remains a future feature.
+- [x] Fix batch-close CRLF/saved baselines and read-only preflight; make stale
+      source-open/restore delivery fail visibly rather than install stale bytes
+      or leave an inert loading label. Legacy batch-close remains a separate
+      transactional worker, not claimed migrated onto the single save queue.
+- [x] Finish frozen three-platform full/race/strict and native UI gates; refresh
+      real README captures/changelog. Retain exact source/export/index audit
+      artifacts and unchanged baseline vet warnings. See the current QA record.
+- Publication uses the exact audited index and remote HEAD readback; no new
+  binary release/tag is implied. The broader product objective remains active.
+
 ## Validated increment: fail-safe Save foundation (2026-11-16)
 
 - [x] Preserve a failing old-SDK test: unsuccessful extensionless Save silently
@@ -26,7 +97,7 @@ Do not substitute a small passing test for the whole product-readiness gate.
       failure and identical baseline/candidate vet warnings; do not erase them.
 - [x] Audit tested runtime/index identity; approve this prerequisite for commit/push.
 
-Explicit Save, recovery writes, companions and dirty quit/open/New remain
+At that published prerequisite, explicit Save, recovery, companions and guards were
 synchronous. The controlled public writer baseline is NOT fixed by atomic
 replacement. Next: immutable UI capture, one bounded physical writer, manual/
 autosave ordering, owned completion/clean-marker checks and captured action

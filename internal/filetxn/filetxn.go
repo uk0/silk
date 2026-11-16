@@ -157,6 +157,13 @@ func commit(changes []Change, rename func(string, string) error) (err error) {
 		if err := unchanged(s); err != nil {
 			return err
 		}
+		// A writable parent directory must not bypass a destination's explicit
+		// read-only mode through rename (notably on Unix, including root tests).
+		// Validate the whole plan before staging; unchanged read-only files are
+		// still legitimate no-op conflict checks.
+		if s.exists && s.mode.Perm()&0222 == 0 && !bytes.Equal(s.data, change.Data) {
+			return &os.PathError{Op: "write", Path: s.path, Err: os.ErrPermission}
+		}
 	}
 	for _, change := range changes {
 		s := change.Before

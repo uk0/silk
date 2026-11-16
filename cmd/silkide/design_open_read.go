@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/ged"
@@ -22,6 +23,7 @@ func readReloadDesign(ctx context.Context, path string) (designOpenSnapshot, err
 		return value, err
 	}
 	value.modified, value.size = info.ModTime(), info.Size()
+	value.fingerprint = core.FingerprintBytes(data)
 	value.doc, err = decodeManualDesign(ctx, data)
 	return value, err
 }
@@ -33,6 +35,11 @@ func readManualDesign(ctx context.Context, path string) (designOpenSnapshot, err
 	var value designOpenSnapshot
 	data, info, err := readRestoreSnapshot(ctx, path)
 	value.sourceErr = err
+	if err == nil {
+		value.fingerprint = core.FingerprintBytes(data)
+	} else if os.IsNotExist(err) {
+		value.fingerprint = core.MissingFingerprint()
+	}
 	if info != nil {
 		value.modified, value.size = info.ModTime(), info.Size()
 	}

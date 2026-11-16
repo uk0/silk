@@ -32,10 +32,59 @@ and changes observed during encoding are reported rather than overwritten.
 SDK: `GedScene.SaveTo(path)` returns an error; independent TDoc snapshots support
 `SaveFileAtomic` / `SaveFileAtomic1` (gzip). Legacy `TDoc.SaveFile` remains a
 direct writer; the legacy standalone designer's separate Save As handler has
-not yet migrated. **These Save APIs and the current IDE Save path are synchronous**;
-owned asynchronous Save/quit/open continuations are still in development. This
+not yet migrated. **SDK `SaveTo` and legacy compatibility helpers remain
+synchronous**. The unreleased IDE source uses owned background saves and captured
+close/open/New/quit continuations, rather than treating admission as success. This
 is not a guarantee of power-loss durability, ACL preservation or cross-process
 locking. [Scope and verification](SAVE_SAFETY_QA_20261116.md).
+
+The **unreleased development-source** SDK increment separates a UI-owned save
+receipt from an independent physical writer and a pure `CodeSnapshot`. Captured properties,
+bindings, layout and tags can render typed Go code without worker widget access;
+handler AST work and companion file I/O remain on the serial writer. Companion
+warnings are separate from primary-file success. Toolbar, File menu, shortcuts,
+palette and source-tab Save actions now use this pipeline in the working source.
+Source formatting stays off UI; content baselines refuse external conflicts.
+Save All sequences distinct documents, and recovery shares the physical writer.
+Reservations survive cancellation and pending UI publication. Close/quit waits
+for an already-pending Save or Save All; changed text, design commands and drafts
+invalidate delayed teardown. Save As inspects its target on a worker, asks before
+replacing existing content and rejects changes made after that observation.
+Save seals prior typing into its own Undo group. Batch close preserves CRLF and
+publishes actual saved baselines without overwriting newer text; read-only plans
+fail before staging. Git pane refresh no longer walks module directories on UI.
+Build/Run/test/vet/coverage refuse admission while save/document operations are
+pending; they still operate on saved files, not automatic Save-before-Build.
+Frozen full/race suites and strict bundled-gopls checks pass on macOS, Linux
+and Windows. Native macOS/Windows save refusal, retry and normal-exit checks
+also pass. This is not a completed global performance fix or a new package release.
+[Current integration evidence and remaining gates](ASYNC_SAVE_PROGRESS_20261116.md).
+
+![Development save thread ownership diagram, not a UI screenshot](docs/images/save-worker-ownership.svg)
+
+Architecture illustration only. The older captures in the expandable section
+verify the published synchronous safety prerequisite, not final async acceptance.
+
+![Native macOS async source save preserves unsaved Unicode input](docs/images/save-async-source-macos.png)
+
+Actual unedited final-candidate macOS capture after read-only Save refusal.
+The Unicode buffer and dirty marker remain, with original disk bytes checked
+unchanged. Quit Save All is also refused while read-only; permission repair and
+an explicit retry persist the exact text before normal exit 0.
+
+![Native macOS replacement review defaults to Cancel](docs/images/save-async-replace-macos.png)
+
+Actual Save As review. Cancel preserves the existing file and untitled identity.
+An external change made after review is refused by the writer; a separately
+reviewed retry succeeds. This is not a mockup or a standalone-package verdict.
+
+![Native Windows async save preserves unsaved Unicode input](docs/images/save-async-source-windows.png)
+
+Actual Windows 10 final-candidate capture. Read-only and replacement-denying
+sharing handles preserve the original bytes and dirty buffer; retry succeeds
+without losing Undo/Redo. Native quit Save All refuses read-only output without
+closing the editor. Independent model/source/session readback and normal exit 0
+are verified. These are source-built desktop checks, not a new binary release.
 
 <details>
 <summary>Native Save failure keeps the edited buffer</summary>

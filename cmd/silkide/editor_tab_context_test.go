@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -24,6 +25,7 @@ func tabContext(t *testing.T, tabs *gui.TabWidget, index int) *gui.Menu {
 
 func TestEditorTabContextTargetsInactiveIdentityAndRename(t *testing.T) {
 	w := testWorkbench(t)
+	saves, posts := installTestSourceSaver(t, w)
 	dir := t.TempDir()
 	a, b := writeFile(t, dir, "a.txt", "alpha"), writeFile(t, dir, "b.txt", "beta")
 	openTestEditorReady(t, w.tabs, a)
@@ -34,6 +36,10 @@ func TestEditorTabContextTargetsInactiveIdentityAndRename(t *testing.T) {
 	eb.ReplaceAllText("edited beta")
 	m := tabContext(t, w.tabs, 1)
 	menuCommandButton(m, "tab.save").Action().Trigger(nil)
+	if saves.pending == nil {
+		t.Fatal("context save not admitted")
+	}
+	pumpOwnedSaves(t, posts, func() bool { return saves.pending == nil })
 	if diskText(t, b) != "edited beta" || diskText(t, a) != "alpha" || activeTestEditorReady(t, w.tabs) != ea {
 		t.Fatal("saved/activated wrong target")
 	}
@@ -46,6 +52,9 @@ func TestEditorTabContextTargetsInactiveIdentityAndRename(t *testing.T) {
 		t.Fatal("remove earlier tab")
 	}
 	renamed := filepath.Join(dir, "renamed.txt")
+	if err := os.Rename(b, renamed); err != nil {
+		t.Fatal(err)
+	}
 	delete(openEditors, b)
 	openEditors[renamed] = eb
 	eb.SetFilePath(renamed)
@@ -54,12 +63,20 @@ func TestEditorTabContextTargetsInactiveIdentityAndRename(t *testing.T) {
 		t.Fatal("stale slot/path copied", copied)
 	}
 	menuCommandButton(m, "tab.save").Action().Trigger(nil)
+	if saves.pending == nil {
+		t.Fatal("renamed context save not admitted")
+	}
+	pumpOwnedSaves(t, posts, func() bool { return saves.pending == nil })
 	if diskText(t, renamed) != "edited beta" {
 		t.Fatal("renamed target not saved")
 	}
 	menuCommandButton(m, "tab.close").Action().Trigger(nil)
+	pumpTestTransitions(t, w)
 	if w.tabs.Count() != 0 || openEditors[renamed] != nil {
 		t.Fatal("wrong renamed page closed")
+	}
+	if err := os.WriteFile(b, []byte("edited beta"), 0644); err != nil {
+		t.Fatal(err)
 	}
 	openTestEditorReady(t, w.tabs, b)
 	replacement := activeTestEditorReady(t, w.tabs)
@@ -84,6 +101,7 @@ func TestEditorTabContextCloseGuardAndReopen(t *testing.T) {
 			m := tabContext(t, w.tabs, 0)
 			answerCloseDirty(t, choice)
 			menuCommandButton(m, "tab.close").Action().Trigger(nil)
+			pumpTestTransitions(t, w)
 			if choice == gui.DialogCancel {
 				if w.tabs.Count() != 1 || ed.Text() != "unsaved" || diskText(t, p) != "saved" {
 					t.Fatal("cancel lost data")

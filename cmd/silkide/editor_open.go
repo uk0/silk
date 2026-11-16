@@ -148,6 +148,20 @@ func (c *editorOpenController) open(intent *editorOpenIntent, path string, optio
 	if !c.valid() || path == "" {
 		return false
 	}
+	// Reject/cancel an interactive competing intent at admission, not ready
+	// callbacks. Blanket rejection at apply would strand already-read startup
+	// pages after a canceled modal guard. A late ready page instead invalidates
+	// the guard's captured source set before it can authorize teardown.
+	if t := c.owner.transitions; t != nil {
+		t.cancelForIntent("source-open:" + workspaceSearchKey(path))
+	}
+	if !c.valid() {
+		return false
+	}
+	if transitionBusy() {
+		silkideToast(i18n.T("Finish the current file operation before continuing"), gui.ToastWarning)
+		return false
+	}
 	noteWorkspaceRestoreInteraction(c.tabs)
 	path = canonicalEditorPath(path)
 	if path == "" || rejectBusyFile(path) {
@@ -357,7 +371,7 @@ func (c *editorOpenController) finish(job *editorOpenJob, data []byte, err error
 	focusBefore := gui.CurrentFocusWidget()
 	focusOwned := c.tabs.Stack().CurrentPage() == p && documentMode(c.tabs, c.owner.canvas) == modeEdit && (p.HasFocus() || c.tabs.HasFocus() || c.tabs.TabBar().HasFocus())
 	foreground := focusOwned && c.intent == intent
-	if err == nil && fileRenameAffects(job.path) {
+	if err == nil && fileMutationBusy(job.path) {
 		err = errEditorOpenBusy
 	}
 	if err != nil {

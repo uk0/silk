@@ -23,6 +23,7 @@ var workspaceRestorePost = gui.Post
 var errRestoreNotRegular = errors.New("restore: not a regular file")
 
 type restoredFile struct {
+	fingerprint   core.FileFingerprint
 	modified      time.Time
 	size          int64
 	data          []byte
@@ -86,12 +87,13 @@ type restorePage struct {
 
 func init() {
 	i18n.AddMany("zh", map[string]string{
-		"Restoring file in background…":                           "正在后台恢复文件…",
-		"Waiting for a restore worker…":                           "正在等待恢复任务…",
-		"Restore timed out; close this tab to cancel":             "恢复超时；关闭此页签可取消",
-		"Cancel Session Restore":                                  "取消会话恢复",
-		"Review Session Recovery":                                 "检查会话恢复",
-		"Autosave recovery deferred; use Review Session Recovery": "自动保存恢复已延后，请使用“检查会话恢复”",
+		"Restoring file in background…":                                      "正在后台恢复文件…",
+		"Waiting for a restore worker…":                                      "正在等待恢复任务…",
+		"Restore timed out; close this tab to cancel":                        "恢复超时；关闭此页签可取消",
+		"Cancel Session Restore":                                             "取消会话恢复",
+		"Review Session Recovery":                                            "检查会话恢复",
+		"Autosave recovery deferred; use Review Session Recovery":            "自动保存恢复已延后，请使用“检查会话恢复”",
+		"A file operation is in progress; reopen this tab after it finishes": "文件操作尚未完成；请在完成后重新打开此页签",
 	})
 }
 func newRestorePage(saved editorSession) *restorePage {
@@ -334,6 +336,10 @@ func (r *workspaceRestore) apply(task restoreTask, value restoredFile) {
 			r.fail(task, err)
 			return
 		}
+		bindDesignDisk(r.design, task.path, value.fingerprint)
+		if r.valid() && r.owner != nil {
+			syncDocumentWindowTitle(r.owner.frame, r.canvas)
+		}
 		rebindAutoSaver(r.design)
 		startReloader(r.canvas)
 		if globalReloader != nil {
@@ -345,7 +351,13 @@ func (r *workspaceRestore) apply(task restoreTask, value restoredFile) {
 	}
 	p := task.page
 	idx := editorPageIndex(r.tabs, p)
-	if p.closed || idx < 0 || rejectBusyFile(task.path) {
+	if p.closed || idx < 0 {
+		return
+	}
+	if fileMutationBusy(task.path) {
+		// This reader is terminal; do not leave an inert 'restoring' page after
+		// rejecting its now-stale bytes. Manual reopen replaces this failed page.
+		r.fail(task, errors.New(i18n.T("A file operation is in progress; reopen this tab after it finishes")))
 		return
 	}
 	if openEditors[task.path] != nil {

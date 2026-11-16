@@ -89,13 +89,13 @@ func (b *designReloadBridge) close() {
 // UI-only and intentionally not an explicit open: do not show a recovery or
 // discard prompt, reveal the canvas, set focus, or replace a pending user open.
 func (c *designOpenController) queueReload(owner *hotreload.Reloader, path string) bool {
-	if !c.valid() || c.admitting != nil || owner == nil || globalReloader != owner || owner.Stats().Closed {
+	if !c.valid() || transitionBusy() || c.admitting != nil || owner == nil || globalReloader != owner || owner.Stats().Closed {
 		return false
 	}
 	scene := c.canvas.GedScene()
 	path = canonicalEditorPath(path)
 	if scene == nil || path == "" || scene.Filename() == "" || !scene.IsClean() || c.canvas.HasCapture() ||
-		workspaceSearchKey(canonicalEditorPath(scene.Filename())) != workspaceSearchKey(path) || rejectBusyFile(path) {
+		workspaceSearchKey(canonicalEditorPath(scene.Filename())) != workspaceSearchKey(path) || savePathBusy(path) || saveBatchAffects(path) || rejectBusyFile(path) {
 		return false
 	}
 	if c.pending != nil && !c.pending.reload {
@@ -112,7 +112,7 @@ func (c *designOpenController) queueReload(owner *hotreload.Reloader, path strin
 	return true
 }
 
-func (c *designOpenController) applyReload(j *designOpenJob, doc *core.TDoc) {
+func (c *designOpenController) applyReload(j *designOpenJob, doc *core.TDoc, version core.FileFingerprint) {
 	scene, path, id := j.scene, j.filename, j.id
 	c.retire(j) // release our edit observer before the owned load notifies others
 	if !c.valid() || c.intent != id || c.canvas.GedScene() != scene || scene.Filename() != path {
@@ -124,8 +124,11 @@ func (c *designOpenController) applyReload(j *designOpenJob, doc *core.TDoc) {
 	}
 	if err != nil {
 		logEvent(ged.LogWarn, "Design reload: "+path+": "+err.Error())
-	} else if changed {
-		logEvent(ged.LogInfo, "Reloaded "+path)
+	} else if scene.IsClean() {
+		bindDesignDisk(scene, path, version)
+		if changed {
+			logEvent(ged.LogInfo, "Reloaded "+path)
+		}
 	}
 }
 

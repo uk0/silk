@@ -180,8 +180,22 @@ func (scene *GedScene) GenerateCode(opts CodeGenOptions) string {
 // generated file needs and a bare string cannot carry: the line each widget is
 // constructed on, and whether the output can be trusted at all.
 func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
-	opts = defaultCodeGenOptions(scene, opts)
+	snapshot, widgets := scene.captureCodeSnapshot()
+	generated := snapshot.Generate(opts)
+	anchors := make([]string, len(snapshot.fields))
+	for i := range anchors {
+		anchors[i] = constructorAnchor(snapshot.fields[i].name)
+	}
+	lines := make(map[*FakeWidget]int, len(widgets))
+	for i, at := range indexAnchors(generated.Code, anchors) {
+		if at >= 0 && widgets[i] != nil {
+			lines[widgets[i]] = at
+		}
+	}
+	return GeneratedCode{Code: generated.Code, Lines: lines, Err: generated.Err}
+}
 
+func (scene *GedScene) captureCodeSnapshot() (*CodeSnapshot, []*FakeWidget) {
 	imports := make(map[string]bool)
 	imports["github.com/uk0/silk/gui"] = true  // always needed for Form
 	imports["github.com/uk0/silk/core"] = true // needed for EventLoop in main()
@@ -280,11 +294,12 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 			}
 
 			fields = append(fields, fieldInfo{
-				name:        fieldName,
-				goType:      goType,
-				constructor: constructor,
-				factoryName: factoryName,
-				x:           x, y: y, w: w, h: h,
+				name:           fieldName,
+				goType:         goType,
+				constructor:    constructor,
+				factoryName:    factoryName,
+				diagnosticName: fake.WidgetName(),
+				x:              x, y: y, w: w, h: h,
 				defaultText:   defaultText,
 				tagName:       tagName,
 				widget:        fake.Widget(),
@@ -301,6 +316,59 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		}
 	}
 	collect(scene.Children(), "", false)
+	widgets := make([]*FakeWidget, len(fields))
+	for i := range fields {
+		f := &fields[i]
+		widgets[i] = f.fake
+		f.layoutManaged = f.fake.layoutManaged
+		f.gridParent = f.parentField != "" && isGridOrFormParent(f.fake) && f.fake.Parent().(*FakeWidget).layoutManaged
+		if f.gridParent {
+			p := placementForChild(f.fake)
+			f.placement = [4]int{p.Row, p.Column, p.RowSpan, p.ColumnSpan}
+		}
+		if f.defaultText != "" && f.goType != interfaceGoType {
+			setter := textSetterFor(f.widget)
+			if setter != "" && !hasDesignProp(f.factoryName, setter) {
+				f.textSetter = setter
+			}
+		}
+		if f.goType != interfaceGoType {
+			if named, ok := f.widget.(interface{ IconName() string }); ok {
+				if _, ok := f.widget.(interface{ SetIconName(string) }); ok {
+					f.iconName = named.IconName()
+				}
+			}
+		}
+		var props, layout strings.Builder
+		emitDesignProperties(&props, imports, f.factoryName, f.name, f.widget)
+		emitLayoutProperties(&layout, *f)
+		f.propertyCode, f.layoutCode = props.String(), layout.String()
+		bindings := make(map[string]string, len(f.eventHandlers))
+		for event, handler := range f.eventHandlers {
+			bindings[event] = handler
+		}
+		f.eventHandlers = bindings
+		f.widget, f.fake = nil, nil
+	}
+	diagnostic := unmappedFactoryError(unmapped)
+	snapshot := &CodeSnapshot{fields: fields, imports: imports, decls: append([]TagDecl(nil), scene.TagDict()...),
+		title: scene.FormTitle(), width: roundPx(scene.Width()), height: roundPx(scene.Height()),
+		missing: append([]string(nil), scene.MissingWidgets()...)}
+	if diagnostic != nil {
+		snapshot.errText = diagnostic.Error()
+	}
+	return snapshot, widgets
+}
+
+// Generate renders a captured model without consulting the original UI. The
+// snapshot may be rendered concurrently with different package/type options.
+func (snapshot *CodeSnapshot) Generate(opts CodeGenOptions) CapturedCode {
+	opts = snapshot.defaultOptions(opts)
+	fields := snapshot.fields
+	imports := make(map[string]bool, len(snapshot.imports))
+	for path, used := range snapshot.imports {
+		imports[path] = used
+	}
 
 	// hasTags: any widget carries a design-time tag, so the output needs a
 	// core.TagDB field the host feeds and the widgets subscribe to.
@@ -317,7 +385,7 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 	// widget (device / alarm / operator panel). It is a strict superset of
 	// hasTags, so a tag-bearing scene always takes the services path; a plain UI
 	// keeps the legacy TagDB-free output.
-	decls := scene.TagDict()
+	decls := snapshot.decls
 	needServices := sceneNeedsServices(fields, decls)
 	if needServices {
 		imports["github.com/uk0/silk/scada"] = true
@@ -354,9 +422,7 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 
 	// Constructor
 	constructorName := "New" + opts.TypeName
-	formW := roundPx(scene.Width())
-	formH := roundPx(scene.Height())
-	title := scene.FormTitle()
+	formW, formH, title := snapshot.width, snapshot.height, snapshot.title
 
 	buf.WriteString(fmt.Sprintf("func %s() *%s {\n", constructorName, opts.TypeName))
 	buf.WriteString(fmt.Sprintf("\tui := new(%s)\n\n", opts.TypeName))
@@ -372,15 +438,11 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		buf.WriteString("\tui.Tags = core.NewTagDB()\n\n")
 	}
 
-	// Widgets whose event code the generator could not read, reported below
-	// alongside the unmapped factories.
-	var badHandlers []handlerProblem
-
 	// Children
 	for _, f := range fields {
 		buf.WriteString(fmt.Sprintf("\tui.%s = %s\n", f.name, f.constructor))
 		if isDesignerLayoutFactory(f.factoryName) {
-			fmt.Fprintf(&buf, "\tui.%s.SetLayoutEnabled(%t)\n", f.name, f.fake.layoutManaged)
+			fmt.Fprintf(&buf, "\tui.%s.SetLayoutEnabled(%t)\n", f.name, f.layoutManaged)
 		}
 		switch {
 		case f.parentField == "":
@@ -388,9 +450,9 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.Form)\n", f.name))
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
-		case f.parentField != "" && isGridOrFormParent(f.fake) && f.fake.Parent().(*FakeWidget).layoutManaged:
-			p := placementForChild(f.fake)
-			fmt.Fprintf(&buf, "\tui.%s.AddLayoutWidget(ui.%s, %d, %d, %d, %d)\n", f.parentField, f.name, p.Row, p.Column, p.RowSpan, p.ColumnSpan)
+		case f.gridParent:
+			p := f.placement
+			fmt.Fprintf(&buf, "\tui.%s.AddLayoutWidget(ui.%s, %d, %d, %d, %d)\n", f.parentField, f.name, p[0], p[1], p[2], p[3])
 		case f.parentAdd:
 			// Nested in a simple-AddWidget container (VBox/HBox/Card/
 			// GroupBox): AddWidget reparents AND lets the container
@@ -402,12 +464,6 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetParent(ui.%s)\n", f.name, f.parentField))
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
-		}
-		// Event code that cannot be read is reported, not generated from: the
-		// bindings below would otherwise wire a handler this file never
-		// declares, or drop the developer's body into an empty stub.
-		if reason := handlerSourceProblem(f.code); reason != "" {
-			badHandlers = append(badHandlers, handlerProblem{fake: f.fake, reason: reason})
 		}
 		// Wire the events this widget contributes. handlerBindingsFor owns
 		// the rules (recorded bindings win, otherwise the widget's natural
@@ -442,8 +498,8 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		if f.defaultText == "" || f.goType == interfaceGoType {
 			continue
 		}
-		setter := textSetterFor(f.widget)
-		if setter == "" || hasDesignProp(f.factoryName, setter) {
+		setter := f.textSetter
+		if setter == "" {
 			continue
 		}
 		fmt.Fprintf(&buf, "\tui.%s.%s(%q)\n", f.name, setter, f.defaultText)
@@ -458,14 +514,10 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		if f.goType == interfaceGoType {
 			continue
 		}
-		named, ok := f.widget.(interface{ IconName() string })
-		if !ok || named.IconName() == "" {
+		if f.iconName == "" {
 			continue
 		}
-		if _, ok := f.widget.(interface{ SetIconName(string) }); !ok {
-			continue
-		}
-		fmt.Fprintf(&buf, "\tui.%s.SetIconName(%q)\n", f.name, named.IconName())
+		fmt.Fprintf(&buf, "\tui.%s.SetIconName(%q)\n", f.name, f.iconName)
 	}
 	buf.WriteString("\n")
 
@@ -473,11 +525,11 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 	// configurable property the designer changed from its default (colors,
 	// range, unit, …) so the generated screen looks like the design.
 	for _, f := range fields {
-		emitDesignProperties(&buf, imports, f.factoryName, f.name, f.widget)
+		buf.WriteString(f.propertyCode)
 	}
 
 	for _, f := range fields {
-		emitLayoutProperties(&buf, f)
+		buf.WriteString(f.layoutCode)
 	}
 	// Final layout pass follows all child creation and scalar property setters.
 	// Reverse order lets nested size hints settle before their parents arrange.
@@ -600,29 +652,7 @@ func (scene *GedScene) GenerateCodeIndexed(opts CodeGenOptions) GeneratedCode {
 		src = string(formatted)
 	}
 
-	// The line map is resolved against the finished source, not counted during
-	// the walk: gofmt collapses blank-line runs and the import block is rewritten
-	// from scratch below the walk, so a line counted while emitting would be off
-	// by an amount nothing can predict. The anchors still come from the walk.
-	anchors := make([]string, len(fields))
-	for i := range fields {
-		anchors[i] = constructorAnchor(fields[i].name)
-	}
-	lines := make(map[*FakeWidget]int, len(fields))
-	for i, at := range indexAnchors(src, anchors) {
-		if at >= 0 && fields[i].fake != nil {
-			lines[fields[i].fake] = at
-		}
-	}
-
-	// One error at a time: an unmapped factory is the more fundamental gap (the
-	// widget is not in the output at all), so it is named first and the handler
-	// problems surface once it is resolved.
-	err := unmappedFactoryError(unmapped)
-	if err == nil {
-		err = handlerSourceError(badHandlers)
-	}
-	return GeneratedCode{Code: src, Lines: lines, Err: err}
+	return CapturedCode{Code: src, Err: snapshot.capturedError()}
 }
 
 // emitMain writes the runnable entry point for a package main design. Both

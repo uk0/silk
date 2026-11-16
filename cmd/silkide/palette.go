@@ -88,7 +88,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 			}
 		})
 	}
-	add("Save All", actionKeyHint()+"+Shift+S", func() { performSaveAll(editorTabs, designCanvas) })
+	add("Save All", actionKeyHint()+"+Shift+S", func() { requestSaveAllDocuments(editorTabs, designCanvas, nil) })
 	for i, name := range []string{"Undo", "Redo"} {
 		redo := i == 1
 		hint := actionKeyHint() + "+Z"
@@ -160,7 +160,7 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		showRecentFilesMenu(editorTabs, designCanvas)
 	})
 	add("Save", "Cmd+S", func() {
-		saveCurrentDocument(editorTabs, designCanvas)
+		requestCurrentDocumentSave(editorTabs, designCanvas, nil)
 	})
 	add("Reopen Closed Editor", "Cmd+Shift+T", func() { reopenClosedEditor(editorTabs) })
 	add("Close Other Editors", "", func() { startEditorBatchClose(editorTabs, activeEditor(editorTabs), closeOtherEditors) })

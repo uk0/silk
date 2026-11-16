@@ -16,6 +16,7 @@ type AutoSaver struct {
 	timer    gui.Timer
 	scene    *GedScene
 	lastSave time.Time
+	request  func(*GedScene)
 }
 
 // GlobalAutoSaver is the singleton auto-saver instance.
@@ -41,6 +42,12 @@ func (this *AutoSaver) SetEnabled(enabled bool) {
 func (this *AutoSaver) IsEnabled() bool {
 	return this.enabled
 }
+
+// SetSaveRequest installs an optional UI-thread host dispatcher. It receives
+// the live scene on UI only and must capture before scheduling bounded work.
+// The host owns physical ordering, errors and completion reporting; admission
+// is not a successful autosave. Nil retains the legacy synchronous SDK behavior.
+func (this *AutoSaver) SetSaveRequest(request func(*GedScene)) { this.request = request }
 
 // SetInterval sets the auto-save interval duration.
 func (this *AutoSaver) SetInterval(d time.Duration) {
@@ -90,6 +97,10 @@ func (this *AutoSaver) tick() {
 
 	filename := this.scene.Filename()
 	if filename == "" {
+		return
+	}
+	if this.request != nil {
+		this.request(this.scene)
 		return
 	}
 

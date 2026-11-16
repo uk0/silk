@@ -2,7 +2,6 @@ package ged
 
 import (
 	"errors"
-	"path/filepath"
 )
 
 // SaveTo commits UI drafts and atomically writes the design to filename. Only
@@ -24,24 +23,15 @@ func (s *GedScene) SaveTo(filename string) error {
 	}
 	s.saving = true
 	defer func() { s.saving = false }()
-	previous := s.filename
-	if filepath.Ext(filename) == "" {
-		filename += DefaultDesignExt
-	}
-	doc, err := s.SaveDesignWithPendingEdits()
+	p, err := s.prepareSave(filename)
 	if err != nil {
 		return err
 	}
-	// Draft commit observers may retarget the scene. Never write the old
-	// request under a new identity or restore its path over the observer.
-	if s.filename != previous {
-		return errors.New("design save: document identity changed during draft commit")
-	}
-	if err = doc.SaveFileAtomic(filename); err != nil {
+	if err = p.Writer().Write(); err != nil {
 		return err
 	}
-	s.SetFilename(filename)
-	s.SetTitle(filepath.Base(filename))
-	s.UndoStack().SetClean()
+	if !s.completeSave(p) {
+		return ErrSaveSuperseded
+	}
 	return nil
 }

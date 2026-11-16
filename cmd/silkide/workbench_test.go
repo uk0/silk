@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
@@ -41,11 +43,31 @@ func testWorkbench(t *testing.T) *workbench {
 	dock.AddView(w.welcome)
 	w.canvas.GedScene().SetFilename(filepath.Join(t.TempDir(), "Form.silkui"))
 	globalWorkbench = w
+	installTestTransitions(t, w)
 	installTestEditorOpener(t, w)
 	installTestDesignOpener(t, w)
 	dock.SetTabChangedCallback(func(_ int) { w.syncHistoryActions() })
 	t.Cleanup(w.closeHistoryActions)
 	t.Cleanup(w.closeNavigationActions)
+	t.Cleanup(func() {
+		if b := w.saveBatch; b != nil {
+			b.finish(false)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if c := w.sourceSaves; c != nil {
+			c.Close()
+			if err := c.settings.queue.Wait(ctx); err != nil {
+				t.Error("source writer cleanup", err)
+			}
+		}
+		if c := w.designSaves; c != nil {
+			c.Close()
+			if err := c.settings.queue.Wait(ctx); err != nil {
+				t.Error("design writer cleanup", err)
+			}
+		}
+	})
 	return w
 }
 
@@ -86,6 +108,7 @@ func TestSaveEntrypointsTargetVisibleEditor(t *testing.T) {
 	for _, entry := range []string{"shortcut", "palette", "toolbar"} {
 		t.Run(entry, func(t *testing.T) {
 			w := testWorkbench(t)
+			saves, posts := installTestSourceSaver(t, w)
 			path := writeFile(t, t.TempDir(), "main.go", "package main\n")
 			if !openTestEditorReady(t, w.tabs, path) {
 				t.Fatal("open failed")
@@ -129,6 +152,10 @@ func TestSaveEntrypointsTargetVisibleEditor(t *testing.T) {
 					t.Fatal("Save toolbar button missing")
 				}
 			}
+			if saves.pending == nil {
+				t.Fatal("save command not admitted")
+			}
+			pumpOwnedSaves(t, posts, func() bool { return saves.pending == nil })
 			if got := diskText(t, path); got != "package main\n\nfunc added() {}\n" {
 				t.Fatalf("saved %q", got)
 			}

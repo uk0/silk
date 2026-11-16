@@ -14,7 +14,39 @@ import (
 	"time"
 
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
+
+func TestWorkspaceRestoreReadySnapshotDuringSaveHasTerminalRetryState(t *testing.T) {
+	w := testWorkbench(t)
+	p := writeFile(t, t.TempDir(), "pending.txt", "old bytes")
+	posts := make(chan func(), 16)
+	r := newWorkspaceRestore(workspaceSession{Version: 1, Editors: []editorSession{{Path: p}}, ActiveFile: p, Mode: modeEdit}, w.tabs, nil, workspaceRestoreOptions{post: func(f func()) { posts <- f }})
+	cleanupRestore(t, r, nil)
+	var ready func()
+	select {
+	case ready = <-posts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reader completion")
+	}
+	ticket, ok := reserveSavePaths(new(saveReservationOwner), []string{p})
+	if !ok {
+		t.Fatal("reserve")
+	}
+	t.Cleanup(func() { ticket.finish(true); ticket.finish(false) })
+	if err := os.WriteFile(p, []byte("new bytes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ready()
+	if r.Busy() || openEditors[p] != nil || w.tabs.Count() != 1 || r.pages[0].label.Text() != i18n.T("A file operation is in progress; reopen this tab after it finishes") {
+		t.Fatal("stale restore accepted or falsely left loading")
+	}
+	ticket.finish(true)
+	ticket.finish(false)
+	if !openTestEditorReady(t, w.tabs, p) || openEditors[p].Text() != "new bytes" || w.tabs.Count() != 1 {
+		t.Fatal("failed page not replaceable with fresh output")
+	}
+}
 
 func installRestorePost(t *testing.T) chan func() {
 	t.Helper()

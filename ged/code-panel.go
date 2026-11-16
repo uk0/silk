@@ -411,6 +411,14 @@ func (this *CodePanel) HasPendingChanges() bool {
 	return true
 }
 
+func (this *CodePanel) PendingEditVersion() any {
+	return struct {
+		widget           *FakeWidget
+		revision, loaded uint64
+		code, text       string
+	}{this.currentWidget, this.editor.TextRevision(), this.loadedRevision, this.loadedCode, this.loadedText}
+}
+
 func (this *CodePanel) CommitPendingChanges() error {
 	if !this.HasPendingChanges() {
 		return nil

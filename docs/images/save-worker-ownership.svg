@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="438" viewBox="0 0 1120 438" role="img" aria-labelledby="title desc">
+  <title id="title">Silk save thread ownership, development architecture</title>
+  <desc id="desc">Captured close, New, Open and quit continuations wait for real saves and Save All UI completion. Explicit Save captures independent document and code inputs on UI, writes files on one bounded physical worker, then separately validates adoption and later edits. Cancellation never releases blocked physical work. Native platform gates remain pending.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#92a6bd"/></marker>
+  </defs>
+  <rect width="1120" height="438" rx="18" fill="#101923"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="30" y="39" fill="#f2f7fc" font-size="23" font-weight="600">Save without crossing UI ownership</text>
+    <rect x="766" y="19" width="324" height="29" rx="14" fill="#322c1a"/>
+    <text x="928" y="39" text-anchor="middle" fill="#f6cd7f" font-size="13">DEVELOPMENT · NATIVE GATES STILL OPEN</text>
+    <text x="30" y="79" fill="#becbd9" font-size="14">CLOSE / NEW / OPEN / QUIT · CAPTURED UI CONTINUATIONS</text>
+    <rect x="30" y="94" width="1060" height="47" rx="9" fill="#162b3d" stroke="#3b83b2"/>
+    <text x="52" y="123" fill="#d5ebfc" font-size="15">Wait for prior Save / Save All → worker inspection → explicit decision → revalidate edits → resume once</text>
+    <text x="30" y="177" fill="#becbd9" font-size="14">EXPLICIT SAVE / SAVE ALL / RECOVERY · CURRENT WORKING SOURCE</text>
+    <rect x="30" y="194" width="290" height="141" rx="12" fill="#162b3d" stroke="#3b83b2"/>
+    <text x="49" y="223" fill="#8fd6ff" font-size="17" font-weight="600">1  UI capture</text>
+    <text x="49" y="250" fill="#e2edf7" font-size="14">Freeze text / TDoc + typed code inputs</text>
+    <text x="49" y="274" fill="#b2c5d7" font-size="14">Copy bindings, properties, layout, tags</text>
+    <text x="49" y="312" fill="#8fd6ff" font-size="13">Receipt / Undo checkpoint stay on UI</text>
+    <path d="M328 263 H360" stroke="#92a6bd" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="370" y="194" width="345" height="141" rx="12" fill="#172e2c" stroke="#3a9286"/>
+    <text x="389" y="223" fill="#8de4ce" font-size="17" font-weight="600">2  One physical writer</text>
+    <text x="389" y="250" fill="#e2edf7" font-size="14">Atomic primary → companion AST + files</text>
+    <text x="389" y="274" fill="#b2c5d7" font-size="14">One active + one replaceable queued task</text>
+    <text x="389" y="312" fill="#8de4ce" font-size="13">No widgets, scenes or UI callbacks</text>
+    <path d="M723 263 H755" stroke="#92a6bd" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="765" y="194" width="325" height="141" rx="12" fill="#25243a" stroke="#8276b1"/>
+    <text x="784" y="223" fill="#c6baff" font-size="17" font-weight="600">3  Owned UI completion</text>
+    <text x="784" y="250" fill="#e2edf7" font-size="14">Recheck lifetime, intent, history and path</text>
+    <text x="784" y="274" fill="#b2c5d7" font-size="14">Keep newer input / Undo intact</text>
+    <text x="784" y="312" fill="#c6baff" font-size="13">Written ≠ adopted; companion errors separate</text>
+    <path d="M30 357 H1090" stroke="#314153"/>
+    <text x="30" y="384" fill="#e2edf7" font-size="14">Cancel / Close retire the UI receipt, not a blocked OS write. The physical slot stays occupied until real work returns.</text>
+    <text x="30" y="413" fill="#a6b8ca" font-size="13">Architecture illustration, not a UI screenshot. Pending: frozen full platform + native QA; legacy standalone paths.</text>
+  </g>
+</svg>

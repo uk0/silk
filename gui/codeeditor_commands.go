@@ -9,9 +9,23 @@ func (this *CodeEditor) Redo() { this.redo() }
 // Hosts call it only after loading or successfully writing the document.
 func (this *CodeEditor) MarkSaved() {
 	this.breakTypingUndoGroup()
-	this.savedText = this.Text()
+	this.MarkSnapshotSaved(this.Text())
+}
+
+// SavedTextSnapshot returns the last loaded/successfully saved exact text. Call
+// on UI, then pass the immutable string to a worker, not the editor itself.
+func (this *CodeEditor) SavedTextSnapshot() string { return this.savedText }
+
+// MarkSnapshotSaved publishes a physically saved text snapshot without replacing
+// newer input, moving selection/caret, ending its typing group or clearing Undo.
+// Call only on UI after actual write success and editor/path ownership checks.
+// This does not mean the current buffer is clean: newer edits remain modified,
+// and Undo back to the saved bytes becomes clean. A stale/failed write must not
+// call this method. MarkSaved retains its existing current-buffer semantics.
+func (this *CodeEditor) MarkSnapshotSaved(text string) {
+	this.savedText = text
+	this.modified = this.Text() != text
 	this.modifiedRevision = this.textRevision
-	this.modified = false
 }
 
 // Modified compares exact content once per text revision, then serves idle

@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 
+	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
@@ -44,10 +45,33 @@ var silkideToast = func(msg string, level gui.ToastLevel) {
 // It attempts companion Go generation after saving; failures appear in Output
 // but do not invalidate the successfully saved design document.
 func saveDesignDocument(canvas *ged.GedView) bool {
-	if canvas == nil || canvas.GedScene() == nil || !canvas.GedScene().Save() {
+	if canvas == nil || canvas.GedScene() == nil || anySaveBusy() || saveBatchBusy() {
 		return false
 	}
-	regenerateGoForSilkui(canvas.GedScene().Filename())
+	scene := canvas.GedScene()
+	previous, path := scene.Filename(), scene.Filename()
+	if path == "" {
+		path = gui.SaveFileDialog()
+		if path == "" || canvas.GedScene() != scene || scene.Filename() != previous {
+			return false
+		}
+	}
+	p, err := scene.PrepareSave(path)
+	if err != nil {
+		core.Warn(err)
+		return false
+	}
+	if err := p.Writer().Write(); err != nil {
+		core.Warn(err)
+		return false
+	}
+	if !scene.CompleteSave(p) {
+		return false
+	}
+	if version, ok := p.Writer().WrittenFingerprint(); ok {
+		bindDesignDisk(scene, p.Writer().Path(), version)
+	}
+	regenerateGoForSilkui(scene.Filename())
 	return true
 }
 

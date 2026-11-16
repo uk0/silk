@@ -85,6 +85,7 @@ func TestEditorPointerCloseFocusesRemainingDocument(t *testing.T) {
 	x, y := editorPointerPoint(t, bar, 1, true)
 	bar.OnLeftDown(x, y)
 	bar.OnLeftUp(x, y)
+	pumpTestTransitions(t, w)
 	if w.tabs.Count() != 1 || !first.HasFocus() || !strings.HasPrefix(w.frame.Title(), "a.txt — ") {
 		t.Fatal("close left stale focus/title")
 	}
@@ -92,6 +93,7 @@ func TestEditorPointerCloseFocusesRemainingDocument(t *testing.T) {
 
 func TestEditorToolbarMouseSaveKeepsTypingAndMenuTarget(t *testing.T) {
 	w := testWorkbench(t)
+	saves, posts := installTestSourceSaver(t, w)
 	path := writeFile(t, t.TempDir(), "target.txt", "alpha")
 	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
@@ -118,6 +120,10 @@ func TestEditorToolbarMouseSaveKeepsTypingAndMenuTarget(t *testing.T) {
 	if !ed.HasFocus() {
 		t.Fatal("mouse save stole editor focus")
 	}
+	if saves.pending == nil {
+		t.Fatal("toolbar save not admitted")
+	}
+	pumpOwnedSaves(t, posts, func() bool { return saves.pending == nil })
 	if b, err := os.ReadFile(path); err != nil || string(b) != "changed\r\n中🙂" {
 		t.Fatal("save mismatch", err)
 	}

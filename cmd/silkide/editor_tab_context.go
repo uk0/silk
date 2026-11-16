@@ -67,11 +67,11 @@ func buildEditorTabContextMenu(menu *gui.Menu, tabs *gui.TabWidget, index int) {
 	}
 	add("tab.save", "Save", "save", path != "", func() {
 		if _, live := resolveEditorTabTarget(tabs, ed); live != "" {
-			saveEditorToDisk(ed, live)
+			requestSourceDocumentSave(ed, live, nil)
 		}
 	})
 	add("tab.close", "Close Editor", "close", path != "", func() {
-		if idx, live := resolveEditorTabTarget(tabs, ed); idx >= 0 && live != "" && closeEditorTab(tabs, idx) {
+		if idx, live := resolveEditorTabTarget(tabs, ed); idx >= 0 && live != "" && requestCloseEditorTab(tabs, idx) {
 			if current := activeEditor(tabs); current != nil {
 				focusEditorTab(tabs, current)
 			}

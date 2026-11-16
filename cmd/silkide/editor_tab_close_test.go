@@ -10,7 +10,7 @@ import (
 	"github.com/uk0/silk/gui"
 )
 
-// The tests below drive tabs.TabBar().CloseTab(idx) — the exact call TabBar's
+// The tests below drive closeTestTab(t, tabs, idx) — the exact call TabBar's
 // OnLeftUp makes when the X button is released, and the one OnMiddleUp funnels
 // into — on a TabWidget wired by buildEditorTabs, so they exercise the
 // production close path rather than closeEditorTab directly. The Cmd+W tests
@@ -88,7 +88,12 @@ func cmdW(t *testing.T, tabs *gui.TabWidget) func() {
 	if press == nil {
 		t.Fatal("registerShortcuts left Cmd+W unbound")
 	}
-	return press
+	return func() {
+		press()
+		if w := globalWorkbench; !dirtyPromptUp && w != nil && w.tabs == tabs {
+			pumpTestTransitions(t, w)
+		}
+	}
 }
 
 // editorTabIndex returns the tab index whose page is ed, or -1.
@@ -117,7 +122,7 @@ func TestCloseEditorTabCancelKeepsUnsavedEdits(t *testing.T) {
 	tabs, ed, idx := openEditedTab(t, path, edited)
 	answerCloseDirty(t, gui.DialogCancel)
 
-	if tabs.TabBar().CloseTab(idx) {
+	if closeTestTab(t, tabs, idx) {
 		t.Error("CloseTab reported the tab closed after a cancelled prompt")
 	}
 	if editorTabIndex(tabs, ed) < 0 {
@@ -166,7 +171,7 @@ func TestCloseEditorTabSaveAndDiscard(t *testing.T) {
 			tabs, ed, idx := openEditedTab(t, path, edited)
 			answerCloseDirty(t, c.answer)
 
-			if !tabs.TabBar().CloseTab(idx) {
+			if !closeTestTab(t, tabs, idx) {
 				t.Fatal("CloseTab refused to close after the prompt was answered")
 			}
 			if editorTabIndex(tabs, ed) >= 0 {
@@ -199,7 +204,7 @@ func TestCloseEditorTabCleanBufferClosesSilently(t *testing.T) {
 	tabs, ed, idx := openEditedTab(t, path, original)
 	asked := answerCloseDirty(t, gui.DialogCancel)
 
-	if !tabs.TabBar().CloseTab(idx) {
+	if !closeTestTab(t, tabs, idx) {
 		t.Fatal("CloseTab refused to close a clean tab")
 	}
 	if *asked {
@@ -321,7 +326,7 @@ func TestCmdWClosesTheCurrentTabWhenItIsTheFirstOfSeveral(t *testing.T) {
 	// so the real files sit at 0 and 1. They carry no path, so they close
 	// without a prompt.
 	for tabs.Count() > 2 {
-		if !tabs.TabBar().CloseTab(0) {
+		if !closeTestTab(t, tabs, 0) {
 			t.Fatalf("a seeded sample tab refused to close (%d tabs left)", tabs.Count())
 		}
 	}
@@ -402,7 +407,7 @@ func TestCloseEditorTabSavesTheClosingTabNotTheActiveOne(t *testing.T) {
 	}
 	answerCloseDirty(t, gui.DialogOK)
 
-	if !tabs.TabBar().CloseTab(idxB) {
+	if !closeTestTab(t, tabs, idxB) {
 		t.Fatal("CloseTab refused to close the background tab")
 	}
 	if disk := diskText(t, pathB); disk != editedB {
@@ -446,7 +451,7 @@ func TestCloseEditorTabFailedSaveKeepsTheBuffer(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(path, 0o644) }) // else TempDir can't clean up
 	answerCloseDirty(t, gui.DialogOK)
 
-	if tabs.TabBar().CloseTab(idx) {
+	if closeTestTab(t, tabs, idx) {
 		t.Error("CloseTab reported the tab closed after the save failed")
 	}
 	if editorTabIndex(tabs, ed) < 0 {
@@ -536,7 +541,7 @@ func TestCloseEditorTabUnreadableFileKeepsTheBuffer(t *testing.T) {
 			c.breakFile(t, path)
 			asked := answerCloseDirty(t, gui.DialogCancel)
 
-			if tabs.TabBar().CloseTab(idx) {
+			if closeTestTab(t, tabs, idx) {
 				t.Error("CloseTab closed a tab whose file is unreadable; the buffer was the only copy left")
 			}
 			if !*asked {
@@ -576,7 +581,7 @@ func TestCloseEditorTabEmptyBufferVanishedFileClosesSilently(t *testing.T) {
 	if got := dirtyEditorPaths(); slices.Contains(got, path) {
 		t.Errorf("dirtyEditorPaths() = %v; an empty buffer has nothing to save, so Cmd+Q must not stop for %q", got, path)
 	}
-	if !tabs.TabBar().CloseTab(idx) {
+	if !closeTestTab(t, tabs, idx) {
 		t.Fatal("CloseTab refused to close an empty buffer whose file is gone")
 	}
 	if *asked {

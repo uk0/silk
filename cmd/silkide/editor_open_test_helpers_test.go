@@ -58,6 +58,10 @@ func ownTestEditorTabs(t *testing.T, tabs *gui.TabWidget) {
 		return
 	}
 	if w := globalWorkbench; w != nil && w.tabs == tabs {
+		if w.canvas == nil {
+			w.canvas = ged.NewGedView()
+		}
+		installTestTransitions(t, w)
 		if testEditorOpenPosts[w] == nil {
 			installTestEditorOpener(t, w)
 		}
@@ -66,11 +70,13 @@ func ownTestEditorTabs(t *testing.T, tabs *gui.TabWidget) {
 	old := globalWorkbench
 	frame := gui.NewFrame()
 	dock := frame.SuggestDocDock().(*gui.Dock)
-	w := &workbench{frame: frame, center: dock, tabs: tabs}
+	w := &workbench{frame: frame, center: dock, tabs: tabs, canvas: ged.NewGedView()}
+	dock.AddView(w.canvas)
 	dock.AddView(tabs)
 	globalWorkbench = w
 	t.Cleanup(func() { w.closeHistoryActions(); w.closeNavigationActions(); globalWorkbench = old })
 	installTestEditorOpener(t, w)
+	installTestTransitions(t, w)
 }
 
 // Fixture calls exercise the real asynchronous entrypoint and drive its UI

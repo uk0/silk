@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/internal/filetxn"
@@ -27,6 +28,11 @@ type editorCloseTarget struct {
 	editor     *gui.CodeEditor
 	path, text string
 	revision   uint64
+	crlf       bool
+}
+type editorCloseOutput struct {
+	text    string
+	version core.FileFingerprint
 }
 type editorCloseDisk struct {
 	before filetxn.Snapshot
@@ -86,7 +92,7 @@ func editorCloseTargets(tabs *gui.TabWidget, anchor *gui.CodeEditor, mode editor
 }
 
 func startEditorBatchClose(tabs *gui.TabWidget, anchor *gui.CodeEditor, mode editorCloseMode) bool {
-	if activeEditorClose != nil || activeFileRename != nil || workspaceSearchBusy() || macroBusy || dirtyPromptUp {
+	if transitionBusy() || anySaveBusy() || saveBatchBusy() || activeEditorClose != nil || activeFileRename != nil || workspaceSearchBusy() || macroBusy || dirtyPromptUp {
 		silkideToast(i18n.T("Finish the current file operation before closing editors"), gui.ToastWarning)
 		return false
 	}
@@ -98,6 +104,7 @@ func startEditorBatchClose(tabs *gui.TabWidget, anchor *gui.CodeEditor, mode edi
 	for i := range targets {
 		targets[i].text = targets[i].editor.Text()
 		targets[i].revision = targets[i].editor.TextRevision()
+		targets[i].crlf = targets[i].editor.LineEndings().Preferred == gui.LineEndingCRLF
 		total += len(targets[i].text)
 		if total > editorCloseMemoryLimit || len(targets) > 4096 {
 			silkideToast(i18n.T("Close fewer editors at once (64 MiB snapshot limit)"), gui.ToastWarning)
@@ -222,10 +229,15 @@ func (j *editorCloseJob) inspected(disk []editorCloseDisk) {
 	// Save All and clean closes share conflict verification on the worker.
 	// No-op entries validate disk snapshots without rewriting clean files.
 	targets := append([]editorCloseTarget(nil), j.targets...)
+	for i, d := range disk {
+		if d.dirty {
+			targets[i].editor.SealTypingUndoGroup()
+		}
+	}
 	commit := editorCloseCommit
 	j.launch(func() {
 		var changes []filetxn.Change
-		outputs := make(map[int]string)
+		outputs := make(map[int]editorCloseOutput)
 		unformatted := false
 		var failure error
 		for i, d := range disk {
@@ -244,12 +256,15 @@ func (j *editorCloseJob) inspected(disk []editorCloseDisk) {
 			if d.dirty && strings.EqualFold(filepath.Ext(targets[i].path), ".go") {
 				if formatted, err := formatClosingEditor(j.ctx, out); err == nil {
 					out = formatted
+					if targets[i].crlf {
+						out = strings.ReplaceAll(strings.ReplaceAll(out, "\r\n", "\n"), "\n", "\r\n")
+					}
 				} else {
 					unformatted = true
 				}
 			}
 			if d.dirty {
-				outputs[i] = out
+				outputs[i] = editorCloseOutput{text: out, version: core.FingerprintBytes([]byte(out))}
 			}
 			if d.before.Exists() || d.dirty {
 				changes = append(changes, filetxn.Change{Before: d.before, Data: []byte(out)})
@@ -273,7 +288,7 @@ func formatClosingEditor(ctx context.Context, text string) (string, error) {
 	data, err := cmd.Output()
 	return string(data), err
 }
-func (j *editorCloseJob) saved(outputs map[int]string, unformatted bool, err error) {
+func (j *editorCloseJob) saved(outputs map[int]editorCloseOutput, unformatted bool, err error) {
 	if activeEditorClose != j {
 		return
 	}
@@ -292,7 +307,7 @@ func (j *editorCloseJob) saved(outputs map[int]string, unformatted bool, err err
 	closeAllowed := j.allCurrent()
 	j.post(func() { j.publishSaved(outputs, unformatted, closeAllowed, 0) })
 }
-func (j *editorCloseJob) publishSaved(outputs map[int]string, unformatted, closeAllowed bool, index int) {
+func (j *editorCloseJob) publishSaved(outputs map[int]editorCloseOutput, unformatted, closeAllowed bool, index int) {
 	if activeEditorClose != j {
 		return
 	}
@@ -301,16 +316,22 @@ func (j *editorCloseJob) publishSaved(outputs map[int]string, unformatted, close
 		return
 	}
 	// A save may finish after cancellation/typing. Publish one editor per turn;
-	// do not overwrite/mark saved a buffer newer than the captured revision.
+	// do not overwrite newer input, but publish its actual disk baseline so Undo
+	// to the committed bytes is clean and the next own save does not conflict.
 	if index < len(j.targets) {
 		target := &j.targets[index]
-		if out, ok := outputs[index]; ok && j.validTarget(*target) {
-			if target.text != out {
-				target.editor.ReplaceAllText(out)
-				target.text = out
+		if out, ok := outputs[index]; ok && j.ownsTarget(*target) {
+			if j.validTarget(*target) && target.text != out.text {
+				target.editor.ReplaceAllText(out.text)
+				target.text = out.text
 				target.revision = target.editor.TextRevision()
 			}
-			target.editor.MarkSaved()
+			if !j.ownsTarget(*target) {
+				j.changed()
+				return
+			}
+			target.editor.MarkSnapshotSaved(out.text)
+			noteObservedSourceSave(target.editor, target.path, out.text, out.version)
 			target.editor.RefreshGitStatus()
 			refreshEditorTab(j.tabs, target.editor, target.path)
 		}
@@ -332,6 +353,10 @@ func (j *editorCloseJob) publishSaved(outputs map[int]string, unformatted, close
 		silkideToast(i18n.T("gofmt failed; saved unformatted"), gui.ToastWarning)
 	}
 	j.post(j.closeNext)
+}
+
+func (j *editorCloseJob) ownsTarget(t editorCloseTarget) bool {
+	return j.owner == globalWorkbench && openEditors[t.path] == t.editor && t.editor.FilePath() == t.path && editorPageIndex(j.tabs, t.editor) >= 0
 }
 func (j *editorCloseJob) closeNext() {
 	if !j.live() {

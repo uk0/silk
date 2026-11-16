@@ -53,19 +53,43 @@ func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (S
 	if err := scene.CommitPendingEdits(); err != nil {
 		return SplitResult{}, err
 	}
+	return scene.CaptureCodeSnapshot().GenerateCodeFile(filename, opts)
+}
+
+// GenerateCodeFile writes a captured typed machine/user pair without reading a
+// scene or widget. It may run on a bounded worker. Preserve the existing split
+// ownership/stub/import/conflict checks; the two-file set is not crash-atomic.
+func (snapshot *CodeSnapshot) GenerateCodeFile(filename string, opts CodeGenOptions) (SplitResult, error) {
+	return snapshot.writeCodeFile(filename, opts, false)
+}
+
+// RegenerateCodeFile is for automatic companion updates: both owned machine
+// and developer user files must already exist. A missing user file is never
+// silently synthesized as a new main() behind the developer's back.
+func (snapshot *CodeSnapshot) RegenerateCodeFile(filename string, opts CodeGenOptions) (SplitResult, error) {
+	if len(snapshot.missing) != 0 {
+		return SplitResult{}, fmt.Errorf("cannot regenerate with missing widgets: %v", snapshot.missing)
+	}
+	return snapshot.writeCodeFile(filename, opts, true)
+}
+
+func (snapshot *CodeSnapshot) writeCodeFile(filename string, opts CodeGenOptions, existingOnly bool) (SplitResult, error) {
 	explicitType := opts.TypeName != ""
-	opts = defaultCodeGenOptions(scene, opts)
+	opts = snapshot.defaultOptions(opts)
 	machine, user := splitCodePaths(filename)
 	res := SplitResult{MachineFile: machine, UserFile: user}
 	if !token.IsIdentifier(opts.PackageName) || opts.PackageName == "_" || !token.IsIdentifier(opts.TypeName) || opts.TypeName == "_" {
 		return res, fmt.Errorf("invalid generated package or type name: %q, %q", opts.PackageName, opts.TypeName)
 	}
-	if err := scene.checkHandlerSource(); err != nil {
+	if err := snapshot.handlerError(); err != nil {
 		return res, err
 	}
 	machineBefore, err := filetxn.Read(machine)
 	if err != nil {
 		return res, err
+	}
+	if existingOnly && !machineBefore.Exists() {
+		return res, fmt.Errorf("%s: no owned machine file; explicitly export to a new path", machine)
 	}
 	if machineBefore.Exists() {
 		typeName, err := SplitCodeType(string(machineBefore.Bytes()))
@@ -81,12 +105,15 @@ func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (S
 	if err != nil {
 		return res, err
 	}
+	if existingOnly && !userBefore.Exists() {
+		return res, fmt.Errorf("%s: split export has no user file; restore it or explicitly export to a new path", user)
+	}
 
 	// Generate and validate BOTH halves before replacing either destination.
 	// GenerateCode alone discards errors such as an unmapped widget factory.
 	machineOpts := opts
 	machineOpts.SplitHandlers = true
-	generated := scene.GenerateCodeIndexed(machineOpts)
+	generated := snapshot.Generate(machineOpts)
 	if generated.Err != nil {
 		return res, generated.Err
 	}
@@ -94,11 +121,11 @@ func (scene *GedScene) GenerateCodeFile(filename string, opts CodeGenOptions) (S
 	if err != nil {
 		return res, fmt.Errorf("%s: generated source: %w", machine, err)
 	}
-	stubs := scene.collectHandlerStubs()
+	stubs := collectHandlerStubsFrom(snapshot.fields)
 	var userCode string
 	var added, missing []string
 	if !userBefore.Exists() {
-		userCode = renderUserCode(opts, scene.needsServices(), stubs)
+		userCode = renderUserCode(opts, sceneNeedsServices(snapshot.fields, snapshot.decls), stubs)
 	} else {
 		userCode = string(userBefore.Bytes())
 		parsed, err := parser.ParseFile(token.NewFileSet(), user, userCode, parser.SkipObjectResolution)
@@ -164,6 +191,14 @@ func splitCodePaths(filename string) (machine, user string) {
 // both rather than from whichever path reached it first. A stub that kept only
 // its half declared a signature naming a package the file never imported.
 func (scene *GedScene) collectHandlerStubs() []handlerStub {
+	var fields []fieldInfo
+	walkFakeWidgets(scene.Children(), func(fake *FakeWidget) {
+		fields = append(fields, fieldInfo{code: fake.GetCode(), factoryName: fake.WidgetFactoryName(), eventHandlers: fake.EventHandlers()})
+	})
+	return collectHandlerStubsFrom(fields)
+}
+
+func collectHandlerStubsFrom(fields []fieldInfo) []handlerStub {
 	var out []handlerStub
 	at := map[string]int{}
 	merge := func(s handlerStub) {
@@ -185,18 +220,18 @@ func (scene *GedScene) collectHandlerStubs() []handlerStub {
 			out[i].imp = s.imp
 		}
 	}
-	walkFakeWidgets(scene.Children(), func(fake *FakeWidget) {
-		code := strings.TrimSpace(fake.GetCode())
-		for _, block := range handlerBlocks(code, fake.EventHandlers()) {
+	for _, field := range fields {
+		code := strings.TrimSpace(field.code)
+		for _, block := range handlerBlocks(code, field.eventHandlers) {
 			merge(block)
 		}
-		for _, b := range handlerBindingsFor(fake.WidgetFactoryName(), code, fake.EventHandlers()) {
+		for _, b := range handlerBindingsFor(field.factoryName, code, field.eventHandlers) {
 			if !b.known || b.handler == "" {
 				continue
 			}
 			merge(handlerStub{name: b.handler, params: b.params, imp: b.imp})
 		}
-	})
+	}
 	return out
 }
 

@@ -41,6 +41,8 @@ func pumpTestDesignOpenUntil(t *testing.T, w *workbench, done func() bool) {
 		select {
 		case f := <-testDesignOpenPosts[w]:
 			f()
+		case f := <-testTransitionPosts[w]:
+			f()
 		case <-timer.C:
 			t.Fatal("design open UI delivery timeout")
 		}

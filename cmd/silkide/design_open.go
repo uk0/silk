@@ -18,14 +18,15 @@ var designOpenPost = gui.Post
 
 type designOpenToken struct{ marker byte }
 type designOpenSettings struct {
-	read            func(context.Context, string) (designOpenSnapshot, error)
-	readReload      func(context.Context, string) (designOpenSnapshot, error)
-	post            func(func())
-	afterModal      func(func())
-	timeout         time.Duration
-	confirmDiscard  func(*ged.GedView) bool
-	confirmRecovery func(gui.IWidget, string, string) bool
-	installed       func(*ged.GedView, string, string, designOpenSnapshot)
+	read                func(context.Context, string) (designOpenSnapshot, error)
+	readReload          func(context.Context, string) (designOpenSnapshot, error)
+	post                func(func())
+	afterModal          func(func())
+	timeout             time.Duration
+	confirmDiscard      func(*ged.GedView) bool
+	confirmDiscardAsync func(string, *ged.GedView, func(bool)) bool
+	confirmRecovery     func(gui.IWidget, string, string) bool
+	installed           func(*ged.GedView, string, string, designOpenSnapshot)
 }
 
 // Worker callbacks retain only this revocable mailbox, not a scene or frame.
@@ -67,6 +68,7 @@ type designOpenController struct {
 	pending, queued *designOpenJob
 	intent          *designOpenToken
 	admitting       *designOpenToken
+	admittingPath   string
 	active          int
 	closed          bool
 	stopClosed      func()
@@ -99,8 +101,10 @@ func newDesignOpenController(w *workbench, s designOpenSettings) *designOpenCont
 	if s.timeout <= 0 {
 		s.timeout = 30 * time.Second
 	}
-	if s.confirmDiscard == nil {
-		s.confirmDiscard = confirmDiscardDirty
+	if s.confirmDiscardAsync == nil {
+		s.confirmDiscardAsync = func(path string, canvas *ged.GedView, done func(bool)) bool {
+			return requestDesignTransition("open:"+workspaceSearchKey(path), canvas, done)
+		}
 	}
 	if s.confirmRecovery == nil {
 		s.confirmRecovery = confirmRecoverFromAutosave
@@ -130,7 +134,9 @@ func designOpenerFor(tabs *gui.TabWidget, canvas *ged.GedView) *designOpenContro
 func (c *designOpenController) valid() bool {
 	return c != nil && !c.closed && c.owner != nil && globalWorkbench == c.owner && c.owner.designOpen == c && c.owner.canvas == c.canvas && !c.canvas.IsClosed()
 }
-func (c *designOpenController) Busy() bool { return c != nil && !c.closed && len(c.all) != 0 }
+func (c *designOpenController) Busy() bool {
+	return c != nil && !c.closed && (len(c.all) != 0 || c.admitting != nil)
+}
 func (c *designOpenController) current(j *designOpenJob) bool {
 	if !c.valid() || j == nil || j.done || c.pending != j || c.intent != j.id || j.scene == nil || c.canvas.GedScene() != j.scene || j.scene.Filename() != j.filename {
 		return false
@@ -165,6 +171,14 @@ func requestDesignOpen(path string, tabs *gui.TabWidget, canvas *ged.GedView, re
 }
 func (c *designOpenController) open(path string, recent bool) bool {
 	path = canonicalEditorPath(path)
+	if c.valid() {
+		if t := c.owner.transitions; t != nil {
+			t.cancelForIntent("open:" + workspaceSearchKey(path))
+		}
+		if c.admitting != nil && c.admittingPath == path {
+			return true
+		}
+	}
 	if !c.valid() || path == "" || rejectBusyFile(path) {
 		return false
 	}
@@ -176,18 +190,32 @@ func (c *designOpenController) open(path string, recent bool) bool {
 	intent := new(designOpenToken)
 	c.intent = intent
 	c.admitting = intent
-	defer func() {
-		if c.admitting == intent {
-			c.admitting = nil
-		}
-	}()
+	c.admittingPath = path
 	scene := c.canvas.GedScene()
 	if scene == nil {
+		c.admitting = nil
+		c.admittingPath = ""
 		return false
 	}
 	// A modal can run queued completions. Retire older requests first and check
 	// both workbench and scene after the explicit discard/save decision.
-	if !c.settings.confirmDiscard(c.canvas) || !c.valid() || c.intent != intent || c.canvas.GedScene() != scene || scene.HasPendingEdits() {
+	if confirm := c.settings.confirmDiscard; confirm != nil {
+		return c.continueOpen(intent, scene, path, recent, confirm(c.canvas))
+	}
+	accepted := c.settings.confirmDiscardAsync(path, c.canvas, func(ok bool) { c.continueOpen(intent, scene, path, recent, ok) })
+	if !accepted && c.admitting == intent {
+		c.admitting = nil
+		c.admittingPath = ""
+	}
+	return accepted
+}
+
+func (c *designOpenController) continueOpen(intent *designOpenToken, scene *ged.GedScene, path string, recent, allowed bool) bool {
+	if c.admitting == intent {
+		c.admitting = nil
+		c.admittingPath = ""
+	}
+	if !allowed || !c.valid() || c.intent != intent || c.canvas.GedScene() != scene || scene.HasPendingEdits() {
 		return false
 	}
 	// Reveal before admission: this intentional activation is not an interaction
@@ -298,6 +326,11 @@ func (c *designOpenController) complete(id *designOpenToken, value designOpenSna
 	c.startNext()
 }
 func (c *designOpenController) deliver(j *designOpenJob, value designOpenSnapshot, err error) bool {
+	// Own-save watcher notifications are not user attempts to mutate a busy
+	// file. Silently retire them rather than stacking a misleading busy toast.
+	if j.reload && (transitionBusy() || savePathBusy(j.path) || saveBatchAffects(j.path)) {
+		return false
+	}
 	if !c.current(j) {
 		c.dropChanged(j)
 		return false
@@ -352,7 +385,7 @@ func (c *designOpenController) applyPrepared(j *designOpenJob, value designOpenS
 		return
 	}
 	if j.reload {
-		c.applyReload(j, doc)
+		c.applyReload(j, doc, value.fingerprint)
 		return
 	}
 	scene, path, previous, recent, id := j.scene, j.path, j.filename, j.recent, j.id
@@ -368,10 +401,12 @@ func (c *designOpenController) applyPrepared(j *designOpenJob, value designOpenS
 	if !c.valid() || c.intent != id || c.canvas.GedScene() != scene || scene.Filename() != path {
 		return
 	}
+	bindDesignDisk(scene, path, value.fingerprint)
 	c.settings.installed(c.canvas, path, previous, value)
 	if !c.valid() || c.intent != id || c.canvas.GedScene() != scene || scene.Filename() != path {
 		return
 	}
+	syncDocumentWindowTitle(c.owner.frame, c.canvas)
 	if recent {
 		recordRecentFile(path)
 	}
@@ -482,6 +517,10 @@ func (c *designOpenController) Close() {
 	if c == nil || c.closed {
 		return
 	}
+	c.retireAdmittingTransition()
+	if c.closed {
+		return
+	}
 	c.closed = true
 	if c.reloadBridge != nil {
 		c.reloadBridge.close()
@@ -503,17 +542,34 @@ func (c *designOpenController) Close() {
 	c.queued = nil
 	c.intent = nil
 	c.admitting = nil
+	c.admittingPath = ""
 	c.owner = nil
 	c.canvas = nil
+}
+
+func (c *designOpenController) retireAdmittingTransition() {
+	// Only this live opener's still-admitting path owns the parent save/guard.
+	// Closing an obsolete controller must not retire a newer opener's intent.
+	if !c.valid() || c.admitting == nil {
+		return
+	}
+	key := "open:" + workspaceSearchKey(c.admittingPath)
+	if t := c.owner.transitions; t != nil && t.active != nil && t.active.key == key {
+		t.active.finish(false)
+	}
 }
 func cancelOwnedDesignOpen(c *designOpenController) bool {
 	if !c.valid() {
 		return false
 	}
 	c.intent = nil
-	return c.cancelPending()
+	hadGuard := c.admitting != nil
+	c.retireAdmittingTransition()
+	c.admitting = nil
+	c.admittingPath = ""
+	return c.cancelPending() || hadGuard
 }
 func designOpenPending(tabs *gui.TabWidget) bool {
 	w := globalWorkbench
-	return w != nil && w.tabs == tabs && w.designOpen.valid() && w.designOpen.pending != nil
+	return w != nil && w.tabs == tabs && w.designOpen.valid() && (w.designOpen.pending != nil || w.designOpen.admitting != nil)
 }

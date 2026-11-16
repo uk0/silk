@@ -186,8 +186,8 @@ func buildFileMenu(tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {
 	m.AddSeparator()
 	canSave := documentMode(tabs, canvas) == modeEdit && activeEditor(tabs) != nil ||
 		documentMode(tabs, canvas) == modeDesign && canvas != nil
-	appendFileMenuCommand(m, fileMenuCommand{"file.save", "Save", "save", key + "+S", func() { saveCurrentDocument(tabs, canvas) }, canSave})
-	appendFileMenuCommand(m, fileMenuCommand{"file.saveAll", "Save All", "save", key + "+Shift+S", func() { performSaveAll(tabs, canvas) }, canvas != nil || activeEditor(tabs) != nil})
+	appendFileMenuCommand(m, fileMenuCommand{"file.save", "Save", "save", key + "+S", func() { requestCurrentDocumentSave(tabs, canvas, nil) }, canSave})
+	appendFileMenuCommand(m, fileMenuCommand{"file.saveAll", "Save All", "save", key + "+Shift+S", func() { requestSaveAllDocuments(tabs, canvas, nil) }, canvas != nil || activeEditor(tabs) != nil})
 	m.AddSeparator()
 	appendFileMenuCommand(m, fileMenuCommand{"file.closeAll", "Close All Editors", "close", "", func() { startEditorBatchClose(tabs, nil, closeAllEditors) }, activeEditorClose == nil && len(editorCloseTargets(tabs, nil, closeAllEditors)) > 0})
 	appendFileMenuCommand(m, fileMenuCommand{"file.cancelClose", "Cancel Closing Editors", "stop", "", cancelEditorBatchClose, activeEditorClose != nil && !activeEditorClose.cancelled})

@@ -49,7 +49,7 @@ func renameBusyError(path, message string) error {
 	return diagnostic.New(diagnostic.FileOperationBusy, message, nil).At(diagnostic.Location{File: path})
 }
 func rejectBusyFile(path string) bool {
-	if !fileRenameAffects(path) && !workspaceSearchAffects(path) && !editorCloseAffects(path) {
+	if !fileMutationBusy(path) {
 		return false
 	}
 	err := renameBusyError(path, "file operation is still running; retry after completion")
@@ -57,7 +57,15 @@ func rejectBusyFile(path string) bool {
 	silkideToast(err.Error(), gui.ToastWarning)
 	return true
 }
+
+func fileMutationBusy(path string) bool {
+	return fileRenameAffects(path) || workspaceSearchAffects(path) || editorCloseAffects(path) || savePathBusy(path) || saveBatchAffects(path)
+}
 func rejectDuringRename() bool {
+	if transitionBusy() || anySaveBusy() || saveBatchBusy() {
+		silkideToast(i18n.T("A save is still running; wait for completion before this operation"), gui.ToastWarning)
+		return true
+	}
 	if activeEditorClose != nil {
 		silkideToast(i18n.T("Finish or cancel closing editors before another file operation"), gui.ToastWarning)
 		return true
@@ -76,7 +84,7 @@ func rejectDuringRename() bool {
 // closed or recreated. Completion reads their latest contents, including edits
 // made while the filesystem worker was running.
 func prepareEditorRename(tabs *gui.TabWidget, canvas *ged.GedView, oldPath, newPath string) (ged.RenamePreparation, error) {
-	if activeEditorClose != nil || workspaceSearchBusy() || activeFileRename != nil || macroBusy || globalDebug != nil || globalDebugAttempt != nil {
+	if transitionBusy() || anySaveBusy() || saveBatchBusy() || activeEditorClose != nil || workspaceSearchBusy() || activeFileRename != nil || macroBusy || globalDebug != nil || globalDebugAttempt != nil {
 		return ged.RenamePreparation{}, renameBusyError(oldPath, "finish the current file operation, macro expansion or debug session before renaming")
 	}
 	// A designer document also owns autosave/reload/companion-generation paths.
