@@ -23,13 +23,63 @@ Do not substitute a small passing test for the whole product-readiness gate.
       ordinary/race, 12 strict gopls probes, Windows native/SQLite replay and all
       2,004 publication build inputs before commit/push. Keep macOS-native gaps open.
 
-## Next increment: startup I/O and remaining industrial workflow
+## Validated increment: startup I/O, watchers and live-alarm ownership
 
-- [ ] Trace and remove UI-thread file-open stalls during workspace restoration;
-      prove cancellation, retained source identity and late-result guards before
-      changing startup behavior. The current native macOS observation is not a pass.
-- [ ] Complete real macOS-native startup, keyboard/IME and source-runtime checks
-      without changing personal preferences or bypassing OS permissions.
+- [x] Separate the pre-loop restoration file-open stall from native macOS capture
+      failure with an unchanged baseline, truly private process settings and a
+      sample showing the ordinary AppKit/GLFW event wait.
+- [x] Implement bounded background restoration and owned loading pages, exact
+      captured source/location, cancellation/late-result guards and pending-session
+      persistence; pass focused/broad SDK/IDE races (not final release gates).
+- [x] Add coherent SDK page replacement, captured-state file watch registration,
+      permanent watcher retirement and nonblocking Close / explicit physical Wait.
+- [x] Reproduce Reloader Stop returning before an active callback finishes using
+      the public API. Keep that counterexample as a publication blocker.
+- [x] Fix Reloader callback serialization/coalescing, concurrent shutdown and
+      late admission; replay the public counterexample (now false), with focused
+      races for bounded queues, callback/reader joins and root retirement.
+- [x] Defer delayed recovery after user interaction; explicit owned review rereads
+      current files. Cover nested edits and uncommitted property drafts.
+- [x] Repeat SDK watcher/reloader races 12 times; reject the first native candidate
+      for missing keyboard focus and prove transfer/non-stealing/missing-file cases.
+- [x] Refreeze the corrected 2,714-file / 2,012-build-input source and pass complete
+      macOS/Linux ordinary/race plus eight strict real bundled-gopls probes;
+      independently read back all files and absence of extra Go.
+- [x] Recover Windows connectivity without changing the host; verify actual task
+      absence before submitting a new build. Pass corrected native keyboard-only
+      input/save, normal exit, persisted session and external design hot reload.
+- [x] Finish oversized-source native close/persistence and runnable sentinel
+      control; inspect retained captures before starting final full suites.
+- [x] Run exact combined-source full three-platform ordinary/race + 12 required
+      bundled-gopls probes, native Windows/persistence gates and scoped macOS
+      observation; finish actual screenshots and publication-input identity audit.
+
+- [x] Reproduce old AlarmPanel queued updates after cancel/rebind and 1,000 queued
+      refreshes per burst. Harden source/owner release, pass 100 alarm race repeats
+      and whole GUI ordinary/race on macOS/Linux, then merge the verified files.
+- [x] Freeze and fully verify the 2,717-file combined source; prior startup-only
+      native/platform results are not final gates. Retain failed Windows runs,
+      fix the strict harness staging path and inspect existing tasks on transport
+      loss instead of restarting. All final runners return zero.
+- [x] Replay the combined Windows IDE and SDK fixture: input/save/session,
+      external design reload, oversized-source F5/close and runnable sentinel,
+      alarm rebind/ack/cancel/clear, inspected screenshots and three normal exits.
+- [x] Recover a real macOS V3 CUA capture without changing OS permissions or
+      personal settings. Prove no-mouse restored input/save, design hot reload,
+      independent source/settings readback and native kqueue exit status zero.
+      Do not infer IME or source-runtime acceptance from that basic replay.
+
+Details and retained limits: [startup I/O QA](STARTUP_IO_QA_20261115.md).
+Alarm contract: [live-alarm lifecycle QA](SDK_ALARM_LIFECYCLE_QA_20261115.md).
+
+## Remaining industrial/native workflow
+
+- [ ] Continue manual Open/Save, resource loading and hot-reload callback I/O.
+      Background session restoration does not make these paths nonblocking.
+      Preserve source identity, cancellation and late-result ownership guards.
+- [ ] Continue real macOS-native IME composition and source-runtime checks;
+      the V3 basic restore/input/save/reload/exit replay now passes separately.
+      Do not change personal preferences or bypass OS permissions.
 - [ ] Continue point-source configuration, explicit store/type migration, alarms,
       device routing and SDK icon gaps with separate persistence/native evidence.
       Do not label these or complete Qt Creator parity as already delivered.

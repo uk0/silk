@@ -2,6 +2,8 @@ package gui
 
 import (
 	"strconv"
+	"sync"
+	"sync/atomic"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
@@ -25,6 +27,7 @@ type AlarmPanel struct {
 	scrollY   float64
 	rowHeight float64
 	cbAck     func(tag string)
+	delivery  *alarmPanelDelivery // UI thread creates this once; its mutex guards subscription work.
 }
 
 func init() {
@@ -64,17 +67,130 @@ func (this *AlarmPanel) Alarms() []core.AlarmState {
 	return out
 }
 
-// BindAlarmDB wires the panel to db as a live view: it seeds the panel with
-// db.Active() and subscribes for every future transition. AlarmDB subscribers
-// fire on whatever goroutine drove the transition (a driver-poll goroutine, not
-// the UI thread), so the callback marshals the refresh onto the event-loop
-// thread via Post before touching the panel — mirroring the tag bindings. The
-// returned func unsubscribes and is idempotent (it wraps the db's CancelFunc).
+// BindAlarmDB binds one current database on the UI thread. Rebinding retires
+// the old subscription, even if its refresh is already queued. A nil database
+// explicitly detaches and clears the view. Driver transitions coalesce to one
+// queued UI refresh per panel, without a polling timer or per-event goroutine.
+// The returned cancellation function is idempotent and may run on any goroutine.
+// Cancellation revokes future UI admissions; an already admitted UI refresh may
+// finish. It never joins the UI thread and does not clear the last visible rows.
 func (this *AlarmPanel) BindAlarmDB(db *core.AlarmDB) func() {
-	this.SetAlarms(db.Active())
-	return db.Subscribe(func(core.AlarmState) {
-		Post(func() { this.SetAlarms(db.Active()) })
-	})
+	if this.delivery == nil {
+		this.delivery = &alarmPanelDelivery{panel: this}
+	}
+	return this.delivery.bind(db)
+}
+
+type alarmPanelBinding struct {
+	owner       atomic.Pointer[alarmPanelDelivery]
+	db          *core.AlarmDB
+	active      bool // protected by delivery.mu, including unsubscribe installation
+	unsubscribe func()
+}
+
+type alarmPanelDelivery struct {
+	mu      sync.Mutex
+	panel   *AlarmPanel // only the UI drain reads or mutates widget state
+	current *alarmPanelBinding
+	queued  bool
+}
+
+func (d *alarmPanelDelivery) bind(db *core.AlarmDB) func() {
+	b := &alarmPanelBinding{db: db, active: db != nil}
+	b.owner.Store(d)
+	d.mu.Lock()
+	old := d.current
+	var stop func()
+	if old != nil {
+		old.active = false
+		old.owner.Store(nil)
+		stop = old.unsubscribe
+		old.unsubscribe = nil
+		old.db = nil
+	}
+	d.current = b
+	d.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	if db == nil {
+		d.panel.SetAlarms(nil)
+		return func() {}
+	}
+	cancel := db.Subscribe(func(core.AlarmState) { d.request(b) })
+	d.mu.Lock()
+	owned := d.current == b && b.active
+	if owned {
+		b.unsubscribe = cancel
+	}
+	d.mu.Unlock()
+	if !owned {
+		cancel()
+	}
+	// Subscribe first so a transition during this snapshot is not missed.
+	d.refresh(b)
+	return b.cancel
+}
+
+// A held, already cancelled handle must not retain the panel or a new source.
+func (b *alarmPanelBinding) cancel() {
+	if d := b.owner.Load(); d != nil {
+		d.retire(b)
+	}
+}
+
+func (d *alarmPanelDelivery) retire(b *alarmPanelBinding) {
+	d.mu.Lock()
+	b.active = false
+	b.owner.Store(nil)
+	stop := b.unsubscribe
+	b.unsubscribe = nil
+	b.db = nil
+	if d.current == b {
+		d.current = nil
+	}
+	d.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+func (d *alarmPanelDelivery) request(b *alarmPanelBinding) {
+	d.mu.Lock()
+	if d.current != b || !b.active || d.queued {
+		d.mu.Unlock()
+		return
+	}
+	d.queued = true
+	d.mu.Unlock()
+	Post(d.flush)
+}
+
+func (d *alarmPanelDelivery) flush() {
+	d.mu.Lock()
+	d.queued = false
+	b := d.current
+	d.mu.Unlock()
+	if b != nil {
+		d.refresh(b)
+	}
+}
+
+func (d *alarmPanelDelivery) refresh(b *alarmPanelBinding) {
+	d.mu.Lock()
+	db := b.db // An admitted refresh borrows its source even if cancellation follows.
+	owned := d.current == b && b.active && db != nil
+	d.mu.Unlock()
+	if !owned {
+		return
+	}
+	snapshot := db.Active()
+	d.mu.Lock()
+	owned = d.current == b && b.active
+	d.mu.Unlock()
+	if owned {
+		d.panel.SetAlarms(snapshot)
+	}
 }
 
 // SigAckRequested registers the callback fired when the operator clicks a row's

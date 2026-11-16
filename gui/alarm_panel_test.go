@@ -174,3 +174,174 @@ func TestAlarmPanelFactoryRegistered(t *testing.T) {
 		t.Fatalf("factory gui.AlarmPanel built %T, want *AlarmPanel", obj)
 	}
 }
+
+// Lifecycle regressions for owned, coalesced database delivery.
+func TestAlarmPanelUnsubscribeRevokesAlreadyQueuedRefresh(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	db := core.NewAlarmDB()
+	p := NewAlarmPanel()
+	stop := p.BindAlarmDB(db)
+	db.Update("OLD", core.HighHigh, 95)
+	stop()
+	drainUITasks()
+	if got := p.Alarms(); len(got) != 0 {
+		t.Fatalf("retired binding delivered queued state: %+v", got)
+	}
+}
+func TestAlarmPanelRebindingRejectsOldQueuedOwner(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	oldDB, nextDB := core.NewAlarmDB(), core.NewAlarmDB()
+	p := NewAlarmPanel()
+	oldStop := p.BindAlarmDB(oldDB)
+	oldDB.Update("OLD", core.HighHigh, 95)
+	oldStop()
+	nextDB.Update("NEW", core.Low, 5)
+	nextStop := p.BindAlarmDB(nextDB)
+	defer nextStop()
+	drainUITasks()
+	got := p.Alarms()
+	if len(got) != 1 || got[0].Tag != "NEW" {
+		t.Fatalf("old queued refresh overwrote current binding: %+v", got)
+	}
+}
+func TestAlarmPanelBurstHasOnePendingRefresh(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	db := core.NewAlarmDB()
+	p := NewAlarmPanel()
+	stop := p.BindAlarmDB(db)
+	defer stop()
+	for i := 0; i < 1000; i++ {
+		severity := core.High
+		if i%2 == 1 {
+			severity = core.None
+		}
+		db.Update("AI11", severity, float64(i))
+	}
+	uiTaskMu.Lock()
+	pending := len(uiTasks)
+	uiTaskMu.Unlock()
+	if pending != 1 {
+		t.Fatalf("alarm transition burst queued %d UI refreshes, want one coalesced refresh", pending)
+	}
+	drainUITasks()
+	if got := p.Alarms(); len(got) != 0 {
+		t.Fatalf("latest cleared state not retained: %+v", got)
+	}
+}
+
+func TestAlarmPanelRebindRetiresWithoutCallerCancelAndKeepsOneDelivery(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	a, b := core.NewAlarmDB(), core.NewAlarmDB()
+	p := NewAlarmPanel()
+	a.Update("A", core.High, 99)
+	b.Update("B", core.Low, 1)
+	var oldStop func()
+	for i := 0; i < 100; i++ {
+		stop := p.BindAlarmDB(a)
+		a.Update("A", core.HighHigh, float64(i))
+		p.BindAlarmDB(b)
+		b.Update("B", core.LowLow, float64(i))
+		if oldStop != nil {
+			oldStop()
+		}
+		oldStop = stop
+	}
+	t.Cleanup(func() { p.BindAlarmDB(nil)() })
+	uiTaskMu.Lock()
+	pending := len(uiTasks)
+	uiTaskMu.Unlock()
+	if pending != 1 {
+		t.Fatalf("rebind burst queued %d deliveries, want one per panel", pending)
+	}
+	drainUITasks()
+	got := p.Alarms()
+	if len(got) != 1 || got[0].Tag != "B" {
+		t.Fatalf("stale cancel or refresh retired new owner: %+v", got)
+	}
+}
+func TestAlarmPanelNilBindingClearsAndRejectsQueuedOldState(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	db := core.NewAlarmDB()
+	db.Update("AI11", core.High, 20)
+	p := NewAlarmPanel()
+	stop := p.BindAlarmDB(db)
+	db.Update("AI11", core.HighHigh, 30)
+	detach := p.BindAlarmDB(nil)
+	detach()
+	stop()
+	drainUITasks()
+	if got := p.Alarms(); len(got) != 0 {
+		t.Fatalf("nil binding retained old state: %+v", got)
+	}
+}
+func TestAlarmPanelWorkerCancellationAndConcurrentPublicationStayRetired(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	db := core.NewAlarmDB()
+	p := NewAlarmPanel()
+	stop := p.BindAlarmDB(db)
+	published := make(chan struct{})
+	cancelled := make(chan struct{})
+	go func() {
+		defer close(published)
+		for i := 0; i < 1000; i++ {
+			severity := core.High
+			if i%2 == 1 {
+				severity = core.None
+			}
+			db.Update("AI11", severity, float64(i))
+		}
+	}()
+	go func() { stop(); stop(); close(cancelled) }()
+	<-cancelled
+	<-published
+	drainUITasks()
+	if got := p.Alarms(); len(got) != 0 {
+		t.Fatalf("worker-cancelled owner changed UI: %+v", got)
+	}
+}
+
+func TestAlarmPanelRetiredBindingReleasesSourceAndSubscription(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	p := NewAlarmPanel()
+	db := core.NewAlarmDB()
+	stop := p.BindAlarmDB(db)
+	b := p.delivery.current
+	db.Update("AI11", core.High, 90)
+	stop()
+	p.delivery.mu.Lock()
+	retained := b.db != nil || b.unsubscribe != nil || b.owner.Load() != nil
+	p.delivery.mu.Unlock()
+	if retained {
+		t.Fatal("retired cancellation handle retains its old database or subscription")
+	}
+	drainUITasks()
+}
+func TestAlarmPanelReplacedBindingReleasesSourceBeforeOldCancel(t *testing.T) {
+	resetUIQueue()
+	t.Cleanup(resetUIQueue)
+	p := NewAlarmPanel()
+	a, b := core.NewAlarmDB(), core.NewAlarmDB()
+	oldStop := p.BindAlarmDB(a)
+	old := p.delivery.current
+	stop := p.BindAlarmDB(b)
+	defer stop()
+	p.delivery.mu.Lock()
+	retained := old.db != nil || old.unsubscribe != nil || old.owner.Load() != nil
+	p.delivery.mu.Unlock()
+	if retained {
+		t.Fatal("rebind retains old database through a still-held cancel handle")
+	}
+	oldStop()
+	b.Update("CURRENT", core.High, 91)
+	drainUITasks()
+	if got := p.Alarms(); len(got) != 1 || got[0].Tag != "CURRENT" {
+		t.Fatalf("retired handle changed new owner: %+v", got)
+	}
+}

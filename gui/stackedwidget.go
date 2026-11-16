@@ -64,6 +64,34 @@ func (this *StackedWidget) RemovePage(idx int) {
 	this.Self().Update()
 }
 
+// replacePage is called only after TabWidget has validated detached ownership.
+// Publish identity first; reentrant lifecycle handlers must not see the old
+// page in the slot being replaced. Never overwrite a later removal/selection.
+func (this *StackedWidget) replacePage(idx int, w IWidget) {
+	old := this.pages[idx]
+	this.pages[idx] = w
+	old.Hide()
+	if old.Parent() == this.Self() {
+		old.SetParent(nil)
+	}
+	current := -1
+	for i, p := range this.pages {
+		if p == w {
+			current = i
+			break
+		}
+	}
+	if current < 0 {
+		return
+	}
+	w.SetParent(this.Self())
+	if w.Parent() == this.Self() && this.Page(current) == w {
+		w.SetVisible(current == this.currentIndex)
+	}
+	this.Layout()
+	this.Update()
+}
+
 // MovePage reorders the pages in place, the way a tab strip does when a tab is
 // dragged to a new position. It only renumbers: no page is reparented, hidden
 // or shown, so whatever was on screen stays on screen.

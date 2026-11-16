@@ -21,7 +21,19 @@ func openDesignDocument(scene *ged.GedScene, originalPath, recoveryPath string) 
 	if recoveryPath != "" {
 		sourcePath = recoveryPath
 	}
-	if err := scene.OpenFile(sourcePath); err != nil {
+	doc, err := core.LoadTDocFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	return applyDesignDocument(scene, doc, originalPath, recoveryPath != "")
+}
+
+// applyDesignDocument is the UI-only half of opening a captured document.
+func applyDesignDocument(scene *ged.GedScene, doc *core.TDoc, originalPath string, recovered bool) error {
+	if scene == nil || doc == nil || originalPath == "" {
+		return errors.New("invalid captured design")
+	}
+	if err := scene.LoadDesign(doc); err != nil {
 		return err
 	}
 	scene.SetFilename(originalPath)
@@ -33,7 +45,7 @@ func openDesignDocument(scene *ged.GedScene, originalPath, recoveryPath string) 
 	stack := scene.UndoStack()
 	stack.SetClean()
 	stack.Clear()
-	if recoveryPath != "" {
+	if recovered {
 		// Recovery has no reconstructible edit history. Create a dirty position
 		// then discard its empty marker: Clear retains dirty without advertising
 		// a fake Undo that would mark recovered content saved without changing it.

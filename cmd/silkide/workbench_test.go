@@ -252,7 +252,10 @@ func TestWorkspaceSessionRoundTripPreservesOrderActiveCursor(t *testing.T) {
 	}
 	openEditors = map[string]*gui.CodeEditor{}
 	restored := buildEditorTabs(nil)
-	restoreWorkspaceSession(loaded, restored, nil)
+	posts := installRestorePost(t)
+	r := restoreWorkspaceSession(loaded, restored, nil)
+	t.Cleanup(r.Close)
+	pumpRestore(t, posts, func() bool { return !r.Busy() })
 	if got := orderedEditorPaths(restored); !reflect.DeepEqual(got, paths) {
 		t.Fatalf("order = %v", got)
 	}
@@ -266,7 +269,10 @@ func TestWorkspaceSessionIgnoresMissingFilesAndClampsCursor(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "x.txt", "short")
 	state := workspaceSession{Version: 1, Editors: []editorSession{{Path: "/nonexistent/silkide.go"}, {Path: path, Line: 999, Column: 999, ScrollY: -10}}}
-	restoreWorkspaceSession(state, w.tabs, nil)
+	posts := installRestorePost(t)
+	r := restoreWorkspaceSession(state, w.tabs, nil)
+	t.Cleanup(r.Close)
+	pumpRestore(t, posts, func() bool { return !r.Busy() })
 	if w.tabs.Count() != 1 {
 		t.Fatal("missing document created a tab")
 	}

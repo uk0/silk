@@ -1,6 +1,8 @@
 package fswatch
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +13,9 @@ import (
 // QFileSystemWatcher's two-event split (fileChanged / directoryChanged)
 // expanded into Created/Modified/Removed for finer-grain handling —
 // most consumers want to know whether a path appeared or vanished.
+var ErrClosed = errors.New("fswatch: watcher closed")
+var ErrSuperseded = errors.New("fswatch: watch request superseded")
+
 type EventKind int
 
 const (
@@ -84,10 +89,12 @@ type Watcher struct {
 	// stop signals the polling goroutine to exit. Closed by Stop.
 	stop chan struct{}
 
-	// wg tracks the polling goroutine for orderly shutdown. Stop
-	// waits on wg so callers see "polling actually halted" semantics
-	// when Stop returns.
-	wg sync.WaitGroup
+	closed  bool
+	done    chan struct{}
+	next    uint64
+	pending map[string]uint64
+	// Test seam: set before use; no filesystem work may hold mu.
+	snapshotFn func(string) *snapshot
 }
 
 // snapshot is the last-observed state for a single watched path.
@@ -108,7 +115,7 @@ type childInfo struct {
 	size    int64
 }
 
-// New creates a stopped Watcher with the default 500ms poll interval
+// New creates an idle Watcher with the default 500ms poll interval
 // and a 64-slot event buffer. AddPath starts the polling loop on the
 // first call.
 func New() *Watcher {
@@ -117,6 +124,7 @@ func New() *Watcher {
 		snapshots:    make(map[string]*snapshot),
 		events:       make(chan Event, 64),
 		stop:         make(chan struct{}),
+		done:         make(chan struct{}), pending: make(map[string]uint64),
 	}
 }
 
@@ -144,9 +152,11 @@ func (w *Watcher) PollInterval() time.Duration {
 // publishes on. Closed when Stop returns.
 func (w *Watcher) Events() <-chan Event { return w.events }
 
-// AddPath registers path (file or directory). Errors from Stat are
-// returned to the caller; the path is added regardless and a Removed
-// event will fire if it later appears and disappears.
+// AddPath synchronously captures path (file or directory), without holding
+// watcher locks during I/O. Missing/unreadable state is registered as absent.
+// Close/RemovePath can retire a blocked registration; it then returns ErrClosed
+// or ErrSuperseded instead of reviving the path. Use AddFileState on a UI thread
+// when the exact file metadata has already been read in the background.
 //
 // Adding the same path twice is a no-op — duplicate watches don't
 // produce duplicate events.
@@ -156,22 +166,70 @@ func (w *Watcher) AddPath(path string) error {
 		return err
 	}
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return ErrClosed
+	}
 	if _, ok := w.snapshots[abs]; ok {
 		w.mu.Unlock()
 		return nil
 	}
-	snap := w.takeSnapshot(abs)
-	w.snapshots[abs] = snap
-	first := !w.running
-	if first {
-		w.running = true
-	}
+	w.next++
+	token := w.next
+	w.pending[abs] = token
 	w.mu.Unlock()
-	if first {
-		w.wg.Add(1)
+	// A slow mount/provider must not block Paths, RemovePath or Close.
+	snap := w.readSnapshot(abs)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	if w.pending[abs] != token {
+		return ErrSuperseded
+	}
+	delete(w.pending, abs)
+	w.registerLocked(abs, snap)
+	return nil
+}
+
+// AddFileState registers a regular-file snapshot already captured by a worker.
+// It does no target stat/read; relative paths still resolve via filepath.Abs.
+// A later poll compares against exactly this state,
+// so a change between reading the source and registering its watch is not lost.
+// size must be nonnegative. No file handles or mutable caller state are retained.
+func (w *Watcher) AddFileState(path string, modified time.Time, size int64) error {
+	if size < 0 {
+		return errors.New("fswatch: negative file size")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	if _, ok := w.snapshots[abs]; ok {
+		return nil
+	}
+	delete(w.pending, abs)
+	w.registerLocked(abs, &snapshot{exists: true, modTime: modified, size: size})
+	return nil
+}
+func (w *Watcher) registerLocked(path string, snap *snapshot) {
+	w.snapshots[path] = snap
+	if !w.running {
+		w.running = true
 		go w.poll()
 	}
-	return nil
+}
+func (w *Watcher) readSnapshot(path string) *snapshot {
+	if w.snapshotFn != nil {
+		return w.snapshotFn(path)
+	}
+	return w.takeSnapshot(path)
 }
 
 // RemovePath drops the path from the watch list. Does not retroactively
@@ -183,6 +241,7 @@ func (w *Watcher) RemovePath(path string) {
 	}
 	w.mu.Lock()
 	delete(w.snapshots, abs)
+	delete(w.pending, abs)
 	w.mu.Unlock()
 }
 
@@ -198,27 +257,48 @@ func (w *Watcher) Paths() []string {
 	return out
 }
 
-// Stop terminates the polling goroutine and closes Events. Safe to
-// call multiple times — the second call is a no-op. Returns when
-// the goroutine has actually exited.
-func (w *Watcher) Stop() {
+// Close permanently revokes registration/events and requests poll shutdown.
+// It does not wait for an uninterruptible filesystem snapshot. Wait belongs
+// outside UI dispatch. Events closes when the physical poller has returned.
+func (w *Watcher) Close() {
 	w.mu.Lock()
-	if !w.running {
-		w.mu.Unlock()
+	defer w.mu.Unlock()
+	if w.closed {
 		return
 	}
-	w.running = false
+	w.closed = true
+	w.pending = nil
 	close(w.stop)
-	w.mu.Unlock()
-	w.wg.Wait()
-	close(w.events)
+	if !w.running {
+		close(w.events)
+		close(w.done)
+	}
 }
+
+// Wait joins physical polling only after Close (not a caller's concurrent
+// AddPath snapshot; Close prevents that call from publishing when it returns). Cancellation is not permission
+// to replace a blocked OS snapshot; it may continue until that syscall returns.
+func (w *Watcher) Wait(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("fswatch: nil wait context")
+	}
+	select {
+	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Stop permanently closes and joins polling. It may wait for filesystem I/O;
+// interactive hosts should Close on the UI thread and Wait off-loop with a bound.
+func (w *Watcher) Stop() { w.Close(); _ = w.Wait(context.Background()) }
 
 // poll is the polling goroutine. Wakes on pollInterval, snapshots
 // every watched path, diffs against the previous snapshot, emits
 // events for any change.
 func (w *Watcher) poll() {
-	defer w.wg.Done()
+	defer func() { w.mu.Lock(); w.running = false; close(w.events); close(w.done); w.mu.Unlock() }()
 	w.mu.Lock()
 	interval := w.pollInterval
 	w.mu.Unlock()
@@ -241,6 +321,10 @@ func (w *Watcher) poll() {
 // consistent state.
 func (w *Watcher) tick() {
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
 	// Copy the current path list before iterating so AddPath /
 	// RemovePath called from inside an Event handler doesn't perturb
 	// the loop. Snapshot pointers are mutated in place after the
@@ -254,18 +338,20 @@ func (w *Watcher) tick() {
 	for _, path := range paths {
 		w.mu.Lock()
 		prev, ok := w.snapshots[path]
-		if !ok {
-			// Removed mid-tick.
+		if !ok || w.closed {
+			// Removed/closed mid-tick.
 			w.mu.Unlock()
 			continue
 		}
 		w.mu.Unlock()
 
-		curr := w.takeSnapshot(path)
-		w.diffAndEmit(path, prev, curr)
-
+		curr := w.readSnapshot(path)
 		w.mu.Lock()
-		w.snapshots[path] = curr
+		// Remove/re-add/Close while I/O was blocked retires this baseline.
+		if !w.closed && w.snapshots[path] == prev {
+			w.diffAndEmit(path, prev, curr)
+			w.snapshots[path] = curr
+		}
 		w.mu.Unlock()
 	}
 }

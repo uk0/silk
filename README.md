@@ -166,6 +166,48 @@ save or replace it. New snapshots fit their own geometry rather than the templat
 [SDK runtime view](docs/SDK_FEATURES.md#可嵌入运行视图与控件树可见性事件) ·
 [Native/platform verification](IDE_PROCESS_RUNTIME_QA_20261115.md)
 
+### Background workspace recovery (2026-11-15)
+
+Workspace restoration uses two bounded readers and owned loading tabs rather
+than reading every source before the event loop. Closing a loading tab cancels
+its delivery; pending source locations remain available to ordinary session save.
+After you start working, autosave prompts are deferred. Use **File → Review
+Session Recovery** to read current files and decide explicitly, or **Cancel
+Session Restore** to stop pending restoration. OS reads are cooperatively canceled,
+not forcibly killed. Manual Open/Save and IME coverage remain separate.
+
+![Restored Windows editor accepts keyboard input without a mouse click](docs/images/startup-restored-editor-windows.png)
+
+Actual corrected-candidate Windows capture: ordered restored tabs and Unicode
+source, then keyboard-only input. The `*` marks unsaved changes; an independent
+hash check confirms disk bytes are unchanged until explicit Save.
+The combined macOS candidate also passes real restored keyboard input, save,
+external design reload, independent session readback and normal exit; this is
+not Chinese IME or all-menu acceptance.
+
+<details>
+<summary>Owned restoration errors do not become editable empty files</summary>
+
+![Oversized process source remains an owned read-only error page](docs/images/startup-owned-error-windows.png)
+
+The 32 MiB + 1 byte `.silkhmi` remains a closeable error page rather than an
+empty editor. F5 must not fall through to running a neighbouring Go project.
+Native failure-path/persistence acceptance is recorded separately below.
+
+</details>
+
+[Lifecycle, evidence and remaining gates](STARTUP_IO_QA_20261115.md)
+
+The same verified source also owns live **AlarmPanel** bindings: switching databases
+retires the old subscription, transition bursts share one pending UI refresh,
+and a held canceled handle no longer retains the panel or its former source.
+Cancel preserves the last visible rows; UI-thread `BindAlarmDB(nil)` detaches
+and clears. Already admitted UI work may finish. These lifecycle changes add no
+polling timer. The combined source passes full ordinary/race suites on macOS,
+Linux and Windows, plus 12 required real bundled-gopls probes (zero probe skips).
+[Alarm binding contract and verification](SDK_ALARM_LIFECYCLE_QA_20261115.md).
+
+
 ---
 
 ## Incremental local completion candidates (2026-11-15)

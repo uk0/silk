@@ -266,6 +266,11 @@ func dispatchProcessRuntime(canvas *ged.GedView) bool {
 	if w == nil || w.canvas != canvas || documentMode(w.tabs, canvas) != modeEdit {
 		return false
 	}
+	if pending, ok := w.tabs.Stack().CurrentPage().(*restorePage); ok && strings.EqualFold(filepath.Ext(pending.saved.Path), ".silkhmi") {
+		// A loading/failed process source is not permission to run an unrelated
+		// Go project. Only the restored tracked buffer can own its runtime.
+		return true
+	}
 	ed := activeEditor(w.tabs)
 	if ed == nil || !strings.EqualFold(filepath.Ext(ed.FilePath()), ".silkhmi") {
 		return false

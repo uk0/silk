@@ -1730,3 +1730,64 @@ _ = err
   **其他控件方法仍是 UI-thread-only**，这些 API 并非为整个控件树加锁。
 
 运行示例：`go run ./examples/ui-dispatch`。
+
+
+## 文件恢复与监听生命周期
+
+- `gui.TabWidget.ReplaceTab(index, page, title, icon)` 在原位置替换页面，保留选择，
+  对同一索引的新页面发布一次已提交身份通知。新页面须已脱离其他父控件；拒绝祖先循环。
+  旧页面只脱离，不自动保存或销毁；宿主负责未保存确认、Close 与资源回收。
+- `(*fswatch.Watcher).AddFileState(path, modified, size)` / `Reloader.WatchFileState` 使用后台捕获
+  的文件元数据注册初始状态，不再次 stat/read 目标；相对路径仍经 `filepath.Abs` 解析。
+  注册后第一次轮询仍能检测“读取后、注册前”的修改。
+- `fswatch.Close()` / `hotreload.Reloader.Close()` 非阻塞撤销后续工作；`Wait(ctx)` 在
+  UI 循环外证明物理任务结束。超时不会强制中断 OS 系统调用，也不能称为线程已经退出。
+  `Stop()` 保留无界物理等待；不要在自身回调中 Stop/Wait，可在回调里 Close。
+- 热重载只有一个事件收集器／计时器与一个串行工作线程。同一路径保留最新事件，过时的
+  读取结果／错误和已取消的监听代次不再发布。`Options.MaxPending` 默认 1024；达到上限后
+  已有路径仍合并，新增路径通过 `Stats.Rejected` 和合并的 `ErrPendingLimit` 错误报告拒绝。
+- Close 不能抢占已获准的宿主回调；Wait 才能证明该回调结束。宿主已经投递至 UI 队列的
+  回调还必须独立检查窗口／控制器身份。IDE 已加入此类撤销守卫。
+
+```go
+// 窗口关闭回调：先撤销 UI 所有权，再取消工作；不要在 UI 线程等待。
+ownerGeneration++ // 宿主自己的代次；UI 投递回调也必须核对它。
+retiring := reloader // 捕获本次要退休的实例，不等待未来替换后的 reloader。
+retiring.Close()
+go func() {
+    ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+    defer cancel()
+    if err := retiring.Wait(ctx); err != nil {
+        log.Printf("reloader shutdown still pending: %v", err)
+    }
+}()
+```
+
+示例使用标准库 `context`、`time`、`log`。后台等待只核对物理结束，不读写
+`ownerGeneration` 或任何控件；它不是“超时后工作已经结束”的保证。宿主也可在
+主事件循环结束后同步调用 `Wait(ctx)`，但不得在该 reloader 自身回调中等待。
+
+联合源码已通过三平台完整普通／竞态测试、12 项严格 gopls 探针及限定范围原生交互；
+未覆盖的 IME、手动 I/O 等边界见 [启动 I/O QA](../STARTUP_IO_QA_20261115.md)。
+
+## 实时告警面板的绑定所有权
+
+- 在 UI 线程调用 `AlarmPanel.BindAlarmDB(db)`，一个面板只有一个当前数据源；
+  重绑自动退休旧订阅，旧回调或旧 cancel 不会覆盖／取消新数据源。
+- 同一面板最多一个待执行 UI 刷新；突发事件合并读取最新状态，不增加轮询或逐事件 goroutine。
+- 返回的 cancel 可从任意 goroutine 幂等调用，不等待 UI，也不清空已显示的行；
+  已获准的 UI 刷新仍可能结束。宿主关闭前应取消订阅。
+- 退休时释放数据源、订阅及面板所有权引用，保留旧 cancel 不再延长面板或旧数据源的生命周期。
+  需要清空时在 UI 线程显式调用 `panel.BindAlarmDB(nil)`。
+- 这是现有浮点 `core.AlarmDB` 的视图生命周期修复，不是新的精确整数点位告警引擎，
+  也不加入持久化告警、设备写入或权限控制。
+
+```go
+// UI 线程：绑定；关闭逻辑保存并调用这个取消句柄。
+stop := panel.BindAlarmDB(database)
+stop() // 可在后台调用：撤销后续交付，保留最后显示的快照。
+// UI 线程：显式解绑并清空，不要用 defer panel.BindAlarmDB(nil)()。
+panel.BindAlarmDB(nil)
+```
+
+三平台完整测试、Windows 原生回放及剩余边界见 [告警绑定 QA](../SDK_ALARM_LIFECYCLE_QA_20261115.md)。

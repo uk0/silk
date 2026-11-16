@@ -18,8 +18,8 @@
 // others a smarter diff that preserves scroll positions / focused
 // fields).
 //
-// Concurrency contract: Reload callbacks fire on the package's reader
-// goroutine, NOT the GLFW main thread. Hosts that touch GLFW state
+// Concurrency contract: Reload/error callbacks run serially on one bounded
+// worker, NOT the GLFW main thread. Hosts that touch GLFW state
 // inside the callback must marshal the work onto the main thread (e.g.
 // via gui.RunOnMain or a channel they drain in their event loop). The
 // package documentation calls this out so users don't run a Build()
@@ -32,6 +32,7 @@
 package hotreload
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -53,15 +54,21 @@ import (
 // stopping the watcher.
 type ReloadFunc func(path string, tree *decl.Node) error
 
-// ErrorFunc is invoked for every parse / load / host-callback failure.
-// Hosts typically log to a console panel or flash a banner; returning
-// from the func has no side effect — the loop continues.
+// ErrorFunc reports current parse/load/host-callback failures on the same
+// serialized worker. Superseded/unwatched/closed input failures are retired.
+// ErrPendingLimit uses an empty path and aggregates rejected events. A hook
+// panic is logged and contained; returning has no side effect on later jobs.
 type ErrorFunc func(path string, err error)
 
 // Options configures a Reloader at construction time. Zero values
 // behave reasonably: Debounce defaults to 100ms; PollInterval defaults
 // to fswatch.New()'s 500ms.
 type Options struct {
+	// MaxPending bounds distinct queued/active paths. Default 1024. Existing
+	// paths coalesce to their latest event even at capacity. Overflow increments
+	// Stats.Rejected and reports ErrPendingLimit through serialized onError.
+	MaxPending int
+
 	// Debounce coalesces rapid Modified events on the same path into a
 	// single rebuild. Useful for editors that write atomically (rename
 	// temp + chmod + replace) and produce a burst of fs events.
@@ -86,22 +93,42 @@ type Options struct {
 // callbacks run on a single internal goroutine — host callback code
 // does not need its own locking *between* reload calls.
 type Reloader struct {
-	w        *fswatch.Watcher
-	onReload ReloadFunc
-	onError  ErrorFunc
-
+	w          *fswatch.Watcher
+	onReload   ReloadFunc
+	onError    ErrorFunc
 	debounce   time.Duration
 	allowedExt map[string]struct{}
+	limit      int
+	load       func(string) (*decl.Node, error)
 
-	stop chan struct{}
-	wg   sync.WaitGroup
-
-	// pending coalesces same-path events arriving inside the debounce
-	// window. Keyed by path; value is a one-shot timer that fires the
-	// rebuild when no further event has arrived in `debounce`.
-	mu      sync.Mutex
-	pending map[string]*time.Timer
+	mu                       sync.Mutex
+	closed                   bool
+	live                     int
+	busy                     bool
+	sequence                 uint64
+	pending                  map[string]*reloadEntry
+	roots                    map[string]*watchRequest
+	rejected, reportRejected uint64
+	reportDue                time.Time
+	stop, done, wake         chan struct{}
+	jobs                     chan reloadJob
 }
+
+// Stats is a memory-only snapshot. Pending includes the active path; Active
+// means a serialized worker job is admitted, not that shutdown has completed.
+type Stats struct {
+	Pending        int
+	Active, Closed bool
+	Rejected       uint64
+}
+
+func (r *Reloader) Stats() Stats {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Stats{len(r.pending), r.busy, r.closed, r.rejected}
+}
+
+var ErrPendingLimit = errors.New("hotreload: pending path limit reached")
 
 // New constructs a Reloader with the given handlers and options. onReload
 // is required; onError may be nil (failures are silently swallowed in
@@ -109,6 +136,13 @@ type Reloader struct {
 func New(onReload ReloadFunc, onError ErrorFunc, opts Options) (*Reloader, error) {
 	if onReload == nil {
 		return nil, errors.New("hotreload.New: onReload is required")
+	}
+	if opts.MaxPending < 0 {
+		return nil, errors.New("hotreload.New: negative MaxPending")
+	}
+	limit := opts.MaxPending
+	if limit == 0 {
+		limit = 1024
 	}
 	w := fswatch.New()
 	if opts.PollInterval > 0 {
@@ -122,17 +156,11 @@ func New(onReload ReloadFunc, onError ErrorFunc, opts Options) (*Reloader, error
 	for _, ext := range opts.AllowedExt {
 		allowed[normaliseExt(ext)] = struct{}{}
 	}
-	r := &Reloader{
-		w:          w,
-		onReload:   onReload,
-		onError:    onError,
-		debounce:   debounce,
-		allowedExt: allowed,
-		stop:       make(chan struct{}),
-		pending:    make(map[string]*time.Timer),
-	}
-	r.wg.Add(1)
+	r := &Reloader{w: w, onReload: onReload, onError: onError, debounce: debounce, allowedExt: allowed, limit: limit,
+		load: loadReloadTree, pending: make(map[string]*reloadEntry), roots: make(map[string]*watchRequest),
+		stop: make(chan struct{}), done: make(chan struct{}), wake: make(chan struct{}, 1), jobs: make(chan reloadJob, 1), live: 2}
 	go r.loop()
+	go r.worker()
 	return r, nil
 }
 
@@ -141,115 +169,91 @@ func New(onReload ReloadFunc, onError ErrorFunc, opts Options) (*Reloader, error
 // children. Returns the underlying fswatch.AddPath error verbatim so
 // callers can react to permission / not-found problems.
 func (r *Reloader) Watch(path string) error {
-	return r.w.AddPath(path)
+	return r.watch(path, func(abs string) error { return r.w.AddPath(abs) })
 }
 
-// Unwatch removes a previously-watched path. Pending debounced
-// rebuilds for that path are cancelled.
+// WatchFileState registers a worker-captured regular-file baseline without
+// synchronous filesystem I/O. The first poll still detects intervening edits.
+func (r *Reloader) WatchFileState(path string, modified time.Time, size int64) error {
+	return r.watch(path, func(abs string) error { return r.w.AddFileState(abs, modified, size) })
+}
+
+// Unwatch retires the root and its pending file/directory work. Already admitted
+// callbacks may finish; blocked reads cannot publish after the registration is
+// removed or replaced, including unwatch/re-watch of the same path.
 func (r *Reloader) Unwatch(path string) {
-	r.w.RemovePath(path)
-	r.mu.Lock()
-	if t, ok := r.pending[path]; ok {
-		t.Stop()
-		delete(r.pending, path)
-	}
-	r.mu.Unlock()
-}
-
-// Stop halts the reload loop and the underlying watcher. Returns when
-// the goroutines have exited and pending callbacks (if any) have
-// completed. Idempotent.
-func (r *Reloader) Stop() {
-	select {
-	case <-r.stop:
+	abs, err := filepath.Abs(path)
+	if err != nil {
 		return
-	default:
 	}
-	close(r.stop)
-
-	// Cancel any pending debounced rebuilds so we don't fire after
-	// Stop returns.
 	r.mu.Lock()
-	for _, t := range r.pending {
-		t.Stop()
-	}
-	r.pending = nil
-	r.mu.Unlock()
-
-	r.w.Stop()
-	r.wg.Wait()
-}
-
-// loop is the single reader goroutine: it pulls fswatch events,
-// debounces them per-path, and dispatches rebuilds.
-func (r *Reloader) loop() {
-	defer r.wg.Done()
-	for {
-		select {
-		case <-r.stop:
-			return
-		case ev, ok := <-r.w.Events():
-			if !ok {
-				return
+	root := r.roots[abs]
+	delete(r.roots, abs)
+	if root != nil {
+		finishWatch(root, fswatch.ErrSuperseded)
+		for p, e := range r.pending {
+			if e.root == root {
+				delete(r.pending, p)
 			}
-			if ev.Kind != fswatch.Modified && ev.Kind != fswatch.Created {
-				continue
-			}
-			if !r.extAllowed(ev.Path) {
-				continue
-			}
-			r.scheduleRebuild(ev.Path)
 		}
 	}
+	r.w.RemovePath(abs)
+	r.mu.Unlock()
+	r.signal()
 }
 
-// scheduleRebuild starts (or resets) the debounce timer for path. The
-// rebuild runs on a fresh goroutine after the timer fires so we don't
-// block subsequent events while a slow rebuild is in flight.
-func (r *Reloader) scheduleRebuild(path string) {
+// Close permanently revokes new callback admission and registration, without
+// joining OS I/O or an already admitted host callback. Safe from a callback.
+// UI hosts must also retire callbacks they have already marshaled to their UI.
+func (r *Reloader) Close() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.pending == nil {
-		// Reloader stopped — drop the event.
+	if r.closed {
+		r.mu.Unlock()
 		return
 	}
-	if t, ok := r.pending[path]; ok {
-		t.Stop()
+	r.closed = true
+	close(r.stop)
+	for _, root := range r.roots {
+		finishWatch(root, fswatch.ErrClosed)
 	}
-	r.pending[path] = time.AfterFunc(r.debounce, func() {
-		r.mu.Lock()
-		delete(r.pending, path)
-		r.mu.Unlock()
-		r.rebuild(path)
-	})
+	r.roots = nil
+	r.pending = nil
+	r.reportRejected = 0
+	// A queued, not yet received job need not retain its source after Close.
+	select {
+	case <-r.jobs:
+		r.busy = false
+	default:
+	}
+	r.w.Close()
+	r.mu.Unlock()
 }
 
-// rebuild does the actual parse + dispatch. Errors at any stage go to
-// onError; only a successful (TDoc + AST) parse triggers onReload.
-func (r *Reloader) rebuild(path string) {
-	// Last-write-wins: a file may have been deleted between event and
-	// rebuild. core.LoadTDocFile reports the error; surface and bail.
+// Wait proves that the event loop, worker/callback and watcher poller physically
+// ended. It does not cancel on timeout and cannot forcibly stop an OS syscall.
+// Call Close first, and never wait/Stop from this reloader's own callback.
+func (r *Reloader) Wait(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("hotreload: nil wait context")
+	}
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return r.w.Wait(ctx)
+}
+
+// Stop is Close plus an unbounded physical join. Concurrent calls all join the
+// same lifetime. Interactive hosts should Close then Wait off-loop with a bound.
+func (r *Reloader) Stop() { r.Close(); _ = r.Wait(context.Background()) }
+
+func loadReloadTree(path string) (*decl.Node, error) {
 	doc, err := core.LoadTDocFile(path)
 	if err != nil {
-		r.fireError(path, err)
-		return
+		return nil, err
 	}
-	tree, err := decl.FromTDoc(doc)
-	if err != nil {
-		r.fireError(path, err)
-		return
-	}
-	if err := r.onReload(path, tree); err != nil {
-		r.fireError(path, err)
-	}
-}
-
-// fireError centralises the nil-check on onError so callers don't
-// have to repeat it.
-func (r *Reloader) fireError(path string, err error) {
-	if r.onError != nil {
-		r.onError(path, err)
-	}
+	return decl.FromTDoc(doc)
 }
 
 // extAllowed returns true when r.allowedExt is empty (no filter) or

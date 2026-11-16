@@ -234,3 +234,18 @@ func TestProcessRuntimeAncestorHideCancelsPendingDecodeWithoutAutoRestart(t *tes
 		t.Fatal("showing dock restarted cancelled load")
 	}
 }
+
+func TestProcessRuntimeLoadingAndFailedSourceCannotFallThroughToGoRun(t *testing.T) {
+	w, _, _, _ := testProcessRuntime(t)
+	p := newRestorePage(editorSession{Path: filepath.Join(t.TempDir(), "loading.silkhmi")})
+	w.tabs.AddTab(p, "loading.silkhmi", nil)
+	w.tabs.SetCurrentIndex(w.tabs.Count() - 1)
+	w.activate(modeEdit)
+	if !dispatchProcessRuntime(w.canvas) {
+		t.Fatal("pending process document fell through to unrelated Go Run")
+	}
+	p.label.SetText("failed to read source")
+	if !dispatchProcessRuntime(w.canvas) {
+		t.Fatal("failed process document fell through to unrelated Go Run")
+	}
+}

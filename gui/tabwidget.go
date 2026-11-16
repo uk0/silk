@@ -117,6 +117,42 @@ func (this *TabWidget) AddTab(w IWidget, title string, icon paint.Icon) {
 	}
 }
 
+// ReplaceTab replaces an owned page without changing its tab order/selection.
+// w must be detached (or already be this page). Metadata and stack agree before
+// CurrentChanged reports the new identity, including same-index replacement.
+// Like other widget mutation, this is UI-thread-only. The old page is detached,
+// not destroyed; the caller owns cancellation/Close and any unsaved-work guard.
+func (this *TabWidget) ReplaceTab(idx int, w IWidget, title string, icon paint.Icon) bool {
+	if idx < 0 || idx >= len(this.refs) || w == nil || w == this.Self() || w == this.stack {
+		return false
+	}
+	for p := this.Self(); p != nil; p = p.Parent() {
+		if p == w {
+			return false
+		}
+	}
+	old := this.refs[idx].page
+	if w != old && w.Parent() != nil {
+		return false
+	}
+	this.changingTabs++
+	defer func() {
+		this.changingTabs--
+		this.notifyCurrentChanged()
+	}()
+	this.refs[idx].page, this.refs[idx].title, this.refs[idx].icon = w, title, icon
+	if old != w {
+		this.stack.replacePage(idx, w)
+	}
+	// OnHide/parent handlers may select a different tab while activation
+	// callbacks are suppressed. Honor that final selection before publishing.
+	this.stack.SetCurrentIndex(this.tabBar.ActiveTab())
+	this.tabBar.Layout()
+	this.Layout()
+	this.Update()
+	return true
+}
+
 // SetTabTitle changes metadata without replacing the page or its undo history.
 func (this *TabWidget) SetTabTitle(idx int, title string) {
 	if idx < 0 || idx >= len(this.refs) || this.refs[idx].title == title {

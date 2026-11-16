@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased — bounded restore and live-update lifecycles (2026-11-15)
+
+- Build bounded asynchronous startup restoration with owned loading pages,
+  source/scene identity guards, soft deadlines and pending-session persistence.
+  Preserve source bytes, Undo, location, MRU and user-selected workspace modes.
+- Add SDK tab-page replacement and captured file-state watcher registration;
+  retire late watcher results and provide nonblocking Close / physical Wait.
+- Correct reentrant page-selection and empty/legacy startup mode regressions.
+- Serialize Reloader callbacks on one fixed worker; coalesce latest input,
+  bound pending paths, expose overflow and retire closed/unwatched generations.
+  Add nonblocking Close / bounded physical Wait and correct concurrent Stop joins.
+- Defer late autosave prompts after user interaction. Explicit menu/palette review
+  rereads current files and guards pending property drafts and changed owners.
+- Correct initial keyboard focus after asynchronous restoration without stealing
+  another input's focus; transfer it when a missing active source is skipped.
+  Reject the first frozen native candidate and rerun final-source gates.
+- Own and coalesce AlarmPanel database bindings. Rebinding retires the old
+  source; queued old updates and old cancellation handles cannot overwrite or
+  cancel a replacement. Add explicit nil detach without a timer/per-event worker.
+- Release retired source/subscription/owner references, including held cancel
+  handles. Preserve the last visible rows on cancellation and keep UI access on
+  UI; an already admitted refresh may finish. Repeat alarm races 100 times.
+- Verify the combined source with complete ordinary/race suites on macOS arm64,
+  Linux arm64/Xvfb and Windows amd64, plus 12 required bundled-gopls probes.
+  Replay Windows restore/save/reload/error controls and alarm lifecycle, and
+  macOS restored input/save/design reload; independently verify normal exits,
+  source/settings/state readback and all 2,012 publication build inputs.
+  Refresh README with exact combined-source Windows captures.
+  Previous startup-only failures/results and the corrected Windows strict staging
+  harness remain retained evidence, not silently discarded or reused as gates.
+  See [alarm ownership QA](SDK_ALARM_LIFECYCLE_QA_20261115.md).
+- Keep native IME, remaining manual I/O, all-menu and full product-parity limits
+  explicit in [verification and scope](STARTUP_IO_QA_20261115.md).
+
 ## Unreleased — source-backed process runtime inside SilkIDE (2026-11-15)
 
 - Add an inert, embeddable `hmiapp.RuntimeView` with alternate live diagram/point

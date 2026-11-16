@@ -101,13 +101,19 @@ func TestRunSingleTestMarshalsItsResult(t *testing.T) {
 // repaints — the single largest off-thread mutation in the IDE.
 func TestHotReloadReopensOnTheUIThread(t *testing.T) {
 	body := silkideFuncBody(t, "func startReloader(canvas *ged.GedView) {")
-	open := strings.Index(body, "reloadCleanDesign(canvas.GedScene(), path)")
+	open := strings.Index(body, "reloadOwnedCleanDesign(r, canvas, path)")
 	if open < 0 {
 		t.Fatal("startReloader no longer calls the guarded reload helper; update this test to match")
 	}
 	post := strings.Index(body, "onUI(func() {")
 	if post < 0 || post > open {
 		t.Error("the hot-reload callback reopens the scene on the watcher goroutine instead of posting to the UI thread")
+	}
+	helper := silkideFuncBody(t, "func reloadOwnedCleanDesign(owner *hotreload.Reloader,")
+	ownership := strings.Index(helper, "globalReloader != owner")
+	reopen := strings.Index(helper, "reloadCleanDesign(canvas.GedScene(), path)")
+	if ownership < 0 || reopen < ownership {
+		t.Error("owned UI reload lost lifetime/document guard")
 	}
 }
 

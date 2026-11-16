@@ -310,3 +310,34 @@ func TestNewRequiresOnReload(t *testing.T) {
 		t.Fatal("error wrapping unexpected")
 	}
 }
+
+func TestReloaderCapturedFileBaselineDoesNotMissInterveningEdit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "captured.silkui")
+	writeSilkUI(t, path, "before", "first")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSilkUI(t, path, "after captured read", "longer changed source")
+	got := make(chan *decl.Node, 2)
+	r, err := New(func(_ string, n *decl.Node) error { got <- n; return nil }, nil, Options{Debounce: 10 * time.Millisecond, PollInterval: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Stop()
+	if err := r.WatchFileState(path, info.ModTime(), info.Size()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-got:
+		if n == nil {
+			t.Fatal("nil rebuilt snapshot")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("captured baseline lost the edit before registration")
+	}
+	r.Stop()
+	if err := r.WatchFileState(path, info.ModTime(), info.Size()); err == nil {
+		t.Fatal("stopped reloader admitted a new captured state")
+	}
+}

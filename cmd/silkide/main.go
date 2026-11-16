@@ -162,12 +162,15 @@ func main() {
 	}
 
 	// Reopen whatever was open at last close. Done after the frame is
-	// fully built (panels/tabs exist) but before Show() so the restored
-	// tabs are visible on first paint rather than popping in afterwards.
+	// fully built. Loading pages preserve order on first paint; bounded workers
+	// read files only after this point, without blocking Show or the event loop.
 	restoreSession(editorTabs, designCanvas)
 
 	frame.Show()
 	core.EventLoop()
+	if w := globalWorkbench; w != nil && w.restore != nil {
+		w.restore.Close()
+	}
 	if globalWorkbench != nil && globalWorkbench.processRuntime != nil {
 		globalWorkbench.processRuntime.shutdown()
 		if err := globalWorkbench.processRuntime.wait(context.Background()); err != nil {
@@ -178,6 +181,12 @@ func main() {
 		globalWorkbench.closeHistoryActions()
 		globalWorkbench.closeNavigationActions()
 	}
+	closeIDEReloader()
+	reloadShutdown, cancelReloadShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := waitIDEReloaders(reloadShutdown); err != nil {
+		core.Warn("Hot reload shutdown: ", err)
+	}
+	cancelReloadShutdown()
 	finishPreferenceSaves(prefs)
 	// Stop and join gutter workers only after UI dispatch ends. Merely canceling
 	// at tab/window close can let the process exit before the child is reaped.
@@ -1044,6 +1053,9 @@ func detachEditorTab(tabs *gui.TabWidget, target gui.IWidget, ed *gui.CodeEditor
 	if ed != nil && path != "" {
 		closed = editorSession{Path: path, Line: ed.CursorLine(), Column: ed.CursorCol(), ScrollY: ed.ScrollY()}
 	}
+	if pending, ok := target.(*restorePage); ok {
+		pending.Close()
+	}
 	if ed != nil {
 		retireProcessRuntime(ed)
 		if c := bookmarkController(tabs); c != nil {
@@ -1256,6 +1268,11 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 	// documentMode can no longer distinguish design from a hidden editor.
 	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
 	frame.SetClosedCallback(func(*gui.Frame) {
+		if w := globalWorkbench; w != nil && w.restore != nil {
+			w.restore.Close()
+		}
+		closeIDEReloader()
+
 		if w := globalWorkbench; w != nil && w.processRuntime != nil {
 			w.processRuntime.shutdown()
 		}
@@ -1702,6 +1719,28 @@ var closeApp func()
 // constructed when the first .silkui opens — silkide instances that
 // only edit code never spin up the watcher.
 var globalReloader *hotreload.Reloader
+
+// UI thread owns host retirement. Stop admits no late UI posts after teardown;
+// physical joins run only after the UI loop, with the same bounded deadline.
+var retiredIDEReloaders []*hotreload.Reloader
+
+func closeIDEReloader() {
+	if r := globalReloader; r != nil {
+		globalReloader = nil
+		r.Close()
+		retiredIDEReloaders = append(retiredIDEReloaders, r)
+	}
+}
+func waitIDEReloaders(ctx context.Context) error {
+	var result error
+	for _, r := range retiredIDEReloaders {
+		if err := r.Wait(ctx); err != nil {
+			result = errors.Join(result, err)
+		}
+	}
+	retiredIDEReloaders = nil
+	return result
+}
 
 // globalInspector is the package-level reference to the right-dock
 // Object Inspector. The "New" toolbar action and Cmd+N shortcut both
@@ -3327,7 +3366,9 @@ func startReloader(canvas *ged.GedView) {
 	if globalReloader != nil || canvas == nil {
 		return
 	}
-	r, err := hotreload.New(
+	var r *hotreload.Reloader
+	var err error
+	r, err = hotreload.New(
 		func(path string, _ *decl.Node) error {
 			// This runs on the hot-reload watcher's goroutine, which may not
 			// touch the scene: OpenFile rebuilds every item and repaints, and
@@ -3335,7 +3376,7 @@ func startReloader(canvas *ged.GedView) {
 			// UI thread is drawing at that instant. Reading the scene inside
 			// the post also picks up a canvas the user retargeted meanwhile.
 			onUI(func() {
-				if _, err := reloadCleanDesign(canvas.GedScene(), path); err != nil {
+				if _, err := reloadOwnedCleanDesign(r, canvas, path); err != nil {
 					core.Warn("hotreload: ", path, ": ", err)
 				}
 			})
@@ -3353,6 +3394,13 @@ func startReloader(canvas *ged.GedView) {
 		return
 	}
 	globalReloader = r
+}
+
+func reloadOwnedCleanDesign(owner *hotreload.Reloader, canvas *ged.GedView, path string) (bool, error) {
+	if owner == nil || globalReloader != owner || canvas == nil {
+		return false, nil
+	}
+	return reloadCleanDesign(canvas.GedScene(), path)
 }
 
 // watchForReload registers a .silkui path with the file watcher so
@@ -3426,9 +3474,21 @@ func restoreSession(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 		restoreWorkspaceSession(state, editorTabs, designCanvas)
 		return
 	}
-	for _, path := range existingPaths(globalPrefs.OpenSession()) {
-		openDocument(path, editorTabs, designCanvas, nil, false)
+	state := workspaceSession{Version: workspaceSessionVersion, Mode: modeWelcome}
+	for _, path := range globalPrefs.OpenSession() {
+		if path == "" {
+			continue
+		}
+		if filepath.Ext(path) == ".silkui" {
+			state.Design = path
+			state.Mode = modeDesign
+		} else {
+			state.Mode = modeEdit
+			state.Editors = append(state.Editors, editorSession{Path: path})
+			state.ActiveFile = path
+		}
 	}
+	restoreWorkspaceSession(state, editorTabs, designCanvas)
 }
 
 // openEditors tracks which paths are already loaded in the editor
@@ -3451,6 +3511,9 @@ func openFileInEditor(tabs *gui.TabWidget, path string) bool {
 
 // loadFileInEditor is also used by session restore, which must preserve MRU.
 func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
+	if path != "" {
+		noteWorkspaceRestoreInteraction(tabs)
+	}
 	if path == "" {
 		return false
 	}
@@ -3474,6 +3537,16 @@ func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 	if err != nil {
 		return false
 	}
+	return attachFileInEditor(tabs, path, data, nil, true) != nil
+}
+
+// attachFileInEditor only constructs UI from an owned snapshot. Session restore
+// reads on bounded workers, then replaces its exact still-owned loading page.
+// Manual opens keep their existing synchronous API for navigation callers.
+func attachFileInEditor(tabs *gui.TabWidget, path string, data []byte, replace gui.IWidget, focus bool) *gui.CodeEditor {
+	if tabs == nil || path == "" || openEditors[path] != nil {
+		return nil
+	}
 	ed := makeCodeEditor(string(data))
 	// Give the editor its path so RefreshGitStatus → git diff lights up
 	// the change gutter (added/modified/removed bars). Without this the
@@ -3481,8 +3554,20 @@ func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 	configureEditorGitFeedback(ed)
 	ed.SetFilePath(path)
 	ed.MarkSaved()
-	tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
 	openEditors[path] = ed
+	if replace == nil {
+		tabs.AddTab(ed, filepath.Base(path), paint.LoadIcon("document"))
+	} else if idx := editorPageIndex(tabs, replace); idx < 0 || !tabs.ReplaceTab(idx, ed, filepath.Base(path), paint.LoadIcon("document")) {
+		delete(openEditors, path)
+		ed.CancelGitStatus()
+		ed.CancelSymbolIndex()
+		return nil
+	}
+	if openEditors[path] != ed || editorPageIndex(tabs, ed) < 0 {
+		ed.CancelGitStatus()
+		ed.CancelSymbolIndex()
+		return nil
+	}
 	configureEditorSymbolActions(tabs, ed)
 	configureEditorNavigation(tabs, ed)
 	configureEditorBookmarks(tabs, ed)
@@ -3500,6 +3585,7 @@ func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 			return
 		}
 		invalidateProcessRuntime(ed)
+		noteWorkspaceRestoreInteraction(tabs)
 		refreshEditorTab(tabs, ed, path)
 		if fileRenameAffects(path) {
 			return
@@ -3566,7 +3652,12 @@ func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 			}
 		}()
 	})
-	focusEditorTab(tabs, ed)
+	if focus {
+		focusEditorTab(tabs, ed)
+	}
+	if openEditors[path] != ed || editorPageIndex(tabs, ed) < 0 {
+		return nil
+	}
 	logEvent(ged.LogInfo, "Opened "+path)
 	// Let the background gopls client see the buffer so subsequent
 	// hover/definition/completion (next commit) have something to work
@@ -3574,7 +3665,7 @@ func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
 	lspDidOpenFile(path, string(data))
 	updateMacroEditor(tabs, path, ed)
 	forgetClosedEditor(tabs, path)
-	return true
+	return ed
 }
 
 // openFileInEditorAt is openFileInEditor + ScrollToLine; the entry

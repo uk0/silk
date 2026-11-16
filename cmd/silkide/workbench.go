@@ -37,6 +37,7 @@ type workbench struct {
 	navigation        gui.NavigationStack
 	bookmarks         *editorBookmarks
 	processRuntime    *processRuntimePane
+	restore           *workspaceRestore
 	notifications     *notificationsPane
 	closedEditors     closedEditorHistory
 	toolViews         map[workspaceMode]workbenchToolViews
@@ -77,6 +78,7 @@ func (w *workbench) activate(mode workspaceMode) {
 	if w == nil || w.center == nil {
 		return
 	}
+	noteWorkspaceRestoreInteraction(w.tabs)
 	var view gui.IWidget
 	switch mode {
 	case modeWelcome:

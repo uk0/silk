@@ -58,11 +58,31 @@ func captureWorkspaceSession(tabs *gui.TabWidget, canvas *ged.GedView) workspace
 	if canvas != nil && canvas.GedScene() != nil {
 		state.Design = canvas.GedScene().Filename()
 	}
-	for _, path := range orderedEditorPaths(tabs) {
-		ed := openEditors[path]
-		if ed == nil {
+	if w := globalWorkbench; w != nil && w.tabs == tabs && w.restore != nil {
+		r := w.restore
+		if !r.closed && r.designPending && !r.designChanged && r.canvas == canvas && r.design != nil && r.design.Filename() == r.designInitialFilename {
+			state.Design = r.state.Design
+		}
+	}
+	if tabs == nil {
+		return state
+	}
+	for i := 0; i < tabs.Count(); i++ {
+		page := tabs.Stack().Page(i)
+		if pending, ok := page.(*restorePage); ok {
+			if !pending.closed && openEditors[pending.saved.Path] == nil {
+				state.Editors = append(state.Editors, pending.saved)
+				if tabs.CurrentIndex() == i {
+					state.ActiveFile = pending.saved.Path
+				}
+			}
 			continue
 		}
+		ed, ok := page.(*gui.CodeEditor)
+		if !ok || openEditors[ed.FilePath()] != ed {
+			continue
+		}
+		path := ed.FilePath()
 		scroll := ed.ScrollY()
 		if math.IsNaN(scroll) || math.IsInf(scroll, 0) || scroll < 0 {
 			scroll = 0
@@ -72,24 +92,6 @@ func captureWorkspaceSession(tabs *gui.TabWidget, canvas *ged.GedView) workspace
 	return state
 }
 
-func restoreWorkspaceSession(state workspaceSession, tabs *gui.TabWidget, canvas *ged.GedView) {
-	if len(existingPaths([]string{state.Design})) != 0 {
-		openDocument(state.Design, tabs, canvas, nil, false)
-	}
-	for _, saved := range state.Editors {
-		if len(existingPaths([]string{saved.Path})) == 0 || !loadFileInEditor(tabs, saved.Path) {
-			continue
-		}
-		ed := activeEditor(tabs)
-		ed.ScrollToLineCol(saved.Line, saved.Column)
-		if saved.ScrollY >= 0 && !math.IsNaN(saved.ScrollY) && !math.IsInf(saved.ScrollY, 0) {
-			ed.SetScrollY(saved.ScrollY)
-		}
-	}
-	if ed := openEditors[state.ActiveFile]; ed != nil {
-		focusEditorTab(tabs, ed)
-	}
-	if w := globalWorkbench; w != nil && w.tabs == tabs {
-		w.activate(state.Mode)
-	}
+func restoreWorkspaceSession(state workspaceSession, tabs *gui.TabWidget, canvas *ged.GedView) *workspaceRestore {
+	return newWorkspaceRestore(state, tabs, canvas, workspaceRestoreOptions{})
 }

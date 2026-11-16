@@ -61,6 +61,14 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		})
 	}
 
+	add("Review Session Recovery", "", func() { reviewSessionRecovery(editorTabs, sessionRecoveryFor(editorTabs)) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { r := sessionRecoveryFor(editorTabs); return r != nil && r.canReviewRecovery() }
+	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand {
+		r := sessionRecoveryFor(editorTabs)
+		return paletteCommand{Name: i18n.T("Review Session Recovery"), Available: func() bool { return r != nil && sessionRecoveryFor(editorTabs) == r && r.canReviewRecovery() }, Fn: func() { reviewSessionRecovery(editorTabs, r) }}
+	}
+	add("Cancel Session Restore", "", func() { cancelWorkspaceRestore(editorTabs) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { return workspaceRestoreBusy(editorTabs) }
 	for i, mode := range []workspaceMode{modeWelcome, modeEdit, modeDesign} {
 		add([]string{"Welcome", "Edit", "Design"}[i], actionKeyHint()+"+"+[]string{"1", "2", "3"}[i], func() {
 			if globalWorkbench != nil {

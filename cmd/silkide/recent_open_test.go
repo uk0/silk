@@ -72,12 +72,15 @@ func TestSessionRestoreDoesNotReorderRecentFiles(t *testing.T) {
 			p.AddRecentFile(b)
 			p.AddRecentFile(a)
 			state := workspaceSession{Version: workspaceSessionVersion, Editors: []editorSession{{Path: a, Line: 1, Column: 2}, {Path: b}}, ActiveFile: a, Mode: modeEdit}
+			posts := installRestorePost(t)
 			if legacy {
 				p.SetOpenSession([]string{a, b})
 				restoreSession(w.tabs, w.canvas)
 			} else {
 				restoreWorkspaceSession(state, w.tabs, w.canvas)
 			}
+			t.Cleanup(w.restore.Close)
+			pumpRestore(t, posts, func() bool { return !w.restore.Busy() })
 			if w.tabs.Count() != 2 {
 				t.Fatal("restore failed")
 			}
