@@ -10,6 +10,7 @@ import (
 	"github.com/uk0/silk/async"
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/hotreload"
 	"github.com/uk0/silk/i18n"
 )
 
@@ -18,6 +19,7 @@ var designOpenPost = gui.Post
 type designOpenToken struct{ marker byte }
 type designOpenSettings struct {
 	read            func(context.Context, string) (designOpenSnapshot, error)
+	readReload      func(context.Context, string) (designOpenSnapshot, error)
 	post            func(func())
 	afterModal      func(func())
 	timeout         time.Duration
@@ -45,6 +47,9 @@ type designOpenJob struct {
 	undoCount, undoCurrent int
 	undoClean              bool
 	modalFocusGap          bool
+	reload                 bool
+	reloadOwner            *hotreload.Reloader
+	mode                   workspaceMode
 }
 
 // The single design viewport has one physical reader and one replaceable latest
@@ -61,10 +66,12 @@ type designOpenController struct {
 	all             map[*designOpenToken]*designOpenJob
 	pending, queued *designOpenJob
 	intent          *designOpenToken
+	admitting       *designOpenToken
 	active          int
 	closed          bool
 	stopClosed      func()
 	status          string
+	reloadBridge    *designReloadBridge
 }
 
 func init() {
@@ -79,6 +86,9 @@ func init() {
 func newDesignOpenController(w *workbench, s designOpenSettings) *designOpenController {
 	if s.read == nil {
 		s.read = readManualDesign
+	}
+	if s.readReload == nil {
+		s.readReload = readReloadDesign
 	}
 	if s.post == nil {
 		s.post = designOpenPost
@@ -129,6 +139,11 @@ func (c *designOpenController) current(j *designOpenJob) bool {
 	if history.Count() != j.undoCount || history.Current() != j.undoCurrent || history.IsClean() != j.undoClean {
 		return false
 	}
+	if j.reload {
+		return j.reloadOwner != nil && globalReloader == j.reloadOwner && !j.reloadOwner.Stats().Closed &&
+			!j.scene.HasPendingEdits() && !c.canvas.HasCapture() && documentMode(c.owner.tabs, c.canvas) == j.mode &&
+			gui.CurrentFocusWidget() == j.focus
+	}
 	return !j.scene.HasPendingEdits() && !c.canvas.HasCapture() &&
 		documentMode(c.owner.tabs, c.canvas) == modeDesign && designOpenFocusOwned(j.focus, gui.CurrentFocusWidget(), c.canvas, j.modalFocusGap)
 }
@@ -160,6 +175,12 @@ func (c *designOpenController) open(path string, recent bool) bool {
 	c.cancelPending()
 	intent := new(designOpenToken)
 	c.intent = intent
+	c.admitting = intent
+	defer func() {
+		if c.admitting == intent {
+			c.admitting = nil
+		}
+	}()
 	scene := c.canvas.GedScene()
 	if scene == nil {
 		return false
@@ -181,6 +202,14 @@ func (c *designOpenController) open(path string, recent bool) bool {
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, c.settings.timeout)
 	j := &designOpenJob{id: intent, box: new(designOpenMailbox), path: path, filename: scene.Filename(), scene: scene, recent: recent, focus: gui.CurrentFocusWidget(), ctx: ctx, cancel: cancel}
+	c.admit(j)
+	return true
+}
+
+// Shared physical-reader budget for explicit opens and automatic reloads. A
+// canceled OS read keeps its slot until it returns, regardless of request kind.
+func (c *designOpenController) admit(j *designOpenJob) {
+	scene, ctx := j.scene, j.ctx
 	j.undoCount, j.undoCurrent, j.undoClean = scene.UndoStack().Count(), scene.UndoStack().Current(), scene.UndoStack().IsClean()
 	j.box.owner.Store(c)
 	j.box.payload.Store(true)
@@ -203,9 +232,12 @@ func (c *designOpenController) open(path string, recent bool) bool {
 			})
 		}
 	})
-	c.setStatus(i18n.Tf("Opening design %s in background; Cancel Design Open to stop", filepath.Base(path)))
+	if j.reload {
+		c.setStatus(i18n.Tf("Reloading design %s in background", filepath.Base(j.path)))
+	} else {
+		c.setStatus(i18n.Tf("Opening design %s in background; Cancel Design Open to stop", filepath.Base(j.path)))
+	}
 	c.startNext()
-	return true
 }
 func (c *designOpenController) startNext() {
 	if !c.valid() || c.active != 0 || c.queued == nil {
@@ -218,6 +250,9 @@ func (c *designOpenController) startNext() {
 		return
 	}
 	path, read := j.path, c.settings.read
+	if j.reload {
+		read = c.settings.readReload
+	}
 	future, err := async.Submit(j.ctx, c.jobs, func(ctx context.Context) (designOpenSnapshot, error) { return read(ctx, path) })
 	if err != nil {
 		c.fail(j, err)
@@ -274,7 +309,7 @@ func (c *designOpenController) deliver(j *designOpenJob, value designOpenSnapsho
 	if rejectBusyFile(j.path) {
 		return false
 	}
-	if value.recoveryPath != "" {
+	if !j.reload && value.recoveryPath != "" {
 		recovered := c.settings.confirmRecovery(c.canvas, j.path, value.recoveryPath)
 		// GLFW may return before native destruction/conditional focus repair.
 		// Wait for cleanup without forcing focus; only then may an unowned
@@ -316,6 +351,10 @@ func (c *designOpenController) applyPrepared(j *designOpenJob, value designOpenS
 	if !c.current(j) || rejectBusyFile(j.path) {
 		return
 	}
+	if j.reload {
+		c.applyReload(j, doc)
+		return
+	}
 	scene, path, previous, recent, id := j.scene, j.path, j.filename, j.recent, j.id
 	// Stop our listener before the single, UI-owned document installation. A new
 	// intent dispatched by other observers still wins over subsequent host effects.
@@ -345,7 +384,7 @@ func (c *designOpenController) applyPrepared(j *designOpenJob, value designOpenS
 }
 
 func (c *designOpenController) dropChanged(j *designOpenJob) {
-	if c.valid() && c.pending == j && !j.done {
+	if c.valid() && c.pending == j && !j.done && !j.reload {
 		text := i18n.T("Design open canceled; current design or input changed")
 		logEvent(ged.LogInfo, text)
 		silkideToast(text, gui.ToastInfo)
@@ -366,6 +405,11 @@ func installOpenedDesign(canvas *ged.GedView, path, previous string, value desig
 }
 func (c *designOpenController) fail(j *designOpenJob, err error) {
 	if c.valid() && c.pending == j && !j.done && !errors.Is(err, context.Canceled) {
+		if j.reload {
+			logEvent(ged.LogWarn, "Design reload: "+j.path+": "+err.Error())
+			c.retire(j)
+			return
+		}
 		text := err.Error()
 		if errors.Is(err, context.DeadlineExceeded) {
 			text = i18n.T("Design open timed out; current design was kept")
@@ -405,6 +449,7 @@ func (c *designOpenController) retire(j *designOpenJob) {
 	j.scene = nil
 	j.focus = nil
 	j.modalFocusGap = false
+	j.reloadOwner = nil
 	if !j.running {
 		j.box.owner.Store(nil)
 		delete(c.all, j.id)
@@ -438,6 +483,10 @@ func (c *designOpenController) Close() {
 		return
 	}
 	c.closed = true
+	if c.reloadBridge != nil {
+		c.reloadBridge.close()
+		c.reloadBridge = nil
+	}
 	c.cancel()
 	c.clearStatus()
 	if c.stopClosed != nil {
@@ -453,6 +502,7 @@ func (c *designOpenController) Close() {
 	c.pending = nil
 	c.queued = nil
 	c.intent = nil
+	c.admitting = nil
 	c.owner = nil
 	c.canvas = nil
 }

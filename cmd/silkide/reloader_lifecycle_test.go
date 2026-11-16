@@ -10,6 +10,7 @@ import (
 func TestIDEReloaderRetiresQueuedUIAuthorityBeforeJoining(t *testing.T) {
 	w := testWorkbench(t)
 	old, retired := globalReloader, retiredIDEReloaders
+	oldBridge := globalDesignReloadBridge
 	globalReloader = nil
 	retiredIDEReloaders = nil
 	t.Cleanup(func() {
@@ -20,6 +21,7 @@ func TestIDEReloaderRetiresQueuedUIAuthorityBeforeJoining(t *testing.T) {
 			t.Error(e)
 		}
 		globalReloader, retiredIDEReloaders = old, retired
+		globalDesignReloadBridge = oldBridge
 	})
 	p := filepath.Join(t.TempDir(), "f.silkui")
 	writeRecoveryDesign(t, p, "Initial", "initial")
@@ -30,8 +32,9 @@ func TestIDEReloaderRetiresQueuedUIAuthorityBeforeJoining(t *testing.T) {
 	owned := globalReloader
 	writeRecoveryDesign(t, p, "Current owner", "second")
 	if applied, e := reloadOwnedCleanDesign(owned, w.canvas, p); e != nil || !applied {
-		t.Fatal("active owner could not apply", e)
+		t.Fatal("active owner could not admit", e)
 	}
+	pumpTestDesignOpens(t, w)
 	closeIDEReloader()
 	startReloader(w.canvas)
 	if globalReloader == owned {

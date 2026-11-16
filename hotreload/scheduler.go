@@ -268,20 +268,36 @@ func (r *Reloader) runJob(job reloadJob) {
 		r.fireError(job, fmt.Errorf("%w: %d events rejected", ErrPendingLimit, job.rejected))
 		return
 	}
-	tree, err := r.load(job.path)
-	if err != nil {
-		r.fireError(job, err)
-		return
+	var tree *decl.Node
+	var err error
+	if r.onInvalidate == nil {
+		tree, err = r.load(job.path)
+		if err != nil {
+			r.fireError(job, err)
+			return
+		}
 	}
 	if !r.allowed(job) {
 		return
 	}
 	// Admission is linearized by allowed(). Close can revoke later admissions,
 	// not preempt an already admitted callback. Wait proves it has returned.
-	err = invokeReload(r.onReload, job.path, tree)
+	if r.onInvalidate != nil {
+		err = invokeInvalidation(r.onInvalidate, job.path)
+	} else {
+		err = invokeReload(r.onReload, job.path, tree)
+	}
 	if err != nil {
 		r.fireError(job, err)
 	}
+}
+func invokeInvalidation(fn InvalidationFunc, path string) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("hotreload: callback panic: %v", p)
+		}
+	}()
+	return fn(path)
 }
 func invokeReload(fn ReloadFunc, path string, tree *decl.Node) (err error) {
 	defer func() {

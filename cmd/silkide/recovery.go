@@ -58,11 +58,10 @@ func applyDesignDocument(scene *ged.GedScene, doc *core.TDoc, originalPath strin
 	return nil
 }
 
-// reloadCleanDesign must run on the UI thread: queued watcher events can arrive
-// after the canvas has switched documents or acquired unsaved edits. A watcher
-// subscription is not permission to overwrite whichever document is open now.
-// False with no error means the event was safely ignored.
-func reloadCleanDesign(scene *ged.GedScene, changedPath string) (bool, error) {
+// reloadCleanDesign is the UI-only, I/O-free install of an owned prepared
+// snapshot. The caller must also validate admission/edit/lifetime state; a
+// subscription or a currently clean scene is not sufficient authority alone.
+func reloadCleanDesign(scene *ged.GedScene, changedPath string, disk *core.TDoc) (bool, error) {
 	if scene == nil || scene.Filename() == "" || changedPath == "" {
 		return false, nil
 	}
@@ -81,14 +80,14 @@ func reloadCleanDesign(scene *ged.GedScene, changedPath string) (bool, error) {
 	// Saving this very scene also emits a watcher event. Compare canonical
 	// documents instead of timestamps: a no-op reload would replace widget
 	// identities and discard the still-valid history of the just-saved edit.
-	disk, err := core.LoadTDocFile(originalPath)
-	if err != nil {
-		return false, err
+	var kind string
+	if disk == nil || disk.Value(&kind) != nil || kind != "form" {
+		return false, errors.New("reload: expected a prepared silkui form document")
 	}
 	if disk.String() == scene.SaveDesign().String() {
 		return false, nil
 	}
-	if err := openDesignDocument(scene, originalPath, ""); err != nil {
+	if err := applyDesignDocument(scene, disk, originalPath, false); err != nil {
 		return false, err
 	}
 	return true, nil

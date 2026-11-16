@@ -96,24 +96,36 @@ func TestRunSingleTestMarshalsItsResult(t *testing.T) {
 	}
 }
 
-// TestHotReloadReopensOnTheUIThread pins the file-watcher path. fswatch calls
-// onReload on its own goroutine, and GedScene.OpenFile rebuilds every item and
-// repaints — the single largest off-thread mutation in the IDE.
+// The watcher must only invalidate a revocable mailbox. UI admission precedes
+// a bounded read; only the resulting owned UI completion may rebuild widgets.
 func TestHotReloadReopensOnTheUIThread(t *testing.T) {
 	body := silkideFuncBody(t, "func startReloader(canvas *ged.GedView) {")
-	open := strings.Index(body, "reloadOwnedCleanDesign(r, canvas, path)")
-	if open < 0 {
-		t.Fatal("startReloader no longer calls the guarded reload helper; update this test to match")
-	}
-	post := strings.Index(body, "onUI(func() {")
-	if post < 0 || post > open {
-		t.Error("the hot-reload callback reopens the scene on the watcher goroutine instead of posting to the UI thread")
+	watcher := strings.Index(body, "hotreload.NewInvalidations(")
+	callback := strings.Index(body, "b.signal,")
+	if watcher < 0 || callback < watcher {
+		t.Fatal("watcher no longer uses the data-only invalidation mailbox")
 	}
 	helper := silkideFuncBody(t, "func reloadOwnedCleanDesign(owner *hotreload.Reloader,")
 	ownership := strings.Index(helper, "globalReloader != owner")
-	reopen := strings.Index(helper, "reloadCleanDesign(canvas.GedScene(), path)")
+	reopen := strings.Index(helper, "c.queueReload(owner, path)")
 	if ownership < 0 || reopen < ownership {
 		t.Error("owned UI reload lost lifetime/document guard")
+	}
+	if strings.Contains(helper, "LoadTDoc") || strings.Contains(helper, "OpenFile(") {
+		t.Fatal("reload admission regressed to synchronous source I/O")
+	}
+	source, err := os.ReadFile("design_reload.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	start, end := strings.Index(text, "func (b *designReloadBridge) signal("), strings.Index(text, "func (b *designReloadBridge) deliver()")
+	if start < 0 || end < start {
+		t.Fatal("missing watcher mailbox boundaries")
+	}
+	signal := text[start:end]
+	if !strings.Contains(signal, "b.post(b.deliver)") || strings.Contains(signal, "GedScene(") || strings.Contains(signal, ".queueReload(") {
+		t.Fatal("watcher signal bypassed UI admission")
 	}
 }
 

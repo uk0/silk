@@ -13,7 +13,9 @@
 //     widget swap — typically via (*decl.Node).Build() and an
 //     app-specific Replace() that rewires parent/children.
 //
-// The package deliberately stops at "produce the new AST" — performing
+// New produces a fresh AST. NewInvalidations instead reports only paths, for
+// hosts that must capture UI-owned edit/lifetime authority before reading.
+// The package deliberately stops before widget mutation — performing
 // the widget tree swap is host policy (some apps want a full re-Build,
 // others a smarter diff that preserves scroll positions / focused
 // fields).
@@ -54,6 +56,13 @@ import (
 // stopping the watcher.
 type ReloadFunc func(path string, tree *decl.Node) error
 
+// InvalidationFunc reports a changed path without reading or parsing its data.
+// Like ReloadFunc it runs on the serialized worker, never on the UI thread.
+// Hosts use this when preparation must follow UI-owned admission (for example,
+// capture document/edit identity before an asynchronous read). A notification
+// is not a snapshot or permission to replace a host's current document.
+type InvalidationFunc func(path string) error
+
 // ErrorFunc reports current parse/load/host-callback failures on the same
 // serialized worker. Superseded/unwatched/closed input failures are retired.
 // ErrPendingLimit uses an empty path and aggregates rejected events. A hook
@@ -86,20 +95,21 @@ type Options struct {
 	AllowedExt []string
 }
 
-// Reloader is the entry point. Construct via New, register paths via
+// Reloader is the entry point. Construct via New or NewInvalidations, register paths via
 // Watch, and Stop on shutdown.
 //
 // Reloader is safe for concurrent calls to Watch/Unwatch/Stop, but the
 // callbacks run on a single internal goroutine — host callback code
 // does not need its own locking *between* reload calls.
 type Reloader struct {
-	w          *fswatch.Watcher
-	onReload   ReloadFunc
-	onError    ErrorFunc
-	debounce   time.Duration
-	allowedExt map[string]struct{}
-	limit      int
-	load       func(string) (*decl.Node, error)
+	w            *fswatch.Watcher
+	onReload     ReloadFunc
+	onInvalidate InvalidationFunc
+	onError      ErrorFunc
+	debounce     time.Duration
+	allowedExt   map[string]struct{}
+	limit        int
+	load         func(string) (*decl.Node, error)
 
 	mu                       sync.Mutex
 	closed                   bool
@@ -137,6 +147,22 @@ func New(onReload ReloadFunc, onError ErrorFunc, opts Options) (*Reloader, error
 	if onReload == nil {
 		return nil, errors.New("hotreload.New: onReload is required")
 	}
+	return newReloader(onReload, nil, onError, opts)
+}
+
+// NewInvalidations retains New's debouncing, bounded coalescing and retirement
+// contracts, but does not open, decode or build an AST for changed files.
+// Watch still registers a filesystem baseline; WatchFileState can reuse one
+// already captured by a host's background reader. Hosts must revoke any work
+// they have marshaled after callback return when their own UI owner retires.
+func NewInvalidations(onChange InvalidationFunc, onError ErrorFunc, opts Options) (*Reloader, error) {
+	if onChange == nil {
+		return nil, errors.New("hotreload.NewInvalidations: onChange is required")
+	}
+	return newReloader(nil, onChange, onError, opts)
+}
+
+func newReloader(onReload ReloadFunc, onInvalidate InvalidationFunc, onError ErrorFunc, opts Options) (*Reloader, error) {
 	if opts.MaxPending < 0 {
 		return nil, errors.New("hotreload.New: negative MaxPending")
 	}
@@ -156,7 +182,7 @@ func New(onReload ReloadFunc, onError ErrorFunc, opts Options) (*Reloader, error
 	for _, ext := range opts.AllowedExt {
 		allowed[normaliseExt(ext)] = struct{}{}
 	}
-	r := &Reloader{w: w, onReload: onReload, onError: onError, debounce: debounce, allowedExt: allowed, limit: limit,
+	r := &Reloader{w: w, onReload: onReload, onInvalidate: onInvalidate, onError: onError, debounce: debounce, allowedExt: allowed, limit: limit,
 		load: loadReloadTree, pending: make(map[string]*reloadEntry), roots: make(map[string]*watchRequest),
 		stop: make(chan struct{}), done: make(chan struct{}), wake: make(chan struct{}, 1), jobs: make(chan reloadJob, 1), live: 2}
 	go r.loop()

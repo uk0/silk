@@ -81,7 +81,7 @@ func TestDesignerDraftSaveAllAndHotReloadGuard(t *testing.T) {
 	w, p, fake := designerDraftFixture(t)
 	s := w.canvas.GedScene()
 	writeRecoveryDesign(t, s.Filename(), "External replacement", "external")
-	if changed, err := reloadCleanDesign(s, s.Filename()); err != nil || changed || s.Children()[0] != fake {
+	if changed, err := reloadCleanDesign(s, s.Filename(), nil); err != nil || changed || s.Children()[0] != fake {
 		t.Fatal("hot reload replaced draft owner", err)
 	}
 	if !saveAllDocuments(w.tabs, w.canvas) || !s.IsClean() || p.HasPendingChanges() {

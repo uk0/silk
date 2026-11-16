@@ -13,6 +13,19 @@ type designOpenSnapshot struct {
 	sourceErr error
 }
 
+// Reloads never inspect recovery siblings or repeat a read during UI apply.
+// A corrupt/missing replacement keeps the current scene and its history intact.
+func readReloadDesign(ctx context.Context, path string) (designOpenSnapshot, error) {
+	var value designOpenSnapshot
+	data, info, err := readRestoreSnapshot(ctx, path)
+	if err != nil {
+		return value, err
+	}
+	value.modified, value.size = info.ModTime(), info.Size()
+	value.doc, err = decodeManualDesign(ctx, data)
+	return value, err
+}
+
 // Every stat/open/read/decompression/parse stays on the bounded worker. Primary
 // and recovery failures are separate: a valid autosave can recover a missing or
 // damaged original, but rejecting that recovery must not install an empty form.

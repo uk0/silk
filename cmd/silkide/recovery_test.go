@@ -1,14 +1,27 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
 )
+
+// Model-only reload tests explicitly prepare their fixture before UI apply.
+// Production uses the bounded reader after owned UI admission, never this helper.
+func preparedReloadDocument(t *testing.T, path string) *core.TDoc {
+	t.Helper()
+	value, err := readReloadDesign(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value.doc
+}
 
 func writeRecoveryDesign(t *testing.T, path, title, buttonText string) {
 	t.Helper()
@@ -168,7 +181,7 @@ func TestReloadIgnoresAnOldWatchAfterSwitchingDocuments(t *testing.T) {
 		}
 	}
 	writeRecoveryDesign(t, pathA, "A external", "A after")
-	if applied, err := reloadCleanDesign(scene, pathA); err != nil || applied {
+	if applied, err := reloadCleanDesign(scene, pathA, nil); err != nil || applied {
 		t.Fatalf("stale A watch should be ignored after A -> B: applied=%v err=%v", applied, err)
 	}
 	if scene.Filename() != pathB || !scene.IsClean() || scene.Title() != "B.silkui" || recoveryButtonText(t, scene) != "B current" {
@@ -196,7 +209,7 @@ func TestReloadProtectsDirtyRecoveredAndEditedDesigns(t *testing.T) {
 			before := scene.SaveDesign().String()
 			count := scene.UndoStack().Count()
 			writeRecoveryDesign(t, path, "External", "Do not replace my changes")
-			if applied, err := reloadCleanDesign(scene, path); err != nil || applied {
+			if applied, err := reloadCleanDesign(scene, path, nil); err != nil || applied {
 				t.Fatalf("dirty document reloaded: applied=%v err=%v", applied, err)
 			}
 			if scene.SaveDesign().String() != before || scene.IsClean() || scene.UndoStack().Count() != count || scene.Filename() != path {
@@ -229,7 +242,7 @@ func TestReloadCleanCurrentDesignPreservesIdentityAndResetsHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied, err := reloadCleanDesign(scene, relative); err != nil || !applied {
+	if applied, err := reloadCleanDesign(scene, relative, preparedReloadDocument(t, path)); err != nil || !applied {
 		t.Fatalf("same clean document not reloaded across relative/absolute spellings: applied=%v err=%v", applied, err)
 	}
 	if scene.Filename() != path || scene.Title() != "current.silkui" || scene.FormTitle() != "External" || recoveryButtonText(t, scene) != "After" || !scene.IsClean() || scene.UndoStack().Count() != 0 {
@@ -247,16 +260,20 @@ func TestReloadReadFailurePreservesCleanCurrentDesign(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if applied, err := reloadCleanDesign(scene, path); err == nil || applied {
+	value, readErr := readReloadDesign(context.Background(), path)
+	if readErr == nil {
+		t.Fatal("missing source was accepted by the background preparation primitive")
+	}
+	if applied, err := reloadCleanDesign(scene, path, value.doc); err == nil || applied {
 		t.Fatalf("missing file reported as reloaded: applied=%v err=%v", applied, err)
 	}
 	if scene.Filename() != path || !scene.IsClean() || recoveryButtonText(t, scene) != "Keep current view" {
 		t.Fatal("failed reload damaged existing design")
 	}
-	if applied, err := reloadCleanDesign(nil, path); applied || err != nil {
+	if applied, err := reloadCleanDesign(nil, path, nil); applied || err != nil {
 		t.Fatal("nil scene should safely ignore reload")
 	}
-	if applied, err := reloadCleanDesign(scene, ""); applied || err != nil {
+	if applied, err := reloadCleanDesign(scene, "", nil); applied || err != nil {
 		t.Fatal("empty event path should safely ignore reload")
 	}
 }
@@ -283,7 +300,7 @@ func TestReloadAfterOwnSavePreservesWidgetIdentityAndUndo(t *testing.T) {
 		t.Fatal("test requires a just-saved document with valid undo history")
 	}
 	// Replay the file notification produced by that explicit Save.
-	if applied, err := reloadCleanDesign(scene, path); err != nil || applied {
+	if applied, err := reloadCleanDesign(scene, path, preparedReloadDocument(t, path)); err != nil || applied {
 		t.Fatalf("identical own-save event must be a no-op: applied=%v err=%v", applied, err)
 	}
 	if !scene.IsClean() || !scene.UndoStack().CanUndo() || scene.UndoStack().Count() != 1 || scene.Children()[0] != originalWidget {

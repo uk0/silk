@@ -9,6 +9,33 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: UI-admitted bounded design reload (2026-11-16)
+
+- [x] Reproduce the published 76978b3 UI reload callback waiting for a controlled
+      regular-file reader. Preserve the failing default-preserving overlay.
+- [x] Add SDK invalidation-only dispatch without redundant source/AST reads,
+      retaining serialized callbacks, coalescing, bounded queues and Close/Wait.
+- [x] Admit reloads on UI before reading; share the manual-open physical reader,
+      ownership/edit/draft/capture guards and deadline without recovery prompts,
+      canvas activation, MRU writes or a synchronous UI read fallback.
+- [x] Coalesce watcher-to-UI notifications in a revocable mailbox. Retire old
+      watchers/workbenches and prevent automatic events stealing manual admission.
+- [x] Preserve exact prepared metadata/handler source, own-save widget/Undo
+      identity, and hidden-editor focus. Pass ten focused race repetitions.
+- [x] Pass final-source Mac/Linux full/race and strict bundled-gopls gates;
+      current native macOS confirms clean external reload, own-save Undo,
+      dirty-design preservation and hidden-editor input/save/session/exit.
+- [x] Finish Windows full/race/strict and native UI gates with exact source,
+      model/session/input readback and normal exit 0.
+- [x] Freeze/verify all platforms, source readback and bundled-gopls; update
+      actual screenshots/README/SDK/changelog.
+- [x] Complete source/index/documentation identity audit; approve the tested
+      increment for the user-authorized commit/push.
+
+Save/automatic-save transactions, resource construction and complete external
+conflict/dirty-document review remain separate work; do not call them fixed by
+removing this callback's duplicate UI reads.
+
 ## Validated increment: owned design opening and bounded canvas (2026-11-16)
 
 - [x] Reproduce the 56fe384 public manual .silkui open waiting inside a controlled

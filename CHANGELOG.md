@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — UI-admitted design hot reload (2026-11-16)
+
+- Add SDK invalidation-only notifications while preserving legacy AST reload,
+  serialized callbacks, bounded coalescing and permanent Close/physical Wait.
+- Replace discarded worker AST plus duplicate UI reads with UI-owned admission,
+  one bounded preparation reader shared with manual Open, and prepared TDoc apply.
+- Coalesce watcher/UI bursts through revocable mailboxes; guard scene/Undo,
+  drafts, focus/capture, lifetime, path and manual-open admission priority.
+- Preserve own-save widget/Undo identity, exact designer metadata/handler bytes
+  and hidden-editor input without recovery prompts or automatic workspace changes.
+- Pass frozen-source full/race suites on all three platforms and 12 strict real
+  bundled-gopls checks. Verify macOS/Windows clean external reload, own-save Undo,
+  dirty-design protection, hidden-editor input, saved model/session and exit 0.
+  Add actual native README captures; retain failures and limits in
+  [reload QA](DESIGN_RELOAD_QA_20261116.md). Save/auto-save transactions and
+  resource construction are not claimed nonblocking by this increment.
+
 ## Unreleased — owned design opening and bounded canvas (2026-11-16)
 
 - Read/decompress/parse primary and autosave .silkui snapshots off the UI loop;

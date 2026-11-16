@@ -18,7 +18,6 @@ import (
 
 	"github.com/uk0/silk/a11y"
 	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/decl"
 	_ "github.com/uk0/silk/device" // registers the DeviceComponent (Modbus/S7) factory for the palette
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/graph"
@@ -1702,6 +1701,16 @@ var retiredIDEReloaders []*hotreload.Reloader
 func closeIDEReloader() {
 	if r := globalReloader; r != nil {
 		globalReloader = nil
+		if b := globalDesignReloadBridge; b != nil && b.reloader.Load() == r {
+			if c := b.controller.Load(); c != nil {
+				c.detachReloader(r)
+			}
+			b.close()
+			globalDesignReloadBridge = nil
+		}
+		if w := globalWorkbench; w != nil {
+			w.designOpen.detachReloader(r)
+		}
 		r.Close()
 		retiredIDEReloaders = append(retiredIDEReloaders, r)
 	}
@@ -3340,29 +3349,28 @@ func confirmDiscardDirty(canvas *ged.GedView) bool {
 	}
 }
 
-// startReloader spins up the file-system watcher on first .silkui
-// open. The onReload closure captures the design canvas so changes
-// to a watched .silkui flow back through GedScene.OpenFile.
+// startReloader installs an invalidation-only watcher. Its worker retains a
+// revocable mailbox, not the canvas, and does not parse an AST that the UI then
+// discards. UI admission captures edit identity before the bounded source read.
 func startReloader(canvas *ged.GedView) {
-	if globalReloader != nil || canvas == nil {
+	w := globalWorkbench
+	if canvas == nil || w == nil || w.canvas != canvas {
 		return
 	}
-	var r *hotreload.Reloader
-	var err error
-	r, err = hotreload.New(
-		func(path string, _ *decl.Node) error {
-			// This runs on the hot-reload watcher's goroutine, which may not
-			// touch the scene: OpenFile rebuilds every item and repaints, and
-			// widgets have no locking, so doing it here corrupts whatever the
-			// UI thread is drawing at that instant. Reading the scene inside
-			// the post also picks up a canvas the user retargeted meanwhile.
-			onUI(func() {
-				if _, err := reloadOwnedCleanDesign(r, canvas, path); err != nil {
-					core.Warn("hotreload: ", path, ": ", err)
-				}
-			})
-			return nil
-		},
+	c := designOpenerFor(w.tabs, canvas)
+	if c == nil {
+		return
+	}
+	if globalReloader != nil {
+		if b := c.reloadBridge; b != nil && b.reloader.Load() == globalReloader {
+			b.bind(canvas.GedScene().Filename())
+			return
+		}
+		closeIDEReloader() // never reuse a previous workbench's dead mailbox
+	}
+	b := newDesignReloadBridge(c)
+	r, err := hotreload.NewInvalidations(
+		b.signal,
 		func(path string, err error) {
 			core.Warn("hotreload: ", path, ": ", err)
 		},
@@ -3371,17 +3379,31 @@ func startReloader(canvas *ged.GedView) {
 		},
 	)
 	if err != nil {
+		b.close()
 		core.Warn("hotreload.New: ", err)
 		return
 	}
+	b.reloader.Store(r)
+	c.reloadBridge = b
+	globalDesignReloadBridge = b
 	globalReloader = r
 }
 
+// UI-only admission. A true return means queued, not installed or read already.
+// There is deliberately no synchronous read/parse fallback for unowned hosts.
 func reloadOwnedCleanDesign(owner *hotreload.Reloader, canvas *ged.GedView, path string) (bool, error) {
 	if owner == nil || globalReloader != owner || canvas == nil {
 		return false, nil
 	}
-	return reloadCleanDesign(canvas.GedScene(), path)
+	w := globalWorkbench
+	if w == nil || w.canvas != canvas {
+		return false, nil
+	}
+	c := designOpenerFor(w.tabs, canvas)
+	if c == nil {
+		return false, nil
+	}
+	return c.queueReload(owner, path), nil
 }
 
 // watchForReload registers a .silkui path with the file watcher so

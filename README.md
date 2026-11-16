@@ -266,7 +266,25 @@ These are unmodified desktop captures, not mockups or a universal CPU benchmark.
 
 [Design preparation regression, native replay and scope](MANUAL_DESIGN_OPEN_QA_20261116.md)
 
-Save, resources, macro output and reload callback I/O remain separate work. This
+### UI-admitted design reload (2026-11-16)
+
+This iteration removes the watcher AST read followed by two UI-thread
+rereads. A coalesced invalidation first captures UI document/edit ownership,
+then shares bounded background preparation with explicit design Open. Own-save
+notifications preserve selected widgets and Undo; automatic reload does not
+reveal a hidden canvas or steal editor input.
+
+![Actual macOS source input retained across hidden design reload](docs/images/design-reload-focus-macos.png)
+
+![Actual Windows editor input retained across hidden design reload](docs/images/design-reload-focus-windows.png)
+
+These unmodified current-source native captures are paired with exact saved-text,
+model/session readback and normal exit 0 on both platforms. Full and race suites
+pass on macOS, Linux and Windows, plus 12 strict real bundled-gopls checks.
+See [reload regression, native replay and limits](DESIGN_RELOAD_QA_20261116.md).
+
+
+Save, resources, macro output and other callback I/O remain separate work. This
 increment is not complete Qt Creator parity or a universal Windows CPU fix.
 
 The same verified source also owns live **AlarmPanel** bindings: switching databases
