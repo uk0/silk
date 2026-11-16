@@ -51,7 +51,7 @@ func (this *GroupBox) SetTitle(s string) {
 }
 
 func (this *GroupBox) SetContent(w IWidget) {
-	if this.content != nil {
+	if this.content != nil && this.content.Parent() == this.Self() {
 		this.content.SetParent(nil)
 	}
 	this.content = w
@@ -288,7 +288,7 @@ func (this *GroupBox) OnLeftDown(x, y float64) {
 }
 
 func (this *GroupBox) Layout() {
-	if this.content == nil {
+	if this.content == nil || this.content.Parent() != this.Self() || !this.content.IsVisible() {
 		return
 	}
 	titleH := this.titleHeight()
@@ -311,19 +311,40 @@ func (this *GroupBox) Layout() {
 }
 
 func (this *GroupBox) SizeHints() SizeHints {
+	return this.measureGroupWidth(0)
+}
+
+func (this *GroupBox) HeightForWidth(width float64) float64 {
+	return this.SizeHintsForWidth(width).Height
+}
+
+func (this *GroupBox) SizeHintsForWidth(width float64) SizeHints {
+	if hint, ok := inheritedNaturalHints(this, width); ok {
+		return hint
+	}
+	return preserveInheritedHints(this, this.measureGroupWidth(width))
+}
+
+func (this *GroupBox) measureGroupWidth(width float64) SizeHints {
 	titleH := this.titleHeight()
 	pad := this.borderPadding()
 
 	minW := 100.0
 	minH := titleH + pad*2 + 20
+	policy := GrowHorizontal | GrowVertical
 
-	if this.content != nil {
-		hints := this.content.SizeHints()
+	if this.content != nil && this.content.Parent() == this.Self() && this.content.IsVisible() {
+		innerWidth := 0.0
+		if width > 0 {
+			innerWidth = max(0, layoutDimension(width)-2*(pad+4))
+		}
+		hints := MeasureForWidth(this.content, innerWidth)
 		cw := hints.Width + 2*(pad+4)
 		ch := hints.Height + titleH + 4 + pad + 4
 		minW = math.Max(minW, cw)
 		minH = math.Max(minH, ch)
+		policy |= hints.Policy & ShrinkHorizontal
 	}
 
-	return SizeHints{Width: minW, Height: minH, Policy: GrowHorizontal | GrowVertical}
+	return SizeHints{Width: minW, Height: minH, Policy: policy}
 }

@@ -114,6 +114,8 @@ func (this *FormLayout) AddLayoutWidget(w IWidget, row, col, rowSpan, colSpan in
 	w.SetParent(this.Self())
 }
 
+// Intrinsic measurement is also used by the Gantt/scene dialog builders to
+// choose their explicitly authored label columns and fixed row heights.
 func formRowHints(row FormRow) (SizeHints, SizeHints) {
 	var label, field SizeHints
 	if row.label != nil {
@@ -123,6 +125,20 @@ func formRowHints(row FormRow) (SizeHints, SizeHints) {
 		field = row.widget.SizeHints()
 	}
 	return label, field
+}
+
+func (this *FormLayout) rowHints(row FormRow, labelWidth, fieldWidth float64) (SizeHints, SizeHints, bool) {
+	var label, field SizeHints
+	active := false
+	if row.label != nil && row.label.Parent() == this.Self() && row.label.IsVisible() {
+		label = MeasureForWidth(row.label, labelWidth)
+		active = true
+	}
+	if row.widget != nil && row.widget.Parent() == this.Self() && row.widget.IsVisible() {
+		field = MeasureForWidth(row.widget, fieldWidth)
+		active = true
+	}
+	return label, field, active
 }
 
 func (this *FormLayout) Layout() {
@@ -160,15 +176,20 @@ func (this *FormLayout) Layout() {
 
 	var fixedTotal float64
 	var flexCount int
+	activeRows := 0
 
 	for i, row := range this.rows {
+		lh, wh, active := this.rowHints(row, labelW, widgetW)
+		if !active {
+			continue
+		}
+		activeRows++
 		if this.rowHeight > 0 {
 			heights[i] = this.rowHeight
 			fixedTotal += this.rowHeight
 		} else {
 			// Use the larger of label/widget size hints
-			lh, wh := formRowHints(row)
-			rh := math.Max(lh.Height, wh.Height)
+			rh := math.Max(layoutHintHeight(lh, 0), layoutHintHeight(wh, 0))
 			if rh > 0 {
 				heights[i] = rh
 				fixedTotal += rh
@@ -178,7 +199,7 @@ func (this *FormLayout) Layout() {
 		}
 	}
 
-	spacingTotal := float64(n-1) * this.spacing
+	spacingTotal := float64(max(0, activeRows-1)) * this.spacing
 	remaining := h - fixedTotal - spacingTotal
 	var flexH float64
 	if flexCount > 0 && remaining > 0 {
@@ -187,18 +208,23 @@ func (this *FormLayout) Layout() {
 
 	yOff := y0
 	for i, row := range this.rows {
+		labelActive := row.label != nil && row.label.Parent() == this.Self() && row.label.IsVisible()
+		fieldActive := row.widget != nil && row.widget.Parent() == this.Self() && row.widget.IsVisible()
+		if !labelActive && !fieldActive {
+			continue
+		}
 		rh := heights[i]
 		if rh == 0 {
 			rh = flexH
 		}
 
 		// Label: right-aligned in the label column
-		if row.label != nil {
+		if labelActive {
 			row.label.SetBounds(x0, yOff, labelW, rh)
 		}
 
 		// Widget: fills the remaining width
-		if row.widget != nil {
+		if fieldActive {
 			row.widget.SetBounds(widgetX, yOff, widgetW, rh)
 		}
 
@@ -213,6 +239,21 @@ func (this *FormLayout) Draw(g paint.Painter) {
 }
 
 func (this *FormLayout) SizeHints() SizeHints {
+	return this.measureFormWidth(0)
+}
+
+func (this *FormLayout) HeightForWidth(width float64) float64 {
+	return this.SizeHintsForWidth(width).Height
+}
+
+func (this *FormLayout) SizeHintsForWidth(width float64) SizeHints {
+	if hint, ok := inheritedNaturalHints(this, width); ok {
+		return hint
+	}
+	return preserveInheritedHints(this, this.measureFormWidth(width))
+}
+
+func (this *FormLayout) measureFormWidth(width float64) SizeHints {
 	if this.layoutDisabled {
 		return SizeHints{Width: this.Width(), Height: this.Height()}
 	}
@@ -222,21 +263,34 @@ func (this *FormLayout) SizeHints() SizeHints {
 	}
 
 	var totalH, maxWidgetW float64
+	labelWidth, fieldWidth := this.labelWidth, 0.0
+	if width > 0 {
+		_, _, innerWidth, _ := applyLayoutPadding(this.padding, layoutDimension(width), 0)
+		labelWidth = min(labelWidth, innerWidth)
+		fieldWidth = max(0, innerWidth-labelWidth-this.spacing)
+	}
+	activeRows := 0
+	policy := GrowHorizontal | GrowVertical
 	for _, row := range this.rows {
-		lh, wh := formRowHints(row)
-		rh := math.Max(lh.Height, wh.Height)
+		lh, wh, active := this.rowHints(row, labelWidth, fieldWidth)
+		if !active {
+			continue
+		}
+		activeRows++
+		rh := math.Max(layoutHintHeight(lh, 0), layoutHintHeight(wh, 0))
 		if this.rowHeight > 0 {
 			rh = this.rowHeight
 		}
 		totalH += rh
 		maxWidgetW = math.Max(maxWidgetW, wh.Width)
+		policy |= (lh.Policy | wh.Policy) & ShrinkHorizontal
 	}
 
-	totalH += float64(n-1) * this.spacing
+	totalH += float64(max(0, activeRows-1)) * this.spacing
 	totalH += this.padding.T + this.padding.B
 	totalW := this.labelWidth + this.spacing + maxWidgetW + this.padding.L + this.padding.R
 
-	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
+	return SizeHints{Width: totalW, Height: totalH, Policy: policy}
 }
 
 // LayoutEnabled defaults to true for ordinary runtime widgets. Designer files

@@ -26,6 +26,7 @@ type toastEntry struct {
 	manager    *ToastManager
 	position   ToastPosition
 	onActivate func()
+	textLayout toastTextLayout
 }
 
 // Notifications belong to the owner for coordinate mapping and repainting,
@@ -123,6 +124,7 @@ func (mgr *ToastManager) dismiss(entry *toastEntry) {
 	entry.manager = nil
 	entry.onActivate = nil
 	entry.message = ""
+	entry.textLayout = toastTextLayout{}
 	if parent != nil {
 		mgr.layoutToasts(parent)
 	}
@@ -187,6 +189,9 @@ func toastAccentColor(level ToastLevel) paint.Color {
 
 func (this *toastEntry) Draw(g paint.Painter) {
 	w, h := this.Size()
+	if w <= 0 || h <= 0 || math.IsNaN(w) || math.IsNaN(h) || math.IsInf(w, 0) || math.IsInf(h, 0) {
+		return
+	}
 	bg, textColor := toastColors(this.level)
 	accent := toastAccentColor(this.level)
 	iconBG := accent
@@ -268,9 +273,6 @@ func (this *toastEntry) Draw(g paint.Painter) {
 	}
 
 	// Message text
-	t := Theme()
-	msgFont := paint.NewFont(t.Font.Family(), 13, false, false)
-	g.SetFont(msgFont)
 	g.SetBrush1(textColor)
 	// Cut the message before the close button: it is painted after the text at
 	// w-20 and takes clicks from w-32 on, so an unelided message runs under the
@@ -279,12 +281,13 @@ func (this *toastEntry) Draw(g paint.Painter) {
 	if w < 76 {
 		textLeft = 10
 	}
-	msg := elideToWidth(msgFont, notificationPreview(this.message), w-40.0-textLeft)
-	ext := msgFont.TextExtents(msg)
+	layout := this.layoutText(w - 40.0 - textLeft)
+	g.SetFont(layout.font)
+	ext := layout.extents
 	tx := textLeft - ext.XBearing
 	ty := 0.5*(h+ext.YBearing) - ext.YBearing
 	g.Translate(tx, ty)
-	g.DrawText(msg)
+	g.DrawText(layout.text)
 	g.Translate(-tx, -ty)
 
 	// Close button (rounded X) at right side

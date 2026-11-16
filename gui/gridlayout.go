@@ -3,7 +3,6 @@ package gui
 import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
-	"math"
 )
 
 func init() {
@@ -62,11 +61,22 @@ func (this *GridLayout) AddWidget(w IWidget, row, col int) {
 
 // AddWidgetSpan places a widget at the given row and column with the specified row/col span.
 func (this *GridLayout) AddWidgetSpan(w IWidget, row, col, rowSpan, colSpan int) {
+	if w == nil || row < 0 || col < 0 || row > 4095 || col > 4095 {
+		return
+	}
 	if rowSpan < 1 {
 		rowSpan = 1
 	}
 	if colSpan < 1 {
 		colSpan = 1
+	}
+	rowSpan, colSpan = min(rowSpan, 4096-row), min(colSpan, 4096-col)
+	for i := range this.cells {
+		if this.cells[i].widget == w {
+			this.cells[i] = GridCell{widget: w, row: row, col: col, rowSpan: rowSpan, colSpan: colSpan}
+			w.SetParent(this.Self())
+			return
+		}
 	}
 	this.cells = append(this.cells, GridCell{
 		widget:  w,
@@ -94,23 +104,34 @@ func (this *GridLayout) AddLayoutWidget(w IWidget, row, col, rowSpan, colSpan in
 
 // SetColumnWidth sets a fixed width for a column. Pass 0 for flexible sizing.
 func (this *GridLayout) SetColumnWidth(col int, width float64) {
+	if col < 0 || col > 4095 {
+		return
+	}
 	for col >= len(this.colWidths) {
 		this.colWidths = append(this.colWidths, 0)
 	}
-	this.colWidths[col] = width
+	this.colWidths[col] = layoutDimension(width)
+	this.InvalidateLayout()
 }
 
 // SetRowHeight sets a fixed height for a row. Pass 0 for flexible sizing.
 func (this *GridLayout) SetRowHeight(row int, height float64) {
+	if row < 0 || row > 4095 {
+		return
+	}
 	for row >= len(this.rowHeights) {
 		this.rowHeights = append(this.rowHeights, 0)
 	}
-	this.rowHeights[row] = height
+	this.rowHeights[row] = layoutDimension(height)
+	this.InvalidateLayout()
 }
 
 // gridDimensions returns the number of rows and columns needed.
 func (this *GridLayout) gridDimensions() (maxRows, maxCols int) {
 	for _, c := range this.cells {
+		if !this.ownsCell(c) {
+			continue
+		}
 		endRow := c.row + c.rowSpan
 		endCol := c.col + c.colSpan
 		if endRow > maxRows {
@@ -143,64 +164,25 @@ func (this *GridLayout) Layout() {
 	// cumulative offset arrays. This avoids 4 allocations per Layout() call.
 	scratch := acquireGridScratch()
 
-	colW := growF64(scratch.colW, maxCols)
+	colW := this.measureColumns(w, true, maxCols, scratch.colW)
 	scratch.colW = colW
-	var fixedW float64
-	var flexCols int
-	for i := 0; i < maxCols; i++ {
-		if i < len(this.colWidths) && this.colWidths[i] > 0 {
-			colW[i] = this.colWidths[i]
-			fixedW += colW[i]
-		} else {
-			flexCols++
-		}
-	}
-	spacingW := float64(maxCols-1) * this.spacing
-	remainW := w - fixedW - spacingW
-	if remainW < 0 {
-		remainW = 0
-	}
-	var flexColW float64
-	if flexCols > 0 && remainW > 0 {
-		flexColW = remainW / float64(flexCols)
-	}
-	if flexColW < 0 {
-		flexColW = 0
-	}
-	for i := 0; i < maxCols; i++ {
-		if colW[i] == 0 {
-			colW[i] = flexColW
-		}
-	}
-
-	// Resolve row heights
-	rowH := growF64(scratch.rowH, maxRows)
+	rowH, _ := this.measureRows(colW, maxRows, scratch.rowH)
 	scratch.rowH = rowH
-	var fixedH float64
-	var flexRows int
-	for i := 0; i < maxRows; i++ {
-		if i < len(this.rowHeights) && this.rowHeights[i] > 0 {
-			rowH[i] = this.rowHeights[i]
-			fixedH += rowH[i]
-		} else {
+	// Explicit row heights stay fixed. Flexible rows receive their measured
+	// minimum first, then share extra space; spanning cells contribute only to
+	// flexible tracks, never overwriting authored fixed heights.
+	used, flexRows := float64(maxRows-1)*this.spacing, 0
+	for i, height := range rowH {
+		used += height
+		if i >= len(this.rowHeights) || this.rowHeights[i] <= 0 {
 			flexRows++
 		}
 	}
-	spacingH := float64(maxRows-1) * this.spacing
-	remainH := h - fixedH - spacingH
-	if remainH < 0 {
-		remainH = 0
-	}
-	var flexRowH float64
-	if flexRows > 0 && remainH > 0 {
-		flexRowH = remainH / float64(flexRows)
-	}
-	if flexRowH < 0 {
-		flexRowH = 0
-	}
-	for i := 0; i < maxRows; i++ {
-		if rowH[i] == 0 {
-			rowH[i] = flexRowH
+	if extra := h - used; extra > 0 && flexRows > 0 {
+		for i := range rowH {
+			if i >= len(this.rowHeights) || this.rowHeights[i] <= 0 {
+				rowH[i] += extra / float64(flexRows)
+			}
 		}
 	}
 
@@ -222,7 +204,7 @@ func (this *GridLayout) Layout() {
 
 	// Position each widget (skip hidden)
 	for _, c := range this.cells {
-		if !c.widget.IsVisible() {
+		if !this.activeCell(c) {
 			continue
 		}
 		cx := colX[c.col]
@@ -257,59 +239,7 @@ func (this *GridLayout) Draw(g paint.Painter) {
 }
 
 func (this *GridLayout) SizeHints() SizeHints {
-	if this.layoutDisabled {
-		return SizeHints{Width: this.Width(), Height: this.Height()}
-	}
-	if len(this.cells) == 0 {
-		return SizeHints{}
-	}
-
-	maxRows, maxCols := this.gridDimensions()
-
-	// Pooled scratch — colW + rowH only; no offset arrays needed here.
-	scratch := acquireGridScratch()
-	colW := growF64(scratch.colW, maxCols)
-	scratch.colW = colW
-	rowH := growF64(scratch.rowH, maxRows)
-	scratch.rowH = rowH
-
-	for _, c := range this.cells {
-		hi := c.widget.SizeHints()
-		cw := hi.Width / float64(c.colSpan)
-		ch := hi.Height / float64(c.rowSpan)
-		for j := c.col; j < c.col+c.colSpan && j < maxCols; j++ {
-			colW[j] = math.Max(colW[j], cw)
-		}
-		for j := c.row; j < c.row+c.rowSpan && j < maxRows; j++ {
-			rowH[j] = math.Max(rowH[j], ch)
-		}
-	}
-
-	// Override with fixed sizes where specified
-	for i := 0; i < maxCols; i++ {
-		if i < len(this.colWidths) && this.colWidths[i] > 0 {
-			colW[i] = this.colWidths[i]
-		}
-	}
-	for i := 0; i < maxRows; i++ {
-		if i < len(this.rowHeights) && this.rowHeights[i] > 0 {
-			rowH[i] = this.rowHeights[i]
-		}
-	}
-
-	var totalW, totalH float64
-	for _, w := range colW {
-		totalW += w
-	}
-	for _, h := range rowH {
-		totalH += h
-	}
-
-	totalW += float64(maxCols-1)*this.spacing + this.padding.L + this.padding.R
-	totalH += float64(maxRows-1)*this.spacing + this.padding.T + this.padding.B
-
-	releaseGridScratch(scratch)
-	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
+	return this.measureGridWidth(0)
 }
 
 // LayoutEnabled defaults to true for ordinary runtime widgets. Designer files

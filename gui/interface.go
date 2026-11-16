@@ -150,7 +150,16 @@ type IDrawOverlay interface {
 //}
 
 type IHeightForWidth interface {
+	// HeightForWidth measures preferred height at width without changing bounds,
+	// focus, parentage or native windows. Like SizeHints, this is UI-thread-only.
 	HeightForWidth(float64) float64
+}
+
+// ISizeHintsForWidth measures the complete hint in one traversal. Containers
+// implement this alongside IHeightForWidth so deeply nested layouts need not
+// walk every subtree once for its natural hint and again for its height.
+type ISizeHintsForWidth interface {
+	SizeHintsForWidth(float64) SizeHints
 }
 
 type IWidthForHeight interface {

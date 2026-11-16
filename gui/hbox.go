@@ -67,7 +67,7 @@ func (this *HBox) Layout() {
 	// so phases 1-3 can reuse them by index.
 	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
 		scratch.visible = append(scratch.visible, c)
-		scratch.hints = append(scratch.hints, c.SizeHints())
+		scratch.hints = append(scratch.hints, MeasureForWidth(c, 0))
 		return true
 	})
 
@@ -86,79 +86,15 @@ func (this *HBox) Layout() {
 		return
 	}
 
-	// Phase 1: classify children (hints already collected in phase 0).
-	var fixedTotal float64
-	var totalStretch int
-
-	for i := 0; i < n; i++ {
-		hi := hints[i]
-		if hi.Stretch > 0 {
-			// Stretchable child — participates in proportional distribution
-			totalStretch += hi.Stretch
-		} else {
-			// Fixed-width child
-			fixedW := hi.Width
-			if fixedW <= 0 {
-				fixedW = hi.MinWidth
-			}
-			if fixedW <= 0 {
-				fixedW = 32 // fallback minimum
-			}
-			fixedTotal += fixedW
-		}
-	}
-
-	if totalStretch <= 0 {
-		totalStretch = 1
-	}
-
-	spacingTotal := float64(n-1) * this.spacing
-	remaining := cw - fixedTotal - spacingTotal
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	// Phase 2: distribute space. Reuse scratch.sizes as the widths buffer.
-	// Grow it to length n; existing capacity is reused without allocation
-	// when n <= cap (typical case after the first call).
-	if cap(scratch.sizes) >= n {
-		scratch.sizes = scratch.sizes[:n]
-	} else {
-		scratch.sizes = make([]float64, n)
-	}
+	scratch.sizes = resolveHBoxWidths(hints, cw, this.spacing, scratch.sizes)
 	widths := scratch.sizes
-	for i := 0; i < n; i++ {
-		hi := hints[i]
-		var v float64
-		if hi.Stretch > 0 {
-			// Proportional allocation based on stretch weight
-			v = remaining * float64(hi.Stretch) / float64(totalStretch)
-		} else {
-			v = hi.Width
-			if v <= 0 {
-				v = hi.MinWidth
-			}
-			if v <= 0 {
-				v = 32
-			}
-		}
-
-		// Clamp to min/max
-		if hi.MinWidth > 0 && v < hi.MinWidth {
-			v = hi.MinWidth
-		}
-		if hi.MaxWidth > 0 && v > hi.MaxWidth {
-			v = hi.MaxWidth
-		}
-		widths[i] = v
-	}
 
 	// Phase 3: position children
 	xOff := cx
 	for i := 0; i < n; i++ {
 		c := visible[i]
-		hi := hints[i]
 		childW := widths[i]
+		hi := MeasureForWidth(c, childW)
 
 		// Determine child height and vertical position
 		childH := ch
@@ -199,6 +135,7 @@ func (this *HBox) SizeHints() SizeHints {
 	// child's SizeHints() is consulted exactly once and accumulated inline.
 	n := 0
 	var totalW, maxH float64
+	policy := GrowHorizontal | GrowVertical
 
 	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
 		hi := c.SizeHints()
@@ -208,6 +145,7 @@ func (this *HBox) SizeHints() SizeHints {
 		}
 		totalW += w
 		maxH = math.Max(maxH, hi.Height)
+		policy |= hi.Policy & ShrinkHorizontal
 		n++
 		return true
 	})
@@ -218,7 +156,51 @@ func (this *HBox) SizeHints() SizeHints {
 	totalW += this.padding.L + this.padding.R
 	maxH += this.padding.T + this.padding.B
 
-	return SizeHints{Width: totalW, Height: maxH, Policy: GrowHorizontal | GrowVertical}
+	return SizeHints{Width: totalW, Height: maxH, Policy: policy}
+}
+
+func (this *HBox) HeightForWidth(width float64) float64 {
+	return this.SizeHintsForWidth(width).Height
+}
+
+func (this *HBox) SizeHintsForWidth(width float64) SizeHints {
+	if hint, ok := inheritedNaturalHints(this, width); ok {
+		return hint
+	}
+	return preserveInheritedHints(this, this.measureHBoxWidth(width))
+}
+
+func (this *HBox) measureHBoxWidth(width float64) SizeHints {
+	if this.layoutDisabled {
+		return this.SizeHints()
+	}
+	scratch := acquireLayoutScratch()
+	defer releaseLayoutScratch(scratch)
+	this.NakedWidget().eachVisibleChild(func(child IWidget) bool {
+		scratch.visible = append(scratch.visible, child)
+		scratch.hints = append(scratch.hints, MeasureForWidth(child, 0))
+		return true
+	})
+	_, _, available, _ := applyLayoutPadding(this.padding, layoutDimension(width), 0)
+	if width > 0 {
+		scratch.sizes = resolveHBoxWidths(scratch.hints, available, this.spacing, scratch.sizes)
+	}
+	var height, preferredWidth float64
+	policy := GrowHorizontal | GrowVertical
+	for i, child := range scratch.visible {
+		hint := scratch.hints[i]
+		if width > 0 {
+			hint = MeasureForWidth(child, scratch.sizes[i])
+		}
+		height = max(height, layoutHintHeight(hint, 0))
+		preferredWidth += scratch.hints[i].Width
+		policy |= hint.Policy & ShrinkHorizontal
+	}
+	if len(scratch.visible) > 1 {
+		preferredWidth += float64(len(scratch.visible)-1) * this.spacing
+	}
+	return SizeHints{Width: preferredWidth + this.padding.L + this.padding.R,
+		Height: height + this.padding.T + this.padding.B, Policy: policy}
 }
 
 // LayoutEnabled defaults to true for ordinary runtime widgets. Designer files

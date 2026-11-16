@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — width-dependent layout and readable diagnostics (2026-11-16)
+
+- Add nonmutating width-dependent SDK measurement and shared first-layout
+  geometry for wrapped labels, boxes, forms, grids, groups and flowing children.
+- Contain fallback Unicode ink and preserve ordinary optical baselines.
+- Retain explicit tracks/constraints, derived SizeHints, ownership and bounded
+  natural/allocated text caches; reject invalid/duplicate grid registration.
+- Preserve warning/error preview ends and cache toast font/text/extents instead
+  of rebuilding them on every draw; full notification details stay unchanged.
+- Pass frozen-source full/race suites on macOS (9,457 named passes /29 skips
+  each), Linux (9,396 /37) and Windows (9,245 /43), plus four strict real
+  bundled-gopls checks per platform and 400 focused race passes. Source exports
+  match all 2,811 frozen files /2,065 Go files. CI-scoped vet passes; full vet
+  retains 501 unchanged baseline diagnostics, with no new warnings.
+- Verify actual macOS/Windows first-layout quit prompts, visible read-only
+  failure causes, refusal without data loss, Undo/Redo, cancellation and normal
+  exit 0. macOS additionally verifies full-error clipboard readback and actual
+  multi-file long-name wrapping/Save All. Refresh README with three original
+  current-source captures. This is not a new binary release, full DPI/scrolling
+  support, universal performance guarantee or Qt Creator feature parity.
+  [Verification and limitations](LAYOUT_MEASURE_PROGRESS_20261116.md).
+
 ## Unreleased — asynchronous save and owned document transitions (2026-11-16)
 
 - Add UI-only save receipts, Undo epoch checkpoints and independent once-only

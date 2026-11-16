@@ -9,6 +9,27 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: width-dependent GUI layout and readable diagnostics (2026-11-16)
+
+Baseline `66406e2`; the full product objective stays active.
+
+- [x] Preserve failing first-layout punctuation/multiline and toast-reason replays.
+- [x] Add pure width measurement and shared Label/box/form/grid/flow/group solvers.
+- [x] Preserve inherited SDK constraints/stretch, bounded warm text caches,
+      explicit tracks, spanning rows and moved-child ownership.
+- [x] Keep diagnostic ends and cached toast previews without changing full details,
+      semantic colors, focus or owner-local notification behavior.
+- [x] Finish frozen full/race/strict on all three platforms and actual native
+      macOS/Windows replay, source exports and normal exit/readback. Refresh
+      README with three original captures, SDK usage and changelog.
+- Publication requires the exact staged/runtime/export/media identity audit;
+  only reviewed result documents and original captures may differ from the
+  frozen manifest. Commit/push uses remote HEAD readback, not a release/tag.
+- [ ] Continue dynamic size-hint invalidation and coherent Windows PMv2/input/IME
+      work. Do not mistake SYSTEM_AWARE source for full per-monitor support.
+
+[Current evidence and limits](LAYOUT_MEASURE_PROGRESS_20261116.md).
+
 ## Validated increment: actual asynchronous Save integration (2026-11-16)
 
 This verified **unreleased development-source** increment is based on `8828150`. Explicit Ctrl+S/Save All now

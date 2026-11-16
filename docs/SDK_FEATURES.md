@@ -3,6 +3,33 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 按宽度测量布局与诊断文本（已验证开发源码）
+
+- `gui.MeasureForWidth(widget, width)`：UI 线程内按目标宽度测量，不设置探测尺寸，
+  不触发 Resize／焦点／原生窗口或 I/O。无有效宽度时保留自然测量；旧控件继续使用
+  `SizeHints`，已有 `IHeightForWidth` 实现可直接适配。
+- `ISizeHintsForWidth.SizeHintsForWidth`：一次返回完整测量结果，供嵌套布局使用。
+  Label／VBox／HBox／FormLayout／GridLayout／FlexWrap／GroupBox 已接入。
+  保留派生控件的策略、Stretch、Min／Max 及首选高度；自定义装饰可显式覆写宽度测量。
+- 换行 Label 使用自然宽度与分配宽度两个有界缓存；HBox 仅压缩明确允许缩小的控件，
+  Grid 浮动行先满足换行和跨行单元格需求，再分配剩余空间，显式固定行列仍优先。
+- `gui.ElideTextMiddle(font, text, width)`：保留路径／诊断开头与末尾，UTF-8 rune
+  安全，在后端支持时遵守成形簇边界；不是完整双向文字引擎。警告／错误 Toast 使用
+  有界首尾预览并缓存字体／裁剪／度量，完整消息仍可在 IDE 通知详情中查看。
+- 三平台冻结源码 full／race 与各 4 项真实捆绑 gopls 检查通过；macOS／Windows
+  原生对话框、失败保存保留输入、Undo／Redo、取消与正常退出读回通过。README
+  补充原始实机截图。这不代表所有动态重排、超长消息滚动或 Windows per-monitor
+  DPI 已解决，也不是新的二进制发布。
+  [复现、验收与边界](../LAYOUT_MEASURE_PROGRESS_20261116.md)。
+
+```go
+// 在 UI 线程中调用。测量本身不会改变控件尺寸或创建窗口。
+label := gui.NewLabel("一段需要根据可用宽度自动换行的说明文字。")
+label.SetWrap(true)
+hint := gui.MeasureForWidth(label, 240)
+label.SetBounds(0, 0, 240, hint.Height) // 宿主显式安装尺寸；常用布局会自动完成。
+```
+
 ## 安全文件保存与设计 Save As
 
 - `TDoc.SaveFileAtomic(path)` / `SaveFileAtomic1(path, gz)`：同目录临时文件完整

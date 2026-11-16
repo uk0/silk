@@ -31,10 +31,10 @@ func NewFlexWrap() *FlexWrap {
 }
 
 func (this *FlexWrap) Spacing() float64     { return this.spacing }
-func (this *FlexWrap) SetSpacing(s float64) { this.spacing = s; this.relayout() }
+func (this *FlexWrap) SetSpacing(s float64) { this.spacing = layoutDimension(s); this.relayout() }
 
 func (this *FlexWrap) RowGap() float64     { return this.rowGap }
-func (this *FlexWrap) SetRowGap(g float64) { this.rowGap = g; this.relayout() }
+func (this *FlexWrap) SetRowGap(g float64) { this.rowGap = layoutDimension(g); this.relayout() }
 
 func (this *FlexWrap) SetPadding(p Padding) { this.padding = p; this.relayout() }
 
@@ -70,7 +70,7 @@ func (this *FlexWrap) Layout() {
 
 	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
 		scratch.visible = append(scratch.visible, c)
-		scratch.hints = append(scratch.hints, c.SizeHints())
+		scratch.hints = append(scratch.hints, MeasureForWidth(c, 0))
 		return true
 	})
 
@@ -83,7 +83,7 @@ func (this *FlexWrap) Layout() {
 	}
 
 	w, h := this.Self().Size()
-	cx, cy, cw, _ := this.padding.Apply(0, 0, w, h)
+	cx, cy, cw, _ := applyLayoutPadding(this.padding, w, h)
 	if cw <= 0 {
 		releaseLayoutScratch(scratch)
 		return
@@ -95,28 +95,7 @@ func (this *FlexWrap) Layout() {
 	rowH := 0.0
 
 	for i := 0; i < n; i++ {
-		hi := hints[i]
-		childW := hi.Width
-		if childW <= 0 {
-			childW = hi.MinWidth
-		}
-		if childW <= 0 {
-			childW = 32
-		}
-		if hi.MinWidth > 0 && childW < hi.MinWidth {
-			childW = hi.MinWidth
-		}
-		if hi.MaxWidth > 0 && childW > hi.MaxWidth {
-			childW = hi.MaxWidth
-		}
-
-		childH := hi.Height
-		if childH <= 0 {
-			childH = hi.MinHeight
-		}
-		if childH <= 0 {
-			childH = 24
-		}
+		childW, childH := flexChildSize(visible[i], hints[i], cw)
 
 		// Wrap if this child won't fit in the current row.
 		// Always allow the first child of a row to be placed even if it's
@@ -148,33 +127,33 @@ func (this *FlexWrap) Draw(g paint.Painter) {
 // Height: total stacked row heights + row gaps + vertical padding.
 // If no width is set yet, returns the sum of intrinsic widths as a single row.
 func (this *FlexWrap) SizeHints() SizeHints {
+	return this.measureFlowWidth(this.Width())
+}
+
+func (this *FlexWrap) HeightForWidth(width float64) float64 {
+	return this.SizeHintsForWidth(width).Height
+}
+
+func (this *FlexWrap) SizeHintsForWidth(width float64) SizeHints {
+	if hint, ok := inheritedNaturalHints(this, width); ok {
+		return hint
+	}
+	return preserveInheritedHints(this, this.measureFlowWidth(width))
+}
+
+func (this *FlexWrap) measureFlowWidth(width float64) SizeHints {
 	if this.NakedWidget().child == nil {
 		return SizeHints{}
 	}
 
-	w, _ := this.Self().Size()
-	cw := w - this.padding.L - this.padding.R
+	_, _, cw, _ := applyLayoutPadding(this.padding, layoutDimension(width), 0)
 
 	var maxRowW, totalH, rowW, rowH float64
 	rows := 0
 	first := true
 
 	this.NakedWidget().eachVisibleChild(func(c IWidget) bool {
-		hi := c.SizeHints()
-		childW := hi.Width
-		if childW <= 0 {
-			childW = hi.MinWidth
-		}
-		if childW <= 0 {
-			childW = 32
-		}
-		childH := hi.Height
-		if childH <= 0 {
-			childH = hi.MinHeight
-		}
-		if childH <= 0 {
-			childH = 24
-		}
+		childW, childH := flexChildSize(c, MeasureForWidth(c, 0), cw)
 
 		if first {
 			rowW = childW
@@ -212,5 +191,25 @@ func (this *FlexWrap) SizeHints() SizeHints {
 
 	totalW := maxRowW + this.padding.L + this.padding.R
 	totalH += this.padding.T + this.padding.B
-	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical}
+	return SizeHints{Width: totalW, Height: totalH, Policy: GrowHorizontal | GrowVertical | ShrinkHorizontal}
+}
+
+func flexChildSize(child IWidget, hint SizeHints, available float64) (float64, float64) {
+	width := hint.Width
+	if width <= 0 {
+		width = hint.MinWidth
+	}
+	if width <= 0 {
+		width = 32
+	}
+	if available > 0 && hint.Policy&ShrinkHorizontal != 0 {
+		width = min(width, available)
+	}
+	if hint.MinWidth > 0 {
+		width = max(width, hint.MinWidth)
+	}
+	if hint.MaxWidth > 0 {
+		width = min(width, hint.MaxWidth)
+	}
+	return width, layoutHintHeight(MeasureForWidth(child, width), 24)
 }

@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"math"
 	"strings"
 
 	"github.com/uk0/silk/core"
@@ -31,6 +30,14 @@ type Label struct {
 
 	// Draw and SizeHints share the width-dependent layout. Ordinary repaints
 	// never reshape text; a mutable font's attributes also participate in the key.
+	labelLayoutCache
+	// Natural + allocated width are the common two-pass layout pair. Retain
+	// two entries, not an unbounded width map, so parent measurement does not
+	// force two complete reshapes on every unchanged Layout call.
+	alternateLayout labelLayoutCache
+}
+
+type labelLayoutCache struct {
 	cachedHints  SizeHints
 	hintText     string
 	hintFont     paint.Font
@@ -147,6 +154,14 @@ func (this *Label) Draw(g paint.Painter) {
 		y := top + float64(i)*this.lineHeight + this.lineAscent
 		if len(this.lines) == 1 && this.cachedHints.Height <= h {
 			y = (h - line.ext.YBearing) * 0.5 // Preserve single-line optical centering.
+			// The optical formula can put a taller fallback emoji's descender
+			// below a perfectly sufficient measured label. Keep the old baseline
+			// when it fits; otherwise contain the complete actual ink rectangle.
+			low := -line.ext.YBearing
+			high := h - line.ext.YBearing - line.ext.Height
+			if high >= low {
+				y = max(low, min(high, y))
+			}
 		}
 		if line.text != "" {
 			g.Translate(x, y)
@@ -157,22 +172,39 @@ func (this *Label) Draw(g paint.Painter) {
 }
 
 func (this *Label) SizeHints() SizeHints {
-	f := this.effectiveFont()
 	w := 0.0
 	if this.wrap {
 		w, _ = this.Self().Size()
-		if w < 0 || math.IsNaN(w) || math.IsInf(w, 0) {
-			w = 0
-		}
 	}
-	if this.hintsValid &&
-		this.hintText == this.text &&
-		this.hintFont == f &&
-		this.hintThemeRev == themeRev && this.hintWidth == w &&
-		this.hintWrap == this.wrap && this.hintFamily == f.Family() &&
-		this.hintSize == f.Size() && this.hintBold == f.Bold() && this.hintItalic == f.Italic() {
+	return this.measureLabelWidth(w)
+}
+
+// HeightForWidth shares Draw's cached layout without resizing the label.
+func (this *Label) HeightForWidth(width float64) float64 {
+	return this.SizeHintsForWidth(width).Height
+}
+
+func (this *Label) SizeHintsForWidth(width float64) SizeHints {
+	if hint, ok := inheritedNaturalHints(this, width); ok {
+		return hint
+	}
+	return preserveInheritedHints(this, this.measureLabelWidth(width))
+}
+
+func (this *Label) measureLabelWidth(width float64) SizeHints {
+	f := this.effectiveFont()
+	w := 0.0
+	if this.wrap {
+		w = layoutDimension(width)
+	}
+	if this.labelLayoutCache.matches(this.text, f, this.wrap, w) {
 		return this.cachedHints
 	}
+	if this.alternateLayout.matches(this.text, f, this.wrap, w) {
+		this.labelLayoutCache, this.alternateLayout = this.alternateLayout, this.labelLayoutCache
+		return this.cachedHints
+	}
+	this.alternateLayout = this.labelLayoutCache
 
 	fe := f.FontExtents()
 	this.lines = nil
@@ -194,11 +226,22 @@ func (this *Label) SizeHints() SizeHints {
 			appendLine(string(row.text))
 		}
 	}
-	this.lineHeight = max(1, fe.Height)
-	this.lineAscent = fe.Ascent
-	hints := SizeHints{Height: this.lineHeight * float64(max(1, len(this.lines))), Policy: GrowHorizontal | GrowVertical}
+	ascent, descent := max(0, fe.Ascent), max(0, fe.Descent)
 	for _, line := range this.lines {
-		hints.Width = max(hints.Width, line.ext.Width)
+		ascent = max(ascent, -line.ext.YBearing)
+		descent = max(descent, line.ext.YBearing+line.ext.Height)
+	}
+	this.lineHeight = max(1, fe.Height, ascent+descent)
+	this.lineAscent = ascent
+	hints := SizeHints{Height: this.lineHeight * float64(max(1, len(this.lines))), Policy: GrowHorizontal | GrowVertical}
+	if this.wrap {
+		hints.Policy |= ShrinkHorizontal
+	}
+	for _, line := range this.lines {
+		// Wrapping uses advances, not ink bounds. Reporting only ink width can
+		// move a final punctuation mark or trailing space onto a clipped row
+		// even when a parent assigns precisely the requested natural width.
+		hints.Width = max(hints.Width, line.ext.Width, line.ext.XAdvance)
 	}
 
 	this.hintText = this.text
@@ -210,6 +253,13 @@ func (this *Label) SizeHints() SizeHints {
 	this.cachedHints = hints
 	this.hintsValid = true
 	return hints
+}
+
+func (cache *labelLayoutCache) matches(text string, font paint.Font, wrap bool, width float64) bool {
+	return cache.hintsValid && cache.hintText == text && cache.hintFont == font &&
+		cache.hintThemeRev == themeRev && cache.hintWidth == width && cache.hintWrap == wrap &&
+		cache.hintFamily == font.Family() && cache.hintSize == font.Size() &&
+		cache.hintBold == font.Bold() && cache.hintItalic == font.Italic()
 }
 
 func (this *Label) Align() TextAlign {

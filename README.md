@@ -19,6 +19,45 @@ signed/notarized standalone apps.
 
 ---
 
+## GUI layout and diagnostic readability (development branch)
+
+The current working source adds pure width-dependent SDK measurement, so a
+wrapped label's first layout can reserve every visual row before drawing.
+Common box/form/grid/group/flow containers share that geometry; warning/error
+previews preserve the final cause instead of showing only a long path.
+Frozen-source full/race and strict bundled-gopls checks pass on macOS, Linux
+and Windows. Source-built macOS/Windows native UI checks also pass, including
+complete quit prompts, failed-save preservation and normal exit 0.
+[Implementation, reproduction and limits](LAYOUT_MEASURE_PROGRESS_20261116.md).
+
+![Actual macOS multi-file quit prompt with complete wrapped filenames](docs/images/layout-multiline-quit-macos.png)
+
+Unedited capture from the current source-built SilkIDE, not a mockup. Both long
+filenames and the final question mark are visible without covering the buttons.
+Escape leaves both files unchanged; a subsequent Save All persists both exact
+Unicode buffers before normal exit 0. This does not imply automatic scrolling
+for arbitrarily large messages or a standalone-package release.
+
+<details>
+<summary>Full diagnostic details and clipboard verification</summary>
+
+![Actual macOS complete save diagnostic in Notifications](docs/images/layout-diagnostic-details-macos.png)
+
+The notification details retain the full read-only error. Copy Message was
+tested through ordinary clipboard paste and independent disk readback; it is
+not limited to the shortened preview. The edited buffer remains unsaved until
+an explicit successful retry. These captures do not certify all DPI or font paths.
+
+![Actual Windows read-only save keeps the final diagnostic cause visible](docs/images/layout-diagnostic-windows.png)
+
+Unedited current-source Windows 10 capture: the toast preserves `permission
+denied`, not merely the path prefix. Read-only and replacement-denying sharing
+handles leave the original bytes intact; explicit retry and Undo/Redo pass.
+The quit prompt's complete question/default Save All and Escape cancellation
+were separately checked before native exit 0 and model/source/session readback.
+
+</details>
+
 ## Save safety (development branch)
 
 SilkIDE's design Save, editor Save and design recovery writes stage a complete

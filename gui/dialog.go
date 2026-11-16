@@ -235,6 +235,18 @@ func (this *Dialog) dialogSize() (w, h float64) {
 	if this.btnBox != nil {
 		w = math.Max(w, this.btnBox.requiredWidth())
 	}
+	// Native client sizes are integer pixels. Measure at the width that will
+	// actually be installed, then reserve all wrapped rows on the FIRST layout.
+	// A probe SetBounds here would dispatch Resize/focus/layout callbacks.
+	w = math.Ceil(w)
+	if this.contentWidget != nil {
+		hints := MeasureForWidth(this.contentWidget, math.Max(0, w-padSide*2))
+		required := hints.Height + padTopBot*2 + btnBarH
+		if this.preferredH <= 0 {
+			h = math.Min(500, math.Max(h, required))
+		}
+	}
+	h = math.Ceil(h)
 	return
 }
 
