@@ -151,6 +151,13 @@ type Widget struct {
 	prev   *Widget
 	child  *Widget
 
+	// UI-owned, revocable/coalesced geometry invalidation; no timer or worker.
+	pendingLayout *layoutBatch
+	activeLayout  *layoutBatch
+	queuedLayout  *layoutEntry
+	layoutDirty   bool
+	layoutRunning bool
+
 	dt *string
 
 	//objname string
@@ -201,6 +208,7 @@ func (this *Widget) SetParent(parent IWidget) {
 	if op == np {
 		return
 	}
+	this.cancelQueuedLayouts()
 	cancelClipboardPastes(this.Self())
 
 	if op != nil {
@@ -236,6 +244,13 @@ func (this *Widget) SetParent(parent IWidget) {
 	}
 	this.syncWindow(this.IsVisible(), true)
 	notifyBusyAnimationVisibility(this.Self())
+	if op != nil {
+		op.NakedWidget().RequestLayout()
+	}
+	if np != nil {
+		this.RequestLayout()
+		this.resumeDirtyLayouts()
+	}
 }
 
 func (this *Widget) X() float64 {
@@ -460,30 +475,32 @@ func (this *Widget) SizeHints() SizeHints {
 }
 
 func (this *Widget) OnResize() {
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
+	pending := this.layoutDirty
+	this.layoutNow()
+	if pending && (this.parent == nil || independentLayoutRoot(this)) {
+		this.resumeDirtyLayouts()
 	}
 }
 
 // InvalidateLayout requests a layout recalculation on this widget.
 // If this widget implements ILayout, its Layout() is called immediately,
-// then Update() is called to trigger a repaint.
+// then Update() triggers repaint. Changed hints propagate to higher layout
+// ancestors on a coalesced UI turn; RequestLayout is the fully deferred API.
 func (this *Widget) InvalidateLayout() {
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
-	}
+	this.layoutNow()
 	this.Self().Update()
+	this.InvalidateSizeHints()
 }
 
 // InvalidateParentLayout requests the parent container to recalculate layout.
-// This should be called when a child's size hints change.
+// The immediate parent's Layout/Update stay synchronous. Higher ancestors are
+// invalidated on a coalesced UI turn. Prefer InvalidateSizeHints in new setters.
 func (this *Widget) InvalidateParentLayout() {
 	p := this.Self().Parent()
 	if p != nil {
-		if i, ok := p.(ILayout); ok {
-			i.Layout()
-		}
+		p.NakedWidget().layoutNow()
 		p.Update()
+		p.NakedWidget().InvalidateSizeHints()
 	}
 }
 
@@ -742,6 +759,7 @@ func (this *Widget) setVisible(b bool) {
 	this.hidden = !b
 
 	if this.hidden {
+		this.cancelQueuedLayouts()
 		cancelClipboardPastes(this.Self())
 		dismissOwnedToasts(this.Self())
 		if i, ok := this.Self().(IEventHide); ok {
@@ -756,6 +774,10 @@ func (this *Widget) setVisible(b bool) {
 		}
 	}
 	notifyBusyAnimationVisibility(this.Self())
+	this.InvalidateSizeHints()
+	if !this.hidden {
+		this.resumeDirtyLayouts()
+	}
 }
 
 func (this *Widget) Show() {

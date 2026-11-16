@@ -19,6 +19,45 @@ signed/notarized standalone apps.
 
 ---
 
+## Dynamic layout updates (development branch)
+
+The SDK adds coalesced UI-thread size-hint invalidation for
+ordinary text/font/wrap, layout and hierarchy changes, without a polling timer.
+It also repairs callback-time stale ownership and replaced form fields left as
+independently painted children. Frozen-source full/race and strict actual
+bundled-gopls checks pass on macOS, Linux and Windows. Actual macOS/Windows SDK
+and IDE native replay, generated-package compilation and normal exit pass.
+This is a verified development increment, not a new packaged release.
+[Runnable SDK example](examples/layoutupdates/README.md) ·
+[Reproduction and limits](LAYOUT_INVALIDATION_PROGRESS_20261116.md).
+
+![Actual macOS SDK consumer with expanded text, font and spacing](docs/images/layout-updates-sdk-macos.png)
+
+Unedited current-source SDK-example capture. Text/font/spacing and hide/show
+actions move the nested group and following controls without action-owned
+manual Layout calls. All toggles were tested in both directions before normal
+system Quit / exit 0. This is SDK-consumer evidence, not whole-IDE or Windows
+acceptance by itself; those checks have separate evidence in the linked report.
+The existing GroupBox corner-path polish remains separate work.
+
+<details>
+<summary>Native resize also wraps the button flow</summary>
+
+![Actual macOS narrower SDK window reflows text and button rows](docs/images/layout-updates-narrow-macos.png)
+
+The original 640-logical-pixel window was resized natively to about 502 pixels.
+The full message remains visible; four actions fit on the first row and the
+last action moves to a second row without covering the group or following text.
+
+![Actual Windows SDK window reflows the same nested content](docs/images/layout-updates-narrow-windows.png)
+
+Unedited Windows 10 capture after native resizing from 680 to 500 window pixels.
+All five actions were exercised in both directions, including keyboard
+activation; the following row stays outside the group. Quiet CPU samples and
+their limits are recorded in the report, not presented as an FPS guarantee.
+
+</details>
+
 ## GUI layout and diagnostic readability (development branch)
 
 The current working source adds pure width-dependent SDK measurement, so a

@@ -76,6 +76,7 @@ func (this *Label) SetText(s string) {
 	}
 	this.text = s
 	this.hintsValid = false
+	this.InvalidateSizeHints()
 	this.Self().Update()
 }
 
@@ -87,6 +88,7 @@ func (this *Label) SetTextColor(c paint.Color) {
 func (this *Label) SetFont(f paint.Font) {
 	this.font = f
 	this.hintsValid = false
+	this.InvalidateSizeHints()
 	this.Self().Update()
 }
 
@@ -104,6 +106,7 @@ func (this *Label) SetWrap(b bool) {
 	}
 	this.wrap = b
 	this.hintsValid = false
+	this.InvalidateSizeHints()
 	this.Self().Update()
 }
 

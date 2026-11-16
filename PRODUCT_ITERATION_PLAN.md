@@ -9,6 +9,27 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: event-driven dynamic layout invalidation (2026-11-16)
+
+- [x] Preserve setter/queue failures: nested text needs 176.4px but gets 19.6px;
+      changed spacing overlaps following siblings.
+- [x] Implement owner-local coalesced requests, hidden/zero-size quiet state,
+      reparent/partial cancellation, bounded turns and reentry guards.
+- [x] Reproduce/fix box/form stale ownership, grid callback coordinate panic and
+      duplicate/replaced FormLayout fields left as floating children.
+- [x] Pass 440 focused race cases, preserve the superseded nested-pump polling
+      failure, and compile the no-polling SDK consumer `examples/layoutupdates`.
+- [x] Finish frozen three-platform full/race/strict checks, deep-layout benchmarks,
+      actual macOS/Windows SDK and IDE replay, normal exits and source exports.
+- [x] Compile actual generated companions in isolated macOS/Windows consumers;
+      refresh README with three original captures, SDK usage and changelog.
+- Publication requires the exact staged/runtime/export/media audit and remote
+  commit readback. No release/tag or whole-product completion is implied.
+- [ ] Continue GroupBox arc/corner raster polish, disabled menu-icon semantics,
+      first-frame capture/damage investigation and actual Windows IDE profiling.
+
+[Evidence and remaining gates](LAYOUT_INVALIDATION_PROGRESS_20261116.md).
+
 ## Validated increment: width-dependent GUI layout and readable diagnostics (2026-11-16)
 
 Baseline `66406e2`; the full product objective stays active.
@@ -25,7 +46,7 @@ Baseline `66406e2`; the full product objective stays active.
 - Publication requires the exact staged/runtime/export/media identity audit;
   only reviewed result documents and original captures may differ from the
   frozen manifest. Commit/push uses remote HEAD readback, not a release/tag.
-- [ ] Continue dynamic size-hint invalidation and coherent Windows PMv2/input/IME
+- [ ] Continue coherent Windows PMv2/input/IME
       work. Do not mistake SYSTEM_AWARE source for full per-monitor support.
 
 [Current evidence and limits](LAYOUT_MEASURE_PROGRESS_20261116.md).

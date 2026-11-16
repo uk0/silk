@@ -44,10 +44,7 @@ func (this *FlexWrap) EnumProperties(list core.IPropertyList) {
 }
 
 func (this *FlexWrap) relayout() {
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
-	}
-	this.Self().Update()
+	this.InvalidateLayout()
 }
 
 // AddWidget appends a child. Layout is recomputed lazily on the next Layout()
@@ -95,6 +92,9 @@ func (this *FlexWrap) Layout() {
 	rowH := 0.0
 
 	for i := 0; i < n; i++ {
+		if visible[i].Parent() != this.Self() || !visible[i].IsVisible() {
+			continue
+		}
 		childW, childH := flexChildSize(visible[i], hints[i], cw)
 
 		// Wrap if this child won't fit in the current row.

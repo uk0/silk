@@ -35,10 +35,7 @@ func (this *VBox) HAlign() TextAlign     { return this.halign }
 func (this *VBox) SetHAlign(a TextAlign) { this.halign = a; this.relayout() }
 
 func (this *VBox) relayout() {
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
-	}
-	this.Self().Update()
+	this.InvalidateLayout()
 }
 
 func (this *VBox) EnumProperties(list core.IPropertyList) {
@@ -149,6 +146,9 @@ func (this *VBox) Layout() {
 	yOff := cy
 	for i := 0; i < n; i++ {
 		c := visible[i]
+		if c.Parent() != this.Self() || !c.IsVisible() {
+			continue // a preceding Resize callback can move/hide later children
+		}
 		hi := hints[i]
 		childH := heights[i]
 

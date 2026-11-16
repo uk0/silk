@@ -3,6 +3,24 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 动态尺寸失效与合并重排（已验证开发源码）
+
+- `Widget.InvalidateSizeHints()`：自定义控件改变首选尺寸输入后调用；不在 setter 中
+  执行 Layout、Resize 或尺寸 getter，将布局祖先合并到 UI 队列。Label 的文字、字体、
+  换行变化已经接入；不要求宿主逐个事件手工重排。
+- `Widget.RequestLayout()`：同时请求自身布局与布局祖先；不自动调整原生窗口大小。
+  未扩展必需的 `IWidget` 接口，接口变量可经 `NakedWidget()` 使用。
+- 两者均为 UI 线程 API，后台结果先经 `gui.Post`。现有同步失效入口的正常路径保持
+  立即执行；重入转为延后请求。每批最多 64 项／软 4ms 后让出 UI，单次自定义回调
+  仍不可抢占；隐藏或零尺寸构造树保留 dirty 状态但不创建活动轮询。
+- Hide／Detach 撤销旧队列引用，Show／新父级重新接收当前状态。布局中的回调重挂载
+  其他控件时，旧快照不得覆盖其新归属；FormLayout 移动／替换槽位会清理重复与旧子控件。
+- [可运行示例](../examples/layoutupdates/README.md) 与
+  [失败复现、三平台测试与原生验收](../LAYOUT_INVALIDATION_PROGRESS_20261116.md)。
+  三平台冻结源码 full／race、各 4 项真实捆绑 gopls、440 次聚焦 race 及
+  macOS／Windows 实际 SDK／IDE 操作、生成包编译、保存读回与正常退出通过。
+  这是开发源码增量，不是新二进制发布、原子全树重排或所有性能问题已解决的承诺。
+
 ## 按宽度测量布局与诊断文本（已验证开发源码）
 
 - `gui.MeasureForWidth(widget, width)`：UI 线程内按目标宽度测量，不设置探测尺寸，

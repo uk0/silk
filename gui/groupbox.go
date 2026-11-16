@@ -58,9 +58,7 @@ func (this *GroupBox) SetContent(w IWidget) {
 	if w != nil {
 		w.SetParent(this.Self())
 	}
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
-	}
+	this.InvalidateLayout()
 }
 
 func (this *GroupBox) Content() IWidget {

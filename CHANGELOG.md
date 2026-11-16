@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — owned dynamic layout invalidation (2026-11-16)
+
+- Add UI-only queued layout/size-hint invalidation, coalesced ancestors, bounded
+  turns, hidden/zero-size quiet state and hide/reparent cancellation.
+- Preserve normal synchronous invalidators; defer reentry. Wire ordinary
+  Label setters and layout/hierarchy changes without a polling timer.
+- Fix stale layout snapshots moving foreign children, grid callback coordinate
+  indexing and FormLayout duplicate/replaced fields left independently painted.
+- Add a no-polling SDK consumer and retain failing regressions, including a
+  superseded prototype's nested-pump self-posting failure. Blocked successor
+  work now waits for explicit completion instead of polling the UI queue.
+- Pass frozen full/race suites: macOS 9,479 named passes /29 skips each;
+  Linux 9,418 /37; Windows 9,267 /43. Four strict actual bundled-gopls tests
+  pass per platform, plus 440 focused race passes, pure-Go/native GL and script
+  gates. All three source exports match 2,819 files /2,068 Go files.
+- Verify all SDK example toggles and native resizing on macOS/Windows; actual
+  IDE drag, File Save/toolbar retry, editor Unicode, read-only/refused replacement,
+  Undo/Redo, About, quit cancellation/refusal and successful dirty Save All exit.
+  Independent disk/model/session readback and owned gopls shutdown pass.
+  Compile both actual IDE-generated companions in isolated consumer packages.
+- Add three original native README captures and bounded layout benchmarks.
+  CI-scoped vet passes; full vet retains 501 unchanged baseline diagnostics,
+  no new. Quiet CPU samples are scoped measurements, not a whole-product/FPS
+  guarantee. This is not a new binary release or full Qt Creator parity.
+  [Verification and boundaries](LAYOUT_INVALIDATION_PROGRESS_20261116.md).
+
 ## Unreleased — width-dependent layout and readable diagnostics (2026-11-16)
 
 - Add nonmutating width-dependent SDK measurement and shared first-layout

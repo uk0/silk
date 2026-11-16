@@ -75,6 +75,7 @@ func (this *GridLayout) AddWidgetSpan(w IWidget, row, col, rowSpan, colSpan int)
 		if this.cells[i].widget == w {
 			this.cells[i] = GridCell{widget: w, row: row, col: col, rowSpan: rowSpan, colSpan: colSpan}
 			w.SetParent(this.Self())
+			this.RequestLayout() // same-parent metadata changes still need layout
 			return
 		}
 	}
@@ -86,6 +87,7 @@ func (this *GridLayout) AddWidgetSpan(w IWidget, row, col, rowSpan, colSpan int)
 		colSpan: colSpan,
 	})
 	w.SetParent(this.Self())
+	this.RequestLayout()
 }
 
 // AddLayoutWidget is the designer/runtime bridge preserving row and spans.
@@ -205,6 +207,11 @@ func (this *GridLayout) Layout() {
 	// Position each widget (skip hidden)
 	for _, c := range this.cells {
 		if !this.activeCell(c) {
+			continue
+		}
+		if c.col >= len(colX) || c.row >= len(rowY) {
+			// Earlier Resize callbacks can relocate a later registered cell.
+			// Its new coordinates belong to the next requested track solution.
 			continue
 		}
 		cx := colX[c.col]

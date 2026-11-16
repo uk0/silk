@@ -35,10 +35,7 @@ func (this *HBox) VAlign() VertAlign     { return this.valign }
 func (this *HBox) SetVAlign(a VertAlign) { this.valign = a; this.relayout() }
 
 func (this *HBox) relayout() {
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
-	}
-	this.Self().Update()
+	this.InvalidateLayout()
 }
 
 func (this *HBox) EnumProperties(list core.IPropertyList) {
@@ -93,6 +90,9 @@ func (this *HBox) Layout() {
 	xOff := cx
 	for i := 0; i < n; i++ {
 		c := visible[i]
+		if c.Parent() != this.Self() || !c.IsVisible() {
+			continue
+		}
 		childW := widths[i]
 		hi := MeasureForWidth(c, childW)
 

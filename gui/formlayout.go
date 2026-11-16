@@ -95,6 +95,7 @@ func (this *FormLayout) AddRow(labelText string, w IWidget) {
 		label:  lbl,
 		widget: w,
 	})
+	this.RequestLayout()
 }
 
 // AddLayoutWidget registers existing designer objects, without manufacturing
@@ -106,12 +107,30 @@ func (this *FormLayout) AddLayoutWidget(w IWidget, row, col, rowSpan, colSpan in
 	for len(this.rows) <= row {
 		this.rows = append(this.rows, FormRow{})
 	}
+	// Move one registered object, never leave duplicate stale slots that keep
+	// contributing ghost rows. Replacing a slot releases only its owned child;
+	// an object already reparented elsewhere must not be detached again.
+	for i := range this.rows {
+		if this.rows[i].label == w {
+			this.rows[i].label = nil
+		}
+		if this.rows[i].widget == w {
+			this.rows[i].widget = nil
+		}
+	}
+	var previous IWidget
 	if col == 0 {
+		previous = this.rows[row].label
 		this.rows[row].label = w
 	} else {
+		previous = this.rows[row].widget
 		this.rows[row].widget = w
 	}
+	if previous != nil && previous.Parent() == this.Self() {
+		previous.SetParent(nil)
+	}
 	w.SetParent(this.Self())
+	this.RequestLayout()
 }
 
 // Intrinsic measurement is also used by the Gantt/scene dialog builders to
@@ -224,7 +243,7 @@ func (this *FormLayout) Layout() {
 		}
 
 		// Widget: fills the remaining width
-		if fieldActive {
+		if fieldActive && row.widget.Parent() == this.Self() && row.widget.IsVisible() {
 			row.widget.SetBounds(widgetX, yOff, widgetW, rh)
 		}
 
