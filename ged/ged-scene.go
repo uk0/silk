@@ -33,6 +33,7 @@ type GedScene struct {
 	pendingEditors  []pendingDesignEdit
 	pendingEditSeq  int
 	committingEdits bool
+	saving          bool
 	graph.SceneItem
 	filename string
 	title    string
@@ -288,32 +289,23 @@ func (this *GedScene) SaveDesign() *core.TDoc {
 
 func (this *GedScene) Save() bool {
 	core.Debug("GedScene.Save(): filename=", this.filename)
-	if this.filename == "" {
-		this.filename = gui.SaveFileDialog()
-		if this.filename == "" {
+	// Reject reentry before opening a native dialog, too. Draft callbacks must
+	// not recursively prompt or save a partially committed unnamed document.
+	if this.saving || this.committingEdits {
+		return false
+	}
+	previous, filename := this.filename, this.filename
+	if filename == "" {
+		filename = gui.SaveFileDialog()
+		if filename == "" || this.filename != previous {
 			return false
 		}
 	}
-
-	// Default to the .silkui extension when the user (or native dialog)
-	// returned a path without any extension. Legacy extensions such as
-	// .cml / .silk / .form are left intact for backwards compat.
-	if filepath.Ext(this.filename) == "" {
-		this.filename += DefaultDesignExt
-	}
-
-	doc, err := this.SaveDesignWithPendingEdits()
-	if err != nil {
+	if err := this.SaveTo(filename); err != nil {
 		core.Warn(err)
 		return false
 	}
-	err = doc.SaveFile(this.filename)
-	if err == nil {
-		this.UndoStack().SetClean()
-		this.SetTitle(filepath.Base(this.filename))
-		return true
-	}
-	return false
+	return true
 }
 
 func (this *GedScene) LoadDesign(doc *core.TDoc) error {

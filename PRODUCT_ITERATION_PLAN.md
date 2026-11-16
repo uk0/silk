@@ -9,6 +9,29 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: fail-safe Save foundation (2026-11-16)
+
+- [x] Preserve a failing old-SDK test: unsuccessful extensionless Save silently
+      changed the current filename. Keep the separate blocking-writer baseline.
+- [x] Implement opt-in atomic TDoc writes, platform replacement and read-only,
+      nonregular/concurrent-change protection without changing raw SaveFile.
+- [x] Adopt Save As identity/clean marker only after success; reject nested draft
+      saves/retarget and keep draft Undo. Use staging for editor/recovery writes.
+- [x] Pass first focused and ten-repeat race regression (not final source gates).
+- [x] Freeze source; complete full/race/strict gopls on all three platforms.
+- [x] Verify current native macOS/Windows failed and successful Save behavior;
+      read back disk/session, update actual README captures, close normally.
+- [x] Complete final-source focused race regression: 450 named passes, no skips.
+- [x] Retain first-run harness failures, the unexplained Linux concurrent-reader
+      failure and identical baseline/candidate vet warnings; do not erase them.
+- [x] Audit tested runtime/index identity; approve this prerequisite for commit/push.
+
+Explicit Save, recovery writes, companions and dirty quit/open/New remain
+synchronous. The controlled public writer baseline is NOT fixed by atomic
+replacement. Next: immutable UI capture, one bounded physical writer, manual/
+autosave ordering, owned completion/clean-marker checks and captured action
+continuations. Do not reinterpret a durable-success bool as background admission.
+
 ## Validated increment: UI-admitted bounded design reload (2026-11-16)
 
 - [x] Reproduce the published 76978b3 UI reload callback waiting for a controlled

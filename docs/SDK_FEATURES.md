@@ -3,6 +3,30 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 安全文件保存与设计 Save As
+
+- `TDoc.SaveFileAtomic(path)` / `SaveFileAtomic1(path, gz)`：同目录临时文件完整
+  编码（含 gzip trailer）、Sync、Close 后才替换。保留原文件权限；拒绝只读文件和
+  末级符号链接，检测准备期间的常规并发修改；失败不会先截断或删除原文档。
+- `GedScene.SaveTo(path) error`：**UI 线程同步 API**，先提交属性/代码草稿再生成
+  独立快照；实际写入成功后才采用新路径/标题及 clean 标记。保留 Undo；无扩展名
+  补 `.silkui`，保留旧 `.cml` 等扩展名。草稿回调重入 Save 或切换路径会被拒绝。
+- 不修改旧 `TDoc.SaveFile` 的直接写语义；原子替换不复制扩展 ACL/所有权，硬链接
+  别名仍指向旧内容，不能代替跨进程锁，也不保证所有文件系统和断电场景。
+- **并非已经实现异步 IDE Save**。后台调用只能处理 UI 先捕获的独立快照；不能
+  在 worker 上调用 `SaveTo` 或遍历控件，更不能把排队成功当成退出/打开的保存成功。
+
+```go
+// UI 线程：草稿提交失败则保留编辑状态，不启动写入。
+doc, err := scene.SaveDesignWithPendingEdits()
+if err != nil { return err }
+// doc 由调用方独占；可以交给已有的有界 worker，期间不可再修改 doc。
+err = doc.SaveFileAtomic(path) // 同步 I/O，不在 worker 上访问 scene。
+// 不可在完成后无条件 SetClean：宿主必须重新验证路径、生命周期和编辑版本。
+```
+
+[验收与边界](../SAVE_SAFETY_QA_20261116.md)。
+
 ## LSP 增量文本同步
 
 - `LSPClient.SupportsIncrementalSync()`：只有握手明确声明数值 `2` 或

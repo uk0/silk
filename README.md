@@ -19,6 +19,43 @@ signed/notarized standalone apps.
 
 ---
 
+## Save safety (development branch)
+
+SilkIDE's design Save, editor Save and design recovery writes stage a complete
+same-directory file, sync/close it, then replace the destination. Ordinary
+encoding/I/O failure no longer truncates the old document. The new SDK
+`GedScene.SaveTo` also supports safe Save As without changing path/title/clean
+marker on failure; successful saves retain Undo.
+Existing permissions are retained, read-only files and leaf symlinks are refused,
+and changes observed during encoding are reported rather than overwritten.
+
+SDK: `GedScene.SaveTo(path)` returns an error; independent TDoc snapshots support
+`SaveFileAtomic` / `SaveFileAtomic1` (gzip). Legacy `TDoc.SaveFile` remains a
+direct writer; the legacy standalone designer's separate Save As handler has
+not yet migrated. **These Save APIs and the current IDE Save path are synchronous**;
+owned asynchronous Save/quit/open continuations are still in development. This
+is not a guarantee of power-loss durability, ACL preservation or cross-process
+locking. [Scope and verification](SAVE_SAFETY_QA_20261116.md).
+
+<details>
+<summary>Native Save failure keeps the edited buffer</summary>
+
+![macOS read-only save preserves dirty editor text](docs/images/save-readonly-macos.png)
+
+Actual macOS candidate capture: the Unicode text and dirty marker remain after
+a refused read-only Save. Disk bytes are independently checked unchanged; a
+retry after permission repair saves the exact buffer. No screenshot mockup.
+
+![Windows read-only save preserves dirty editor text](docs/images/save-readonly-windows.png)
+
+Actual Windows 10 capture of the same protection. A separate held-reader check
+also verifies refusal when a handle allows writes but denies replacement; the
+original bytes remain intact, and retry after releasing it succeeds. Save keeps
+both design and source Undo/Redo history. These are source-build checks, not a
+new standalone-package release.
+
+</details>
+
 ## Industrial 2D HMI workbench
 
 ```bash

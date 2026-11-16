@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — fail-safe document save foundation (2026-11-16)
+
+- Add opt-in plain/gzip atomic TDoc saving without changing legacy direct-write
+  APIs: same-directory staging, sticky write errors, flush/sync/close checks and
+  platform snapshot replacement, never delete-then-rename.
+- Preserve existing permissions; reject read-only/non-regular destinations and
+  detect identity/content/permission changes during preparation before replacing.
+- Add error-returning UI-only `GedScene.SaveTo`; adopt Save As identity and clean
+  marker only after success. Reject draft-callback retarget/reentrant saves and
+  keep committed drafts undoable. Editors and recovery writes use safe staging.
+- This is a synchronous safety prerequisite, not completed asynchronous Save or
+  Qt Creator parity. [Verification and remaining work](SAVE_SAFETY_QA_20261116.md).
+- Pass frozen-source full/race gates on macOS, Linux and Windows, 12 strict real
+  bundled-gopls checks and 450 focused race passes. Native macOS/Windows verify
+  refused read-only saves, unchanged originals, successful retries, Undo/Redo,
+  Unicode source/session readback and normal exit 0. Windows also verifies a
+  write-sharing handle that denies replacement. Add two actual README captures;
+  retain intermediate failures and existing vet warnings in the QA report.
+
 ## Unreleased — UI-admitted design hot reload (2026-11-16)
 
 - Add SDK invalidation-only notifications while preserving legacy AST reload,

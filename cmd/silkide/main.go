@@ -24,6 +24,7 @@ import (
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hotreload"
 	"github.com/uk0/silk/i18n"
+	"github.com/uk0/silk/internal/fileops"
 	"github.com/uk0/silk/internal/processutil"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/pdfexport"
@@ -3118,7 +3119,7 @@ func saveEditorToDisk(ed *gui.CodeEditor, path string) bool {
 			silkideToast(i18n.T("gofmt failed; saved unformatted"), gui.ToastWarning)
 		}
 	}
-	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+	if err := fileops.WriteFileAtomic(path, []byte(out), 0o644); err != nil {
 		// Keep the OS error after the transient toast expires (not the buffer).
 		core.Warn("editor save failed: ", err)
 		silkideToast(i18n.Tf("Save failed: %v", err), gui.ToastError)

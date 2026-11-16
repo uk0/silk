@@ -100,7 +100,7 @@ func (this *AutoSaver) tick() {
 		core.Error(err)
 		return
 	}
-	err = doc.SaveFile(autosavePath)
+	err = doc.SaveFileAtomic(autosavePath)
 	if err != nil {
 		core.Error(err)
 		return
