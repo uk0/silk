@@ -39,7 +39,7 @@ func TestEditorRenameBarrierKeepsLatestBufferAndReleasesOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := writeFile(t, old, "a.go", "package p\n")
-			if !openFileInEditor(w.tabs, path) {
+			if !openTestEditorReady(t, w.tabs, path) {
 				t.Fatal("open failed")
 			}
 			e := openEditors[path]

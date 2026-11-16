@@ -26,15 +26,15 @@ func TestEditorTabContextTargetsInactiveIdentityAndRename(t *testing.T) {
 	w := testWorkbench(t)
 	dir := t.TempDir()
 	a, b := writeFile(t, dir, "a.txt", "alpha"), writeFile(t, dir, "b.txt", "beta")
-	openFileInEditor(w.tabs, a)
-	ea := activeEditor(w.tabs)
-	openFileInEditor(w.tabs, b)
-	eb := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, a)
+	ea := activeTestEditorReady(t, w.tabs)
+	openTestEditorReady(t, w.tabs, b)
+	eb := activeTestEditorReady(t, w.tabs)
 	focusEditorTab(w.tabs, ea)
 	eb.ReplaceAllText("edited beta")
 	m := tabContext(t, w.tabs, 1)
 	menuCommandButton(m, "tab.save").Action().Trigger(nil)
-	if diskText(t, b) != "edited beta" || diskText(t, a) != "alpha" || activeEditor(w.tabs) != ea {
+	if diskText(t, b) != "edited beta" || diskText(t, a) != "alpha" || activeTestEditorReady(t, w.tabs) != ea {
 		t.Fatal("saved/activated wrong target")
 	}
 	copyOld := copyEditorTabPath
@@ -61,14 +61,14 @@ func TestEditorTabContextTargetsInactiveIdentityAndRename(t *testing.T) {
 	if w.tabs.Count() != 0 || openEditors[renamed] != nil {
 		t.Fatal("wrong renamed page closed")
 	}
-	openFileInEditor(w.tabs, b)
-	replacement := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, b)
+	replacement := activeTestEditorReady(t, w.tabs)
 	replacement.ReplaceAllText("replacement unsaved")
 	copied = ""
 	for _, id := range []string{"tab.save", "tab.copyPath", "tab.close"} {
 		menuCommandButton(m, id).Action().Trigger(nil)
 	}
-	if copied != "" || activeEditor(w.tabs) != replacement || replacement.Text() != "replacement unsaved" || diskText(t, b) != "edited beta" {
+	if copied != "" || activeTestEditorReady(t, w.tabs) != replacement || replacement.Text() != "replacement unsaved" || diskText(t, b) != "edited beta" {
 		t.Fatal("stale action affected replacement")
 	}
 }
@@ -78,8 +78,8 @@ func TestEditorTabContextCloseGuardAndReopen(t *testing.T) {
 		t.Run(string(rune('A'+choice)), func(t *testing.T) {
 			w := testWorkbench(t)
 			p := writeFile(t, t.TempDir(), "a.txt", "saved")
-			openFileInEditor(w.tabs, p)
-			ed := activeEditor(w.tabs)
+			openTestEditorReady(t, w.tabs, p)
+			ed := activeTestEditorReady(t, w.tabs)
 			ed.ReplaceAllText("unsaved")
 			m := tabContext(t, w.tabs, 0)
 			answerCloseDirty(t, choice)
@@ -93,14 +93,14 @@ func TestEditorTabContextCloseGuardAndReopen(t *testing.T) {
 			if w.tabs.Count() != 0 || !canReopenEditor(w.tabs) {
 				t.Fatal("close missed cleanup/history")
 			}
-			if !reopenClosedEditor(w.tabs) {
+			if !reopenTestEditorReady(t, w.tabs) {
 				t.Fatal("reopen")
 			}
 			want := "saved"
 			if choice == gui.DialogOK {
 				want = "unsaved"
 			}
-			if activeEditor(w.tabs).Text() != want || diskText(t, p) != want {
+			if activeTestEditorReady(t, w.tabs).Text() != want || diskText(t, p) != want {
 				t.Fatal("close decision lost")
 			}
 		})
@@ -111,7 +111,7 @@ func TestEditorTabContextRevealAndCopyError(t *testing.T) {
 	w := testWorkbench(t)
 	root := t.TempDir()
 	p := writeFile(t, root, "a.txt", "a")
-	openFileInEditor(w.tabs, p)
+	openTestEditorReady(t, w.tabs, p)
 	old := globalFileExplorer
 	globalFileExplorer = ged.NewFileExplorer()
 	t.Cleanup(func() { globalFileExplorer.SetRootDir(""); globalFileExplorer = old })

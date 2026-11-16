@@ -7,9 +7,9 @@ import (
 
 func TestReadOnlyEditorMenusAndStaleCommands(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.json", "{\"a\":1}\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.json", "{\"a\":1}\n"))
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.DuplicateLines()
 	ed.SetFocus()
 	stale := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)

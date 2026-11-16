@@ -45,9 +45,9 @@ func TestSceneAssetEditorMenuPaletteUndoSaveAndReload(t *testing.T) {
 	sceneAssetTestHooks(t)
 	source := sceneAssetTestSource(t)
 	path := writeFile(t, t.TempDir(), "plant.silkscene", source)
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	if ed.Language() != "json" {
 		t.Fatal("not JSON")
@@ -115,9 +115,9 @@ func TestSceneAssetEditorLateLoadsStaleCommitsAndReadOnly(t *testing.T) {
 	sceneAssetTestHooks(t)
 	source := sceneAssetTestSource(t)
 	path := writeFile(t, t.TempDir(), "a.SILKSCENE", source)
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	var complete func(*scene3d.Document, error)
 	startSceneAssetLoad = func(_ string, done func(*scene3d.Document, error)) error { complete = done; return nil }
@@ -140,9 +140,9 @@ func TestSceneAssetEditorLateLoadsStaleCommitsAndReadOnly(t *testing.T) {
 	}
 	ed.SetReadOnly(false)
 	editSceneAsset(w.tabs, w.canvas, ed)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "b.txt", "untouched"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "b.txt", "untouched"))
 	complete(d, nil)
-	if opened != 0 || activeEditor(w.tabs).Text() != "untouched" {
+	if opened != 0 || activeTestEditorReady(t, w.tabs).Text() != "untouched" {
 		t.Fatal("wrong tab completion")
 	}
 	focusEditorTab(w.tabs, ed)
@@ -175,9 +175,9 @@ func TestSceneAssetEditorCancellationInvalidDocumentAndLineEndings(t *testing.T)
 	sceneAssetTestHooks(t)
 	source := sceneAssetTestSource(t)
 	path := writeFile(t, t.TempDir(), "a.silkscene", strings.TrimSuffix(source, "\n")+"\r\n")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	showSceneAssetEditor = func(gui.IWidget, *scene3d.Document, func(*scene3d.Document) error) error { return nil }
 	editSceneAsset(w.tabs, w.canvas, ed)
@@ -209,9 +209,9 @@ func TestSceneAssetAuthoringOneHostTransactionAndDiskRoundtrip(t *testing.T) {
 	sceneAssetTestHooks(t)
 	source := sceneAssetTestSource(t)
 	path := writeFile(t, t.TempDir(), "authoring.silkscene", source)
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	var staged *scene3d.Document
 	showSceneAssetEditor = func(_ gui.IWidget, d *scene3d.Document, commit func(*scene3d.Document) error) error {

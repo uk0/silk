@@ -58,6 +58,10 @@ func (ns *NavigationStack) SubscribeChanged(fn func()) func() {
 }
 
 func (ns *NavigationStack) notifyChanged() {
+	if ns.prepared != nil {
+		// Advance before observers so a reentrant completion cannot commit twice.
+		ns.prepared.generation = new(navigationGeneration)
+	}
 	for _, o := range ns.observers {
 		if o.notify != nil {
 			o.notify()

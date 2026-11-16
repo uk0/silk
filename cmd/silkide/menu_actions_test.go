@@ -59,11 +59,11 @@ func TestFileMenuInventoryAndEnabledRouting(t *testing.T) {
 func TestFileMenuSaveWritesVisibleEditor(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	w.activate(modeEdit)
-	activeEditor(w.tabs).ReplaceAllText("package main\n// menu save\n")
+	activeTestEditorReady(t, w.tabs).ReplaceAllText("package main\n// menu save\n")
 	b := menuCommandButton(buildHamburgerMenu(gui.NewButton(), w.tabs, w.canvas), "file.save")
 	b.Action().Trigger(b)
 	data, err := os.ReadFile(path)
@@ -75,8 +75,8 @@ func TestFileMenuSaveWritesVisibleEditor(t *testing.T) {
 func TestPaletteEditorActionCannotMutateHiddenDocument(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main  \n")
-	openFileInEditor(w.tabs, path)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	ed := activeTestEditorReady(t, w.tabs)
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })
 	registerPaletteCommands(w.tabs, w.canvas)

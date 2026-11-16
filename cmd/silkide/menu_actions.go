@@ -176,6 +176,8 @@ func buildFileMenu(tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {
 	recoveryOwner := sessionRecoveryFor(tabs)
 	appendFileMenuCommand(m, fileMenuCommand{"file.reviewRecovery", "Review Session Recovery", "edit-undo", "", func() { reviewSessionRecovery(tabs, recoveryOwner) }, recoveryOwner != nil && recoveryOwner.canReviewRecovery()})
 	appendFileMenuCommand(m, fileMenuCommand{"file.cancelRestore", "Cancel Session Restore", "stop", "", func() { cancelWorkspaceRestore(tabs) }, workspaceRestoreBusy(tabs)})
+	openOwner := editorOpenerFor(tabs)
+	appendFileMenuCommand(m, fileMenuCommand{"file.cancelOpens", "Cancel File Opens", "stop", "", func() { cancelOwnedEditorFileOpens(tabs, openOwner) }, editorFileOpensPending(tabs)})
 	recent := buildRecentFilesMenu(tabs, canvas)
 	m.AddSubMenu(i18n.T("Open Recent"), paint.LoadIcon("folder"), recent)
 	appendFileMenuCommand(m, fileMenuCommand{"file.reopen", "Reopen Closed Editor", "edit-undo", key + "+Shift+T", func() { reopenClosedEditor(tabs) }, canReopenEditor(tabs)})

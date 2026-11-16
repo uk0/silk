@@ -28,9 +28,9 @@ func TestProcessAssetEditorMenuPaletteSingleUndoAndDiskRoundtrip(t *testing.T) {
 	processAssetTestHooks(t)
 	source, _ := hmi.Template().JSON()
 	path := writeFile(t, t.TempDir(), "plant.silkhmi", string(source))
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	if ed.Language() != "json" {
 		t.Fatal("not a JSON document")
@@ -102,9 +102,9 @@ func TestProcessAssetEditorRejectsLateLoadsStaleWritesAndReadOnly(t *testing.T) 
 	processAssetTestHooks(t)
 	source, _ := hmi.Template().JSON()
 	path := writeFile(t, t.TempDir(), "plant.SILKHMI", string(source))
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	var complete func(hmi.Project, error)
 	startProcessAssetLoad = func(_ string, done func(hmi.Project, error)) error { complete = done; return nil }
@@ -126,9 +126,9 @@ func TestProcessAssetEditorRejectsLateLoadsStaleWritesAndReadOnly(t *testing.T) 
 	}
 	ed.SetReadOnly(false)
 	editProcessAsset(w.tabs, w.canvas, ed)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "other.txt", "untouched"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "other.txt", "untouched"))
 	complete(hmi.Template(), nil)
-	if opened != 0 || activeEditor(w.tabs).Text() != "untouched" {
+	if opened != 0 || activeTestEditorReady(t, w.tabs).Text() != "untouched" {
 		t.Fatal("late decode followed a different tab")
 	}
 	focusEditorTab(w.tabs, ed)
@@ -159,9 +159,9 @@ func TestProcessAssetEditorCancelInvalidAndCRLF(t *testing.T) {
 	processAssetTestHooks(t)
 	source, _ := hmi.Template().JSON()
 	path := writeFile(t, t.TempDir(), "plant.silkhmi", strings.ReplaceAll(string(source), "\n", "\r\n")+"\r\n")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	showProcessAssetEditor = func(gui.IWidget, hmi.Project, func(hmi.Project) error) error { return nil }
 	editProcessAsset(w.tabs, w.canvas, ed)

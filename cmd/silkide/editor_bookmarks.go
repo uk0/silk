@@ -152,35 +152,31 @@ func (c *editorBookmarks) navigate(path string, line int) {
 			break
 		}
 	}
-	from := editorNavigationPosition(c.tabs)
-	if !openFileInEditor(c.tabs, path) {
-		silkideToast(i18n.T("Could not open bookmarked file"), gui.ToastWarning)
-		return
-	}
-	ed := activeEditor(c.tabs)
-	if ed == nil {
-		return
-	}
-	// Opening a closed file may reanchor its persisted context before this jump.
-	if context != "" {
-		best := int(^uint(0) >> 1)
-		originalLine := line
-		for _, m := range c.store.ByFile(path) {
-			if m.Context == context {
-				d := m.Line - originalLine
-				if d < 0 {
-					d = -d
-				}
-				if d < best {
-					best = d
-					line = m.Line
+	if !navigateEditorReady(c.tabs, path, func(ed *gui.CodeEditor) bool {
+		if bookmarkController(c.tabs) != c {
+			return false
+		}
+		// Opening a closed file may reanchor its persisted context before this jump.
+		if context != "" {
+			best := int(^uint(0) >> 1)
+			originalLine := line
+			for _, m := range c.store.ByFile(path) {
+				if m.Context == context {
+					d := m.Line - originalLine
+					if d < 0 {
+						d = -d
+					}
+					if d < best {
+						best = d
+						line = m.Line
+					}
 				}
 			}
 		}
-	}
-	ed.NavigateToLineCol(max(0, min(line-1, ed.LineCount()-1)), 0)
-	if h := editorNavigation(c.tabs); h != nil && from.FilePath != "" {
-		h.RecordJump(from, ed.NavigationPosition())
+		ed.NavigateToLineCol(max(0, min(line-1, ed.LineCount()-1)), 0)
+		return true
+	}) {
+		silkideToast(i18n.T("Could not open bookmarked file"), gui.ToastWarning)
 	}
 }
 func (c *editorBookmarks) next(ed *gui.CodeEditor, back bool) {

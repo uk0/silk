@@ -13,7 +13,7 @@ func TestMacroMenuGuardsAndOutputPreservesDirtyEditor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machine.silkgo")
 	source := []byte("package p\n//silk:macro Decl(Name)\nvar ${Name} = 42\n//silk:end\n//silk:expand Decl(Value)\n")
 	os.WriteFile(path, source, 0644)
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	w.activate(modeEdit)
@@ -33,10 +33,10 @@ func TestMacroMenuGuardsAndOutputPreservesDirtyEditor(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := macroOutputPath(path)
-	if !openFileInEditor(w.tabs, output) {
+	if !openTestEditorReady(t, w.tabs, output) {
 		t.Fatal("open generated")
 	}
-	target := activeEditor(w.tabs)
+	target := activeTestEditorReady(t, w.tabs)
 	target.ReplaceAllText("package handwritten\n")
 	if err := writeMacroOutput(w.tabs, path, generated); err == nil {
 		t.Fatal("overwrote dirty editor")

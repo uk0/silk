@@ -17,8 +17,8 @@ func TestReopenEditorEntrypointsRestoreLocationAndFocus(t *testing.T) {
 			w := testWorkbench(t)
 			w.tabs.SetSize(640, 440)
 			path := writeFile(t, t.TempDir(), "unicode.txt", strings.Repeat("a中🙂z\n", 100))
-			openFileInEditor(w.tabs, path)
-			ed := activeEditor(w.tabs)
+			openTestEditorReady(t, w.tabs, path)
+			ed := activeTestEditorReady(t, w.tabs)
 			ed.NavigateToLineCol(40, 3)
 			pos := ed.NavigationPosition()
 			if !w.tabs.TabBar().CloseTab(0) || !canReopenEditor(w.tabs) || openEditors[path] != nil {
@@ -54,7 +54,8 @@ func TestReopenEditorEntrypointsRestoreLocationAndFocus(t *testing.T) {
 					t.Fatal("palette command missing")
 				}
 			}
-			got := activeEditor(w.tabs)
+			pumpTestEditorOpens(t, w.tabs)
+			got := activeTestEditorReady(t, w.tabs)
 			if got == nil || got == ed || got.FilePath() != path || got.CursorLine() != pos.Line || got.CursorCol() != pos.Column || !got.HasFocus() || documentMode(w.tabs, w.canvas) != modeEdit {
 				t.Fatal("reopen lost identity, caret, workspace or focus")
 			}
@@ -76,25 +77,25 @@ func TestReopenEditorRespectsDirtyCloseDecision(t *testing.T) {
 		t.Run(fmt.Sprint(choice), func(t *testing.T) {
 			w := testWorkbench(t)
 			path := writeFile(t, t.TempDir(), "a.txt", "saved\n")
-			openFileInEditor(w.tabs, path)
-			old := activeEditor(w.tabs)
+			openTestEditorReady(t, w.tabs, path)
+			old := activeTestEditorReady(t, w.tabs)
 			old.ReplaceAllText("unsaved\n")
 			answerCloseDirty(t, choice)
 			closed := w.tabs.TabBar().CloseTab(0)
 			if choice == gui.DialogCancel {
-				if closed || canReopenEditor(w.tabs) || activeEditor(w.tabs) != old || old.Text() != "unsaved\n" {
+				if closed || canReopenEditor(w.tabs) || activeTestEditorReady(t, w.tabs) != old || old.Text() != "unsaved\n" {
 					t.Fatal("cancel changed state")
 				}
 				return
 			}
-			if !closed || !reopenClosedEditor(w.tabs) {
+			if !closed || !reopenTestEditorReady(t, w.tabs) {
 				t.Fatal("close/reopen failed")
 			}
 			want := "saved\n"
 			if choice == gui.DialogOK {
 				want = "unsaved\n"
 			}
-			if activeEditor(w.tabs).Text() != want || diskText(t, path) != want {
+			if activeTestEditorReady(t, w.tabs).Text() != want || diskText(t, path) != want {
 				t.Fatal("discarded text resurrected or saved text lost")
 			}
 		})
@@ -104,8 +105,8 @@ func TestReopenEditorRespectsDirtyCloseDecision(t *testing.T) {
 func TestReopenEditorSaveFailureAndBusyRetainState(t *testing.T) {
 	w := renameWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "disk")
-	openFileInEditor(w.tabs, path)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.ReplaceAllText("buffer")
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -114,13 +115,13 @@ func TestReopenEditorSaveFailureAndBusyRetainState(t *testing.T) {
 		t.Fatal(err)
 	}
 	answerCloseDirty(t, gui.DialogOK)
-	if w.tabs.TabBar().CloseTab(0) || canReopenEditor(w.tabs) || activeEditor(w.tabs) != ed {
+	if w.tabs.TabBar().CloseTab(0) || canReopenEditor(w.tabs) || activeTestEditorReady(t, w.tabs) != ed {
 		t.Fatal("failed save recorded/closed")
 	}
 	// A rename reservation must leave the pending reopen location available.
 	w.closedEditors.remember(editorSession{Path: path})
 	activeFileRename = &editorRename{old: path, next: path + "-new"}
-	if reopenClosedEditor(w.tabs) || !canReopenEditor(w.tabs) {
+	if reopenTestEditorReady(t, w.tabs) || !canReopenEditor(w.tabs) {
 		t.Fatal("busy reopen consumed history")
 	}
 }
@@ -131,20 +132,20 @@ func TestReopenEditorLIFOManualOpenMissingAndDiskChange(t *testing.T) {
 	a := writeFile(t, dir, "a.txt", "old")
 	b := writeFile(t, dir, "b.txt", "b")
 	for _, p := range []string{a, b} {
-		openFileInEditor(w.tabs, p)
+		openTestEditorReady(t, w.tabs, p)
 		w.tabs.TabBar().CloseTab(0)
 	}
-	if !reopenClosedEditor(w.tabs) || activeEditorPath(w.tabs) != b {
+	if !reopenTestEditorReady(t, w.tabs) || activeTestEditorPathReady(t, w.tabs) != b {
 		t.Fatal("not LIFO")
 	}
 	if err := os.WriteFile(a, []byte("new disk"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if !reopenClosedEditor(w.tabs) || activeEditor(w.tabs).Text() != "new disk" {
+	if !reopenTestEditorReady(t, w.tabs) || activeTestEditorReady(t, w.tabs).Text() != "new disk" {
 		t.Fatal("reopened stale snapshot")
 	}
 	w.tabs.TabBar().CloseTab(w.tabs.CurrentIndex())
-	openFileInEditor(w.tabs, a)
+	openTestEditorReady(t, w.tabs, a)
 	if canReopenEditor(w.tabs) {
 		t.Fatal("manual open left stale close history")
 	}
@@ -154,10 +155,10 @@ func TestReopenEditorLIFOManualOpenMissingAndDiskChange(t *testing.T) {
 	old := silkideToast
 	silkideToast = func(s string, _ gui.ToastLevel) { notices = append(notices, s) }
 	t.Cleanup(func() { silkideToast = old })
-	if reopenClosedEditor(w.tabs) || len(notices) != 1 || !canReopenEditor(w.tabs) {
+	if reopenTestEditorReady(t, w.tabs) || len(notices) != 1 || !canReopenEditor(w.tabs) {
 		t.Fatal("failed path silently opened/blocked history")
 	}
-	if !reopenClosedEditor(w.tabs) || activeEditorPath(w.tabs) != a {
+	if !reopenTestEditorReady(t, w.tabs) || activeTestEditorPathReady(t, w.tabs) != a {
 		t.Fatal("older entry not reachable")
 	}
 }
@@ -166,7 +167,7 @@ func TestReopenEditorRenameAndOwnerIsolation(t *testing.T) {
 	w := renameWorkbench(t)
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.txt", "a")
-	openFileInEditor(w.tabs, a)
+	openTestEditorReady(t, w.tabs, a)
 	w.tabs.TabBar().CloseTab(0)
 	next := filepath.Join(dir, "renamed.txt")
 	if err := os.Rename(a, next); err != nil {
@@ -176,7 +177,7 @@ func TestReopenEditorRenameAndOwnerIsolation(t *testing.T) {
 	if canReopenEditor(buildEditorTabs(nil)) || canReopenEditor(nil) {
 		t.Fatal("history leaked to unrelated tabs")
 	}
-	if !reopenClosedEditor(w.tabs) || activeEditorPath(w.tabs) != next {
+	if !reopenTestEditorReady(t, w.tabs) || activeTestEditorPathReady(t, w.tabs) != next {
 		t.Fatal("renamed closed file not remapped")
 	}
 }
@@ -203,16 +204,16 @@ func TestReopenEditorClampsLocationAfterExternalTruncation(t *testing.T) {
 	w := testWorkbench(t)
 	w.tabs.SetSize(640, 440)
 	path := writeFile(t, t.TempDir(), "truncate.txt", strings.Repeat("long line\n", 100))
-	openFileInEditor(w.tabs, path)
-	activeEditor(w.tabs).NavigateToLineCol(90, 8)
+	openTestEditorReady(t, w.tabs, path)
+	activeTestEditorReady(t, w.tabs).NavigateToLineCol(90, 8)
 	w.tabs.TabBar().CloseTab(0)
 	if err := os.WriteFile(path, []byte("中🙂"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if !reopenClosedEditor(w.tabs) {
+	if !reopenTestEditorReady(t, w.tabs) {
 		t.Fatal("reopen failed")
 	}
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	if ed.CursorLine() != 0 || ed.CursorCol() != 2 || ed.ScrollY() != 0 {
 		t.Fatalf("location not clamped to current disk contents: %+v", ed.NavigationPosition())
 	}

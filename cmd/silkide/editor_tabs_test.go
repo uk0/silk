@@ -14,13 +14,13 @@ func TestEditorTabCommandsPreserveBuffersAndRevealEdit(t *testing.T) {
 			dir := t.TempDir()
 			a := writeFile(t, dir, "a.txt", strings.Repeat("中🙂 line\n", 100))
 			b := writeFile(t, dir, "b.txt", "beta")
-			openFileInEditor(w.tabs, a)
-			ea := activeEditor(w.tabs)
+			openTestEditorReady(t, w.tabs, a)
+			ea := activeTestEditorReady(t, w.tabs)
 			ea.NavigateToLineCol(40, 3)
 			ea.OnTextInput("x")
 			pos := ea.NavigationPosition()
-			openFileInEditor(w.tabs, b)
-			eb := activeEditor(w.tabs)
+			openTestEditorReady(t, w.tabs, b)
+			eb := activeTestEditorReady(t, w.tabs)
 			w.activate(modeWelcome)
 			if entry == "menu" {
 				btn := menuCommandButton(buildWorkbenchSubMenu("View", w.tabs, w.canvas), "editor.next")
@@ -44,11 +44,11 @@ func TestEditorTabCommandsPreserveBuffersAndRevealEdit(t *testing.T) {
 					t.Fatal("palette command missing")
 				}
 			}
-			if activeEditor(w.tabs) != ea || !ea.HasFocus() || documentMode(w.tabs, w.canvas) != modeEdit || ea.NavigationPosition() != pos || !ea.Modified() {
+			if activeTestEditorReady(t, w.tabs) != ea || !ea.HasFocus() || documentMode(w.tabs, w.canvas) != modeEdit || ea.NavigationPosition() != pos || !ea.Modified() {
 				t.Fatal("navigation lost page, cursor, dirty state or focus")
 			}
 			menuCommandButton(buildWorkbenchSubMenu("View", w.tabs, w.canvas), "editor.previous").Action().Trigger(nil)
-			if activeEditor(w.tabs) != eb || !eb.HasFocus() {
+			if activeTestEditorReady(t, w.tabs) != eb || !eb.HasFocus() {
 				t.Fatal("previous editor not focused")
 			}
 			navigateEditors(w.tabs, false)
@@ -63,7 +63,7 @@ func TestEditorTabCommandsEmptySingleAndForeign(t *testing.T) {
 	w := testWorkbench(t)
 	for _, stage := range []string{"empty", "single"} {
 		if stage == "single" {
-			openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "a"))
+			openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "a"))
 		}
 		for _, id := range []string{"editor.next", "editor.previous"} {
 			if menuCommandButton(buildWorkbenchSubMenu("View", w.tabs, w.canvas), id).IsEnabled() {

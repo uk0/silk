@@ -47,6 +47,7 @@ type NavigationStack struct {
 	stack     []NavPosition
 	current   int // points to the current position (-1 = empty)
 	observers []*navigationObserver
+	prepared  *navigationPreparation // no owner or observer references; lazily allocated
 }
 
 // Push adds a new position to the stack, discarding any forward history.

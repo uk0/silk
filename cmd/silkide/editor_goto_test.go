@@ -7,9 +7,9 @@ import (
 
 func TestGoToMenuPaletteReadonlyAndFocusIdentity(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "one.txt", "a\n中🙂xyz"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "one.txt", "a\n中🙂xyz"))
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetReadOnly(true)
 	ed.SetFocus()
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
@@ -36,8 +36,8 @@ func TestGoToMenuPaletteReadonlyAndFocusIdentity(t *testing.T) {
 		t.Fatal("readonly location navigation failed", err)
 	}
 	// A modal command is attached to a document identity, not a reused tab index.
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "two.txt", "other"))
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "two.txt", "other"))
+	other := activeTestEditorReady(t, w.tabs)
 	b.Action().Trigger(nil)
 	palette.Fn()
 	if other.GoToLineVisible() || ed.GoToLineVisible() {
@@ -59,9 +59,9 @@ func TestGoToMenuPaletteReadonlyAndFocusIdentity(t *testing.T) {
 func TestGoToClosedEditorRetiresChildInput(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "a\nb")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.ShowGoToLine()
 	if !detachEditorTab(w.tabs, w.tabs.Stack().Page(w.tabs.CurrentIndex()), ed, path) {
 		t.Fatal("detach")

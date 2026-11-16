@@ -41,6 +41,7 @@ func testWorkbench(t *testing.T) *workbench {
 	dock.AddView(w.welcome)
 	w.canvas.GedScene().SetFilename(filepath.Join(t.TempDir(), "Form.silkui"))
 	globalWorkbench = w
+	installTestEditorOpener(t, w)
 	dock.SetTabChangedCallback(func(_ int) { w.syncHistoryActions() })
 	t.Cleanup(w.closeHistoryActions)
 	t.Cleanup(w.closeNavigationActions)
@@ -85,10 +86,10 @@ func TestSaveEntrypointsTargetVisibleEditor(t *testing.T) {
 		t.Run(entry, func(t *testing.T) {
 			w := testWorkbench(t)
 			path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-			if !openFileInEditor(w.tabs, path) {
+			if !openTestEditorReady(t, w.tabs, path) {
 				t.Fatal("open failed")
 			}
-			ed := activeEditor(w.tabs)
+			ed := activeTestEditorReady(t, w.tabs)
 			ed.ReplaceAllText("package main\nfunc added(){}\n")
 			switch entry {
 			case "shortcut":
@@ -143,8 +144,8 @@ func TestSaveEntrypointsTargetVisibleEditor(t *testing.T) {
 func TestSaveFailureDoesNotFallThroughToDesign(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	openFileInEditor(w.tabs, path)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.ReplaceAllText("package main\nfunc unsaved(){}")
 	before := ed.Text()
 	if err := os.Remove(path); err != nil {
@@ -166,8 +167,8 @@ func TestSaveFailureDoesNotFallThroughToDesign(t *testing.T) {
 func TestDesignSaveDoesNotSaveHiddenCode(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	openFileInEditor(w.tabs, path)
-	activeEditor(w.tabs).ReplaceAllText("package changed\n")
+	openTestEditorReady(t, w.tabs, path)
+	activeTestEditorReady(t, w.tabs).ReplaceAllText("package changed\n")
 	w.activate(modeDesign)
 	if !saveCurrentDocument(w.tabs, w.canvas) {
 		t.Fatal("design save failed")
@@ -183,8 +184,8 @@ func TestDesignSaveDoesNotSaveHiddenCode(t *testing.T) {
 func TestEditorUndoRedoAndDirtyTabThroughShortcuts(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "sample.txt", "original")
-	openFileInEditor(w.tabs, path)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.ReplaceAllText("edited")
 	if w.tabs.TabTitle(0) != "sample.txt *" {
 		t.Fatalf("dirty tab: %q", w.tabs.TabTitle(0))
@@ -207,8 +208,8 @@ func TestSaveAllSavesEveryEditedTab(t *testing.T) {
 	w := testWorkbench(t)
 	for _, name := range []string{"b.txt", "a.txt"} {
 		path := writeFile(t, t.TempDir(), name, "before")
-		openFileInEditor(w.tabs, path)
-		activeEditor(w.tabs).ReplaceAllText("after")
+		openTestEditorReady(t, w.tabs, path)
+		activeTestEditorReady(t, w.tabs).ReplaceAllText("after")
 	}
 	w.activate(modeWelcome)
 	if !saveAllDocuments(w.tabs, w.canvas) {
@@ -224,9 +225,9 @@ func TestSaveAllSavesEveryEditedTab(t *testing.T) {
 func TestOpenFileNormalizesEquivalentPaths(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	equivalent := filepath.Dir(path) + string(os.PathSeparator) + "." + string(os.PathSeparator) + "main.go"
-	openFileInEditor(w.tabs, equivalent)
+	openTestEditorReady(t, w.tabs, equivalent)
 	if w.tabs.Count() != 1 || len(openEditors) != 1 {
 		t.Fatal("duplicate document for same path")
 	}
@@ -238,11 +239,11 @@ func TestWorkspaceSessionRoundTripPreservesOrderActiveCursor(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{writeFile(t, dir, "b.txt", "one\n中文ABC\nthree"), writeFile(t, dir, "a.txt", "second")}
 	for _, path := range paths {
-		openFileInEditor(w.tabs, path)
+		openTestEditorReady(t, w.tabs, path)
 	}
 	focusEditorTab(w.tabs, openEditors[paths[0]])
-	activeEditor(w.tabs).ScrollToLineCol(1, 3)
-	activeEditor(w.tabs).SetScrollY(12)
+	activeTestEditorReady(t, w.tabs).ScrollToLineCol(1, 3)
+	activeTestEditorReady(t, w.tabs).SetScrollY(12)
 	state := captureWorkspaceSession(w.tabs, nil)
 	prefs.SetWorkspaceSession(state)
 	flushTestPreferences(t, prefs)
@@ -259,8 +260,8 @@ func TestWorkspaceSessionRoundTripPreservesOrderActiveCursor(t *testing.T) {
 	if got := orderedEditorPaths(restored); !reflect.DeepEqual(got, paths) {
 		t.Fatalf("order = %v", got)
 	}
-	ed := activeEditor(restored)
-	if activeEditorPath(restored) != paths[0] || ed.CursorLine() != 1 || ed.CursorCol() != 3 || ed.ScrollY() != 12 {
+	ed := activeTestEditorReady(t, restored)
+	if activeTestEditorPathReady(t, restored) != paths[0] || ed.CursorLine() != 1 || ed.CursorCol() != 3 || ed.ScrollY() != 12 {
 		t.Fatal("active editor / caret / scroll lost")
 	}
 }
@@ -276,7 +277,7 @@ func TestWorkspaceSessionIgnoresMissingFilesAndClampsCursor(t *testing.T) {
 	if w.tabs.Count() != 1 {
 		t.Fatal("missing document created a tab")
 	}
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	if ed.CursorLine() != 0 || ed.CursorCol() != 5 {
 		t.Fatal("cursor was not clamped")
 	}
@@ -400,7 +401,7 @@ func TestWelcomePreservesManualDockVisibility(t *testing.T) {
 func TestCloseCapturesModeBeforeDockTeardown(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeDesign)
 	prefs := seedLastLaunch(t)
 	previousQuit := quitApp

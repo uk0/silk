@@ -9,7 +9,7 @@ import (
 func TestEditorHintSnapshotRejectsRetiredInteractionAndIdentity(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "hint.go", "package p\n// 😀 Target\n")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	ed := openEditors[path]

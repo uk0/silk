@@ -174,7 +174,7 @@ its delivery; pending source locations remain available to ordinary session save
 After you start working, autosave prompts are deferred. Use **File → Review
 Session Recovery** to read current files and decide explicitly, or **Cancel
 Session Restore** to stop pending restoration. OS reads are cooperatively canceled,
-not forcibly killed. Manual Open/Save and IME coverage remain separate.
+not forcibly killed. Manual design reads/Save and IME coverage remain separate.
 
 ![Restored Windows editor accepts keyboard input without a mouse click](docs/images/startup-restored-editor-windows.png)
 
@@ -197,6 +197,46 @@ Native failure-path/persistence acceptance is recorded separately below.
 </details>
 
 [Lifecycle, evidence and remaining gates](STARTUP_IO_QA_20261115.md)
+
+### Asynchronous source opening and navigation (2026-11-15)
+
+Source files opened from the file tree, quick-open (`file:line:column`), search,
+LSP/bookmarks or **Reopen Closed Editor** now load through owned background jobs.
+An accepted open shows an inert loading tab; only the ready, still-owned target
+receives its location, navigation history and recent-file entry. Existing dirty
+buffers and Undo are preserved, and late results cannot steal another field's focus.
+
+- Two physical source readers per workbench, 128 admitted jobs and a 32 MiB source
+  limit. The startup recovery pool is separate. Deduped paths share one read/tab.
+- Close the loading tab or use **File → Cancel File Opens** / the command palette.
+  A 30-second soft deadline never kills OS calls or starts replacement readers;
+  if both physical reads remain stuck, further reads wait while the UI stays usable.
+- Prepared history commits only after real readiness, skips missing destinations
+  sequentially and rejects newer intent, history edits and retired workspaces.
+
+![Windows native quick-open source at the requested line and column](docs/images/manual-open-location-windows.png)
+
+Actual native Windows capture: quick-open `target.txt:2:3` loads the Unicode source
+and places the caret at **Ln 2, Col 3**. Subsequent keyboard-only edits are saved
+and independently read back; back/forward and close/reopen retain the target.
+
+<details>
+<summary>Oversized interactive opens remain closeable errors</summary>
+
+![Windows native interactive source limit error](docs/images/manual-open-error-windows.png)
+
+A 33 MiB text file stays an inert error page, not an editable empty source.
+Closing it returns to the unchanged editor. These are real desktop screenshots,
+not mockups or evidence of a measured slow drive.
+
+</details>
+
+[Regression, native replay and platform gates](MANUAL_OPEN_QA_20261115.md) ·
+[Two-phase navigation SDK](docs/SDK_FEATURES.md#两阶段异步导航访问与焦点只读查询)
+
+Manual design decoding, Save, resources, macro output and reload callback I/O
+remain separate work; this increment is not complete Qt Creator parity or a
+universal Windows CPU fix.
 
 The same verified source also owns live **AlarmPanel** bindings: switching databases
 retires the old subscription, transition bursts share one pending UI refresh,

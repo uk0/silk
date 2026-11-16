@@ -251,20 +251,11 @@ func openFileFinderSelection(tabs *gui.TabWidget, path, location string) bool {
 	if location == "" {
 		return openFileInEditor(tabs, path)
 	}
-	from := editorNavigationPosition(tabs)
-	if !openFileInEditor(tabs, path) {
-		return false
-	}
-	ed := activeEditor(tabs)
-	if ed == nil {
-		return false
-	}
-	if err := ed.NavigateToLocation(location); err != nil {
-		silkideToast(err.Error(), gui.ToastWarning)
-		return false
-	}
-	if history := editorNavigation(tabs); history != nil && from.FilePath != "" {
-		history.RecordJump(from, ed.NavigationPosition())
-	}
-	return true
+	return navigateEditorReady(tabs, path, func(ed *gui.CodeEditor) bool {
+		if err := ed.NavigateToLocation(location); err != nil {
+			silkideToast(err.Error(), gui.ToastWarning)
+			return false
+		}
+		return true
+	})
 }

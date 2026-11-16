@@ -7,7 +7,7 @@ import (
 
 func TestWorkbenchAndPaletteShareSDKEditorShortcutHints(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "keys.txt", "first\nsecond\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "keys.txt", "first\nsecond\n"))
 	w.activate(modeEdit)
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })

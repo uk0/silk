@@ -155,7 +155,7 @@ func TestWorkspaceSearchResultFromDesignRetainsSearch(t *testing.T) {
 	dockSetActiveView(globalLeftDock, globalSearch)
 	path := writeFile(t, t.TempDir(), "match.txt", "中🙂 foo\n")
 	openWorkspaceSearchMatch(globalSearch, w.tabs, w.canvas, ged.SearchMatch{FilePath: path, Line: 1, Column: 8, LineText: "中🙂 foo", MatchLen: 3})
-	if documentMode(w.tabs, w.canvas) != modeEdit || globalLeftDock.ActiveView() != globalSearch || activeEditor(w.tabs).CursorCol() != 3 {
+	if documentMode(w.tabs, w.canvas) != modeEdit || globalLeftDock.ActiveView() != globalSearch || activeTestEditorReady(t, w.tabs).CursorCol() != 3 {
 		t.Fatal("cross-mode search lost context or Unicode column")
 	}
 }

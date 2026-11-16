@@ -26,8 +26,8 @@ func TestRealGoplsNavigationUnsavedTypeImplementationAndBack(t *testing.T) {
 	lspVersions = map[string]int{}
 	globalLSP = nil
 	lspDocuments = map[string]*lspDocument{}
-	openFileInEditor(w.tabs, source)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, source)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SigChanged(nil)
 	text := "package demo\nfunc use() { /*😀*/ var value Speaker = Greeter{}; _ = value.Speak() }\n"
 	ed.ReplaceAllText(text)
@@ -87,20 +87,20 @@ func TestRealGoplsNavigationUnsavedTypeImplementationAndBack(t *testing.T) {
 		}
 	}
 	request("Go to Type Definition")
-	if activeEditorPath(w.tabs) != types || activeEditor(w.tabs).CursorLine() != 1 || activeEditor(w.tabs).CursorCol() != 5 {
+	if activeTestEditorPathReady(t, w.tabs) != types || activeTestEditorReady(t, w.tabs).CursorLine() != 1 || activeTestEditorReady(t, w.tabs).CursorCol() != 5 {
 		t.Fatal("type definition did not resolve Speaker", editorNavigationPosition(w.tabs))
 	}
-	navigateEditorHistory(w.tabs, false)
-	if activeEditor(w.tabs) != ed || ed.CursorCol() != column || ed.Text() != text || !ed.Modified() {
+	navigateTestEditorHistory(t, w.tabs, false)
+	if activeTestEditorReady(t, w.tabs) != ed || ed.CursorCol() != column || ed.Text() != text || !ed.Modified() {
 		t.Fatal("Back lost unsaved Unicode caller")
 	}
 	// Definition must point at the local value declaration in the unsaved buffer.
 	request("Go to Definition")
 	want := len([]rune(line[:strings.Index(line, "value")]))
-	if activeEditor(w.tabs) != ed || ed.CursorCol() != want {
+	if activeTestEditorReady(t, w.tabs) != ed || ed.CursorCol() != want {
 		t.Fatalf("definition column=%d want %d", ed.CursorCol(), want)
 	}
-	openFileInEditorAt(w.tabs, types, 2, len("type Speaker interface { "))
+	navigateTestEditorAt(t, w.tabs, types, 2, len("type Speaker interface { "))
 	request("Go to Implementation")
 	rows := globalReferencesPanel.Locations()
 	if len(rows) != 2 {

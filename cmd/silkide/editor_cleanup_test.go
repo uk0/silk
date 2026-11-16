@@ -12,9 +12,9 @@ func TestCleanupMenuPaletteAndSavedBytes(t *testing.T) {
 	w := testWorkbench(t)
 	source := "中🙂 \t\r\nb\t\nlast  "
 	path := writeFile(t, t.TempDir(), "cleanup.txt", source)
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	e.SetFocus()
 	e.SelectAll()
 	e.SetBookmark(2, true)
@@ -80,9 +80,9 @@ func TestCleanupMenuPaletteAndSavedBytes(t *testing.T) {
 func TestCleanupGuardsReadonlyFocusAndStaleTargets(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "a  ")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	e.SetFocus()
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
@@ -102,8 +102,8 @@ func TestCleanupGuardsReadonlyFocusAndStaleTargets(t *testing.T) {
 		t.Fatal("readonly mutation")
 	}
 	e.SetReadOnly(false)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "b.txt", "b  "))
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "b.txt", "b  "))
+	other := activeTestEditorReady(t, w.tabs)
 	for i, s := range editorCleanupCommands() {
 		menuCommandButton(m, s.id).Action().Trigger(nil)
 		bound[i].Fn()
@@ -136,9 +136,9 @@ func TestCleanupGuardsReadonlyFocusAndStaleTargets(t *testing.T) {
 func TestCleanupErrorFeedbackAndFinalNewlineAvailability(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "unsafe.txt", "a\r \nlast  ")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	e.SetFocus()
 	old := silkideToast
 	t.Cleanup(func() { silkideToast = old })

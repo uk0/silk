@@ -71,9 +71,9 @@ func batchFiles(t *testing.T, w *workbench) ([]string, []*gui.CodeEditor) {
 	var editors []*gui.CodeEditor
 	for _, name := range []string{"A.txt", "B.txt", "C.txt"} {
 		p := writeFile(t, root, name, name)
-		openFileInEditor(w.tabs, p)
+		openTestEditorReady(t, w.tabs, p)
 		paths = append(paths, p)
-		editors = append(editors, activeEditor(w.tabs))
+		editors = append(editors, activeTestEditorReady(t, w.tabs))
 	}
 	return paths, editors
 }
@@ -81,7 +81,7 @@ func TestEditorBatchCloseMenuAvailable(t *testing.T) {
 	w := testWorkbench(t)
 	batchQueue(t)
 	p := writeFile(t, t.TempDir(), "a.txt", "alpha")
-	openFileInEditor(w.tabs, p)
+	openTestEditorReady(t, w.tabs, p)
 	m := tabContext(t, w.tabs, 0)
 	for _, id := range []string{"tab.closeOthers", "tab.closeRight", "tab.closeAll"} {
 		b := menuCommandButton(m, id)
@@ -106,7 +106,7 @@ func TestEditorBatchCloseScopesAndNewPages(t *testing.T) {
 				t.Fatal("not asynchronous")
 			}
 			newPath := writeFile(t, t.TempDir(), "new.txt", "new")
-			openFileInEditor(w.tabs, newPath)
+			openTestEditorReady(t, w.tabs, newPath)
 			q.drain(t)
 			want := []bool{mode == closeRightEditors, mode != closeAllEditors, false}
 			for i, p := range paths {
@@ -178,7 +178,7 @@ func TestEditorBatchCloseSaveDiscardAndExactlyOneRemovalPerTurn(t *testing.T) {
 			if diskText(t, paths[0]) != wantA || diskText(t, paths[2]) != wantC {
 				t.Fatal("wrong save decision")
 			}
-			if !reopenClosedEditor(w.tabs) || activeEditor(w.tabs).Text() != wantC {
+			if !reopenTestEditorReady(t, w.tabs) || activeTestEditorReady(t, w.tabs).Text() != wantC {
 				t.Fatal("reopen lost saved or retained discarded edits")
 			}
 		})
@@ -291,7 +291,7 @@ func TestEditorBatchCloseReservationAndStaleMenu(t *testing.T) {
 	if !closeEditorTab(w.tabs, 1) {
 		t.Fatal("close anchor")
 	}
-	openFileInEditor(w.tabs, paths[1])
+	openTestEditorReady(t, w.tabs, paths[1])
 	menuCommandButton(menu, "tab.closeAll").Action().Trigger(nil)
 	if activeEditorClose != nil || w.tabs.Count() != 3 {
 		t.Fatal("stale menu targeted replacement")
@@ -362,7 +362,7 @@ func TestIndividualCloseRevalidatesPageAfterModalMutation(t *testing.T) {
 		}
 		return gui.DialogNo
 	}
-	if !closeEditorTab(w.tabs, 1) || w.tabs.Count() != 1 || activeEditor(w.tabs) != eds[2] || openEditors[paths[1]] != nil {
+	if !closeEditorTab(w.tabs, 1) || w.tabs.Count() != 1 || activeTestEditorReady(t, w.tabs) != eds[2] || openEditors[paths[1]] != nil {
 		t.Fatal("stale numeric index closed wrong page")
 	}
 }
@@ -371,8 +371,8 @@ func TestEditorBatchCloseFormatsGoAndPreservesNewerText(t *testing.T) {
 	w := testWorkbench(t)
 	q := batchQueue(t)
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	openFileInEditor(w.tabs, path)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.ReplaceAllText("package main\nfunc f( ){ }\n")
 	expected, err := gofmtSource(ed.Text())
 	if err != nil {
@@ -384,7 +384,7 @@ func TestEditorBatchCloseFormatsGoAndPreservesNewerText(t *testing.T) {
 	if diskText(t, path) != expected || w.tabs.Count() != 0 {
 		t.Fatal("Go save was not formatted")
 	}
-	if !reopenClosedEditor(w.tabs) || activeEditor(w.tabs).Text() != expected {
+	if !reopenTestEditorReady(t, w.tabs) || activeTestEditorReady(t, w.tabs).Text() != expected {
 		t.Fatal("formatted state not reopened")
 	}
 }
@@ -468,8 +468,8 @@ func TestIndividualCloseModalReplacementDoesNotSaveOldBuffer(t *testing.T) {
 	askCloseDirtyEditor = func(*gui.CodeEditor, string) gui.DialogResult {
 		w.tabs.RemoveTab(1)
 		delete(openEditors, paths[1])
-		openFileInEditor(w.tabs, paths[1])
-		replacement = activeEditor(w.tabs)
+		openTestEditorReady(t, w.tabs, paths[1])
+		replacement = activeTestEditorReady(t, w.tabs)
 		replacement.ReplaceAllText("replacement unsaved")
 		return gui.DialogOK
 	}

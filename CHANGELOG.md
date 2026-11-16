@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — asynchronous source opening and navigation (2026-11-15)
+
+- Move interactive source reads off the UI loop. Use owned inert loading/error
+  tabs, deduplicated requests, 128 admitted jobs, two physical readers and a
+  32 MiB source limit. A soft deadline or Cancel never spawns replacement readers.
+- Install only still-owned snapshots; preserve dirty buffers/Undo, newer user
+  intent, another field's focus, requested positions and pending-session metadata.
+  Release canceled queue entries immediately even behind stuck OS reads.
+- Migrate quick-open/locations, LSP/search/bookmarks, reopen and generated-source
+  entrypoints. Record MRU/history only after real readiness; sequentially skip
+  unavailable history destinations rather than committing a pending request.
+- Add File/palette Cancel File Opens, with bound-owner guards against stale
+  commands. Retire pending old-path pages on rename and worker mailboxes on close.
+- Add SDK PrepareNavigation / CanCommitNavigation / CommitNavigation, readonly
+  CurrentPosition and CurrentFocusWidget. Reject stale/foreign/ABA/copied visits;
+  keep legacy history allocation-free when the new API is unused.
+- Add blocked/reordered/canceled/error/focus/owner regressions and migrate legacy
+  completed-state fixtures through a test-only owned dispatcher, never a
+  synchronous production fallback. Full platform/native evidence and retained
+  limits are recorded in [interactive-open QA](MANUAL_OPEN_QA_20261115.md).
+- Pass frozen-source full ordinary/race on macOS, Linux and Windows, 12 strict
+  bundled-gopls probes, native macOS/Windows keyboard/navigation/error replays,
+  independent saved-source/session readback and normal exit checks. Preserve
+  corrected Windows staging/exit-observer harness failures, not false approvals.
+- Add two unmodified native Windows README screenshots, SDK lifecycle guidance
+  and the 2,511-runtime/build-asset publication identity audit.
+- Manual design reads, Save, resources and macro/reload callback I/O remain
+  separate work; this is not complete Qt Creator parity or a universal CPU fix.
+
 ## Unreleased — bounded restore and live-update lifecycles (2026-11-15)
 
 - Build bounded asynchronous startup restoration with owned loading pages,

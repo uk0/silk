@@ -17,7 +17,7 @@ func TestEditorCallbacksFollowCurrentFilePath(t *testing.T) {
 	t.Cleanup(func() { globalLSP = prior })
 	old := writeFile(t, t.TempDir(), "before.go", "package p\n")
 	next := filepath.Join(filepath.Dir(old), "after.silkgo")
-	if !openFileInEditor(w.tabs, old) {
+	if !openTestEditorReady(t, w.tabs, old) {
 		t.Fatal("open")
 	}
 	ed := openEditors[old]

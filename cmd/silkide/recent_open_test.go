@@ -24,19 +24,19 @@ func TestSuccessfulOpenRoutesShareRecentFiles(t *testing.T) {
 	root := t.TempDir()
 	a := writeFile(t, root, "alpha.txt", "alpha\nbeta\n")
 	b := writeFile(t, root, "beta.txt", "beta\n")
-	if !openFileFinderSelection(w.tabs, a, "") {
+	if !openTestFileFinderReady(t, w.tabs, a, "") {
 		t.Fatal("Quick Open failed")
 	}
 	if got := p.RecentFiles(); !slices.Equal(got, []string{a}) {
 		t.Fatalf("Quick Open MRU=%v", got)
 	}
-	openFromTree(b, w.tabs, w.canvas, w.center)
+	openTestDocumentReady(t, b, w.tabs, w.canvas, w.center)
 	if got := p.RecentFiles(); !slices.Equal(got, []string{b, a}) {
 		t.Fatalf("tree MRU=%v", got)
 	}
 	ed := openEditors[a]
 	ed.SetText("unsaved\ncontent\n")
-	if !openFileFinderSelection(w.tabs, a, "2:2") {
+	if !openTestFileFinderReady(t, w.tabs, a, "2:2") {
 		t.Fatal("location open failed")
 	}
 	if openEditors[a] != ed || ed.Text() != "unsaved\ncontent\n" || !ed.Modified() || w.tabs.Count() != 2 {
@@ -46,11 +46,11 @@ func TestSuccessfulOpenRoutesShareRecentFiles(t *testing.T) {
 		t.Fatalf("reopen MRU=%v", got)
 	}
 	for _, path := range []string{"", filepath.Join(root, "missing.txt"), root} {
-		if openFileInEditor(w.tabs, path) {
+		if openTestEditorReady(t, w.tabs, path) {
 			t.Fatalf("invalid file opened: %s", path)
 		}
 	}
-	if openFileInEditor(nil, b) {
+	if openTestEditorReady(t, nil, b) {
 		t.Fatal("nil tabs opened file")
 	}
 	if got := p.RecentFiles(); !slices.Equal(got, []string{a, b}) {
@@ -87,7 +87,7 @@ func TestSessionRestoreDoesNotReorderRecentFiles(t *testing.T) {
 			if got := p.RecentFiles(); !slices.Equal(got, []string{a, b}) {
 				t.Fatalf("restore reordered MRU=%v", got)
 			}
-			if !legacy && (activeEditor(w.tabs) != openEditors[a] || activeEditor(w.tabs).CursorLine() != 1 || activeEditor(w.tabs).CursorCol() != 2) {
+			if !legacy && (activeTestEditorReady(t, w.tabs) != openEditors[a] || activeTestEditorReady(t, w.tabs).CursorLine() != 1 || activeTestEditorReady(t, w.tabs).CursorCol() != 2) {
 				t.Fatal("restore lost active caret")
 			}
 		})

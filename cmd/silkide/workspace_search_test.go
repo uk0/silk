@@ -20,7 +20,7 @@ func TestWorkspaceSearchNavigationUnicodeAndStale(t *testing.T) {
 	w := searchWorkbench(t)
 	line := "中🙂 foo target"
 	path := writeFile(t, t.TempDir(), "a.txt", line+"\n")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	ed := openEditors[path]
@@ -42,7 +42,7 @@ func TestWorkspaceSearchNavigationUnicodeAndStale(t *testing.T) {
 func TestWorkspaceSearchReservationReloadAndUndo(t *testing.T) {
 	w := searchWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "foo\n")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	ed := openEditors[path]
@@ -54,7 +54,7 @@ func TestWorkspaceSearchReservationReloadAndUndo(t *testing.T) {
 	if ed.IsEnabled() || !workspaceSearchAffects(path) || !workspaceSearchBusy() {
 		t.Fatal("no reservation")
 	}
-	if saveEditorToDisk(ed, path) || openFileInEditor(w.tabs, path) || closeEditorTab(w.tabs, editorTabIndex(w.tabs, ed)) || canQuit(w.canvas) {
+	if saveEditorToDisk(ed, path) || openTestEditorReady(t, w.tabs, path) || closeEditorTab(w.tabs, editorTabIndex(w.tabs, ed)) || canQuit(w.canvas) {
 		t.Fatal("reserved operation accepted")
 	}
 	if _, err := prepareEditorRename(w.tabs, w.canvas, path, path+"2"); err == nil {
@@ -81,7 +81,7 @@ func TestWorkspaceSearchReservationReloadAndUndo(t *testing.T) {
 func TestWorkspaceSearchGuardDirtyFailureAndLateEdits(t *testing.T) {
 	w := searchWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "foo")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	ed := openEditors[path]

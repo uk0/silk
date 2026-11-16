@@ -65,7 +65,7 @@ func cmdQ(t *testing.T, tabs *gui.TabWidget) func() {
 // leaves its buffer holding `edited`.
 func openSecondEditedTab(t *testing.T, tabs *gui.TabWidget, path, edited string) *gui.CodeEditor {
 	t.Helper()
-	if !openFileInEditor(tabs, path) {
+	if !openTestEditorReady(t, tabs, path) {
 		t.Fatalf("openFileInEditor returned false for %s", path)
 	}
 	ed := openEditors[path]

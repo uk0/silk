@@ -10,9 +10,9 @@ import (
 func TestLineEndingMenuPaletteAndSavedBytes(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "eol.txt", "中🙂\r\nb\nc\r\nlast")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	e.SetFocus()
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
@@ -49,9 +49,9 @@ func TestLineEndingMenuPaletteAndSavedBytes(t *testing.T) {
 }
 func TestLineEndingCommandsRespectFocusIdentityAndReadOnly(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "a\nb"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "a\nb"))
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	e.SetFocus()
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
@@ -63,8 +63,8 @@ func TestLineEndingCommandsRespectFocusIdentityAndReadOnly(t *testing.T) {
 		t.Fatal("readonly mutation")
 	}
 	e.SetReadOnly(false)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "b.txt", "other\n"))
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "b.txt", "other\n"))
+	other := activeTestEditorReady(t, w.tabs)
 	menuCommandButton(m, "editor.lineEndingCRLF").Action().Trigger(nil)
 	p.Fn()
 	if other.Text() != "other\n" || e.Text() != "a\nb" {
@@ -89,8 +89,8 @@ func TestSaveGoHonorsSelectedLineEnding(t *testing.T) {
 	w := testWorkbench(t)
 	dir := t.TempDir()
 	path := writeFile(t, dir, "main.go", "package main\nfunc main( ){}\n")
-	openFileInEditor(w.tabs, path)
-	e := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	e := activeTestEditorReady(t, w.tabs)
 	if err := e.ConvertLineEndings(gui.LineEndingCRLF); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestSaveGoHonorsSelectedLineEnding(t *testing.T) {
 
 func TestEditMenuKeepsAdvancedCommandsInCompactSubmenus(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "a\nb"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "a\nb"))
 	w.activate(modeEdit)
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)

@@ -52,7 +52,7 @@ func openEditedTab(t *testing.T, path, edited string) (*gui.TabWidget, *gui.Code
 	})
 
 	tabs := buildEditorTabs(nil)
-	if !openFileInEditor(tabs, path) {
+	if !openTestEditorReady(t, tabs, path) {
 		t.Fatal("openFileInEditor returned false")
 	}
 	ed := openEditors[path]
@@ -308,7 +308,7 @@ func TestCmdWClosesTheCurrentTabWhenItIsTheFirstOfSeveral(t *testing.T) {
 		t.Fatal(err)
 	}
 	tabs, edFirst, _ := openEditedTab(t, pathFirst, editedFirst)
-	if !openFileInEditor(tabs, pathSecond) {
+	if !openTestEditorReady(t, tabs, pathSecond) {
 		t.Fatal("openFileInEditor returned false for the second file")
 	}
 	edSecond := openEditors[pathSecond]
@@ -384,7 +384,7 @@ func TestCloseEditorTabSavesTheClosingTabNotTheActiveOne(t *testing.T) {
 	}
 	tabs, edA, idxA := openEditedTab(t, pathA, editedA)
 	// The second dirty file shares the TabWidget; it is the one being closed.
-	if !openFileInEditor(tabs, pathB) {
+	if !openTestEditorReady(t, tabs, pathB) {
 		t.Fatal("openFileInEditor returned false for the background file")
 	}
 	edB := openEditors[pathB]

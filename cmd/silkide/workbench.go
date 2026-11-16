@@ -38,6 +38,7 @@ type workbench struct {
 	bookmarks         *editorBookmarks
 	processRuntime    *processRuntimePane
 	restore           *workspaceRestore
+	opens             *editorOpenController
 	notifications     *notificationsPane
 	closedEditors     closedEditorHistory
 	toolViews         map[workspaceMode]workbenchToolViews

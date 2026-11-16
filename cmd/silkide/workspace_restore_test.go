@@ -74,7 +74,7 @@ func TestWorkspaceRestoreBlockedReadKeepsUIAndOrderWithoutStealingEdits(t *testi
 		}
 	})
 	<-entered
-	if w.tabs.Count() != 3 || activeEditor(w.tabs) != nil {
+	if w.tabs.Count() != 3 || activeTestEditorReady(t, w.tabs) != nil {
 		t.Fatal("restore blocked setup or exposed editable empty file")
 	}
 	captured := captureWorkspaceSession(w.tabs, nil)
@@ -90,7 +90,7 @@ func TestWorkspaceRestoreBlockedReadKeepsUIAndOrderWithoutStealingEdits(t *testi
 	close(release)
 	released = true
 	pumpRestore(t, posts, func() bool { return !r.Busy() })
-	if activeEditor(w.tabs) != ed || ed.Text() != "operator dirty content" || ed.TextRevision() != revision || !ed.CanUndo() {
+	if activeTestEditorReady(t, w.tabs) != ed || ed.Text() != "operator dirty content" || ed.TextRevision() != revision || !ed.CanUndo() {
 		t.Fatal("late restore stole/replaced edited buffer")
 	}
 	if got := orderedEditorPaths(w.tabs); !reflect.DeepEqual(got, []string{a, b, c}) {
@@ -123,10 +123,10 @@ func TestWorkspaceRestoreCloseAndManualOpenDropLateResults(t *testing.T) {
 			})
 			<-entered
 			if manual {
-				if !openFileInEditor(w.tabs, p) {
+				if !openTestEditorReady(t, w.tabs, p) {
 					t.Fatal("manual open failed")
 				}
-				activeEditor(w.tabs).ReplaceAllText("newer unsaved")
+				activeTestEditorReady(t, w.tabs).ReplaceAllText("newer unsaved")
 			} else if !closeEditorTab(w.tabs, 0) {
 				t.Fatal("close loading page failed")
 			}
@@ -399,10 +399,10 @@ func TestWorkspaceRestoreWelcomeAndManualCaptureStayAuthoritative(t *testing.T) 
 	if documentMode(w.tabs, w.canvas) != modeWelcome {
 		t.Fatal("restore changed Welcome mode")
 	}
-	if !openFileInEditor(w.tabs, p) {
+	if !openTestEditorReady(t, w.tabs, p) {
 		t.Fatal("manual open failed")
 	}
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.ReplaceAllText("dirty")
 	ed.ScrollToLineCol(0, 3)
 	state := captureWorkspaceSession(w.tabs, w.canvas)
@@ -425,7 +425,7 @@ func TestWorkspaceRestoreReplacementNotificationCanCloseNewSource(t *testing.T) 
 	r := newWorkspaceRestore(workspaceSession{Editors: []editorSession{{Path: path}}, Mode: modeEdit}, w.tabs, nil, workspaceRestoreOptions{post: func(f func()) { posts <- f }})
 	cleanupRestore(t, r, nil)
 	w.tabs.SetCurrentChangedCallback(func(_ interface{}, idx int) {
-		if activeEditor(w.tabs) != nil {
+		if activeTestEditorReady(t, w.tabs) != nil {
 			closeEditorTab(w.tabs, idx)
 		}
 	})
@@ -500,8 +500,8 @@ func TestWorkspaceRecoveryDefersAfterInteractionAndExplicitReviewReadsFresh(t *t
 				w.activate(modeWelcome)
 			} else {
 				p := writeFile(t, root, "notes.txt", "notes")
-				openFileInEditor(w.tabs, p)
-				activeEditor(w.tabs).ReplaceAllText("Keep unsaved notes")
+				openTestEditorReady(t, w.tabs, p)
+				activeTestEditorReady(t, w.tabs).ReplaceAllText("Keep unsaved notes")
 			}
 			close(release)
 			released = true

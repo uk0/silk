@@ -8,7 +8,7 @@ import (
 func TestCaretMenuAndPaletteAreDiscoverable(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "carets.txt", "one\ntwo\nthree")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	w.activate(modeEdit)
@@ -43,9 +43,9 @@ func TestCaretMenuAndPaletteAreDiscoverable(t *testing.T) {
 func TestCaretMenuRoutingAndStaleDocumentGuard(t *testing.T) {
 	w := testWorkbench(t)
 	first := writeFile(t, t.TempDir(), "a.txt", "one\ntwo\nthree")
-	openFileInEditor(w.tabs, first)
+	openTestEditorReady(t, w.tabs, first)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
 	if menuCommandButton(m, "editor.addCursorAbove").IsEnabled() || menuCommandButton(m, "editor.clearCursors").IsEnabled() {
@@ -71,8 +71,8 @@ func TestCaretMenuRoutingAndStaleDocumentGuard(t *testing.T) {
 	}
 	w.activate(modeEdit)
 	second := writeFile(t, t.TempDir(), "b.txt", "four\nfive")
-	openFileInEditor(w.tabs, second)
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, second)
+	other := activeTestEditorReady(t, w.tabs)
 	b.Action().Trigger(b)
 	if ed.CursorCount() != 2 || other.CursorCount() != 1 {
 		t.Fatal("stale menu changed another document")
@@ -97,9 +97,9 @@ func TestCaretPaletteResolvesVisibleEditorAtExecution(t *testing.T) {
 		t.Fatal("commands missing")
 	}
 	path := writeFile(t, t.TempDir(), "palette.txt", "x\ny")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	add()
 	if ed.CursorCount() != 2 {
 		t.Fatal("palette captured empty startup editor")
@@ -121,9 +121,9 @@ func TestIndentMenuPaletteDocumentGuardAndUndo(t *testing.T) {
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })
 	path := writeFile(t, t.TempDir(), "indent.txt", "abc\nxyz")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetInsertSpaces(true)
 	ed.SetTabSize(2)
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
@@ -161,14 +161,14 @@ func TestIndentMenuPaletteDocumentGuardAndUndo(t *testing.T) {
 		t.Fatal("palette indent/outdent", ed.Text())
 	}
 	other := writeFile(t, t.TempDir(), "other.txt", "other")
-	openFileInEditor(w.tabs, other)
+	openTestEditorReady(t, w.tabs, other)
 	b.Action().Trigger(b)
-	if activeEditor(w.tabs).Text() != "other" || ed.Text() != "abc\nxyz" {
+	if activeTestEditorReady(t, w.tabs).Text() != "other" || ed.Text() != "abc\nxyz" {
 		t.Fatal("stale menu edited another document")
 	}
 	w.activate(modeDesign)
 	b.Action().Trigger(b)
-	if activeEditor(w.tabs).Text() != "other" {
+	if activeTestEditorReady(t, w.tabs).Text() != "other" {
 		t.Fatal("hidden edit")
 	}
 }
@@ -178,9 +178,9 @@ func TestMoveLinesMenuPaletteBoundaryAndDocumentGuard(t *testing.T) {
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })
 	first := writeFile(t, t.TempDir(), "lines.txt", "one\ntwo\nthree\n")
-	openFileInEditor(w.tabs, first)
+	openTestEditorReady(t, w.tabs, first)
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(menu)
 	up, down := menuCommandButton(menu, "editor.moveLinesUp"), menuCommandButton(menu, "editor.moveLinesDown")
@@ -229,8 +229,8 @@ func TestMoveLinesMenuPaletteBoundaryAndDocumentGuard(t *testing.T) {
 	}
 	w.activate(modeEdit)
 	second := writeFile(t, t.TempDir(), "other.txt", "x\ny\n")
-	openFileInEditor(w.tabs, second)
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, second)
+	other := activeTestEditorReady(t, w.tabs)
 	down.Action().Trigger(down)
 	if e.Text() != before || other.Text() != "x\ny\n" {
 		t.Fatal("stale menu changed document")
@@ -246,9 +246,9 @@ func TestDuplicateDeleteLinesMenuPaletteAndDocumentGuards(t *testing.T) {
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })
 	first := writeFile(t, t.TempDir(), "lines.txt", "a\nb\n")
-	openFileInEditor(w.tabs, first)
+	openTestEditorReady(t, w.tabs, first)
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(menu)
 	dup, del := menuCommandButton(menu, "editor.duplicateLines"), menuCommandButton(menu, "editor.deleteLines")
@@ -286,8 +286,8 @@ func TestDuplicateDeleteLinesMenuPaletteAndDocumentGuards(t *testing.T) {
 	}
 	w.activate(modeEdit)
 	second := writeFile(t, t.TempDir(), "empty.txt", "")
-	openFileInEditor(w.tabs, second)
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, second)
+	other := activeTestEditorReady(t, w.tabs)
 	dup.Action().Trigger(dup)
 	del.Action().Trigger(del)
 	if other.Text() != "" || e.Text() != "a\nb\n" {

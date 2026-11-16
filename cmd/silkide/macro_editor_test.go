@@ -72,10 +72,10 @@ func TestMacroEditorDefinitionReferencesAndCompletionWithoutGopls(t *testing.T) 
 	t.Cleanup(func() { globalLSP = oldLSP; globalReferencesPanel = oldRefs })
 	text := "package p\n//silk:macro Declare(Name)\nvar ${Name} int\n//silk:end\n//silk:expand Declare(Value)\n"
 	path := writeFile(t, t.TempDir(), "types.silkgo", text)
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	// Completion acceptance requires a drawable viewport, including before paint.
 	ed.SetSize(800, 500)
 	ed.ScrollToLineCol(4, 17)

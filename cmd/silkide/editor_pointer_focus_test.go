@@ -25,9 +25,9 @@ func TestEditorPointerTabFocusAndImmediateTitle(t *testing.T) {
 	w := testWorkbench(t)
 	a := writeFile(t, t.TempDir(), "a.txt", "alpha")
 	b := writeFile(t, t.TempDir(), "b.txt", "beta")
-	openFileInEditor(w.tabs, a)
-	first := activeEditor(w.tabs)
-	openFileInEditor(w.tabs, b)
+	openTestEditorReady(t, w.tabs, a)
+	first := activeTestEditorReady(t, w.tabs)
+	openTestEditorReady(t, w.tabs, b)
 	w.activate(modeEdit)
 	w.tabs.SetSize(900, 300)
 	w.tabs.Layout()
@@ -50,7 +50,7 @@ func TestEditorPointerTabFocusAndImmediateTitle(t *testing.T) {
 	x, y := editorPointerPoint(t, bar, 0, false)
 	bar.OnLeftDown(x, y)
 	bar.OnLeftUp(x, y)
-	if !first.HasFocus() || activeEditor(w.tabs) != first {
+	if !first.HasFocus() || activeTestEditorReady(t, w.tabs) != first {
 		t.Fatal("pointer selection not ready for typing")
 	}
 	// Clicking the already-active tab also returns focus from the strip.
@@ -75,9 +75,9 @@ func TestEditorPointerTabFocusAndImmediateTitle(t *testing.T) {
 
 func TestEditorPointerCloseFocusesRemainingDocument(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "alpha"))
-	first := activeEditor(w.tabs)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "b.txt", "beta"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "alpha"))
+	first := activeTestEditorReady(t, w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "b.txt", "beta"))
 	w.activate(modeEdit)
 	w.tabs.SetSize(900, 300)
 	w.tabs.Layout()
@@ -93,9 +93,9 @@ func TestEditorPointerCloseFocusesRemainingDocument(t *testing.T) {
 func TestEditorToolbarMouseSaveKeepsTypingAndMenuTarget(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "target.txt", "alpha")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	buildToolBar(w.frame, w.tabs, w.canvas)
 	bar := w.frame.ToolBar()
 	if !bar.PreserveContentFocus() {

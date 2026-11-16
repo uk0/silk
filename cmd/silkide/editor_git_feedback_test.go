@@ -19,7 +19,7 @@ func TestEditorGitFeedbackCodesHintsDedupAndManualRefresh(t *testing.T) {
 	var banners []string
 	silkideToast = func(s string, _ gui.ToastLevel) { banners = append(banners, s) }
 	path := writeFile(t, t.TempDir(), "a.go", "package p\n")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	ed := openEditors[path]
@@ -60,7 +60,7 @@ func TestEditorGitPaletteRefreshUsesActiveVisibleDocument(t *testing.T) {
 	old := paletteCommands
 	defer func() { paletteCommands = old }()
 	path := writeFile(t, t.TempDir(), "main.go", "package main\n")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	ed := openEditors[path]

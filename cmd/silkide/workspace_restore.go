@@ -80,6 +80,8 @@ type restorePage struct {
 	label  *gui.Label
 	cancel context.CancelFunc
 	closed bool
+	manual bool
+	origin gui.NavPosition
 }
 
 func init() {

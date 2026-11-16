@@ -30,7 +30,7 @@ func TestNavigationToolbarEventsClearAndRetirement(t *testing.T) {
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.txt", "first\nsecond\n")
 	b := writeFile(t, dir, "b.txt", "alpha\nbeta\n")
-	openFileInEditor(w.tabs, a)
+	openTestEditorReady(t, w.tabs, a)
 	w.activate(modeEdit)
 	buildToolBar(w.frame, w.tabs, w.canvas)
 	back, forward := historyButton(t, w, "Go Back"), historyButton(t, w, "Go Forward")
@@ -41,19 +41,19 @@ func TestNavigationToolbarEventsClearAndRetirement(t *testing.T) {
 		}
 	}
 	check(false, false)
-	if !openFileFinderSelection(w.tabs, b, "2:2") {
+	if !openTestFileFinderReady(t, w.tabs, b, "2:2") {
 		t.Fatal("location jump")
 	}
 	check(true, false)
-	target := activeEditor(w.tabs)
+	target := activeTestEditorReady(t, w.tabs)
 	back.Action().Trigger(nil)
 	check(false, true)
-	if activeEditor(w.tabs).FilePath() != a {
+	if activeTestEditorReady(t, w.tabs).FilePath() != a {
 		t.Fatal("back wrong document")
 	}
 	forward.Action().Trigger(nil)
 	check(true, false)
-	if activeEditor(w.tabs) != target || target.CursorLine() != 1 || target.CursorCol() != 1 {
+	if activeTestEditorReady(t, w.tabs) != target || target.CursorLine() != 1 || target.CursorCol() != 1 {
 		t.Fatal("forward wrong caret")
 	}
 	rev := back.Action().Rev()
@@ -66,11 +66,11 @@ func TestNavigationToolbarEventsClearAndRetirement(t *testing.T) {
 	w.activate(modeWelcome)
 	back.Action().Trigger(nil)
 	check(false, true)
-	if documentMode(w.tabs, w.canvas) != modeEdit || activeEditor(w.tabs).FilePath() != a {
+	if documentMode(w.tabs, w.canvas) != modeEdit || activeTestEditorReady(t, w.tabs).FilePath() != a {
 		t.Fatal("history did not reveal editor from Welcome")
 	}
 	// Clear is workspace history only: no text/history/caret/dirty changes.
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	e.DuplicateLines()
 	text, pos, dirty := e.Text(), e.NavigationPosition(), e.Modified()
 	clearEditorNavigation(w.tabs)
@@ -78,7 +78,7 @@ func TestNavigationToolbarEventsClearAndRetirement(t *testing.T) {
 	if e.Text() != text || e.NavigationPosition() != pos || e.Modified() != dirty || !e.CanUndo() {
 		t.Fatal("clear changed document")
 	}
-	openFileFinderSelection(w.tabs, b, "1:1")
+	openTestFileFinderReady(t, w.tabs, b, "1:1")
 	check(true, false)
 	buildToolBar(w.frame, w.tabs, w.canvas)
 	oldBack, oldForward := back, forward
@@ -94,7 +94,7 @@ func TestNavigationToolbarEventsClearAndRetirement(t *testing.T) {
 	}
 	w.closeNavigationActions()
 	br = back.Action().Rev()
-	openFileFinderSelection(w.tabs, a, "2:2")
+	openTestFileFinderReady(t, w.tabs, a, "2:2")
 	if back.Action().Rev() != br {
 		t.Fatal("closed subscription still updates")
 	}
@@ -133,14 +133,14 @@ func TestNavigationMenuPaletteAvailabilityAndWorkspaceScope(t *testing.T) {
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.txt", "first\n")
 	b := writeFile(t, dir, "b.txt", "second\n")
-	openFileInEditor(w.tabs, a)
-	openFileFinderSelection(w.tabs, b, "1:2")
+	openTestEditorReady(t, w.tabs, a)
+	openTestFileFinderReady(t, w.tabs, b, "1:2")
 	w.activate(modeWelcome)
 	if !commands["Go Back"].available() || commands["Go Forward"].available() || !commands["Clear Navigation History"].available() {
 		t.Fatal("palette stale availability")
 	}
 	commands["Go Back"].Fn()
-	if activeEditor(w.tabs).FilePath() != a || documentMode(w.tabs, w.canvas) != modeEdit {
+	if activeTestEditorReady(t, w.tabs).FilePath() != a || documentMode(w.tabs, w.canvas) != modeEdit {
 		t.Fatal("palette blocked workspace navigation")
 	}
 	menu = buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)

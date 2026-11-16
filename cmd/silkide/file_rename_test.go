@@ -51,7 +51,7 @@ func TestEditorRenameDirectoryPreservesDirtyBuffersAndSaveIdentity(t *testing.T)
 	b := writeFile(t, filepath.Join(old, "nested"), "macro.silkgo", "package p\n//silk:macro M()\nvar V int\n//silk:end\n")
 	untouched := writeFile(t, root, "source-sibling.go", "package p\n")
 	for _, p := range []string{a, b, untouched} {
-		if !openFileInEditor(w.tabs, p) {
+		if !openTestEditorReady(t, w.tabs, p) {
 			t.Fatal("open", p)
 		}
 	}
@@ -70,7 +70,7 @@ func TestEditorRenameDirectoryPreservesDirtyBuffersAndSaveIdentity(t *testing.T)
 	if saveEditorToDisk(ed, a) || closeEditorTab(w.tabs, editorTabIndex(w.tabs, ed)) || canQuit(w.canvas) {
 		t.Fatal("reserved operation was allowed")
 	}
-	if openFileInEditor(w.tabs, filepath.Join(next, "main.go")) {
+	if openTestEditorReady(t, w.tabs, filepath.Join(next, "main.go")) {
 		t.Fatal("opened destination during rename")
 	}
 	if !fileRenameAffects(b) || fileRenameAffects(untouched) {
@@ -139,7 +139,7 @@ func TestEditorRenameFailureRestoresProvidersAndKeepsBuffers(t *testing.T) {
 	root := t.TempDir()
 	a := writeFile(t, root, "a.silkgo", "package p\n")
 	b := writeFile(t, root, "b.silkgo", "do not replace")
-	if !openFileInEditor(w.tabs, a) {
+	if !openTestEditorReady(t, w.tabs, a) {
 		t.Fatal("open")
 	}
 	ed := openEditors[a]
@@ -169,7 +169,7 @@ func TestEditorRenameRejectsOpenDestinationAndDesignBeforeMutation(t *testing.T)
 	a := writeFile(t, root, "a.go", "package p\n")
 	b := writeFile(t, root, "b.go", "package other\n")
 	for _, p := range []string{a, b} {
-		if !openFileInEditor(w.tabs, p) {
+		if !openTestEditorReady(t, w.tabs, p) {
 			t.Fatal("open")
 		}
 	}
@@ -198,7 +198,7 @@ func TestEditorRenamePersistsNewSessionAndRecentPaths(t *testing.T) {
 	root := t.TempDir()
 	old := writeFile(t, root, "before.go", "package p\n")
 	next := filepath.Join(root, "after.go")
-	if !openFileInEditor(w.tabs, old) {
+	if !openTestEditorReady(t, w.tabs, old) {
 		t.Fatal("open")
 	}
 	ed := openEditors[old]
@@ -261,7 +261,7 @@ func TestEditorRenameRealGoplsKeepsUnsavedDefinition(t *testing.T) {
 		client.Close()
 		lspDocuments, lspVersions = oldDocs, oldVersions
 	}()
-	if !openFileInEditor(w.tabs, old) {
+	if !openTestEditorReady(t, w.tabs, old) {
 		t.Fatal("open")
 	}
 	ed := openEditors[old]

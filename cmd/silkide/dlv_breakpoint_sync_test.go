@@ -308,7 +308,7 @@ func newDebuggeeFile(t *testing.T) (dir, path string) {
 // hook gets wired.
 func openEditorFor(t *testing.T, path string) *gui.CodeEditor {
 	t.Helper()
-	if !openFileInEditor(gui.NewTabWidget(), path) {
+	if !openTestEditorReady(t, gui.NewTabWidget(), path) {
 		t.Fatal("openFileInEditor failed")
 	}
 	ed := openEditors[path]

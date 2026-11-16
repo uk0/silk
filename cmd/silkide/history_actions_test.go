@@ -20,7 +20,7 @@ func historyButton(t *testing.T, w *workbench, name string) *gui.Button {
 }
 func TestHistoryMenusAndToolbarRespectEmptyStacks(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "first.txt", "a\nb\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "first.txt", "a\nb\n"))
 	w.activate(modeEdit)
 	buildToolBar(w.frame, w.tabs, w.canvas)
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
@@ -34,14 +34,14 @@ func TestHistoryMenusAndToolbarRespectEmptyStacks(t *testing.T) {
 }
 func TestHistoryMenuCannotUndoAnotherDocument(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "first.txt", "a\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "first.txt", "a\n"))
 	w.activate(modeEdit)
-	first := activeEditor(w.tabs)
+	first := activeTestEditorReady(t, w.tabs)
 	first.DuplicateLines()
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(menu)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "second.txt", "b\n"))
-	second := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "second.txt", "b\n"))
+	second := activeTestEditorReady(t, w.tabs)
 	second.DuplicateLines()
 	menuCommandButton(menu, "edit.undo").Action().Trigger(nil)
 	if second.Text() != "b\nb\n" {
@@ -51,10 +51,10 @@ func TestHistoryMenuCannotUndoAnotherDocument(t *testing.T) {
 
 func TestHistoryToolbarFollowsEventsTabsModesAndRetirement(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "first.txt", "a\nb\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "first.txt", "a\nb\n"))
 	w.activate(modeEdit)
 	buildToolBar(w.frame, w.tabs, w.canvas)
-	first := activeEditor(w.tabs)
+	first := activeTestEditorReady(t, w.tabs)
 	undo, redo := historyButton(t, w, "Undo"), historyButton(t, w, "Redo")
 	check := func(u, r bool) {
 		t.Helper()
@@ -78,8 +78,8 @@ func TestHistoryToolbarFollowsEventsTabsModesAndRetirement(t *testing.T) {
 	if undo.Action().Rev() != urev || redo.Action().Rev() != rrev {
 		t.Fatal("idle history sync touched actions")
 	}
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "second.txt", "b\n"))
-	second := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "second.txt", "b\n"))
+	second := activeTestEditorReady(t, w.tabs)
 	check(false, false)
 	first.Undo()
 	check(false, false)
@@ -124,9 +124,9 @@ func TestHistoryPaletteAvailabilityAndExecutionGuards(t *testing.T) {
 	w := testWorkbench(t)
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "one\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "one\n"))
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	registerPaletteCommands(w.tabs, w.canvas)
 	var undo, redo paletteCommand
 	for _, c := range paletteCommands {

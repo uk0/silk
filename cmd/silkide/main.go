@@ -168,6 +168,7 @@ func main() {
 
 	frame.Show()
 	core.EventLoop()
+	closeEditorOpens()
 	if w := globalWorkbench; w != nil && w.restore != nil {
 		w.restore.Close()
 	}
@@ -1264,10 +1265,17 @@ func installQuitGuard(frame *gui.Frame, canvas *ged.GedView) {
 // on passing while this one loses the canvas — and with it the open design —
 // or the persist call entirely.
 func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferences) {
+	editorOwner := globalWorkbench
+	if editorOwner != nil && editorOwner.frame != frame {
+		editorOwner = nil
+	}
 	// Capture before CloseAllViews detaches the active dock/tab; afterwards
 	// documentMode can no longer distinguish design from a hidden editor.
 	frame.AddClosingCallback(func(*gui.Frame) { persistSessionState(frame, canvas, prefs) })
 	frame.SetClosedCallback(func(*gui.Frame) {
+		if editorOwner != nil && editorOwner.opens != nil {
+			editorOwner.opens.Close()
+		}
 		if w := globalWorkbench; w != nil && w.restore != nil {
 			w.restore.Close()
 		}
@@ -1699,9 +1707,7 @@ func openDocument(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		}
 		return
 	}
-	if loadFileInEditor(tabs, path) && recordRecent {
-		recordRecentFile(path)
-	}
+	requestEditorOpen(tabs, path, editorOpenOptions{recent: recordRecent})
 }
 
 // globalPrefs is the package-level preferences instance set up by
@@ -3498,51 +3504,21 @@ func restoreSession(editorTabs *gui.TabWidget, designCanvas *ged.GedView) {
 // editor without re-reading the file from disk.
 var openEditors = map[string]*gui.CodeEditor{}
 
-// openFileInEditor adds a fresh code-editor tab for path in tabs,
-// or focuses an existing one if the path is already open. Returns
-// true on success; all explicit open/navigation routes share MRU recording.
+// openFileInEditor accepts a manual open without waiting for filesystem I/O.
+// A true result means accepted, not ready. Location/history callers use the
+// owned ready callback; MRU changes only after a successful foreground open.
 func openFileInEditor(tabs *gui.TabWidget, path string) bool {
-	if !loadFileInEditor(tabs, path) {
-		return false
-	}
-	recordRecentFile(canonicalEditorPath(path))
-	return true
+	return requestEditorOpen(tabs, path, editorOpenOptions{recent: true})
 }
 
-// loadFileInEditor is also used by session restore, which must preserve MRU.
+// loadFileInEditor shares the asynchronous path without changing MRU.
 func loadFileInEditor(tabs *gui.TabWidget, path string) bool {
-	if path != "" {
-		noteWorkspaceRestoreInteraction(tabs)
-	}
-	if path == "" {
-		return false
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	path = filepath.Clean(absPath)
-	if rejectBusyFile(path) {
-		return false
-	}
-	if tabs == nil {
-		return false
-	}
-	if ed, ok := openEditors[path]; ok && ed != nil {
-		focusEditorTab(tabs, ed)
-		forgetClosedEditor(tabs, path)
-		return true
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return attachFileInEditor(tabs, path, data, nil, true) != nil
+	return requestEditorOpen(tabs, path, editorOpenOptions{})
 }
 
 // attachFileInEditor only constructs UI from an owned snapshot. Session restore
 // reads on bounded workers, then replaces its exact still-owned loading page.
-// Manual opens keep their existing synchronous API for navigation callers.
+// Manual opens also install their exact still-owned page after background I/O.
 func attachFileInEditor(tabs *gui.TabWidget, path string, data []byte, replace gui.IWidget, focus bool) *gui.CodeEditor {
 	if tabs == nil || path == "" || openEditors[path] != nil {
 		return nil

@@ -30,11 +30,11 @@ func testBookmarkWorkbench(t *testing.T) (*workbench, *editorBookmarks) {
 func TestBookmarkEditorPanelPersistenceAndDetach(t *testing.T) {
 	w, c := testBookmarkWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "first\ntarget\nlast")
-	if !openFileInEditor(w.tabs, path) {
+	if !openTestEditorReady(t, w.tabs, path) {
 		t.Fatal("open")
 	}
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.NavigateToLineCol(1, 0)
 	runBookmarkCommand(w.tabs, w.canvas, "bookmark.toggle", nil)
 	if got := c.panel.Bookmarks(); len(got) != 1 || got[0].Line != 2 || !ed.HasBookmark(1) {
@@ -67,7 +67,8 @@ func TestBookmarkEditorPanelPersistenceAndDetach(t *testing.T) {
 		t.Fatal("detached callback affected persisted marks")
 	}
 	c.navigate(path, 2)
-	restored := activeEditor(w.tabs)
+	pumpTestEditorOpens(t, w.tabs)
+	restored := activeTestEditorReady(t, w.tabs)
 	if restored == ed || restored.CursorLine() != 1 || !slices.Equal(restored.BookmarkLines(), []int{1}) {
 		t.Fatal("reopen did not restore mark")
 	}
@@ -82,34 +83,34 @@ func TestBookmarkCrossFileHistoryAndClosedReanchor(t *testing.T) {
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.txt", "first\ntarget\nlast")
 	b := writeFile(t, dir, "b.txt", "b")
-	openFileInEditor(w.tabs, a)
+	openTestEditorReady(t, w.tabs, a)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetBookmark(1, true)
 	detachEditorTab(w.tabs, w.tabs.Stack().Page(w.tabs.CurrentIndex()), ed, a)
 	writeFile(t, dir, "a.txt", "new\nfirst\ntarget\nlast")
-	openFileInEditor(w.tabs, b)
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, b)
+	other := activeTestEditorReady(t, w.tabs)
 	other.SetBookmark(0, true)
 	c.next(other, false)
-	if activeEditor(w.tabs).FilePath() != a || activeEditor(w.tabs).CursorLine() != 2 || c.panel.Bookmarks()[0].Line != 3 {
+	if activeTestEditorReady(t, w.tabs).FilePath() != a || activeTestEditorReady(t, w.tabs).CursorLine() != 2 || c.panel.Bookmarks()[0].Line != 3 {
 		t.Fatal("closed-file reanchor failed")
 	}
-	navigateEditorHistory(w.tabs, false)
-	if activeEditor(w.tabs) != other {
+	navigateTestEditorHistory(t, w.tabs, false)
+	if activeTestEditorReady(t, w.tabs) != other {
 		t.Fatal("missing navigation history")
 	}
 	c.next(other, true)
-	if activeEditor(w.tabs).FilePath() != a {
+	if activeTestEditorReady(t, w.tabs).FilePath() != a {
 		t.Fatal("prev")
 	}
 }
 func TestBookmarkMenuPaletteStaleIdentityAndFocus(t *testing.T) {
 	w, c := testBookmarkWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "a\nb")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetReadOnly(true)
 	ed.SetFocus()
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
@@ -132,8 +133,8 @@ func TestBookmarkMenuPaletteStaleIdentityAndFocus(t *testing.T) {
 	if ed.BookmarkCount() != 0 {
 		t.Fatal("palette toggle")
 	}
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "b.txt", "other"))
-	other := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "b.txt", "other"))
+	other := activeTestEditorReady(t, w.tabs)
 	button.Action().Trigger(nil)
 	bound.Fn()
 	if other.BookmarkCount() != 0 || ed.BookmarkCount() != 0 {
@@ -177,8 +178,8 @@ func TestBookmarkCorruptPreferencesAreNotOverwritten(t *testing.T) {
 	c := newEditorBookmarks(w.tabs, ged.NewBookmarksPanel(), p)
 	w.bookmarks = c
 	t.Cleanup(c.close)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "a\nb"))
-	activeEditor(w.tabs).SetBookmark(1, true)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "a\nb"))
+	activeTestEditorReady(t, w.tabs).SetBookmark(1, true)
 	if !c.saveBlocked || p.store.String("navigation/bookmarks", "") != broken {
 		t.Fatal("corrupt source overwritten")
 	}

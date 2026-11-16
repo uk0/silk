@@ -68,9 +68,9 @@ func TestNotificationsHistoryExactDetailsCopyAndClear(t *testing.T) {
 func TestNotificationsBoundedOwnerLifecycleAndNoAutoNavigation(t *testing.T) {
 	w, p := testNotifications(t)
 	path := writeFile(t, t.TempDir(), "a.txt", "unchanged")
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	big := strings.Repeat("中🙂", 20000)
 	for i := 0; i < notificationHistoryLimit+15; i++ {

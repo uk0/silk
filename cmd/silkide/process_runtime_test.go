@@ -41,9 +41,9 @@ func testProcessRuntime(t *testing.T) (*workbench, *processRuntimePane, *gui.Cod
 		t.Fatal(err)
 	}
 	path := writeFile(t, t.TempDir(), "plant.silkhmi", string(data))
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
 	p.load = func(_ context.Context, s string, done func(hmi.Project, error)) error {
 		project, err := hmi.Parse([]byte(s))
@@ -107,7 +107,7 @@ func TestProcessRuntimeMenuPaletteAndF5UseUnsavedOwnedSource(t *testing.T) {
 		t.Fatal("source Undo not preserved/invalidation missing")
 	}
 	p.focusSource()
-	if activeEditor(w.tabs) != ed {
+	if activeTestEditorReady(t, w.tabs) != ed {
 		t.Fatal("source navigation failed after edit")
 	}
 }
@@ -190,7 +190,7 @@ func TestProcessRuntimeDecodeFailureSwitchBusyAndStoreNamespace(t *testing.T) {
 	p.load = func(_ context.Context, _ string, done func(hmi.Project, error)) error { complete = done; return nil }
 	runProcessRuntime(w.tabs, w.canvas, ed)
 	other := writeFile(t, t.TempDir(), "other.go", "package qa\n")
-	openFileInEditor(w.tabs, other)
+	openTestEditorReady(t, w.tabs, other)
 	complete(processRuntimeProject(), nil)
 	if starts != 0 {
 		t.Fatal("late decode ran in other editor context")

@@ -209,7 +209,7 @@ func TestCoverageGutterLightsUpForARealProfile(t *testing.T) {
 	openEditors = map[string]*gui.CodeEditor{}
 	t.Cleanup(func() { openEditors = saved })
 	tabs := buildEditorTabs(nil)
-	if !openFileInEditor(tabs, srcPath) {
+	if !openTestEditorReady(t, tabs, srcPath) {
 		t.Fatal("openFileInEditor returned false")
 	}
 	ed := openEditors[srcPath]
@@ -250,7 +250,7 @@ func TestCoverageAppliedToAFileOpenedAfterTheRun(t *testing.T) {
 	openEditors = map[string]*gui.CodeEditor{}
 	t.Cleanup(func() { openEditors = saved })
 	tabs := buildEditorTabs(nil)
-	if !openFileInEditor(tabs, srcPath) {
+	if !openTestEditorReady(t, tabs, srcPath) {
 		t.Fatal("openFileInEditor returned false")
 	}
 	ed := openEditors[srcPath]
@@ -279,7 +279,7 @@ func TestCoverageStripesClearedOnAFileTheNewRunDidNotMeasure(t *testing.T) {
 	openEditors = map[string]*gui.CodeEditor{}
 	t.Cleanup(func() { openEditors = saved })
 	tabs := buildEditorTabs(nil)
-	if !openFileInEditor(tabs, srcA) {
+	if !openTestEditorReady(t, tabs, srcA) {
 		t.Fatal("openFileInEditor returned false")
 	}
 	ed := openEditors[srcA]
@@ -336,7 +336,7 @@ func TestCoverageRunInstallsTheIdentityItsProfileNeeds(t *testing.T) {
 	openEditors = map[string]*gui.CodeEditor{}
 	t.Cleanup(func() { openEditors = saved })
 	tabs := buildEditorTabs(nil)
-	if !openFileInEditor(tabs, srcPath) {
+	if !openTestEditorReady(t, tabs, srcPath) {
 		t.Fatal("openFileInEditor returned false")
 	}
 	ed := openEditors[srcPath]
@@ -422,7 +422,7 @@ func TestOverlappingCoverageRunsStayOnTheirOwnProfile(t *testing.T) {
 	openEditors = map[string]*gui.CodeEditor{}
 	t.Cleanup(func() { openEditors = saved })
 	tabs := buildEditorTabs(nil)
-	if !openFileInEditor(tabs, slowSrc) {
+	if !openTestEditorReady(t, tabs, slowSrc) {
 		t.Fatal("openFileInEditor returned false")
 	}
 	ed := openEditors[slowSrc]

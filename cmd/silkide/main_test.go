@@ -89,12 +89,12 @@ func TestOpenFileInEditorReusesExistingTab(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !openFileInEditor(tabs, path) {
+	if !openTestEditorReady(t, tabs, path) {
 		t.Fatal("first open returned false")
 	}
 	first := tabs.Count()
 
-	if !openFileInEditor(tabs, path) {
+	if !openTestEditorReady(t, tabs, path) {
 		t.Fatal("second open returned false")
 	}
 	if tabs.Count() != first {

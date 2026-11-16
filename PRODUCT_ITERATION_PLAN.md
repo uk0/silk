@@ -9,6 +9,47 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: asynchronous source opening and navigation (2026-11-15–16)
+
+- [x] Reproduce the published manual-open UI call waiting for a controlled
+      regular-file reader. Keep the minimal read indirection and failing public
+      entrypoint probe separate from any real storage/OS diagnosis.
+- [x] Add SDK prepare/check/commit navigation visits: no provisional history
+      mutation, exact live return position, stale/foreign/ABA rejection, one
+      completed event and no token back-reference to a stack or its observers.
+      Prove legacy traversal parity and zero added allocations when unused.
+- [x] Finish the bounded, owned manual-open controller: inert closeable pages,
+      ordered/deduplicated requests, physical-reader limits across cancellation,
+      observable rejection/soft timeout, no worker UI access or UI-thread joins.
+- [x] Wire all real source-open routes, file finder/location, generated-source
+      opens, closed-tab reopen and cross-file navigation. Only a ready owned
+      target may receive caret/focus/history/MRU changes; preserve dirty buffers.
+- [x] Apply prepared history visits after successful asynchronous navigation,
+      sequentially skip unavailable destinations, and reject newer user intent,
+      window retirement, rename reservations and stale completions.
+- [x] Exercise blocked/canceled/reordered/error paths, fresh session readback,
+      real Windows/macOS input/navigation/close, code generation and full frozen
+      three-platform ordinary/race/strict gates before the next commit/push.
+
+Evidence: [manual-open QA](MANUAL_OPEN_QA_20261115.md). The controlled blocked-reader
+replay returns before physical I/O; newer intent and unrelated field focus win.
+The frozen 2,725-file source passes full ordinary/race on all three platforms,
+12 strict bundled-gopls probes, independent source inventories and actual native
+macOS/Windows quick-open/input/save/history/reopen/error/normal-exit replays.
+Preserve initial Windows staging/exit-observer harness failures and corrected
+reruns; none is silently overwritten. README screenshots are actual Windows R2
+captures. The runtime/build input audit precedes the authorized commit/push.
+
+## Next increment: remaining interactive I/O and native polish
+
+- [ ] Extend manual design reads/decode/recovery with scene identity and edit
+      guards; continue Save/resource/reload-callback I/O rather than claiming
+      that fixing startup or a single open path makes all I/O nonblocking.
+- [ ] Continue shared-loader error titles/messages and the observed plain-text
+      restoration completion popup with baseline/intent evidence, not guesses.
+- [ ] Continue resource/macro/reload callback and Save I/O; this validated source
+      opener is not a claim that all IDE filesystem work is nonblocking.
+
 ## Validated increment: source-backed industrial runtime inside SilkIDE
 
 - [x] Add a reusable inert runtime view with shared background acquisition/store
@@ -74,8 +115,13 @@ Alarm contract: [live-alarm lifecycle QA](SDK_ALARM_LIFECYCLE_QA_20261115.md).
 
 ## Remaining industrial/native workflow
 
-- [ ] Continue manual Open/Save, resource loading and hot-reload callback I/O.
-      Background session restoration does not make these paths nonblocking.
+- [ ] Investigate the Windows plain-text caret-restoration completion popup and
+      polish loading/error window titles/messages. Native replay observed the
+      popup; do not infer its baseline provenance or mark it fixed without a
+      narrow counterexample and input-intent tests.
+- [ ] Continue manual design Open/Save, resource loading, macro output and
+      hot-reload callback I/O. Background source opening and session restoration
+      do not make those separate paths nonblocking.
       Preserve source identity, cancellation and late-result ownership guards.
 - [ ] Continue real macOS-native IME composition and source-runtime checks;
       the V3 basic restore/input/save/reload/exit replay now passes separately.

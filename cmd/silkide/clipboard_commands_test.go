@@ -8,7 +8,7 @@ import (
 
 func TestWorkbenchClipboardMenuInventory(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "clipboard.txt", "hello\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "clipboard.txt", "hello\n"))
 	w.activate(modeEdit)
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
@@ -22,12 +22,12 @@ func TestWorkbenchClipboardMenuInventory(t *testing.T) {
 
 func TestClipboardMenusCannotSelectAnotherOrHiddenDocument(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "first.txt", "first"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "first.txt", "first"))
 	w.activate(modeEdit)
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "second.txt", "second"))
-	e := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "second.txt", "second"))
+	e := activeTestEditorReady(t, w.tabs)
 	menuCommandButton(m, "editor.selectAll").Action().Trigger(nil)
 	if e.HasSelection() {
 		t.Fatal("stale menu selected a different document")
@@ -51,9 +51,9 @@ func TestClipboardMenusCannotSelectAnotherOrHiddenDocument(t *testing.T) {
 
 func TestClipboardCommandsDoNotStealFocusedTextFields(t *testing.T) {
 	w := testWorkbench(t)
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "first.txt", "first"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "first.txt", "first"))
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	field := gui.NewEdit()
 	field.SetParent(w.frame)
 	field.SetText("query")
@@ -87,9 +87,9 @@ func TestClipboardPaletteBindsBeforeModalFocusAndRechecksDocument(t *testing.T) 
 	w := testWorkbench(t)
 	old := paletteCommands
 	t.Cleanup(func() { paletteCommands = old })
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "中🙂\n"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "中🙂\n"))
 	w.activate(modeEdit)
-	e := activeEditor(w.tabs)
+	e := activeTestEditorReady(t, w.tabs)
 	registerPaletteCommands(w.tabs, w.canvas)
 	commands := bindPaletteCommands(paletteCommands)
 	var all paletteCommand
@@ -113,12 +113,12 @@ func TestClipboardPaletteBindsBeforeModalFocusAndRechecksDocument(t *testing.T) 
 	if !e.HasFocus() || e.SelectedText() != e.Text() {
 		t.Fatal("palette did not restore document focus")
 	}
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "b.txt", "b"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "b.txt", "b"))
 	if all.available() {
 		t.Fatal("bound command followed a different editor")
 	}
 	all.Fn()
-	if activeEditor(w.tabs).HasSelection() {
+	if activeTestEditorReady(t, w.tabs).HasSelection() {
 		t.Fatal("stale palette selected a different editor")
 	}
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"math"
 	"path/filepath"
 	"slices"
@@ -64,14 +66,13 @@ func reopenClosedEditor(tabs *gui.TabWidget) bool {
 	if rejectBusyFile(pos.Path) {
 		return false
 	}
-	if !openFileInEditor(tabs, pos.Path) {
-		h.forget(pos.Path)
+	return requestEditorOpen(tabs, pos.Path, editorOpenOptions{recent: true, saved: &pos, ready: func(ed *gui.CodeEditor) bool {
+		ed.RestoreNavigationPosition(gui.NavPosition{FilePath: ed.FilePath(), Line: pos.Line, Column: pos.Column, ScrollY: pos.ScrollY})
+		return true
+	}, failed: func(err error) {
+		if !errors.Is(err, errEditorOpenBusy) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			h.forget(pos.Path)
+		}
 		silkideToast(i18n.Tf("Could not reopen %s", filepath.Base(pos.Path)), gui.ToastWarning)
-		return false
-	}
-	// The shared open path also removes manually reopened entries, reveals
-	// Edit mode, focuses the page, and establishes a fresh LSP document.
-	ed := activeEditor(tabs)
-	ed.RestoreNavigationPosition(gui.NavPosition{FilePath: pos.Path, Line: pos.Line, Column: pos.Column, ScrollY: pos.ScrollY})
-	return true
+	}})
 }

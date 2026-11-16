@@ -19,7 +19,7 @@ func TestEditorSymbolHostActionsTargetOwnerNotCurrentTab(t *testing.T) {
 	var calls []string
 	handler := func(name string) func(*gui.TabWidget) {
 		return func(received *gui.TabWidget) {
-			if received != tabs || activeEditor(tabs) != a || !a.HasFocus() {
+			if received != tabs || activeTestEditorReady(t, tabs) != a || !a.HasFocus() {
 				t.Fatal("context command targeted the wrong editor")
 			}
 			calls = append(calls, name)
@@ -39,7 +39,7 @@ func TestEditorSymbolHostActionsTargetOwnerNotCurrentTab(t *testing.T) {
 	a.RequestRenameSymbol()
 	a.RequestGoToDefinition()
 	a.RequestFindReferences()
-	if len(calls) != 3 || activeEditor(tabs) != b {
+	if len(calls) != 3 || activeTestEditorReady(t, tabs) != b {
 		t.Fatal("stale context action changed a different document")
 	}
 }
@@ -61,10 +61,10 @@ func TestOpenedEditorContextCommandsReportMissingLSPWithoutLocalFallback(t *test
 		t.Fatal(err)
 	}
 	tabs := gui.NewTabWidget()
-	if !openFileInEditor(tabs, path) {
+	if !openTestEditorReady(t, tabs, path) {
 		t.Fatal("openFileInEditor failed")
 	}
-	ed := activeEditor(tabs)
+	ed := activeTestEditorReady(t, tabs)
 	ed.ScrollToLineCol(2, 18)
 	for _, action := range []func(){ed.RequestRenameSymbol, ed.RequestGoToDefinition, ed.RequestFindReferences} {
 		before := len(messages)

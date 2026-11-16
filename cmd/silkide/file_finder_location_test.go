@@ -61,32 +61,32 @@ func TestFileFinderLocationNavigationUsesLiveUnicodeAndHistory(t *testing.T) {
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.go", "package p\nvar A=1\n")
 	b := writeFile(t, dir, "b.go", "disk\n")
-	openFileInEditor(w.tabs, b)
-	target := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, b)
+	target := activeTestEditorReady(t, w.tabs)
 	target.ReplaceAllText("first\r\n😀中\tXYZ\r\nlast")
 	target.SetReadOnly(true)
-	openFileInEditor(w.tabs, a)
-	origin := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, a)
+	origin := activeTestEditorReady(t, w.tabs)
 	origin.NavigateToLineCol(1, 4)
-	if !openFileFinderSelection(w.tabs, b, "2:4") || activeEditor(w.tabs) != target || target.CursorLine() != 1 || target.CursorCol() != 3 {
+	if !openTestFileFinderReady(t, w.tabs, b, "2:4") || activeTestEditorReady(t, w.tabs) != target || target.CursorLine() != 1 || target.CursorCol() != 3 {
 		t.Fatal("wrong live Unicode destination")
 	}
 	if !target.Modified() || target.Text() != "first\r\n😀中\tXYZ\r\nlast" || !w.navigation.CanGoBack() {
 		t.Fatal("dirty text/history lost")
 	}
 	target.NavGoBack()
-	if activeEditor(w.tabs) != origin || origin.CursorCol() != 4 {
+	if activeTestEditorReady(t, w.tabs) != origin || origin.CursorCol() != 4 {
 		t.Fatal("back lost origin")
 	}
 	origin.NavGoForward()
-	if activeEditor(w.tabs) != target || target.CursorCol() != 3 {
+	if activeTestEditorReady(t, w.tabs) != target || target.CursorCol() != 3 {
 		t.Fatal("forward lost destination")
 	}
 	target.NavGoBack()
-	if openFileFinderSelection(w.tabs, b, "2:99") || !w.navigation.CanGoForward() || target.CursorCol() != 3 {
+	if openTestFileFinderReady(t, w.tabs, b, "2:99") || !w.navigation.CanGoForward() || target.CursorCol() != 3 {
 		t.Fatal("invalid range moved caret/polluted history")
 	}
-	if openFileFinderSelection(w.tabs, filepath.Join(dir, "missing.go"), "1") || !w.navigation.CanGoForward() {
+	if openTestFileFinderReady(t, w.tabs, filepath.Join(dir, "missing.go"), "1") || !w.navigation.CanGoForward() {
 		t.Fatal("failed open polluted history")
 	}
 	got, err := os.ReadFile(b)

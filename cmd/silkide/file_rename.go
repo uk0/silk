@@ -175,6 +175,21 @@ func prepareEditorRename(tabs *gui.TabWidget, canvas *ged.GedView, oldPath, newP
 }
 
 func migrateRenamedMetadata(tx *editorRename, tabs *gui.TabWidget, canvas *ged.GedView) {
+	// A pending snapshot belongs to its old path identity, never a replacement
+	// installed by a completed rename. Retire pages without joining their reads.
+	if tabs != nil {
+		for i := tabs.Count() - 1; i >= 0; i-- {
+			if p, ok := tabs.Stack().Page(i).(*restorePage); ok {
+				_, old := fileops.RebasePath(p.saved.Path, tx.old, tx.next)
+				_, next := fileops.RebasePath(p.saved.Path, tx.next, tx.old)
+				if old || next {
+					p.Close()
+					tabs.RemoveTab(i)
+				}
+			}
+		}
+	}
+
 	remap := func(p string) string { next, _ := fileops.RebasePath(p, tx.old, tx.next); return next }
 	if history := editorNavigation(tabs); history != nil {
 		history.MapPaths(remap)

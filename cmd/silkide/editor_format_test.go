@@ -23,9 +23,9 @@ func TestEditorFormatMenuPaletteShortcutAndDocumentIdentity(t *testing.T) {
 		return nil
 	}
 	path := writeFile(t, t.TempDir(), "a.json", `{"x":1}`)
-	openFileInEditor(w.tabs, path)
+	openTestEditorReady(t, w.tabs, path)
 	w.activate(modeEdit)
-	ed := activeEditor(w.tabs)
+	ed := activeTestEditorReady(t, w.tabs)
 	menu := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	for _, id := range []string{"editor.format", "editor.compactJSON", "editor.cancelFormat"} {
 		b := menuCommandButton(menu, id)
@@ -68,7 +68,7 @@ func TestEditorFormatMenuPaletteShortcutAndDocumentIdentity(t *testing.T) {
 		}
 	}
 	other := writeFile(t, t.TempDir(), "b.json", `{"y":2}`)
-	openFileInEditor(w.tabs, other)
+	openTestEditorReady(t, w.tabs, other)
 	menuCommandButton(menu, "editor.format").Action().Trigger(nil)
 	if len(targets) != 5 {
 		t.Fatal("stale menu formatted replacement editor")
@@ -87,7 +87,7 @@ func TestLocalFormatFailureReportsWithoutMutatingText(t *testing.T) {
 	w := testWorkbench(t)
 	oldStart, oldToast := startLocalFormat, silkideToast
 	t.Cleanup(func() { startLocalFormat, silkideToast = oldStart, oldToast })
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.json", `{"x":]}`))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.json", `{"x":]}`))
 	w.activate(modeEdit)
 	var message string
 	silkideToast = func(s string, l gui.ToastLevel) {
@@ -101,10 +101,10 @@ func TestLocalFormatFailureReportsWithoutMutatingText(t *testing.T) {
 		return nil
 	}
 	formatActiveDocument(w.tabs, w.canvas, nil, false)
-	if !strings.Contains(message, "invalid JSON") || activeEditor(w.tabs).Text() != `{"x":]}` {
+	if !strings.Contains(message, "invalid JSON") || activeTestEditorReady(t, w.tabs).Text() != `{"x":]}` {
 		t.Fatal(message)
 	}
-	openFileInEditor(w.tabs, writeFile(t, t.TempDir(), "a.txt", "plain"))
+	openTestEditorReady(t, w.tabs, writeFile(t, t.TempDir(), "a.txt", "plain"))
 	if menuCommandButton(buildWorkbenchSubMenu("Edit", w.tabs, w.canvas), "editor.format").IsEnabled() {
 		t.Fatal("plain text format enabled")
 	}

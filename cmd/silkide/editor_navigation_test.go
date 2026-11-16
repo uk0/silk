@@ -15,32 +15,32 @@ func TestWorkbenchNavigationCrossFileHistory(t *testing.T) {
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.go", "package p\nfunc a(){\n println(1)\n}\n")
 	b := writeFile(t, dir, "b.go", "package p\n/*😀*/ var Target=1\n")
-	openFileInEditor(w.tabs, a)
-	origin := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, a)
+	origin := activeTestEditorReady(t, w.tabs)
 	origin.NavigateToLineCol(2, 4)
-	openFileInEditorAtLSP(w.tabs, b, core.LSPPosition{Line: 1, Character: 11})
-	if activeEditor(w.tabs).CursorCol() != 10 || !w.navigation.CanGoBack() {
+	navigateTestEditorLSP(t, w.tabs, b, core.LSPPosition{Line: 1, Character: 11})
+	if activeTestEditorReady(t, w.tabs).CursorCol() != 10 || !w.navigation.CanGoBack() {
 		t.Fatal("jump not recorded precisely")
 	}
-	activeEditor(w.tabs).ReplaceAllText("package p\n/*😀*/ var Target=2\n")
-	activeEditor(w.tabs).NavigateToLineCol(1, 15)
+	activeTestEditorReady(t, w.tabs).ReplaceAllText("package p\n/*😀*/ var Target=2\n")
+	activeTestEditorReady(t, w.tabs).NavigateToLineCol(1, 15)
 	origin.FoldAll()
-	activeEditor(w.tabs).NavGoBack()
-	if activeEditor(w.tabs) != origin || origin.CursorLine() != 2 || origin.CursorCol() != 4 || origin.IsFolded(1) {
+	activeTestEditorReady(t, w.tabs).NavGoBack()
+	if activeTestEditorReady(t, w.tabs) != origin || origin.CursorLine() != 2 || origin.CursorCol() != 4 || origin.IsFolded(1) {
 		t.Fatal("back lost source location")
 	}
 	origin.NavGoForward()
-	if activeEditorPath(w.tabs) != b || activeEditor(w.tabs).CursorCol() != 15 || !activeEditor(w.tabs).Modified() {
+	if activeTestEditorPathReady(t, w.tabs) != b || activeTestEditorReady(t, w.tabs).CursorCol() != 15 || !activeTestEditorReady(t, w.tabs).Modified() {
 		t.Fatal("forward lost live location or unsaved buffer")
 	}
-	navigateEditorHistory(w.tabs, false)
-	if openFileInEditor(w.tabs, filepath.Join(dir, "missing.go")) {
+	navigateTestEditorHistory(t, w.tabs, false)
+	if openTestEditorReady(t, w.tabs, filepath.Join(dir, "missing.go")) {
 		t.Fatal("unexpected missing file")
 	}
 	if !w.navigation.CanGoForward() {
 		t.Fatal("failed file open polluted history")
 	}
-	openFileInEditorAt(w.tabs, a, 2, 3)
+	navigateTestEditorAt(t, w.tabs, a, 2, 3)
 	if w.navigation.CanGoForward() {
 		t.Fatal("new jump did not branch history")
 	}
@@ -51,9 +51,9 @@ func TestWorkbenchNavigationClosedFileRenameAndMenu(t *testing.T) {
 	dir := t.TempDir()
 	a := writeFile(t, dir, "a.go", "package p\nvar A=1\n")
 	b := writeFile(t, dir, "b.go", "package p\nvar B=2\n")
-	openFileInEditor(w.tabs, a)
-	activeEditor(w.tabs).NavigateToLineCol(1, 4)
-	openFileInEditorAt(w.tabs, b, 2, 4)
+	openTestEditorReady(t, w.tabs, a)
+	activeTestEditorReady(t, w.tabs).NavigateToLineCol(1, 4)
+	navigateTestEditorAt(t, w.tabs, b, 2, 4)
 	old := openEditors[a]
 	old.CancelGitStatus()
 	delete(openEditors, a)
@@ -69,7 +69,8 @@ func TestWorkbenchNavigationClosedFileRenameAndMenu(t *testing.T) {
 		t.Fatal("back menu disabled")
 	}
 	back.Action().Trigger(nil)
-	if activeEditorPath(w.tabs) != next || activeEditor(w.tabs).CursorCol() != 4 {
+	pumpTestEditorOpens(t, w.tabs)
+	if activeTestEditorPathReady(t, w.tabs) != next || activeTestEditorReady(t, w.tabs).CursorCol() != 4 {
 		t.Fatal("history did not reopen renamed file")
 	}
 	for _, id := range []string{"navigate.definition", "navigate.type", "navigate.implementation", "navigate.references"} {
@@ -120,8 +121,8 @@ func TestNavigationQueueBoundsAndSupersedes(t *testing.T) {
 func TestNavigationSnapshotRejectsEditsCaretSwitchAndClosedOwner(t *testing.T) {
 	w := testWorkbench(t)
 	path := writeFile(t, t.TempDir(), "a.go", "package p\nvar A=1\n")
-	openFileInEditor(w.tabs, path)
-	ed := activeEditor(w.tabs)
+	openTestEditorReady(t, w.tabs, path)
+	ed := activeTestEditorReady(t, w.tabs)
 	s := navigationSnapshot{tabs: w.tabs, editor: ed, client: globalLSP, document: lspDocuments[path], path: path, revision: ed.TextRevision(), line: ed.CursorLine(), column: ed.CursorCol()}
 	if !s.current() {
 		t.Fatal("fresh snapshot stale")
