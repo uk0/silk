@@ -71,6 +71,8 @@ type SelectionCallback func(items []graph.IItem)
 
 type GedView struct {
 	graph.GraphView
+	closed                   bool
+	closeSubscriptions       []*viewCloseSubscription
 	selCallbacks             []SelectionCallback
 	selectionListeners       []selectionListener
 	selectionSequence        int
@@ -2427,6 +2429,9 @@ func (this *GedView) OpenFile(filename string) error {
 // one — outlives the design without this, and goes on describing a canvas the
 // user cannot open, let alone fix.
 func (this *GedView) Close() {
+	if !this.beginClose() {
+		return
+	}
 	this.stopSelectionStatus()
 	if scene := this.GedScene(); scene != nil {
 		scene.DiscardPendingEdits()
@@ -2581,29 +2586,11 @@ func (this *GedView) computeAlignGuides(sel []graph.IItem, dx, dy float64) {
 // Called in scene-mm coordinate space (same transform as drawAlignGuides), so
 // the dot spacing tracks the pan/zoom the canvas already applied. Dots are
 // drawn with a tiny zero-width-pen cross per intersection rather than filled
-// circles to stay cheap and crisp at any zoom; only the visible page rect is
-// walked so the loop count scales with page size / grid pitch, not the canvas.
+// circles to stay cheap and crisp. Work is bounded by the visible clip and a
+// two-dimensional paint-only LOD budget, never by the authored page area.
 func (this *GedView) drawGrid(g paint.Painter) {
-	step := this.gridModel().Pitch
-	if step <= 0 {
-		return
-	}
 	w, h := this.SceneSizeMm()
-
-	// Very light grey so the grid is a hint, not a feature competing with the
-	// widgets. Zero pen width = 1px hairline regardless of zoom.
-	g.SetPen1(paint.Color{0, 0, 0, 28}, 0)
-
-	const tick = 0.3 // mm — half-length of each dot's cross arms
-	for x := step; x < w; x += step {
-		for y := step; y < h; y += step {
-			g.MoveTo(x-tick, y)
-			g.LineTo(x+tick, y)
-			g.MoveTo(x, y-tick)
-			g.LineTo(x, y+tick)
-		}
-	}
-	g.Stroke()
+	drawDesignDots(g, w, h, this.gridModel().Pitch)
 }
 
 // drawAlignGuides renders the active alignment guide lines.
@@ -2647,7 +2634,13 @@ func (this *GedView) Draw(g paint.Painter) {
 		// margin's worth of padding region in as well.
 		pw, ph := this.PageSizePx(this.IsPageMarginVisible(), this.ZoomFactor())
 		pLeft, pTop := this.PageOriginPx()
-		g.Rectangle(pLeft-this.ScrollX(), pTop-this.ScrollY(), pw, ph)
+		page := geom.Rect{X: pLeft - this.ScrollX(), Y: pTop - this.ScrollY(), Width: pw, Height: ph}
+		// Bound huge paths before Cairo's fixed-point clip conversion. An
+		// ordinary page keeps its exact original rectangle and AA semantics.
+		if pw > 1<<20 || ph > 1<<20 {
+			page = page.IntersectCopy(g.ClipBounds1())
+		}
+		g.Rectangle1(page)
 		g.Clip()
 
 		x0, y0 := this.SceneOriginPx()

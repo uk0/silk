@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — owned design opening and bounded canvas (2026-11-16)
+
+- Read/decompress/parse primary and autosave .silkui snapshots off the UI loop;
+  keep one physical reader and one replaceable latest queued target. Cooperative
+  timeout/cancel never starts replacement readers while OS I/O remains blocked.
+- Keep the old scene editable and its session identity authoritative until real
+  installation. Reject changed design/Undo, drafts, input/capture, workspace and
+  rename/New/close ownership; recheck after recovery dialogs.
+- Support explicit recovery of missing/damaged originals without creating the
+  original file or installing an empty scene after rejection/read errors.
+- Defer recovery choice installation past native modal cleanup/focus return;
+  preserve explicit Yes/No choices across an unowned canvas focus gap without
+  changing another field's focus or bypassing edit/ownership guards. Add
+  UI-only SDK PostAfterNativeCleanup without polling or worker-thread joins.
+- Add Cancel Design Open in File/palette and owned status feedback; add SDK
+  GedView.IsClosed/SubscribeClosed with idempotent close and detached handles.
+- Bound line/dot grid work and ruler allocation to visible spans with paint-only
+  decade LOD; preserve authored sizes, snapping and exact normal Cairo raster.
+- Check transformed device coordinates too: intermediate forms at high zoom
+  must not evade the huge-path guard.
+- Prevent huge page/background/clip/line coordinates from overflowing Cairo and
+  silently dropping visible content; reject nonfinite geometry and zoom.
+- Pass final-source full/race suites on macOS, Linux and Windows, plus 12 strict
+  real bundled-gopls checks. Verify macOS/Windows recovery, exact saved drag,
+  external reload, huge canvas, input preservation and normal exit 0; add actual
+  README screenshots. See [manual design QA](MANUAL_DESIGN_OPEN_QA_20261116.md).
+  Save, resource construction and other callback I/O remain separate work.
+
 ## Unreleased — asynchronous source opening and navigation (2026-11-15)
 
 - Move interactive source reads off the UI loop. Use owned inert loading/error

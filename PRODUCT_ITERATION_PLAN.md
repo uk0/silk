@@ -9,6 +9,40 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: owned design opening and bounded canvas (2026-11-16)
+
+- [x] Reproduce the 56fe384 public manual .silkui open waiting inside a controlled
+      regular-file reader; preserve the failing overlay and baseline identity.
+- [x] Move primary/recovery stat/read/decompression/parse to a fixed single reader
+      with one replaceable latest queued target; retain physical slots on timeout.
+- [x] Preserve the current design/session identity, Undo and MRU until actual UI
+      installation. Guard edited/undone scenes, pending drafts, focus, capture,
+      workspace changes, New, rename commits and nested recovery callbacks.
+- [x] Add SDK UI-only closed-view subscriptions with severed owner references and
+      idempotent close; bind File/palette cancellation to its observed controller.
+- [x] Pass 50 focused race repetitions (1,450 named passes, no skips/failures) and
+      the first broad IDE ordinary regression. These are not final release gates.
+- [x] Complete three-platform full/race and strict bundled-gopls gates. Verify
+      native open/recovery/drag/reload/persistence from fresh macOS/Windows profiles;
+      cancellation/draft/focus permutations also have owned dispatcher regressions,
+      not a claim that every native interaction combination was manually exercised.
+- [x] Reproduce unbounded SDK grid work with a real 64x64 Cairo clip and a
+      1e12-square form; stop the probe after 1,025 path lines, not an actual hang.
+- [x] Bound line/dot grids and rulers to the visible clip with origin/spacing, finite
+      arithmetic, progress and dense-zoom budgets; verify normal raster parity.
+      Parsing off the UI thread does not bound widget/resource construction.
+- [x] Find and correct native recovery choice loss during delayed modal focus return;
+      add SDK cleanup-boundary posting and revocable, guarded UI continuation.
+- [x] Verify current-source macOS No/Yes recovery, exact saved drag, huge canvas,
+      bad-file preservation, independent readback and normal exit 0; add real images.
+- [x] Final combined-source full three-platform ordinary/race/strict gates pass;
+      review actual screenshots, exact model/session readback and normal exit 0.
+- [x] Complete source/index/documentation identity audit; approve this tested
+      increment for the user-authorized commit/push.
+
+Current report: [manual design preparation QA](MANUAL_DESIGN_OPEN_QA_20261116.md).
+The broader Save/resource/reload callback and complete product goal remain active.
+
 ## Validated increment: asynchronous source opening and navigation (2026-11-15–16)
 
 - [x] Reproduce the published manual-open UI call waiting for a controlled

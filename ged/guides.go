@@ -95,22 +95,43 @@ type rulerTick struct {
 
 // rulerTicks returns the marks covering 0..lengthMm inclusive, one every
 // tickMm and a number every labelMm. Positions are i*tickMm rather than an
-// accumulated sum so the 50 mm label lands exactly on the 50 mm tick whatever
-// the form size. A non-positive step draws nothing instead of looping forever.
+// accumulated sum so the 50 mm label lands exactly on the 50 mm tick. The pure
+// full-span helper is bounded too; painting uses the actual visible scene span.
 func rulerTicks(lengthMm, tickMm, labelMm float64) []rulerTick {
-	if tickMm <= 0 || lengthMm < 0 {
+	return visibleRulerTicks(lengthMm, 0, lengthMm, tickMm, labelMm, 1)
+}
+
+// visibleRulerTicks allocates only a bounded visible scale, not the whole form.
+// Paint-only decades retain the zero anchor and label cadence at dense zoom.
+// One tick of fringe avoids losing an edge to inverse/forward map rounding;
+// drawRulers retains its original exact view-coordinate visibility check.
+func visibleRulerTicks(lengthMm, lo, hi, tickMm, labelMm, scale float64) []rulerTick {
+	if !finiteGridNumber(lengthMm) || lengthMm < 0 || !finiteGridNumber(lo) || !finiteGridNumber(hi) || lo > hi {
 		return nil
 	}
+	lo = math.Max(0, lo-tickMm)
+	hi = math.Min(lengthMm+1e-9, hi+tickMm)
+	if lo > hi {
+		return nil
+	}
+	pitch := gridDisplayPitch(tickMm, scale, hi-lo)
+	if pitch == 0 {
+		return nil
+	}
+	first := math.Ceil(lo / pitch)
+	labels := labelMm * (pitch / tickMm)
 	var ticks []rulerTick
-	for i := 0; ; i++ {
-		mm := float64(i) * tickMm
-		if mm > lengthMm+1e-9 {
+	last := math.Inf(-1)
+	for i := 0; i < maxGridAxisLines; i++ {
+		mm := (first + float64(i)) * pitch
+		if !finiteGridNumber(mm) || mm < lo || mm > hi || mm <= last {
 			break
 		}
 		ticks = append(ticks, rulerTick{
 			mm:      mm,
-			labeled: labelMm > 0 && math.Abs(math.Remainder(mm, labelMm)) < 1e-9,
+			labeled: finiteGridNumber(labels) && labels > 0 && math.Abs(math.Remainder(mm, labels)) < 1e-9,
 		})
+		last = mm
 	}
 	return ticks
 }
@@ -374,6 +395,9 @@ func (this *GedView) drawGuides(g paint.Painter, guides sceneGuides) {
 func (this *GedView) drawRulers(g paint.Painter) {
 	viewW, viewH := this.Size()
 	sceneW, sceneH := this.SceneSizeMm()
+	if !finiteGridRect(0, 0, viewW, viewH) {
+		return
+	}
 	theme := gui.Theme()
 
 	g.Save()
@@ -391,8 +415,11 @@ func (this *GedView) drawRulers(g paint.Painter) {
 	g.LineTo(rulerThicknessPx, viewH)
 	g.Stroke()
 
-	horz := rulerTicks(sceneW, rulerTickMm, rulerLabelMm)
-	vert := rulerTicks(sceneH, rulerTickMm, rulerLabelMm)
+	x0, y0 := this.MapToScene(rulerThicknessPx, rulerThicknessPx)
+	x1, y1 := this.MapToScene(viewW, viewH)
+	scale := gui.ScreenDpmm() * this.ZoomFactor()
+	horz := visibleRulerTicks(sceneW, x0, x1, rulerTickMm, rulerLabelMm, scale)
+	vert := visibleRulerTicks(sceneH, y0, y1, rulerTickMm, rulerLabelMm, scale)
 
 	g.SetPen1(theme.TextColor, 0)
 	for _, tick := range horz {

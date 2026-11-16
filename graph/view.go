@@ -550,13 +550,7 @@ func (this *GraphView) Draw(g paint.Painter) {
 
 	// 画页面
 	pw, ph := this.PageSizePx(this.showPageMargin, this.ZoomFactor())
-	g.Rectangle(0, 0, pw, ph)
-	g.SetBrush1(paint.Color{255, 255, 255, 255})
-	g.FillPreserve()
-	//g.SetSourceRGB(0, 0, 0)
-	//g.SetLineWidth(0.3)
-	g.SetPen1(paint.Color{0, 127, 255, 255}, 0)
-	g.Stroke()
+	drawViewPage(g, pw, ph)
 
 	pageScale := gui.ScreenDpmm() * this.ZoomFactor()
 	g.Scale(pageScale, pageScale)
@@ -821,6 +815,9 @@ func (this *GraphView) SceneOriginPx() (x0, y0 float64) {
 }
 
 func limitZoomFactor(z float64) float64 {
+	if math.IsNaN(z) {
+		return 1
+	}
 	if z < 0.01 {
 		return 0.01
 	}

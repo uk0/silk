@@ -175,6 +175,14 @@ func prepareEditorRename(tabs *gui.TabWidget, canvas *ged.GedView, oldPath, newP
 }
 
 func migrateRenamedMetadata(tx *editorRename, tabs *gui.TabWidget, canvas *ged.GedView) {
+	if w := globalWorkbench; w != nil && w.tabs == tabs && w.canvas == canvas && w.designOpen != nil && w.designOpen.pending != nil {
+		path := w.designOpen.pending.path
+		_, old := fileops.RebasePath(path, tx.old, tx.next)
+		_, next := fileops.RebasePath(path, tx.next, tx.old)
+		if old || next {
+			cancelOwnedDesignOpen(w.designOpen)
+		}
+	}
 	// A pending snapshot belongs to its old path identity, never a replacement
 	// installed by a completed rename. Retire pages without joining their reads.
 	if tabs != nil {

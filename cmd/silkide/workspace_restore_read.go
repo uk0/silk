@@ -14,8 +14,9 @@ import (
 )
 
 // File syscalls run only on a bounded worker. A canceled OS open may remain
-// blocked; no reader is replaced until it really returns. Ordinary manual opens
-// retain their old API and are not claimed to be nonblocking by this increment.
+// blocked; no reader is replaced until it really returns. Startup, source-open
+// and manual design preparation use this bounded snapshot primitive; Save and
+// widget/resource construction have separate I/O contracts.
 func readRestoreBytes(ctx context.Context, path string) ([]byte, error) {
 	data, _, err := readRestoreSnapshot(ctx, path)
 	return data, err

@@ -427,9 +427,25 @@ func sessionRecoveryFor(tabs *gui.TabWidget) *workspaceRestore {
 	return nil
 }
 func noteWorkspaceRestoreInteraction(tabs *gui.TabWidget) {
+	if w := globalWorkbench; w != nil && w.tabs == tabs && w.designOpen != nil {
+		w.designOpen.cancelPending()
+	}
 	if r := sessionRecoveryFor(tabs); r != nil && !r.initializing && !r.closed && r.designPending {
 		r.interacted = true
 	}
+}
+
+// Explicit manual/New design intent retires only the startup design branch;
+// unrelated source restoration keeps its physical readers and owned pages.
+func (r *workspaceRestore) retireDesign() {
+	if r == nil || r.closed {
+		return
+	}
+	r.designChanged = true
+	r.designPending = false
+	r.deferredRecovery = false
+	r.reviewQueued = false
+	r.unlisten()
 }
 func (r *workspaceRestore) canReviewRecovery() bool {
 	return r != nil && r.deferredRecovery && !r.reviewQueued && r.designCurrent()

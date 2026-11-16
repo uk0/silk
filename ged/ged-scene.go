@@ -193,48 +193,14 @@ func (this *GedScene) notifyDesignChanged(refreshProperties bool) {
 //}
 
 func (this *GedScene) DrawSelf(g paint.Painter) {
-	g.SetBrush1(gui.Theme().FormColor)
-	g.Rectangle(this.Bounds())
-	g.Fill()
-
 	x0, y0, w, h := this.Bounds()
-
-	// Two-tier alignment grid for design-mode rulers, both pitches derived
-	// from the scene's grid model:
-	//
-	//   - Minor lines every pitch mm in light grey (230, 230, 235, 220) at
-	//     0.1mm pen width — visible enough to align widgets against
-	//     without overpowering the design itself.
-	//   - Major lines every majorGridRatio cells in slightly darker
-	//     (200, 210, 220, 240) at 0.15mm — give the eye an "every 10
-	//     squares" anchor for judging form size without counting cells.
-	//
-	// Both tiers paint the same path system as the original single-
-	// tier grid; the only cost is one extra Stroke pass, well below
-	// the per-frame budget.
-	if minorStep, majorStep, wantGrid := gridTiers(this.grid); wantGrid {
-		g.SetPen1(paint.Color{230, 230, 235, 220}, 0.1)
-		for x := x0; x <= x0+w; x += minorStep {
-			g.MoveTo(x, y0)
-			g.LineTo(x, y0+h)
-		}
-		for y := y0; y <= y0+h; y += minorStep {
-			g.MoveTo(x0, y)
-			g.LineTo(x0+w, y)
-		}
-		g.Stroke()
-
-		g.SetPen1(paint.Color{200, 210, 220, 240}, 0.15)
-		for x := x0; x <= x0+w; x += majorStep {
-			g.MoveTo(x, y0)
-			g.LineTo(x, y0+h)
-		}
-		for y := y0; y <= y0+h; y += majorStep {
-			g.MoveTo(x0, y)
-			g.LineTo(x0+w, y)
-		}
-		g.Stroke()
+	if !finiteGridRect(x0, y0, w, h) {
+		return
 	}
+	g.SetBrush1(gui.Theme().FormColor)
+	paintDesignBackground(g, x0, y0, w, h)
+
+	drawDesignGrid(g, x0, y0, w, h, this.grid)
 
 	// Draw subtle form size indicator at bottom-right
 	g.Save()

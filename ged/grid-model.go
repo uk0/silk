@@ -47,6 +47,9 @@ func defaultGridModel() GridModel {
 
 // clampGridPitch pins v into [minGridPitch, maxGridPitch].
 func clampGridPitch(v float64) float64 {
+	if v != v {
+		return defaultGridPitch
+	}
 	if v < minGridPitch {
 		return minGridPitch
 	}
@@ -59,6 +62,9 @@ func clampGridPitch(v float64) float64 {
 // clampFormSize floors v at minFormSize. There is no upper bound: a design may
 // legitimately target a page far larger than any screen.
 func clampFormSize(v float64) float64 {
+	if !finiteGridNumber(v) {
+		return minFormSize
+	}
 	if v < minFormSize {
 		return minFormSize
 	}
@@ -69,7 +75,7 @@ func clampFormSize(v float64) float64 {
 // it should paint at all. Pure so the two-tier rule is testable without a
 // painter.
 func gridTiers(g GridModel) (minor, major float64, paint bool) {
-	if !g.Visible || g.Pitch <= 0 {
+	if !g.Visible || !finiteGridNumber(g.Pitch) || g.Pitch <= 0 || !finiteGridNumber(g.Pitch*majorGridRatio) {
 		return 0, 0, false
 	}
 	return g.Pitch, g.Pitch * majorGridRatio, true
@@ -81,7 +87,7 @@ func gridTiers(g GridModel) (minor, major float64, paint bool) {
 // property whose scanner fails is left untouched (prop.parsePropertyValue).
 func parseMm(s string) (float64, bool) {
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil {
+	if err != nil || !finiteGridNumber(v) {
 		return 0, false
 	}
 	return v, true

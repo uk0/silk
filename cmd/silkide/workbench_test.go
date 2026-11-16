@@ -42,6 +42,7 @@ func testWorkbench(t *testing.T) *workbench {
 	w.canvas.GedScene().SetFilename(filepath.Join(t.TempDir(), "Form.silkui"))
 	globalWorkbench = w
 	installTestEditorOpener(t, w)
+	installTestDesignOpener(t, w)
 	dock.SetTabChangedCallback(func(_ int) { w.syncHistoryActions() })
 	t.Cleanup(w.closeHistoryActions)
 	t.Cleanup(w.closeNavigationActions)

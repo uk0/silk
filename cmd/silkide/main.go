@@ -169,6 +169,9 @@ func main() {
 	frame.Show()
 	core.EventLoop()
 	closeEditorOpens()
+	if w := globalWorkbench; w != nil && w.designOpen != nil {
+		w.designOpen.Close()
+	}
 	if w := globalWorkbench; w != nil && w.restore != nil {
 		w.restore.Close()
 	}
@@ -1276,6 +1279,9 @@ func installClosedPersist(frame *gui.Frame, canvas *ged.GedView, prefs *preferen
 		if editorOwner != nil && editorOwner.opens != nil {
 			editorOwner.opens.Close()
 		}
+		if editorOwner != nil && editorOwner.designOpen != nil {
+			editorOwner.designOpen.Close()
+		}
 		if w := globalWorkbench; w != nil && w.restore != nil {
 			w.restore.Close()
 		}
@@ -1667,44 +1673,7 @@ func openDocument(path string, tabs *gui.TabWidget, canvas *ged.GedView, centerD
 		return
 	}
 	if filepath.Ext(path) == ".silkui" {
-		if canvas == nil {
-			return
-		}
-		// Replacing the scene wipes the current design, so guard the
-		// open against losing unsaved work the same way newDesignCanvas
-		// does. confirmDiscardDirty no-ops on a clean scene.
-		if !confirmDiscardDirty(canvas) {
-			return
-		}
-		// Recovery prompt: if a sibling .autosave is newer than the
-		// .silkui the user is trying to open, offer to load it
-		// instead. Picks up where a crash or sudden quit left off.
-		recoveryPath := ""
-		if recovery := ged.CheckRecovery(path); recovery != "" && confirmRecoverFromAutosave(canvas, path, recovery) {
-			recoveryPath = recovery
-		}
-		recovered := recoveryPath != ""
-		if err := openDesignDocument(canvas.GedScene(), path, recoveryPath); err == nil {
-			showDesignWorkspace(canvas)
-			rebindAutoSaver(canvas.GedScene())
-			if recordRecent {
-				recordRecentFile(path)
-			}
-			watchForReload(canvas, path)
-			logEvent(ged.LogInfo, "Opened "+path)
-			if centerDock != nil {
-				// Bring the design canvas to the front so the user sees
-				// the loaded scene immediately.
-				if idx := centerDock.IndexOfView(canvas); idx >= 0 {
-					centerDock.SetActiveIndex(idx)
-				}
-			}
-			if recovered {
-				silkideToast(i18n.T("Recovered from autosave"), gui.ToastSuccess)
-			} else {
-				silkideToast(i18n.Tf("Opened %s", filepath.Base(path)), gui.ToastInfo)
-			}
-		}
+		requestDesignOpen(path, tabs, canvas, recordRecent)
 		return
 	}
 	requestEditorOpen(tabs, path, editorOpenOptions{recent: recordRecent})
@@ -3255,6 +3224,12 @@ func capitalise(s string) string {
 func newDesignCanvas(canvas *ged.GedView) {
 	if canvas == nil {
 		return
+	}
+	if w := globalWorkbench; w != nil && w.canvas == canvas {
+		cancelOwnedDesignOpen(w.designOpen)
+		if w.restore != nil {
+			w.restore.retireDesign()
+		}
 	}
 	if !confirmDiscardDirty(canvas) {
 		return

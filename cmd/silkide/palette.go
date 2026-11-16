@@ -75,6 +75,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 		owner := editorOpenerFor(editorTabs)
 		return paletteCommand{Name: i18n.T("Cancel File Opens"), Available: func() bool { return owner.valid() && len(owner.pending) > 0 }, Fn: func() { cancelOwnedEditorFileOpens(editorTabs, owner) }}
 	}
+	add("Cancel Design Open", "", func() { cancelOwnedDesignOpen(designOpenerFor(editorTabs, designCanvas)) })
+	paletteCommands[len(paletteCommands)-1].Available = func() bool { return designOpenPending(editorTabs) }
+	paletteCommands[len(paletteCommands)-1].Bind = func() paletteCommand {
+		owner := designOpenerFor(editorTabs, designCanvas)
+		return paletteCommand{Name: i18n.T("Cancel Design Open"), Available: func() bool { return owner.valid() && owner.pending != nil }, Fn: func() { cancelOwnedDesignOpen(owner) }}
+	}
 	for i, mode := range []workspaceMode{modeWelcome, modeEdit, modeDesign} {
 		add([]string{"Welcome", "Edit", "Design"}[i], actionKeyHint()+"+"+[]string{"1", "2", "3"}[i], func() {
 			if globalWorkbench != nil {

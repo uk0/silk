@@ -39,6 +39,7 @@ type workbench struct {
 	processRuntime    *processRuntimePane
 	restore           *workspaceRestore
 	opens             *editorOpenController
+	designOpen        *designOpenController
 	notifications     *notificationsPane
 	closedEditors     closedEditorHistory
 	toolViews         map[workspaceMode]workbenchToolViews

@@ -146,11 +146,13 @@ func openTestDocumentReady(t *testing.T, path string, tabs *gui.TabWidget, canva
 	t.Helper()
 	openFromTree(path, tabs, canvas, center)
 	pumpTestEditorOpens(t, tabs)
+	pumpTestDesignOpens(t, globalWorkbench)
 }
 func openTestDocumentOptionsReady(t *testing.T, path string, tabs *gui.TabWidget, canvas *ged.GedView, center *gui.Dock, recent bool) {
 	t.Helper()
 	openDocument(path, tabs, canvas, center, recent)
 	pumpTestEditorOpens(t, tabs)
+	pumpTestDesignOpens(t, globalWorkbench)
 }
 
 // Legacy UI tests assert completed document effects. These named getters await

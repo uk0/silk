@@ -234,9 +234,40 @@ not mockups or evidence of a measured slow drive.
 [Regression, native replay and platform gates](MANUAL_OPEN_QA_20261115.md) ·
 [Two-phase navigation SDK](docs/SDK_FEATURES.md#两阶段异步导航访问与焦点只读查询)
 
-Manual design decoding, Save, resources, macro output and reload callback I/O
-remain separate work; this increment is not complete Qt Creator parity or a
-universal Windows CPU fix.
+### Owned design opening and bounded canvas painting (2026-11-16)
+
+Manual `.silkui` opens now prepare primary/recovery snapshots on one background
+reader, with one replaceable latest target. The current design remains usable
+until the still-owned result is installed; **Cancel Design Open**, edits, drafts,
+New, rename and close revoke late delivery without joining blocked OS calls.
+
+![Actual macOS designer drag and saved property coordinates](docs/images/design-open-drag-macos.png)
+
+Actual macOS native replay: open from the project tree, drag `submit` from
+(20, 25) to **(30, 30) mm**, save and independently read back the design. Recovery
+Yes/No choices continue after native modal cleanup without stealing another
+field's focus. A temporary empty canvas focus does not discard the explicit
+choice; newer input and edits still win.
+
+![Actual Windows designer drag with saved property coordinates](docs/images/design-open-drag-windows.png)
+
+The same frozen source passes Windows 10 native recovery, exact saved drag,
+external reload, huge-canvas preservation and normal-exit checks, with bundled
+gopls connected. Package, race and strict language-service gates pass on macOS,
+Linux and Windows; platform skips and remaining scope are recorded below.
+
+![Actual macOS finite viewport of a very large authored form](docs/images/design-open-large-canvas-macos.png)
+
+This is a **1e12 × 1e12 mm** test form, not a scaled-down document. Line/dot grids
+and rulers build bounded visible spans with paint-only LOD; authored dimensions,
+snapping and normal Cairo raster are preserved. Huge paths are clipped before
+backend conversion, avoiding invisible fills/lines caused by coordinate overflow.
+These are unmodified desktop captures, not mockups or a universal CPU benchmark.
+
+[Design preparation regression, native replay and scope](MANUAL_DESIGN_OPEN_QA_20261116.md)
+
+Save, resources, macro output and reload callback I/O remain separate work. This
+increment is not complete Qt Creator parity or a universal Windows CPU fix.
 
 The same verified source also owns live **AlarmPanel** bindings: switching databases
 retires the old subscription, transition bursts share one pending UI refresh,
