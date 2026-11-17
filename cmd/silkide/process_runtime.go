@@ -30,11 +30,12 @@ type processRuntimePane struct {
 	owner           *gui.CodeEditor
 	path            string
 	revision        uint64
+	index           *hmi.SourceIndex
 	generation      uint64
 	loading, closed bool
 	cancel          context.CancelFunc
 	decodeJobs      *async.Executor
-	load            func(context.Context, string, func(hmi.Project, error)) error
+	load            func(context.Context, string, func(indexedProcessAsset, error)) error
 	startRuntime    func()
 }
 
@@ -42,6 +43,7 @@ func init() {
 	i18n.AddMany("zh", map[string]string{
 		"Run 2D Process": "运行二维组态", "Stop 2D Process": "停止二维组态", "Show Process Runtime": "显示组态运行面板",
 		"Open a .silkhmi source document first": "请先打开 .silkhmi 源文件", "Stop the current process runtime first": "请先停止当前组态运行时", "Loading frozen source snapshot…": "正在读取源文件快照…", "Document changed; run the current buffer again": "文档已变化，请重新运行当前缓冲区",
+		"The selected item has no exact source location": "选中的项目没有精确的源码位置",
 	})
 }
 
@@ -55,18 +57,11 @@ func newProcessRuntimePane(host *workbench, dock *gui.Dock) *processRuntimePane 
 	p.view.SetParent(p)
 	p.info = gui.NewLabel(i18n.T("Open a .silkhmi source document first"))
 	p.info.SetParent(p)
-	p.view.SetStartGuard(func() bool { return !p.loading && p.current() })
+	p.view.SetStartGuard(func() bool { return !p.loading && p.index != nil && p.current() && !p.owner.Formatting() })
 	p.startRuntime = p.view.Start
-	p.load = func(ctx context.Context, source string, done func(hmi.Project, error)) error {
-		_, err := gui.RunAsync(ctx, p.decodeJobs, func(ctx context.Context) (hmi.Project, error) {
-			if err := ctx.Err(); err != nil {
-				return hmi.Project{}, err
-			}
-			project, err := hmi.Parse([]byte(source))
-			if err == nil {
-				err = ctx.Err()
-			}
-			return project, err
+	p.load = func(ctx context.Context, source string, done func(indexedProcessAsset, error)) error {
+		_, err := gui.RunAsync(ctx, p.decodeJobs, func(ctx context.Context) (indexedProcessAsset, error) {
+			return decodeProcessSource(ctx, source)
 		}, done)
 		return err
 	}
@@ -91,10 +86,47 @@ func (p *processRuntimePane) sourceAlive() bool {
 	return !p.closed && p.owner != nil && p.host != nil && openEditors[p.path] == p.owner && p.owner.FilePath() == p.path
 }
 func (p *processRuntimePane) focusSource() {
-	if p.sourceAlive() {
-		p.host.activate(modeEdit)
-		focusEditorTab(p.host.tabs, p.owner)
-		p.owner.SetFocus()
+	if !p.sourceAlive() {
+		return
+	}
+	if c := editorOpenerFor(p.host.tabs); c != nil {
+		p.focusOwnedSource(c, c.newIntent(), p.owner)
+	}
+}
+func (p *processRuntimePane) focusOwnedSource(c *editorOpenController, intent *editorOpenIntent, ed *gui.CodeEditor) {
+	p.host.activate(modeEdit)
+	if c.valid() && c.intent == intent && p.owner == ed && p.sourceAlive() {
+		focusEditorTab(c.tabs, ed)
+		if c.current(intent, ed) && p.owner == ed && p.sourceAlive() {
+			ed.SetFocus()
+		}
+	}
+}
+func (p *processRuntimePane) focusSourceTarget(target hmi.SourceTarget) {
+	if !p.current() || p.owner.Formatting() || transitionBusy() {
+		return
+	}
+	ed, index, tabs := p.owner, p.index, p.host.tabs
+	line, col, ok := index.IDPosition(target)
+	if !ok {
+		silkideToast(i18n.T("The selected item has no exact source location"), gui.ToastWarning)
+		return
+	}
+	c := editorOpenerFor(tabs)
+	if c == nil || trackedOpenEditor(tabs, p.path) != ed {
+		return
+	}
+	intent, stamp := c.newIntent(), c.historyStamp
+	p.focusOwnedSource(c, intent, ed)
+	stillCurrent := func() bool {
+		return c.current(intent, ed) && c.historyStamp == stamp && p.index == index && p.owner == ed && p.current() && !ed.Formatting()
+	}
+	if !stillCurrent() {
+		return
+	}
+	ed.NavigateToLineCol(line, col)
+	if stillCurrent() {
+		c.owner.navigation.RecordJump(intent.origin, ed.NavigationPosition())
 	}
 }
 func (p *processRuntimePane) stop() bool {
@@ -113,6 +145,7 @@ func (p *processRuntimePane) invalidate(ed *gui.CodeEditor) {
 		return
 	}
 	p.stop()
+	p.index = nil
 	p.view.Invalidate()
 	p.info.SetText(i18n.T("Document changed; run the current buffer again"))
 }
@@ -123,6 +156,7 @@ func (p *processRuntimePane) retire(ed *gui.CodeEditor) {
 	p.invalidate(ed)
 	p.owner = nil
 	p.view.SetSourceAction(nil)
+	p.view.SetSourceTargetAction(nil)
 }
 func (p *processRuntimePane) OnHide() { p.stop() }
 func (p *processRuntimePane) OnTreeVisibilityChanged(visible bool) {
@@ -137,6 +171,7 @@ func (p *processRuntimePane) shutdown() {
 	}
 	p.stop()
 	p.closed = true
+	p.index = nil
 	p.decodeJobs.Close()
 	p.view.Close()
 }
@@ -219,11 +254,13 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 		return
 	}
 	p.stop()
+	p.index = nil
 	p.view.Invalidate()
 	p.owner = ed
 	p.path = path
 	p.revision = revision
 	p.view.SetSourceAction(p.focusSource)
+	p.view.SetSourceTargetAction(p.focusSourceTarget)
 	if !p.reveal() {
 		return
 	}
@@ -233,7 +270,7 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 	p.info.SetText(filepath.Base(path) + " · " + i18n.T("Loading frozen source snapshot…"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	p.cancel = cancel
-	finish := func(project hmi.Project, err error) {
+	finish := func(asset indexedProcessAsset, err error) {
 		if p.closed || !p.loading || p.generation != generation {
 			return
 		}
@@ -251,14 +288,21 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 		}
 		p.view.SetSourceLabel(filepath.Base(path))
 		p.info.SetText(path + fmt.Sprintf(" · revision %d", revision))
-		if err = p.view.SetSnapshot(project, processRuntimeDatabase(path)); err != nil {
+		p.index = asset.index
+		if err = p.view.SetSnapshot(asset.project, processRuntimeDatabase(path)); err != nil {
+			if p.index == asset.index {
+				p.index = nil
+			}
 			silkideToast(err.Error(), gui.ToastWarning)
+			return
+		}
+		if p.generation != generation || p.index != asset.index || !p.current() || visibleCaretEditor(tabs, canvas) != ed {
 			return
 		}
 		p.startRuntime()
 	}
 	if err := p.load(ctx, source, finish); err != nil {
-		finish(hmi.Project{}, err)
+		finish(indexedProcessAsset{}, err)
 	}
 }
 func dispatchProcessRuntime(canvas *ged.GedView) bool {

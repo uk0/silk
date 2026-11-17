@@ -236,7 +236,13 @@ func processCorners(n hmi.Node) [4]hmi.XY {
 func (v *ProcessDiagram) beginGesture(g *processGesture) { v.gesture = g; v.PushCapture(); v.Update() }
 func (v *ProcessDiagram) OnLeftDown(x, y float64)        { v.pointerDown(x, y, processInputModifiers()) }
 func (v *ProcessDiagram) pointerDown(x, y float64, mods processModifiers) {
-	if !v.canEdit() || !finiteProcess(x) || !finiteProcess(y) {
+	if !finiteProcess(x) || !finiteProcess(y) {
+		return
+	}
+	if !v.canEdit() {
+		if v.canInspect() && !v.panning {
+			v.inspectAt(x, y)
+		}
 		return
 	}
 	if v.gesture != nil || v.panning {
@@ -634,7 +640,11 @@ func (v *ProcessDiagram) processKey(key int, repeat bool, mods processModifiers)
 		active := v.gesture != nil || v.from != nil || v.panning
 		v.OnPointerCancel()
 		if !active {
-			v.SelectNodes(nil)
+			if v.canInspect() {
+				v.setInspection(hmi.SourceTarget{})
+			} else {
+				v.SelectNodes(nil)
+			}
 		}
 		return
 	}

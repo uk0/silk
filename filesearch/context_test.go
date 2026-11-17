@@ -134,7 +134,10 @@ func TestSearchContextErrorsCancellationAndSymlink(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing root accepted")
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), time.Nanosecond)
+	// An already expired deadline must be deterministic on coarse clocks.
+	// A positive nanosecond timeout can remain live through the scan (and
+	// depends on when the platform schedules the timer callback).
+	ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	r, err = SearchContext(ctx, path, `a.*z`, ContextOptions{Options: Options{Regex: true}})
 	if !errors.Is(err, context.DeadlineExceeded) || len(r.Matches) != 0 {

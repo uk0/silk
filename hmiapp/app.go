@@ -15,6 +15,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hmi"
+	"github.com/uk0/silk/i18n"
 )
 
 type Config struct {
@@ -38,7 +39,9 @@ type Workbench struct {
 	ioDone       chan struct{}
 	Editor       *gui.ProcessEditor
 	Points       *gui.ProcessPointMonitor
+	Alarms       *gui.ProcessAlarmMonitor
 	showPoints   bool
+	showAlarms   bool
 	buttons      []*gui.Button
 	status       *gui.Label
 	cfg          Config
@@ -74,6 +77,9 @@ func New(c Config) (*Workbench, error) {
 	f.Points = gui.NewProcessPointMonitor()
 	f.Points.SetParent(f)
 	f.Points.SetVisible(false)
+	f.Alarms = gui.NewProcessAlarmMonitor()
+	f.Alarms.SetParent(f)
+	f.Alarms.SetVisible(false)
 	add := func(text string, fn func()) {
 		b := gui.NewButton1(text, nil)
 		b.SetParent(f)
@@ -88,6 +94,7 @@ func New(c Config) (*Workbench, error) {
 	add("Fit", f.Fit)
 	add("Snapshot", f.Snapshot)
 	add("Live points", f.TogglePoints)
+	add(i18n.T("Live alarms"), f.ToggleAlarms)
 	f.status = gui.NewLabel("Editor · no I/O until Run / Save / Load · blue ports connect pipes")
 	f.status.SetParent(f)
 	f.refreshControls()
@@ -95,7 +102,7 @@ func New(c Config) (*Workbench, error) {
 }
 func (f *Workbench) OnResize() {
 	w, h := f.Size()
-	columns := max(1, int(max(0, w-16)/150))
+	columns := max(1, min(len(f.buttons), int(max(0, w-16)/128)))
 	bw := (w - 16) / float64(columns)
 	rows := (len(f.buttons) + columns - 1) / columns
 	for i, b := range f.buttons {
@@ -104,11 +111,12 @@ func (f *Workbench) OnResize() {
 	top := 16 + float64(rows)*36
 	available := max(0, h-top-30)
 	pointHeight := 0.0
-	if f.showPoints {
+	if f.showPoints || f.showAlarms {
 		pointHeight = min(260, available*0.4)
 	}
 	f.Editor.SetBounds(0, top, w, max(0, available-pointHeight))
 	f.Points.SetBounds(0, top+available-pointHeight, w, pointHeight)
+	f.Alarms.SetBounds(0, top+available-pointHeight, w, pointHeight)
 	f.status.SetBounds(8, h-28, max(0, w-16), 24)
 	f.Fit()
 }
@@ -120,13 +128,36 @@ func (f *Workbench) TogglePoints() {
 		return
 	}
 	f.showPoints = !f.showPoints
+	f.showAlarms = false
+	f.bindProcessPanels(f.Runtime())
+	f.OnResize()
+}
+
+// ToggleAlarms switches to an inline live/history view without starting a
+// runtime or adding another data/polling worker.
+func (f *Workbench) ToggleAlarms() {
+	if f.closed {
+		return
+	}
+	f.showAlarms = !f.showAlarms
+	f.showPoints = false
+	f.bindProcessPanels(f.Runtime())
+	f.OnResize()
+}
+
+func (f *Workbench) bindProcessPanels(rt *hmi.Runtime) {
 	f.Points.SetVisible(f.showPoints)
+	f.Alarms.SetVisible(f.showAlarms)
 	if f.showPoints {
-		f.Points.SetRuntime(f.Runtime())
+		f.Points.SetRuntime(rt)
 	} else {
 		f.Points.SetRuntime(nil)
 	}
-	f.OnResize()
+	if f.showAlarms {
+		f.Alarms.SetRuntime(rt)
+	} else {
+		f.Alarms.SetRuntime(nil)
+	}
 }
 
 func (f *Workbench) StartRuntime() {
@@ -137,8 +168,8 @@ func (f *Workbench) StartRuntime() {
 	ctx, cancel := context.WithCancel(f.ctx)
 	s := &session{cancel: cancel, done: make(chan struct{})}
 	f.session = s
-	f.showPoints = true
-	f.Points.SetVisible(true)
+	f.showPoints = !f.showAlarms
+	f.bindProcessPanels(nil)
 	f.refreshControls()
 	f.OnResize()
 	f.status.SetText("Starting shared point store and source workers…")
@@ -148,12 +179,10 @@ func (f *Workbench) StartRuntime() {
 		finalErr = runStoredRuntime(ctx, p, f.cfg.DatabasePath, f.cfg.RequestHeaders, gui.PostContext, func(runtime *hmi.Runtime) {
 			if !f.closed && f.session == s && !s.stopping {
 				s.runtime = runtime
-				if f.showPoints {
-					f.Points.SetRuntime(runtime)
-				}
+				f.bindProcessPanels(runtime)
 				_, e := f.Editor.Diagram.BindTags(runtime.Tags)
 				if e != nil {
-					f.Points.SetRuntime(nil)
+					f.bindProcessPanels(nil)
 					f.status.SetText(e.Error())
 					s.cancel()
 				} else {
@@ -171,6 +200,7 @@ func (f *Workbench) finish(s *session, e error) {
 		}
 		f.Editor.Diagram.UnbindTags()
 		f.Points.SetRuntime(nil)
+		f.Alarms.SetRuntime(nil)
 		f.session = nil
 		f.refreshControls()
 		if e != nil {
@@ -185,6 +215,7 @@ func (f *Workbench) StopRuntime() {
 	if f.session != nil && !f.session.stopping {
 		f.session.stopping = true
 		f.Points.SetRuntime(nil)
+		f.Alarms.SetRuntime(nil)
 		f.session.cancel()
 		f.status.SetText("Stopping…")
 		f.notifyRuntime(f.session, nil)
@@ -331,6 +362,7 @@ func (f *Workbench) Close() {
 	}
 	f.closed = true
 	f.Points.Close()
+	f.Alarms.Close()
 	f.refreshControls()
 	f.cancel()
 	f.StopRuntime()
@@ -366,7 +398,7 @@ func Run(c Config) error {
 
 // State is reflected in controls rather than silently ignoring enabled buttons.
 func (f *Workbench) refreshControls() {
-	if len(f.buttons) < 7 {
+	if len(f.buttons) < 9 {
 		return
 	}
 	idle := !f.closed && !f.busy && f.session == nil
@@ -375,7 +407,7 @@ func (f *Workbench) refreshControls() {
 	for _, i := range []int{2, 3, 4} {
 		f.buttons[i].SetEnabled(idle)
 	}
-	for _, i := range []int{5, 6, 7} {
+	for _, i := range []int{5, 6, 7, 8} {
 		f.buttons[i].SetEnabled(!f.closed)
 	}
 	f.Editor.SetRunning(f.session != nil)

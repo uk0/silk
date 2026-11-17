@@ -113,6 +113,70 @@ func TestIndexedSourceRetainsParseAcceptance(t *testing.T) {
 	}
 }
 
+func TestIndexedSourceAlarmNamespaceAndExactPosition(t *testing.T) {
+	s := strings.Replace(indexedFixture, `"points":[]`, `"points":[{"name":"设备","kind":"bool"}]`, 1)
+	s = strings.Replace(s, `"nodes":[`, `"alarms":[{"id":"retired","point":"设备","condition":"is","priority":"warning","threshold":true}],
+ "AlArMs":[{"point":"设备", "i\u0064":"设备","condition":"is","priority":"critical","threshold":false}],
+ "nodes":[`, 1)
+	s = strings.ReplaceAll(s, "\n", "\r\n")
+	p, index, err := ParseIndexedSource(s)
+	if err != nil || len(p.Alarms) != 1 || p.Alarms[0].ID != "设备" {
+		t.Fatalf("alarm fixture: %v %v", p.Alarms, err)
+	}
+	target := SourceTarget{Kind: SourceAlarm, ID: "设备"}
+	marker := `"i\u0064":"`
+	offset := strings.Index(s, marker) + len(marker)
+	line, byteColumn := indexedPosition(s, offset)
+	runes := utf8.RuneCountInString(s[offset-byteColumn : offset])
+	if y, x, ok := index.IDPosition(target); !ok || y != line || x != runes {
+		t.Fatalf("alarm coordinate: %d:%d %v want %d:%d", y, x, ok, line, runes)
+	}
+	if got, ok := index.AtPosition(line, byteColumn); !ok || got != target {
+		t.Fatal("alarm position mistyped", got, ok)
+	}
+	for _, kind := range []SourceEntity{SourceNode, SourceLink, SourcePoint} {
+		if y, _, ok := index.IDPosition(SourceTarget{Kind: kind, ID: "设备"}); !ok || y == line {
+			t.Fatal("alarm alias overlapped another namespace", kind, y, ok)
+		}
+	}
+	if _, _, ok := index.IDPosition(SourceTarget{Kind: SourceAlarm, ID: "retired"}); ok {
+		t.Fatal("indexed a superseded alarm array")
+	}
+}
+
+func TestIndexedSourcePointDeclarationInItsOwnNamespace(t *testing.T) {
+	s := strings.Replace(indexedFixture, `"points":[]`,
+		`"points":[{"name":"shadowed","kind":"int"}],
+ "POINTS":[{"description":"🏭 name decoy","N\u0041ME":"设备","name":null}]`, 1)
+	s = strings.ReplaceAll(s, "\n", "\r\n")
+	p, idx, err := ParseIndexedSource(s)
+	if err != nil || len(p.Points) != 1 || p.Points[0].Name != "设备" {
+		t.Fatal(p.Points, err)
+	}
+	name := SourceTarget{SourcePoint, "设备"}
+	marker := `"N\u0041ME":"`
+	offset := strings.Index(s, marker) + len(marker)
+	line, col := indexedPosition(s, offset)
+	wantCol := utf8.RuneCountInString(s[offset-col : offset])
+	if y, x, ok := idx.IDPosition(name); !ok || y != line || x != wantCol {
+		t.Fatal(y, x, ok, line, wantCol)
+	}
+	if got, ok := idx.AtPosition(line, col); !ok || got != name {
+		t.Fatal(got, ok)
+	}
+	if nodeLine, _, ok := idx.IDPosition(SourceTarget{SourceNode, name.ID}); !ok || nodeLine == line {
+		t.Fatal("crossed point and device namespaces", nodeLine)
+	}
+	inherited := strings.Replace(s, marker+`设备","name":null`, `"initial":0`, 1)
+	_, idx, err = ParseIndexedSource(inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := idx.IDPosition(SourceTarget{SourcePoint, "shadowed"}); ok {
+		t.Fatal("guessed inherited point name")
+	}
+}
+
 func BenchmarkIndexedSource512Nodes(b *testing.B) {
 	p := Project{Version: Version, Width: 100, Height: 100}
 	for n := 0; n < 512; n++ {

@@ -23,6 +23,7 @@ type Runtime struct {
 	writers         map[string]string
 	sources         []*point.HTTPSource
 	configs         []Source
+	alarms          *alarmMonitor
 	mu              sync.Mutex
 	publishMu       sync.Mutex
 	errors          map[string]string
@@ -118,6 +119,10 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 		}
 	}
 	r.Tick(time.Now())
+	r.alarms, e = newAlarmMonitor(p, r.Tags, time.Now)
+	if e != nil {
+		return nil, e
+	}
 	return r, nil
 }
 
@@ -250,6 +255,7 @@ func (r *Runtime) Tick(now time.Time) {
 			}
 		}
 	}
+	r.alarms.tick(now)
 }
 func (r *Runtime) Errors() map[string]string {
 	r.mu.Lock()
@@ -265,6 +271,7 @@ func (r *Runtime) Stop() {
 	r.closed = true
 	cancel, done := r.cancel, r.done
 	r.mu.Unlock()
+	r.alarms.close()
 	if cancel != nil {
 		cancel()
 		<-done

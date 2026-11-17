@@ -2,25 +2,31 @@ package hmiapp
 
 import (
 	"context"
-	"github.com/uk0/silk/hmi"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/uk0/silk/hmi"
 )
 
 func TestGeneratedProjectCompilesAndDocumentRoundTrips(t *testing.T) {
 	p := hmi.Template()
+	p.Alarms = []hmi.AlarmRule{{ID: "valve-watch", Point: "DI11", Condition: hmi.AlarmMatch, Priority: hmi.AlarmWarning, Threshold: true, Latch: true}}
 	b, e := Generate(p)
 	if e != nil {
 		t.Fatal(e)
+	}
+	if !strings.Contains(string(b), "valve-watch") {
+		t.Fatal("generated workbench lost alarm rules")
 	}
 	path := filepath.Join(t.TempDir(), "plant.silkhmi")
 	if e = hmi.Save(path, p); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = hmi.Load(path); e != nil {
+	if p, e := hmi.Load(path); e != nil || len(p.Alarms) != 1 || p.Alarms[0].Threshold != true {
 		t.Fatal(e)
 	}
 	if testing.Short() {
@@ -137,6 +143,32 @@ func TestWorkbenchPointPanelToggleIsInertAndLiveLayoutDoesNotOverlap(t *testing.
 	f.TogglePoints()
 	if f.Points.IsVisible() || len(f.Points.PointStates()) != 0 {
 		t.Fatal("hidden panel kept active view")
+	}
+}
+
+func TestWorkbenchAlarmPanelIsAnInertInlineView(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "points.db")
+	f, err := New(Config{DatabasePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Join()
+	defer f.Close()
+	f.SetSize(640, 560)
+	f.TogglePoints()
+	f.ToggleAlarms()
+	if !f.Alarms.IsVisible() || f.Points.IsVisible() || f.session != nil {
+		t.Fatal("alarm toggle overlapped panels or started acquisition")
+	}
+	if f.Editor.Y()+f.Editor.Height() > f.Alarms.Y() || f.Alarms.Y()+f.Alarms.Height() > f.status.Y() {
+		t.Fatal("inline alarm panel overlaps another workbench region")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("alarm panel created a store", err)
+	}
+	f.TogglePoints()
+	if !f.Points.IsVisible() || f.Alarms.IsVisible() {
+		t.Fatal("point monitor did not retire the alarm view")
 	}
 }
 

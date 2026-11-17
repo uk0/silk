@@ -136,7 +136,16 @@ Return to the source editor and choose **Tools → Run 2D Process**, F5, or the
 ordinary Run button to run the exact current `.silkhmi` buffer, including dirty
 unsaved text. The embedded **Process Runtime** dock has a read-only live diagram,
 typed point monitor, manual-write/history actions and **Go to source** navigation.
-Its Diagram/Points buttons select alternate full-width views for compact docks.
+Its Diagram, Points, and (when the project defines rules) Live alarms buttons
+select alternate full-width views without restarting acquisition.
+Select a point row or click a device or pipe, then choose **Go to source** to
+jump to its declaration in the exact editor buffer, with normal Back/Forward
+history. With no item selected, the command returns to the source document
+without moving its caret. Diagram inspection follows the visible live geometry
+but does not activate authoring or point writes; Escape clears the selection.
+SDK hosts can opt in with `hmiapp.RuntimeView.SetSourceTargetAction` and
+resolve the typed selection against their own current snapshot. Embedding
+without that handler retains the original document-level action.
 
 Source changes, source close/rename, runtime-tab/dock hide and IDE shutdown retire
 pending loads and active acquisition. Revealing a dock or Undoing source edits
@@ -152,14 +161,61 @@ use compatible point names. Database-profile/migration UI is separate work.
 **View → Show Process Runtime** restores a hidden/removed tool instance without
 starting it. The generic Stop action also stops a process runtime; Go build/debug
 commands keep their existing meaning. The standalone workbench's `-project` /
-`-db` workflow remains available. Live-runtime item navigation, hot reload,
-alarm lifecycle and PLC command protocols remain later integration.
+`-db` workflow remains available. Hot reload and PLC command protocols remain
+later integration.
 
 ![Context-sensitive Arrange menu inside the IDE modal](images/hmi-ide-arrange-windows.png)
 
 See [IDE workflow/native verification](../HMI_IDE_QA_20261114.md) for source
 identity, full test results, screenshots and remaining first-frame/platform
 verification boundaries.
+
+### Typed alarm rules
+
+Use **Alarm rules** in the visual editor to stage, validate, and undo rules
+against existing points. A numeric `high` rule trips at or above its threshold
+and returns at or below its lower reset threshold; `low` reverses both
+comparisons. Bounds are inclusive and must not overlap. Integer thresholds
+remain exact, including beyond JavaScript's 53-bit integer range. The `is`
+condition matches a boolean or text value and returns on inequality.
+
+```json
+{"id":"reactor_hot","point":"AI101","condition":"high","priority":"critical",
+ "threshold":90,"reset":85,"raise_ms":500,"clear_ms":1000,"latch":true}
+```
+
+Delay time is measured by the runtime clock; sample timestamps are used for
+freshness when a point has a stale limit. Uncertain, bad, or invalid quality
+cancels any pending transition and leaves an active condition active. A
+latched alarm can return to normal while remaining visible; acknowledging
+that occurrence clears it only with confirmed recovery. An acknowledgment
+before return does not silence the condition. The monitor rejects tokens
+from another occurrence or runtime.
+
+The standalone workbench and the IDE's **Process Runtime** dock expose
+**Live alarms**, **Alarm history**, and **Acknowledge alarm**. The panel does
+not start acquisition, and replaces the point monitor while visible. In the
+IDE, select a live rule or history row and choose **Go to source** to locate
+the authored rule. History is read-only; stopping detaches the monitor, and
+editing the source invalidates the running snapshot and its rule targets.
+SDK consumers can subscribe to
+`Runtime.SubscribeAlarmChanges`, read `AlarmStates` / `AlarmEvents`, and use
+`AcknowledgeAlarm` with the displayed token. The event ring is bounded and
+session-only; authored rules are saved in `.silkhmi`. Acknowledgment never
+writes a point, invokes external equipment, or substitutes for a certified
+alarm or interlock.
+
+Run the tested synthetic fixture with a fresh local database (POSIX shell):
+
+```sh
+qa=$(mktemp -d)
+go run ./cmd/silkhmi -project examples/process2d/alarms.silkhmi -db "$qa/points.db"
+```
+
+Open **Live alarms** and then **Run**. The initial DI11=true raises the
+latched rule; BI11 stays one integer below its high threshold. For this
+fixture only, use **Live points → Write value** to set DI11=false. Return
+to alarms, select the returned rule, acknowledge it, and inspect history.
 
 ### Reusable device library
 

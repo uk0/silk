@@ -9,6 +9,45 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## In verification: typed alarm lifecycle and authoring
+
+- [x] Add bounded schema validation and exact typed thresholds, with separate
+      trip/reset conditions, on/off dwell, quality gating, and optional latching.
+- [x] Own session history and acknowledgment with occurrence identity. No
+      point writes, actuator commands, or database history are implied.
+- [x] Add staged alarm rule authoring and an inline live/history monitor in the
+      standalone workbench. Coalesce lifecycle notifications without polling UI.
+- [x] Compile generated Go; verify macOS native lifecycle, one-write SQLite
+      readback, layout clipping and sorting against a clean profile.
+- [x] Pass the final macOS full/race/strict bundled-gopls and CGO-free SDK gates.
+- [x] Integrate the monitor with the SilkIDE Process Runtime dock. Verify rule
+      and history navigation, view switching, Stop, and no point writes in the
+      native macOS IDE.
+- [ ] Finish Linux and Windows regression for the integrated alarm candidate.
+
+The previous IDE runtime navigation gate runs on a separate frozen candidate.
+[Standalone verification and sample](HMI_TYPED_ALARMS_QA_20261117.md) ·
+[IDE alarm dock verification](HMI_ALARM_DOCK_QA_20261117.md).
+
+## In verification: Process Runtime item navigation
+
+- [x] Reuse the bounded source index for runtime snapshot decoding; extend it
+      to exact point declarations without confusing references or namespaces.
+- [x] Route the existing runtime source button from the active view: selected
+      live point, read-only device or pipe, or the original file without a jump.
+- [x] Fence source edits, tab changes/competing intent, close/rename, hidden
+      devices and obsolete loads. Keep history, disk and live I/O independent.
+- [x] Pass macOS and Linux full/race/strict bundled-gopls tests from frozen
+      source; pass Windows focused race tests on the four changed packages.
+- [x] Verify native macOS and Windows point/device/pipe jumps, history,
+      stop/exit, persisted caret, unchanged source and SQLite readback.
+- [ ] Finish the Windows full/race/strict bundled-gopls matrix before publication.
+      The initial run exposed an existing one-nanosecond file-search timeout
+      fixture; its deterministic test-only correction is under separate replay.
+
+[Verification and limits](HMI_RUNTIME_NAV_QA_20261117.md).
+Alarm lifecycle, hot reload and wider IDE parity are still separate.
+
 ## Validated increment: bidirectional process source navigation
 
 - [x] Index original JSON source positions on the bounded decode worker.
@@ -27,7 +66,7 @@ Do not substitute a small passing test for the whole product-readiness gate.
 - [x] Pass Windows 10 full/race and strict bundled-gopls suites, with an exact
       source-manifest readback after the runs.
 
-Runtime item navigation and further product gaps remain separate.
+Runtime item navigation is covered in the newer increment above.
 
 [Verification and remaining limits](HMI_SOURCE_NAV_QA_20261117.md).
 

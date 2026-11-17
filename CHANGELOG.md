@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — typed HMI alarms
+
+- Author point alarm rules with exact numeric hysteresis or typed bool/text
+  matching, individual raise/clear delays, quality gating and optional latching.
+- Browse live alarms and bounded session history in the standalone workbench
+  and the IDE's **Process Runtime** dock. Switching views keeps acquisition
+  running. Both live and historical IDE rows can jump to the authored rule.
+- Acknowledge the selected occurrence without writing a point. Retired sessions
+  and replacement occurrences reject old acknowledgment tokens.
+- Remove platform timer-resolution dependence from the expired file-search
+  deadline test.
+
+## Unreleased — Process Runtime item navigation
+
+- Navigate from a live point row or a selected device/pipe to its original
+  source declaration, with editor Back/Forward and exact snapshot ownership.
+- Inspect the rendered live diagram without enabling authoring or writes;
+  stale or retired snapshots cannot move the source caret.
+
 ## Unreleased — 2D process source navigation
 
 - Open the visual editor with the node or pipe under the current `.silkhmi`

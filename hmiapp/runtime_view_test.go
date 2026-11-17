@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -127,6 +128,114 @@ func TestRuntimeViewSnapshotFitsNewProjectRatherThanTemplate(t *testing.T) {
 	want := math.Min(v.Diagram.Width()/project.Width, v.Diagram.Height()/project.Height)
 	if math.Abs(v.Diagram.Zoom()-want) > 1e-9 {
 		t.Fatalf("new project retained template camera: zoom=%v want=%v", v.Diagram.Zoom(), want)
+	}
+}
+
+func TestRuntimeViewSourceButtonRoutesActiveSelectionWithoutIO(t *testing.T) {
+	v, posts := runtimeViewTest(t, RuntimeViewOptions{EnsureDatabaseDirectory: true})
+	v.SetSize(1000, 500)
+	p := runtimeViewProject()
+	p.Links = []hmi.Link{{ID: "flow", From: hmi.Endpoint{Node: "di", Port: "east"}, To: hmi.Endpoint{Node: "ai", Port: "west"}}}
+	db := filepath.Join(t.TempDir(), "new", "points.db")
+	if err := v.SetSnapshot(p, db); err != nil {
+		t.Fatal(err)
+	}
+	var events []hmi.SourceTarget
+	v.SetSourceAction(func() { events = append(events, hmi.SourceTarget{}) })
+	v.SetSourceTargetAction(func(s hmi.SourceTarget) { events = append(events, s) })
+	action := v.buttons[5].Action()
+	v.SetPointsMode(false)
+	before := v.Diagram.ProjectJSON()
+	z := v.Diagram.Zoom()
+	v.Diagram.OnLeftDown(70*z, 65*z)
+	action.Trigger(nil)
+	v.Diagram.OnLeftDown(150*z, 60*z)
+	action.Trigger(nil)
+	if v.Busy() || v.Diagram.ProjectJSON() != before {
+		t.Fatal("navigation starts acquisition or edits canvas")
+	}
+	if _, err := os.Stat(db); !os.IsNotExist(err) {
+		t.Fatal("navigation touched database", err)
+	}
+	v.SetPointsMode(true)
+	v.Start()
+	pumpRuntimeView(t, posts, func() bool { return v.Runtime() != nil })
+	if !v.Points.SelectPoint("DI11") {
+		t.Fatal("real live point missing")
+	}
+	action.Trigger(nil)
+	v.Invalidate()
+	action.Trigger(nil) // only the original source document, no stale entity
+	v.SetVisible(false)
+	action.Trigger(nil) // a queued dispatch must respect a hidden owner
+	want := []hmi.SourceTarget{
+		{Kind: hmi.SourceNode, ID: "di"}, {Kind: hmi.SourceLink, ID: "flow"},
+		{Kind: hmi.SourcePoint, ID: "DI11"}, {},
+	}
+	if !slices.Equal(events, want) {
+		t.Fatalf("source action: got %v want %v", events, want)
+	}
+}
+
+func TestRuntimeViewAlarmPaneKeepsRuntimeAndSourceIdentity(t *testing.T) {
+	v, posts := runtimeViewTest(t, RuntimeViewOptions{EnsureDatabaseDirectory: true})
+	v.SetSize(950, 370)
+	button := v.buttons[runtimeAlarmsButton]
+	if button.IsVisible() {
+		t.Fatal("toolbar reserved a slot without alarm rules")
+	}
+	p := runtimeViewProject()
+	p.Points[0].Initial = true
+	p.Alarms = []hmi.AlarmRule{{ID: "limit", Point: "DI11", Condition: hmi.AlarmMatch, Priority: hmi.AlarmCritical, Threshold: true, Latch: true}}
+	db := filepath.Join(t.TempDir(), "store", "points.db")
+	if err := v.SetSnapshot(p, db); err != nil {
+		t.Fatal(err)
+	}
+	button.Action().Trigger(nil)
+	if !button.IsEnabled() || !v.Alarms.IsVisible() || v.Points.IsVisible() || v.Diagram.IsVisible() || v.Busy() {
+		t.Fatal("alarm mode did not remain an inert exclusive view")
+	}
+	if _, err := os.Stat(db); !os.IsNotExist(err) {
+		t.Fatal("switching to alarm mode opened the database", err)
+	}
+	for _, width := range []float64{320, 640, 950} {
+		v.SetSize(width, 270)
+		if v.Alarms.Y()+v.Alarms.Height() > v.status.Y() || button.X()+button.Width() > width || button.Y()+button.Height() > v.Alarms.Y() {
+			t.Fatalf("alarm panel bounds at %.0f", width)
+		}
+	}
+	if !pointsql.StoreAvailable() {
+		t.Skip("runtime alarm session requires cgo for SQLite")
+	}
+	v.Start()
+	pumpRuntimeView(t, posts, func() bool { return v.Runtime() != nil })
+	rt := v.Runtime()
+	states := rt.AlarmStates()
+	if len(states) != 1 || !states[0].Active || !v.Alarms.SelectAlarm("limit") {
+		t.Fatalf("expected active latch bound to the dock: %+v", states)
+	}
+	var events []hmi.SourceTarget
+	v.SetSourceAction(func() { events = append(events, hmi.SourceTarget{}) })
+	v.SetSourceTargetAction(func(s hmi.SourceTarget) { events = append(events, s) })
+	action := v.buttons[runtimeSourceButton].Action()
+	action.Trigger(nil)
+	v.SetPointsMode(true)
+	if v.Runtime() != rt || v.Alarms.SelectedAlarm() != "" || v.Alarms.IsVisible() || !v.Points.SelectPoint("DI11") {
+		t.Fatal("presentation switch restarted acquisition or retained an alarm selection")
+	}
+	action.Trigger(nil)
+	v.SetAlarmMode()
+	if v.Runtime() != rt || !v.Alarms.SelectAlarm("limit") || len(rt.AlarmEvents(0)) != 1 {
+		t.Fatal("return to alarm tab replaced the live session or its history")
+	}
+	v.Invalidate()
+	action.Trigger(nil)
+	if v.Alarms.IsVisible() || button.IsVisible() || v.Alarms.SelectedAlarm() != "" || v.Runtime() != nil || v.CanStart() {
+		t.Fatal("invalidated snapshot retained alarm permissions or geometry")
+	}
+	want := []hmi.SourceTarget{{Kind: hmi.SourceAlarm, ID: "limit"}, {Kind: hmi.SourcePoint, ID: "DI11"}, {}}
+	if !slices.Equal(events, want) {
+		t.Fatalf("wrong authored target: got %v want %v", events, want)
 	}
 }
 func TestRuntimeViewHTTPManualPersistenceQuietStopAndRestart(t *testing.T) {

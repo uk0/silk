@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "title": "Typed alarm lifecycle QA",
+  "width": 600,
+  "height": 360,
+  "points": [
+    {
+      "description": "压力 🏭",
+      "name": "BI11",
+      "kind": "int",
+      "initial": 9007199254740992
+    },
+    {
+      "name": "DI11",
+      "kind": "bool",
+      "initial": true
+    }
+  ],
+  "nodes": [
+    {
+      "label": "泵 P-001 🏭",
+      "id": "pumpA",
+      "kind": "pump",
+      "x": 60,
+      "y": 110,
+      "width": 120,
+      "height": 150
+    },
+    {
+      "id": "tankB",
+      "kind": "tank",
+      "label": "Tank B",
+      "x": 390,
+      "y": 80,
+      "width": 130,
+      "height": 180,
+      "tag": "BI11"
+    }
+  ],
+  "links": [
+    {
+      "id": "flowRoute",
+      "from": {
+        "node": "pumpA",
+        "port": "east"
+      },
+      "to": {
+        "node": "tankB",
+        "port": "west"
+      },
+      "routing": "avoid",
+      "tag": "DI11"
+    }
+  ],
+  "alarms": [
+    {
+      "id": "valve-trip",
+      "point": "DI11",
+      "condition": "is",
+      "priority": "critical",
+      "threshold": true,
+      "clear_ms": 200,
+      "latch": true
+    },
+    {
+      "id": "pressure-hi",
+      "point": "BI11",
+      "condition": "high",
+      "priority": "warning",
+      "threshold": 9007199254740993,
+      "reset": 9007199254740991,
+      "raise_ms": 100
+    }
+  ]
+}

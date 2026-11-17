@@ -35,6 +35,8 @@ type ProcessDiagram struct {
 	stops                            []func()
 	editing, closed                  bool
 	readOnly                         bool
+	inspectionEnabled                bool
+	inspection                       hmi.SourceTarget
 	selected                         string
 	selection                        map[string]bool
 	selectedLink                     string
@@ -89,6 +91,7 @@ func (v *ProcessDiagram) SetProject(p hmi.Project) error {
 	}
 	v.OnPointerCancel()
 	v.UnbindTags()
+	v.inspection = hmi.SourceTarget{}
 	v.project = p
 	v.invalidatePipeRoutes()
 	v.text = string(data)
@@ -307,6 +310,7 @@ func (v *ProcessDiagram) SetEditing(b bool) {
 	if v.editing != b {
 		v.OnPointerCancel()
 		v.editing = b
+		v.inspection = hmi.SourceTarget{}
 		v.resetAuthoredGeometry()
 		for name, sample := range v.samples {
 			v.applySample(name, sample)
@@ -376,6 +380,14 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 		if v.editing && v.selectedLink == l.ID {
 			color = paint.Color{R: 85, G: 172, B: 255, A: 255}
 		}
+		// Keep the actual live/diagnostic color in the center of the pipe.
+		if v.inspectionEnabled && !v.editing && v.inspection == (hmi.SourceTarget{Kind: hmi.SourceLink, ID: l.ID}) {
+			g.SetPen1(processInspectionColor, 3+4/v.zoom)
+			for i := 1; i < len(pts); i++ {
+				g.Line(pts[i-1].X, pts[i-1].Y, pts[i].X, pts[i].Y)
+				g.Stroke()
+			}
+		}
 		g.SetPen1(color, 3)
 		for i := 1; i < len(pts); i++ {
 			g.Line(pts[i-1].X, pts[i-1].Y, pts[i].X, pts[i].Y)
@@ -425,6 +437,11 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 		}
 		if v.editing && v.nodeSelected(n.ID) {
 			g.SetPen1(paint.Color{R: 68, G: 160, B: 255, A: 255}, 1)
+			g.Rectangle(0, 0, n.Width, n.Height)
+			g.Stroke()
+		}
+		if v.inspectionEnabled && !v.editing && v.inspection == (hmi.SourceTarget{Kind: hmi.SourceNode, ID: n.ID}) {
+			g.SetPen1(processInspectionColor, 2/v.zoom)
 			g.Rectangle(0, 0, n.Width, n.Height)
 			g.Stroke()
 		}

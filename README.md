@@ -456,6 +456,13 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
   transaction; Cancel discards, and ordinary Save / Save All persists. The
   source caret preselects its device or pipe; **Go to source** on an unchanged
   draft returns to the selected item's exact JSON ID with Back/Forward history.
+- In **Process Runtime**, select a live point, device or pipe and use
+  **Go to source** to locate its declaration in the unchanged revision of
+  the editor buffer. Runtime selection is read-only.
+- Edit **Alarm rules** with exact typed thresholds, hysteresis, debounce and
+  optional latching. Both the standalone HMI workbench and **Process Runtime**
+  show live alarms and session history. In the IDE, **Go to source** opens the
+  selected alarm rule from either view.
 - Loading/drawing never starts acquisition; I/O stays off the UI thread and
   workers are cancelled/joined. This is a 2D foundation, not certified SCADA or
   a complete P&ID/PLC control system. Pipes can opt into bounded obstacle
@@ -472,6 +479,9 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 [Group authoring QA](HMI_AUTHORING_QA_20261114.md) ·
 [IDE source/visual QA](HMI_IDE_QA_20261114.md) ·
 [Bidirectional source navigation QA](HMI_SOURCE_NAV_QA_20261117.md) ·
+[Process Runtime source navigation QA](HMI_RUNTIME_NAV_QA_20261117.md) ·
+[Typed alarm lifecycle QA](HMI_TYPED_ALARMS_QA_20261117.md) ·
+[IDE alarm dock QA](HMI_ALARM_DOCK_QA_20261117.md) ·
 [Reusable equipment QA](HMI_DEVICE_LIBRARY_QA_20261114.md)
 
 ![Windows native group authoring and owned Arrange menu](docs/images/hmi-authoring-arrange-windows.png)
@@ -488,6 +498,8 @@ and disabled commands whose selection requirements are not met.
 
 The current source buffer stays authoritative. Use changes creates one Undo
 transaction; Cancel discards the draft, and ordinary Save persists it.
+
+![SilkIDE on Windows: a selected live pipe, its original JSON declaration and the running snapshot](docs/images/hmi-runtime-source-windows.png)
 
 </details>
 

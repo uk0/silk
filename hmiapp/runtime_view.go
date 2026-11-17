@@ -24,33 +24,55 @@ type RuntimeViewOptions struct {
 	RuntimeChanged func(*hmi.Runtime)
 }
 
+type runtimeViewMode uint8
+
+const (
+	runtimePoints runtimeViewMode = iota
+	runtimeDiagram
+	runtimeAlarms
+)
+
+const (
+	runtimeRunButton = iota
+	runtimeStopButton
+	runtimeDiagramButton
+	runtimePointsButton
+	runtimeFitButton
+	runtimeSourceButton
+	runtimeAlarmsButton
+)
+
 // RuntimeView is an embeddable, opt-in runtime, not an independent native window.
 // It owns acquisition/store lifetime and borrows no authored document. Hiding the
-// outer view stops acquisition; changing Diagram/Points tabs does not. All methods
+// outer view stops acquisition; changing its presentation does not. All methods
 // except Wait are UI-thread-only. Close cancels; Wait belongs outside the UI loop.
 type RuntimeView struct {
 	gui.Widget
-	Diagram                        *gui.ProcessDiagram
-	Points                         *gui.ProcessPointMonitor
-	options                        RuntimeViewOptions
-	project                        hmi.Project
-	database, source               string
-	configured, closed, pointsMode bool
-	startGuard                     func() bool
-	session                        *session
-	err                            error
-	status                         *gui.Label
-	buttons                        []*gui.Button
-	sourceAction                   func()
-	post                           func(func())
-	postContext                    func(context.Context, func()) error
-	workerMu                       sync.Mutex
-	idle                           chan struct{}
+	Diagram            *gui.ProcessDiagram
+	Points             *gui.ProcessPointMonitor
+	Alarms             *gui.ProcessAlarmMonitor
+	options            RuntimeViewOptions
+	project            hmi.Project
+	database, source   string
+	configured, closed bool
+	mode               runtimeViewMode
+	startGuard         func() bool
+	session            *session
+	err                error
+	status             *gui.Label
+	buttons            []*gui.Button
+	sourceAction       func()
+	sourceTargetAction func(hmi.SourceTarget)
+	post               func(func())
+	postContext        func(context.Context, func()) error
+	workerMu           sync.Mutex
+	idle               chan struct{}
 }
 
 func init() {
 	i18n.AddMany("zh", map[string]string{
 		"Process Runtime": "组态运行", "Run snapshot": "运行快照", "Stop runtime": "停止运行", "Live diagram": "实时组态", "Live points": "实时点位", "Go to source": "返回源文件", "Fit diagram": "适应画布",
+		"Open the selected item in source":                       "在源文件中定位选中项",
 		"No snapshot; use Run 2D Process from a source document": "没有运行快照，请从源文件运行二维组态",
 		"Ready; no acquisition until Run":                        "就绪；点击运行后才开始采集", "Starting process runtime…": "正在启动组态运行时…", "Running frozen source snapshot": "正在运行源文件快照", "Stopping process runtime…": "正在停止组态运行时…", "Stopped; no acquisition": "已停止；没有采集任务", "Source changed; run the current buffer again": "源文件已变化，请重新运行当前缓冲区",
 	})
@@ -69,8 +91,9 @@ func NewRuntimeView(options RuntimeViewOptions) *RuntimeView {
 	v.Diagram.SetParent(v)
 	v.Points = gui.NewProcessPointMonitor()
 	v.Points.SetParent(v)
-	v.pointsMode = true
-	v.Diagram.SetVisible(false)
+	v.Alarms = gui.NewProcessAlarmMonitor()
+	v.Alarms.SetParent(v)
+	v.showMode(runtimePoints)
 	add := func(text, icon string, fn func()) {
 		b := gui.NewButton1(i18n.T(text), gui.LoadIcon(icon))
 		b.SetParent(v)
@@ -83,11 +106,8 @@ func NewRuntimeView(options RuntimeViewOptions) *RuntimeView {
 	add("Live diagram", "preview", func() { v.SetPointsMode(false) })
 	add("Live points", "tree-view", func() { v.SetPointsMode(true) })
 	add("Fit diagram", "maximize", func() { v.Diagram.FitToView() })
-	add("Go to source", "document", func() {
-		if v.sourceAction != nil {
-			v.sourceAction()
-		}
-	})
+	add("Go to source", "document", v.goToSource)
+	add("Live alarms", "notifications", v.SetAlarmMode)
 	v.status = gui.NewLabel("")
 	v.status.SetParent(v)
 	v.setStatus("No snapshot; use Run 2D Process from a source document")
@@ -108,16 +128,25 @@ func (v *RuntimeView) Draw(g paint.Painter) {
 }
 func (v *RuntimeView) OnResize() {
 	w, h := v.Size()
-	cols := max(1, min(len(v.buttons), int(max(0, w-16)/145)))
+	count := runtimeAlarmsButton
+	if v.hasAlarmRules() {
+		count++
+	}
+	cols := max(1, min(count, int(max(0, w-16)/128)))
 	bw := max(0, w-16) / float64(cols)
-	rows := (len(v.buttons) + cols - 1) / cols
+	rows := (count + cols - 1) / cols
 	top := 8 + float64(rows)*34
 	for i, b := range v.buttons {
+		if i >= count {
+			b.SetBounds(0, 0, 0, 0)
+			continue
+		}
 		b.SetBounds(8+float64(i%cols)*bw, 4+float64(i/cols)*34, max(0, bw-4), 30)
 	}
 	height := max(0, h-top-26)
 	v.Diagram.SetBounds(0, top, w, height)
 	v.Points.SetBounds(0, top, w, height)
+	v.Alarms.SetBounds(0, top, w, height)
 	v.status.SetBounds(8, max(0, h-24), max(0, w-16), 22)
 	v.Diagram.FitToView()
 }
@@ -145,6 +174,10 @@ func (v *RuntimeView) SetSnapshot(project hmi.Project, database string) error {
 	v.Diagram.FitToView()
 	v.database = database
 	v.configured = true
+	if v.mode == runtimeAlarms && !v.hasAlarmRules() {
+		v.showMode(runtimePoints)
+	}
+	v.Diagram.SetInspectionEnabled(v.sourceTargetAction != nil)
 	v.err = nil
 	v.setStatus("Ready; no acquisition until Run")
 	v.refreshControls()
@@ -155,6 +188,51 @@ func (v *RuntimeView) SetSourceAction(fn func())    { v.sourceAction = fn; v.ref
 func (v *RuntimeView) SetStartGuard(fn func() bool) { v.startGuard = fn; v.refreshControls() }
 func (v *RuntimeView) Busy() bool                   { return v.session != nil }
 func (v *RuntimeView) LastError() error             { return v.err }
+
+// SetSourceTargetAction opts into item navigation. The host must verify its
+// source snapshot before applying a coordinate. With no selected entity, the
+// original document-level SetSourceAction is used instead.
+func (v *RuntimeView) SetSourceTargetAction(fn func(hmi.SourceTarget)) {
+	if v.closed {
+		return
+	}
+	v.sourceTargetAction = fn
+	v.Diagram.SetInspectionEnabled(fn != nil && v.configured)
+	tip := ""
+	if fn != nil {
+		tip = i18n.T("Open the selected item in source")
+	}
+	gui.SetToolTip(v.buttons[runtimeSourceButton], tip)
+	v.refreshControls()
+}
+
+func (v *RuntimeView) goToSource() {
+	if v.closed || !gui.WidgetTreeVisible(v) {
+		return
+	}
+	if v.configured && v.sourceTargetAction != nil {
+		var target hmi.SourceTarget
+		switch v.mode {
+		case runtimePoints:
+			if name := v.Points.SelectedPoint(); name != "" {
+				target = hmi.SourceTarget{Kind: hmi.SourcePoint, ID: name}
+			}
+		case runtimeAlarms:
+			if id := v.Alarms.SelectedAlarm(); id != "" {
+				target = hmi.SourceTarget{Kind: hmi.SourceAlarm, ID: id}
+			}
+		case runtimeDiagram:
+			target = v.Diagram.InspectionTarget()
+		}
+		if target.ID != "" {
+			v.sourceTargetAction(target)
+			return
+		}
+	}
+	if v.sourceAction != nil {
+		v.sourceAction()
+	}
+}
 func (v *RuntimeView) Runtime() *hmi.Runtime {
 	if v.closed || v.session == nil || v.session.stopping || !v.session.available {
 		return nil
@@ -174,23 +252,54 @@ func (v *RuntimeView) refreshControls() {
 	if len(v.buttons) == 0 {
 		return
 	}
-	v.buttons[0].SetEnabled(v.CanStart())
-	v.buttons[1].SetEnabled(!v.closed && v.Busy() && !v.session.stopping)
-	for _, i := range []int{2, 3} {
+	v.buttons[runtimeRunButton].SetEnabled(v.CanStart())
+	v.buttons[runtimeStopButton].SetEnabled(!v.closed && v.Busy() && !v.session.stopping)
+	for _, i := range []int{runtimeDiagramButton, runtimePointsButton} {
 		v.buttons[i].SetEnabled(!v.closed && v.configured)
 	}
-	v.buttons[2].Action().SetChecked(!v.pointsMode)
-	v.buttons[3].Action().SetChecked(v.pointsMode)
-	v.buttons[4].SetEnabled(!v.closed && v.configured && !v.pointsMode)
-	v.buttons[5].SetEnabled(!v.closed && v.sourceAction != nil)
+	v.buttons[runtimeDiagramButton].Action().SetChecked(v.mode == runtimeDiagram)
+	v.buttons[runtimePointsButton].Action().SetChecked(v.mode == runtimePoints)
+	v.buttons[runtimeFitButton].SetEnabled(!v.closed && v.configured && v.mode == runtimeDiagram)
+	v.buttons[runtimeSourceButton].SetEnabled(!v.closed && (v.sourceAction != nil || v.configured && v.sourceTargetAction != nil))
+	alarms := v.buttons[runtimeAlarmsButton]
+	alarms.SetEnabled(!v.closed && v.hasAlarmRules())
+	alarms.Action().SetChecked(v.mode == runtimeAlarms)
+	if visible := v.hasAlarmRules(); alarms.IsVisible() != visible {
+		alarms.SetVisible(visible)
+		v.OnResize()
+	}
 }
+
+func (v *RuntimeView) hasAlarmRules() bool { return v.configured && len(v.project.Alarms) != 0 }
+
 func (v *RuntimeView) SetPointsMode(points bool) {
-	if v.closed {
+	if points {
+		v.setMode(runtimePoints)
 		return
 	}
-	v.pointsMode = points
-	v.Points.SetVisible(points)
-	v.Diagram.SetVisible(!points)
+	v.setMode(runtimeDiagram)
+}
+
+// SetAlarmMode displays the alarm monitor for a configured snapshot. It does
+// not start acquisition or create a second runtime.
+func (v *RuntimeView) SetAlarmMode() {
+	if v.hasAlarmRules() {
+		v.setMode(runtimeAlarms)
+	}
+}
+
+func (v *RuntimeView) showMode(mode runtimeViewMode) {
+	v.mode = mode
+	v.Points.SetVisible(mode == runtimePoints)
+	v.Diagram.SetVisible(mode == runtimeDiagram)
+	v.Alarms.SetVisible(mode == runtimeAlarms)
+}
+
+func (v *RuntimeView) setMode(mode runtimeViewMode) {
+	if v.closed || v.mode == mode {
+		return
+	}
+	v.showMode(mode)
 	v.bindVisible()
 	v.refreshControls()
 	v.Update()
@@ -204,12 +313,17 @@ func (v *RuntimeView) bindVisible() {
 }
 func (v *RuntimeView) bindRuntime(rt *hmi.Runtime) error {
 	v.Points.SetRuntime(nil)
+	v.Alarms.SetRuntime(nil)
 	v.Diagram.UnbindTags()
 	if rt == nil {
 		return nil
 	}
-	if v.pointsMode {
+	switch v.mode {
+	case runtimePoints:
 		v.Points.SetRuntime(rt)
+		return nil
+	case runtimeAlarms:
+		v.Alarms.SetRuntime(rt)
 		return nil
 	}
 	_, err := v.Diagram.BindTags(rt.Tags)
@@ -254,8 +368,7 @@ func (v *RuntimeView) Start() {
 				if v.closed || v.session != s {
 					return
 				}
-				v.Points.SetRuntime(nil)
-				v.Diagram.UnbindTags()
+				_ = v.bindRuntime(nil)
 				v.session = nil
 				if err == nil {
 					err = v.err
@@ -301,8 +414,7 @@ func (v *RuntimeView) Stop() {
 		return
 	}
 	s.stopping = true
-	v.Points.SetRuntime(nil)
-	v.Diagram.UnbindTags()
+	_ = v.bindRuntime(nil)
 	s.cancel()
 	v.setStatus("Stopping process runtime…")
 	v.refreshControls()
@@ -315,7 +427,11 @@ func (v *RuntimeView) Invalidate() {
 		return
 	}
 	v.configured = false
+	v.Diagram.SetInspectionEnabled(false)
 	v.Stop()
+	if v.mode == runtimeAlarms {
+		v.showMode(runtimePoints)
+	}
 	v.setStatus("Source changed; run the current buffer again")
 	v.refreshControls()
 }
@@ -332,7 +448,9 @@ func (v *RuntimeView) Close() {
 	}
 	v.Stop()
 	v.closed = true
+	gui.SetToolTip(v.buttons[runtimeSourceButton], "")
 	v.Points.Close()
+	v.Alarms.Close()
 	v.Diagram.Close()
 	v.refreshControls()
 }

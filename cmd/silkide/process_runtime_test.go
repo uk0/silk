@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hmi"
@@ -45,9 +46,9 @@ func testProcessRuntime(t *testing.T) (*workbench, *processRuntimePane, *gui.Cod
 	w.activate(modeEdit)
 	ed := activeTestEditorReady(t, w.tabs)
 	ed.SetFocus()
-	p.load = func(_ context.Context, s string, done func(hmi.Project, error)) error {
-		project, err := hmi.Parse([]byte(s))
-		done(project, err)
+	p.load = func(_ context.Context, s string, done func(indexedProcessAsset, error)) error {
+		asset, err := decodeProcessSource(context.Background(), s)
+		done(asset, err)
 		return nil
 	}
 	p.startRuntime = func() {}
@@ -111,13 +112,93 @@ func TestProcessRuntimeMenuPaletteAndF5UseUnsavedOwnedSource(t *testing.T) {
 		t.Fatal("source navigation failed after edit")
 	}
 }
+
+func TestProcessRuntimeItemJumpTracksExactUnsavedSourceAndHistory(t *testing.T) {
+	w, p, ed, disk := testProcessRuntime(t)
+	project := processRuntimeProject()
+	project.Nodes = append(project.Nodes, hmi.Node{ID: "tank", Kind: "tank", X: 420, Y: 20, Width: 90, Height: 80})
+	project.Links = []hmi.Link{{ID: "flow", From: hmi.Endpoint{Node: "value", Port: "east"}, To: hmi.Endpoint{Node: "tank", Port: "west"}}}
+	project.Alarms = []hmi.AlarmRule{{ID: "压力报警", Point: "BI11", Condition: hmi.AlarmHigh, Threshold: int64(70), Reset: int64(65), Priority: hmi.AlarmWarning}}
+	data, err := project.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := strings.Replace(string(data), `"name": "BI11"`, `"description": "压力 🏭", "name": "BI11"`, 1)
+	draft = strings.ReplaceAll(draft, "\n", "\r\n")
+	ed.ReplaceAllText(draft)
+	runProcessRuntime(w.tabs, w.canvas, ed)
+	if p.index == nil || !p.current() {
+		t.Fatal("exact snapshot is unavailable")
+	}
+	otherFile := writeFile(t, t.TempDir(), "other.go", "package qa\n")
+	openTestEditorReady(t, w.tabs, otherFile)
+	other := activeTestEditorReady(t, w.tabs)
+	other.NavigateToLineCol(0, 5)
+	origin := other.NavigationPosition()
+	clearEditorNavigation(w.tabs)
+	verify := func(target hmi.SourceTarget, marker string) {
+		t.Helper()
+		p.focusSourceTarget(target)
+		s := ed.Text()
+		at := strings.Index(s, marker)
+		if at < 0 {
+			t.Fatal("source fixture lacks marker", marker)
+		}
+		at += len(marker) - len(target.ID) - 1
+		wantLine := strings.Count(s[:at], "\n")
+		wantCol := utf8.RuneCountInString(s[strings.LastIndexByte(s[:at], '\n')+1 : at])
+		pos := ed.NavigationPosition()
+		if activeEditor(w.tabs) != ed || pos.Line != wantLine || pos.Column != wantCol {
+			t.Fatal("wrong editor coordinate", pos, wantLine, wantCol)
+		}
+	}
+	verify(hmi.SourceTarget{Kind: hmi.SourcePoint, ID: "BI11"}, `"description": "压力 🏭", "name": "BI11"`)
+	navigateEditorHistory(w.tabs, false)
+	if activeEditor(w.tabs) != other || other.NavigationPosition() != origin {
+		t.Fatal("Back did not return to the other buffer", editorNavigationPosition(w.tabs), origin)
+	}
+	navigateEditorHistory(w.tabs, true)
+	if activeEditor(w.tabs) != ed {
+		t.Fatal("Forward lost the runtime document")
+	}
+	verify(hmi.SourceTarget{Kind: hmi.SourceNode, ID: "tank"}, `"id": "tank"`)
+	verify(hmi.SourceTarget{Kind: hmi.SourceLink, ID: "flow"}, `"id": "flow"`)
+	verify(hmi.SourceTarget{Kind: hmi.SourceAlarm, ID: "压力报警"}, `"id": "压力报警"`)
+	if ed.Text() != draft || !ed.Modified() || !ed.CanUndo() || p.view.Busy() {
+		t.Fatal("navigation changed document/history or started acquisition")
+	}
+	raw, err := os.ReadFile(ed.FilePath())
+	if err != nil || string(raw) != disk {
+		t.Fatal("navigation changed disk", err)
+	}
+	focusEditorTab(w.tabs, other)
+	beforeFocus, beforeHistory := ed.NavigationPosition(), editorNavigationCount(w.tabs)
+	// A newer synchronous tab choice is authoritative even when the original
+	// source and its revision are still valid.
+	w.tabs.SetCurrentChangedCallback(func(_ interface{}, _ int) {
+		if activeEditor(w.tabs) == ed {
+			focusEditorTab(w.tabs, other)
+		}
+	})
+	p.focusSourceTarget(hmi.SourceTarget{Kind: hmi.SourcePoint, ID: "BI11"})
+	if activeEditor(w.tabs) != other || ed.NavigationPosition() != beforeFocus || editorNavigationCount(w.tabs) != beforeHistory {
+		t.Fatal("runtime jump overrode reentrant tab selection")
+	}
+	ed.ReplaceAllText("\r\n" + draft)
+	openTestEditorReady(t, w.tabs, otherFile)
+	before := editorNavigationCount(w.tabs)
+	p.focusSourceTarget(hmi.SourceTarget{Kind: hmi.SourceAlarm, ID: "压力报警"})
+	if p.index != nil || activeEditor(w.tabs) != other || editorNavigationCount(w.tabs) != before {
+		t.Fatal("stale item moved editor or created history")
+	}
+}
 func TestProcessRuntimeLateDecodeCancelCloseAndIdentityGuards(t *testing.T) {
 	w, p, ed, _ := testProcessRuntime(t)
-	var complete func(hmi.Project, error)
+	var complete func(indexedProcessAsset, error)
 	var ctx context.Context
 	starts := 0
 	p.startRuntime = func() { starts++ }
-	p.load = func(c context.Context, _ string, done func(hmi.Project, error)) error {
+	p.load = func(c context.Context, _ string, done func(indexedProcessAsset, error)) error {
 		ctx = c
 		complete = done
 		return nil
@@ -130,19 +211,19 @@ func TestProcessRuntimeLateDecodeCancelCloseAndIdentityGuards(t *testing.T) {
 	if p.loading || ctx.Err() == nil {
 		t.Fatal("change did not cancel decode")
 	}
-	complete(processRuntimeProject(), nil)
+	complete(indexedProcessAsset{project: processRuntimeProject()}, nil)
 	if starts != 0 {
 		t.Fatal("late decode started I/O")
 	}
 	runProcessRuntime(w.tabs, w.canvas, ed)
 	p.stop()
-	complete(processRuntimeProject(), nil)
+	complete(indexedProcessAsset{project: processRuntimeProject()}, nil)
 	if starts != 0 || p.loading {
 		t.Fatal("stopped decode started")
 	}
 	runProcessRuntime(w.tabs, w.canvas, ed)
 	p.shutdown()
-	complete(processRuntimeProject(), nil)
+	complete(indexedProcessAsset{project: processRuntimeProject()}, nil)
 	if starts != 0 || p.current() {
 		t.Fatal("closed owner started")
 	}
@@ -163,7 +244,7 @@ func TestProcessRuntimeSourceCloseRenameAndHiddenDockRetire(t *testing.T) {
 		t.Fatal("removed tool did not reattach")
 	}
 	retireProcessRuntime(ed)
-	if p.owner != nil || p.view.CanStart() {
+	if p.owner != nil || p.index != nil || p.view.CanStart() {
 		t.Fatal("rename/close kept editor ownership")
 	}
 	runProcessRuntime(w.tabs, w.canvas, ed)
@@ -171,7 +252,7 @@ func TestProcessRuntimeSourceCloseRenameAndHiddenDockRetire(t *testing.T) {
 	if !closeEditorTab(w.tabs, idx) {
 		t.Fatal("clean tab close failed")
 	}
-	if p.owner != nil || p.current() || p.view.CanStart() {
+	if p.owner != nil || p.index != nil || p.current() || p.view.CanStart() {
 		t.Fatal("closing editor kept runtime snapshot")
 	}
 }
@@ -179,19 +260,22 @@ func TestProcessRuntimeDecodeFailureSwitchBusyAndStoreNamespace(t *testing.T) {
 	w, p, ed, _ := testProcessRuntime(t)
 	starts := 0
 	p.startRuntime = func() { starts++ }
-	p.load = func(context.Context, string, func(hmi.Project, error)) error {
+	p.load = func(context.Context, string, func(indexedProcessAsset, error)) error {
 		return errors.New("fixture decode unavailable")
 	}
 	runProcessRuntime(w.tabs, w.canvas, ed)
 	if p.loading || starts != 0 || p.view.CanStart() {
 		t.Fatal("failed decode left runnable old snapshot")
 	}
-	var complete func(hmi.Project, error)
-	p.load = func(_ context.Context, _ string, done func(hmi.Project, error)) error { complete = done; return nil }
+	var complete func(indexedProcessAsset, error)
+	p.load = func(_ context.Context, _ string, done func(indexedProcessAsset, error)) error {
+		complete = done
+		return nil
+	}
 	runProcessRuntime(w.tabs, w.canvas, ed)
 	other := writeFile(t, t.TempDir(), "other.go", "package qa\n")
 	openTestEditorReady(t, w.tabs, other)
-	complete(processRuntimeProject(), nil)
+	complete(indexedProcessAsset{project: processRuntimeProject()}, nil)
 	if starts != 0 {
 		t.Fatal("late decode ran in other editor context")
 	}
@@ -214,10 +298,10 @@ func TestProcessRuntimeDecodeFailureSwitchBusyAndStoreNamespace(t *testing.T) {
 
 func TestProcessRuntimeAncestorHideCancelsPendingDecodeWithoutAutoRestart(t *testing.T) {
 	w, p, ed, _ := testProcessRuntime(t)
-	var finish func(hmi.Project, error)
+	var finish func(indexedProcessAsset, error)
 	var loadingContext context.Context
 	starts := 0
-	p.load = func(ctx context.Context, _ string, done func(hmi.Project, error)) error {
+	p.load = func(ctx context.Context, _ string, done func(indexedProcessAsset, error)) error {
 		loadingContext = ctx
 		finish = done
 		return nil
@@ -229,7 +313,7 @@ func TestProcessRuntimeAncestorHideCancelsPendingDecodeWithoutAutoRestart(t *tes
 		t.Fatal("hidden dock kept pending acquisition start")
 	}
 	globalBottomDock.SetVisible(true)
-	finish(processRuntimeProject(), nil)
+	finish(indexedProcessAsset{project: processRuntimeProject()}, nil)
 	if starts != 0 {
 		t.Fatal("showing dock restarted cancelled load")
 	}

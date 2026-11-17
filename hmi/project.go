@@ -79,15 +79,16 @@ type Link struct {
 	Routing string `json:"routing,omitempty"`
 }
 type Project struct {
-	Version       int      `json:"version"`
-	Title         string   `json:"title"`
-	Width         float64  `json:"width"`
-	Height        float64  `json:"height"`
-	Points        []Point  `json:"points"`
-	Sources       []Source `json:"sources,omitempty"`
-	Nodes         []Node   `json:"nodes"`
-	Links         []Link   `json:"links,omitempty"`
-	RetentionDays int      `json:"retention_days,omitempty"`
+	Version       int         `json:"version"`
+	Title         string      `json:"title"`
+	Width         float64     `json:"width"`
+	Height        float64     `json:"height"`
+	Points        []Point     `json:"points"`
+	Sources       []Source    `json:"sources,omitempty"`
+	Nodes         []Node      `json:"nodes"`
+	Links         []Link      `json:"links,omitempty"`
+	Alarms        []AlarmRule `json:"alarms,omitempty"`
+	RetentionDays int         `json:"retention_days,omitempty"`
 }
 
 func validID(s string) bool {
@@ -145,6 +146,9 @@ func (p Project) Validate() error {
 				return e
 			}
 		}
+	}
+	if _, err := compileAlarmRules(p.Alarms, pts); err != nil {
+		return err
 	}
 	sources := map[string]bool{}
 	writers := map[string]bool{}

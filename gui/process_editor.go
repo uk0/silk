@@ -9,6 +9,7 @@ import (
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/hmi"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 	"github.com/uk0/silk/point"
 )
@@ -87,6 +88,7 @@ func (v *ProcessEditor) Init(self IWidget) {
 	arrange := add("Arrange", func() {})
 	v.initArrange(arrange)
 	add("Device library", v.ShowDeviceLibrary)
+	add(i18n.T("Alarm rules"), v.EditAlarmRules)
 	v.Diagram.SigSelectionChanged(func() {
 		v.refreshActions()
 		text := fmt.Sprintf("%d selected", len(v.Diagram.SelectedNodes()))
@@ -213,6 +215,7 @@ func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string
 	table.Init(table)
 	table.SetModel(model)
 	table.SetCellsEditable(true)
+	table.SetClipCellText(true)
 	instructions := "Double-click a cell to edit. Apply validates; Cancel discards."
 	for _, text := range help {
 		if text != "" {

@@ -20,17 +20,21 @@ type indexedProcessAsset struct {
 	index   *hmi.SourceIndex
 }
 
+func decodeProcessSource(ctx context.Context, source string) (indexedProcessAsset, error) {
+	if err := ctx.Err(); err != nil {
+		return indexedProcessAsset{}, err
+	}
+	p, index, err := hmi.ParseIndexedSource(source)
+	if err == nil {
+		err = ctx.Err()
+	}
+	return indexedProcessAsset{p, index}, err
+}
+
 var startProcessAssetLoad = func(source string, done func(indexedProcessAsset, error)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	_, err := gui.RunAsync(ctx, nil, func(ctx context.Context) (indexedProcessAsset, error) {
-		if err := ctx.Err(); err != nil {
-			return indexedProcessAsset{}, err
-		}
-		p, index, err := hmi.ParseIndexedSource(source)
-		if err == nil {
-			err = ctx.Err()
-		}
-		return indexedProcessAsset{p, index}, err
+		return decodeProcessSource(ctx, source)
 	}, func(p indexedProcessAsset, err error) { cancel(); done(p, err) })
 	if err != nil {
 		cancel()

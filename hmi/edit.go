@@ -19,6 +19,7 @@ func CloneProject(p Project) (Project, error) {
 	}
 	q := p
 	q.Points = slices.Clone(p.Points)
+	q.Alarms = slices.Clone(p.Alarms)
 	q.Sources = slices.Clone(p.Sources)
 	for i, s := range p.Sources {
 		q.Sources[i].Headers = maps.Clone(s.Headers)

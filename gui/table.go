@@ -301,6 +301,7 @@ type Table struct {
 	// In-place cell editing. Off by default so existing read-only tables
 	// are unaffected; enable with SetCellsEditable.
 	cellsEditable bool
+	clipCellText  bool
 	editor        *tableCellEditor // lazily created inline editor, reused across cells
 	editing       bool             // an edit is currently active
 	editRow       int              // cell being edited while editing
@@ -928,9 +929,17 @@ func (this *Table) Draw(g paint.Painter) {
 			cw := this.columnWidth(c)
 			txt := this.model.CellText(this.dispRow(r), c)
 			if txt != "" {
+				if this.clipCellText {
+					g.Save()
+					g.Rectangle(xPos, y, cw, rh)
+					g.Clip()
+				}
 				g.SetBrush1(selectionTextColor(t, selected))
 				yt := y + fe.Ascent + (rh-fe.Height)*0.5
 				g.DrawText1(xPos+4, yt, txt)
+				if this.clipCellText {
+					g.Restore()
+				}
 			}
 			xPos += cw
 		}
@@ -964,6 +973,15 @@ func (this *Table) Draw(g paint.Painter) {
 
 	// Frame border
 	t.DrawViewFrame(g, 0, 0, this.w, this.h)
+}
+
+// SetClipCellText confines data-cell ink to each column and row without
+// changing the model, text used for copy/sorting, or the inline editor.
+func (this *Table) SetClipCellText(clip bool) {
+	if this.clipCellText != clip {
+		this.clipCellText = clip
+		this.Update()
+	}
 }
 
 // drawSortArrow draws a small triangle indicator centered at (cx, cy):

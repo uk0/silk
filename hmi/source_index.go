@@ -13,12 +13,14 @@ import (
 type SourceEntity string
 
 const (
-	SourceNode SourceEntity = "node"
-	SourceLink SourceEntity = "link"
+	SourceNode  SourceEntity = "node"
+	SourceLink  SourceEntity = "link"
+	SourcePoint SourceEntity = "point"
+	SourceAlarm SourceEntity = "alarm"
 )
 
-// SourceTarget identifies an authored device or pipe. IDs can be shared by
-// nodes and links, so the kind is part of the key.
+// SourceTarget identifies an authored device, pipe, point or alarm rule.
+// For a point, ID is its name. Entity kinds have separate namespaces.
 type SourceTarget struct {
 	Kind SourceEntity
 	ID   string
@@ -40,7 +42,7 @@ type SourceIndex struct {
 }
 
 // ParseIndexedSource validates exactly as Parse does, then locates the effective
-// top-level nodes and links in the original text (not its formatted serialization).
+// top-level points, nodes, links and alarm rules in the original text.
 func ParseIndexedSource(source string) (Project, *SourceIndex, error) {
 	if len(source) > MaxDocumentBytes {
 		return Project{}, nil, fmt.Errorf("hmi: document too large")
@@ -49,7 +51,7 @@ func ParseIndexedSource(source string) (Project, *SourceIndex, error) {
 	if err != nil {
 		return Project{}, nil, err
 	}
-	i := &SourceIndex{source: source, lines: []int{0}, ids: make(map[SourceTarget]int, len(p.Nodes)+len(p.Links))}
+	i := &SourceIndex{source: source, lines: []int{0}, ids: make(map[SourceTarget]int, len(p.Nodes)+len(p.Links)+len(p.Points)+len(p.Alarms))}
 	for n := 0; n < len(source); n++ {
 		if source[n] == '\n' {
 			i.lines = append(i.lines, n+1)
@@ -78,13 +80,21 @@ func ParseIndexedSource(source string) (Project, *SourceIndex, error) {
 			arrays[SourceNode] = r
 		case strings.EqualFold(k, "links"):
 			arrays[SourceLink] = r
+		case strings.EqualFold(k, "points"):
+			arrays[SourcePoint] = r
+		case strings.EqualFold(k, "alarms"):
+			arrays[SourceAlarm] = r
 		}
 	}
-	for _, kind := range []SourceEntity{SourceNode, SourceLink} {
+	for _, kind := range []SourceEntity{SourceNode, SourceLink, SourcePoint, SourceAlarm} {
 		r := arrays[kind]
 		start := len(i.spans)
 		if r.start < r.end && source[r.start] == '[' {
-			if err := i.indexArray(kind, r.start, r.end); err != nil {
+			field := "id"
+			if kind == SourcePoint {
+				field = "name"
+			}
+			if err := i.indexArray(kind, field, r.start, r.end); err != nil {
 				return Project{}, nil, err
 			}
 		}
@@ -96,8 +106,7 @@ func ParseIndexedSource(source string) (Project, *SourceIndex, error) {
 			if span.target.ID == "" {
 				continue
 			}
-			if kind == SourceNode && (n >= len(p.Nodes) || span.target.ID != p.Nodes[n].ID) ||
-				kind == SourceLink && (n >= len(p.Links) || span.target.ID != p.Links[n].ID) {
+			if span.target.ID != sourceEntityID(p, kind, n) {
 				continue
 			}
 			i.spans = append(i.spans, span)
@@ -108,7 +117,29 @@ func ParseIndexedSource(source string) (Project, *SourceIndex, error) {
 	return p, i, nil
 }
 
-func (i *SourceIndex) indexArray(kind SourceEntity, start, end int) error {
+func sourceEntityID(p Project, kind SourceEntity, n int) string {
+	switch kind {
+	case SourceNode:
+		if n < len(p.Nodes) {
+			return p.Nodes[n].ID
+		}
+	case SourceLink:
+		if n < len(p.Links) {
+			return p.Links[n].ID
+		}
+	case SourcePoint:
+		if n < len(p.Points) {
+			return p.Points[n].Name
+		}
+	case SourceAlarm:
+		if n < len(p.Alarms) {
+			return p.Alarms[n].ID
+		}
+	}
+	return ""
+}
+
+func (i *SourceIndex) indexArray(kind SourceEntity, field string, start, end int) error {
 	d := json.NewDecoder(strings.NewReader(i.source[start:end]))
 	if _, err := d.Token(); err != nil {
 		return err
@@ -120,7 +151,7 @@ func (i *SourceIndex) indexArray(kind SourceEntity, start, end int) error {
 		}
 		end := start + int(d.InputOffset())
 		begin := end - len(raw)
-		id, offset, err := sourceObjectID(i.source[begin:end])
+		id, offset, err := sourceObjectID(i.source[begin:end], field)
 		if err != nil {
 			return err
 		}
@@ -130,7 +161,7 @@ func (i *SourceIndex) indexArray(kind SourceEntity, start, end int) error {
 	return nil
 }
 
-func sourceObjectID(object string) (string, int, error) {
+func sourceObjectID(object, field string) (string, int, error) {
 	if object == "null" {
 		return "", 0, nil
 	}
@@ -150,7 +181,7 @@ func sourceObjectID(object string) (string, int, error) {
 			return "", 0, err
 		}
 		// Null leaves a Go string unchanged, matching the schema decoder.
-		if k, ok := key.(string); ok && strings.EqualFold(k, "id") && len(raw) != 0 && raw[0] == '"' {
+		if k, ok := key.(string); ok && strings.EqualFold(k, field) && len(raw) != 0 && raw[0] == '"' {
 			if err := json.Unmarshal(raw, &id); err != nil {
 				return "", 0, err
 			}
@@ -182,7 +213,7 @@ func (i *SourceIndex) AtPosition(line, byteColumn int) (SourceTarget, bool) {
 }
 
 // IDPosition returns the zero-based line and rune column just inside the
-// authored ID string. Escapes remain source text; the ID key is decoded.
+// authored ID (or point name) string. Escapes remain source text.
 func (i *SourceIndex) IDPosition(target SourceTarget) (line, column int, ok bool) {
 	if i == nil {
 		return 0, 0, false
