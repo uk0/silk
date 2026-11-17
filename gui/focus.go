@@ -10,6 +10,20 @@ package gui
 // FocusPolicy 描述一个控件参与 Tab 焦点链的方式.
 type FocusPolicy int
 
+// IChildFocusOrder lets a composite container keep keyboard traversal in
+// visual order when its direct children are created lazily. Return only live
+// direct children, without duplicates. This changes Tab order, not paint order.
+type IChildFocusOrder interface {
+	ChildFocusOrder() []IWidget
+}
+
+func childFocusOrder(w IWidget) []IWidget {
+	if ordered, ok := w.(IChildFocusOrder); ok {
+		return ordered.ChildFocusOrder()
+	}
+	return w.Children()
+}
+
 const (
 	// AutoFocus 是零值: 按启发式判定 —— 控件可见、可用且实现了
 	// IEventKeyDown 时即可被 Tab 聚焦. 未显式设置策略的控件都是此值.
@@ -64,7 +78,7 @@ func collectFocusable(w IWidget, out *[]IWidget) {
 	if isTabFocusable(w) {
 		*out = append(*out, w)
 	}
-	for _, c := range w.Children() {
+	for _, c := range childFocusOrder(w) {
 		collectFocusable(c, out)
 	}
 }
@@ -78,7 +92,7 @@ func firstFocusable(w IWidget) IWidget {
 	if isTabFocusable(w) {
 		return w
 	}
-	for _, child := range w.Children() {
+	for _, child := range childFocusOrder(w) {
 		if target := firstFocusable(child); target != nil {
 			return target
 		}

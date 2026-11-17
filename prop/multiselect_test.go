@@ -90,6 +90,7 @@ func (o *recordingOwner) PushCommand(cmd gui.ICommand) {
 func bindSheet(objs []interface{}, owner interface{}) *PropertySheet {
 	configFileCache["default"] = &PropertyConfigFile{name: "default", doc: core.NewTDoc()}
 	sheet := NewPropertySheet()
+	sheet.SetSize(640, 1000)
 	sheet.Bind(objs, "default", owner)
 	return sheet
 }

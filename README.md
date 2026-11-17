@@ -19,6 +19,36 @@ signed/notarized standalone apps.
 
 ---
 
+## A bounded, scrollable property inspector (development branch)
+
+Long property lists now scroll inside a dedicated content viewport. Search stays
+fixed; editors, labels and header hit targets share the same clipped coordinates.
+Wheel input also works over single-line text/numeric editors, not just labels.
+Tab reveals offscreen fields and keeps visual order after filtering, while
+scrolling preserves the current typing transaction and closes moved drop-downs.
+Painting visits only the visible label/header range; no idle polling was added.
+
+![Original macOS designer with bottom properties accessible in a compact window](docs/images/property-scroll-macos.jpg)
+
+This is an original source-built capture, not a mockup. Verification, platform
+results and remaining limits are recorded in
+[the scrolling-inspector QA record](PROPERTY_SCROLL_PROGRESS_20261117.md).
+
+<details>
+<summary>Original Windows 10 scrolling-inspector capture</summary>
+
+![Actual Windows designer after saved Undo/Redo, New/reopen and scrollbar dragging](docs/images/property-scroll-windows.png)
+
+Native wheel/Tab/collapse, independent saved-state reads and normal exit 0 pass.
+The actual new generated companions execute against the same frozen SDK on both
+desktop platforms. Full/race suites pass on macOS, Linux and Windows, together
+with twelve strict actual bundled-gopls cases; skips are recorded separately.
+
+</details>
+
+This increment does not claim full editor virtualization, complete Qt Creator
+parity, or a new packaged release.
+
 ## Coherent inspector categories and bilingual search (development branch)
 
 Persisted Chinese and English property IDs now share consistent Layout,

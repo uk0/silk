@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — bounded, scrollable property inspector (2026-11-17)
+
+- Add a true clipped content viewport below the fixed search bar, with a
+  correctly ranged vertical scrollbar, fractional wheel input and matching
+  logical paint/header-hit coordinates. Filter, collapse, resize and Clear clamp
+  or reset stale offsets; hidden editors remain lazy and cannot revive on access.
+- Forward wheel input from single-line property text/numeric editors to the
+  inspector; preserve custom multiline text scrolling. This fixes an actual
+  native-macOS failure that direct sheet-handler tests had missed.
+- Add optional SDK `IChildFocusReveal` and `IChildFocusOrder` hooks. Offscreen
+  fields reveal on Tab without rebinding; visual order survives lazy creation.
+  Independent native popup/form ownership and callback reentry are fenced.
+- Restrict label/header paint traversal to visible entries and dismiss moved
+  inline drop-downs without deactivating text fields or splitting typing history.
+  No polling worker, animation timer or idle frame loop is introduced.
+- Preserve negative controls, correct the designer regression fixture to walk
+  nested editors, and isolate the modal-frame wiring test from pre-existing
+  queued layout work without weakening the production UI-task budget.
+- Pass final frozen macOS/Linux/Windows full/race suites and twelve strict real
+  bundled-gopls cases without skips. Native macOS/Windows wheel, focus, saved
+  Undo/Redo, exact-file reopen and normal exits pass; actual new generated
+  companions execute with race against the same SDK. Three exports match every
+  one of 2,853 manifest files, with no extra Go files; full vet has no changes
+  to its 501 baseline diagnostics. Add two original native README images.
+- Publication evidence and remaining limits are tracked in
+  [the verification record](PROPERTY_SCROLL_PROGRESS_20261117.md). Development
+  source only; full widget virtualization, DPI/IME and whole-product parity are
+  separate work.
+
 ## Unreleased — coherent property inspector (2026-11-17)
 
 - Classify built-in Chinese/English property IDs explicitly: geometry and grid

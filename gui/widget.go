@@ -690,8 +690,18 @@ func (this *Widget) SetFocus() {
 	if ie, ok := oldFocusWidget.(IEventFocusChanged); ok {
 		ie.OnFocusChanged(focusWidget, oldFocusWidget)
 	}
-	if ie, ok := focusWidget.(IEventFocusChanged); ok {
-		ie.OnFocusChanged(focusWidget, oldFocusWidget)
+	if focusWidget != iw || !inputEnabled(iw) {
+		return // Focus callbacks may transfer or retire the requested target.
+	}
+	if ie, ok := iw.(IEventFocusChanged); ok {
+		ie.OnFocusChanged(iw, oldFocusWidget)
+	}
+	if focusWidget != iw || !inputEnabled(iw) {
+		return
+	}
+	revealFocusedChild(iw)
+	if focusWidget != iw || !inputEnabled(iw) {
+		return
 	}
 
 	dock := FindOwnerDock(this.Self())

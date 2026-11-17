@@ -39,12 +39,19 @@ func propertyCommandFixture(t *testing.T, multi bool) (*GedView, *prop.PropertyS
 	v.SetPropertyView(sheet)
 	sheet.Bind(objs, "", s)
 	fields := map[string]*prop.FloatEdit{}
-	for _, child := range sheet.Children() {
+	// Inspect descendants: editors now belong to the bounded content viewport,
+	// not directly to the sheet alongside its fixed search and scrollbar.
+	var visit func(gui.IWidget)
+	visit = func(child gui.IWidget) {
 		if e, ok := child.(*prop.FloatEdit); ok {
 			id := strings.SplitN(gui.GetToolTip(e), "\n", 2)[0]
 			fields[id] = e
 		}
+		for _, nested := range child.Children() {
+			visit(nested)
+		}
 	}
+	visit(sheet)
 	for _, id := range []string{"X", "Y", "Width", "Height"} {
 		if fields[id] == nil {
 			t.Fatalf("missing %s field: %v", id, fields)

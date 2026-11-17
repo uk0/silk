@@ -772,7 +772,7 @@ func (this *PropertyItem) createControl2() IPropertyControl {
 	if typ != "" {
 		control := this.createControl(typ)
 		if control != nil {
-			control.SetParent(this.sheet)
+			control.SetParent(this.sheet.body)
 			return control
 		}
 		fallbackAction = "fallback"
@@ -784,13 +784,13 @@ func (this *PropertyItem) createControl2() IPropertyControl {
 		control := this.createControl(defaultTyp)
 		if control != nil {
 			core.Debug(`property "` + this.Id() + `" ` + fallbackAction + ` to "` + defaultTyp + `" control`)
-			control.SetParent(this.sheet)
+			control.SetParent(this.sheet.body)
 			return control
 		}
 	}
 	core.Debug(`property "` + this.Id() + `" ` + fallbackAction + ` to "Label" control`)
 	control := NewTextEdit()
-	control.SetParent(this.sheet)
+	control.SetParent(this.sheet.body)
 	return control
 }
 
@@ -804,9 +804,10 @@ func (this *PropertyItem) Control() (ret IPropertyControl) {
 			core.Warn(fmt.Sprintf(`Recover PropertyItem.Control() (id = "%v") : %v `, this.Id(), e))
 			this.control = NewTextEdit()
 		}
-		this.control.SetParent(this.sheet)
+		this.control.SetParent(this.sheet.body)
 		this.control.BindProperty(&PropertyItem1{this})
 		this.UpdateControl()
+		this.control.SetVisible(this.vrow >= 0 && this.IsVisible())
 		ret = this.control
 	}()
 	this.control = this.createControl2()
@@ -991,8 +992,11 @@ type PropertySheet struct {
 	categoryBoldFont paint.Font
 
 	// 属性过滤
-	filter    string
-	searchBox *gui.SearchBox
+	filter        string
+	searchBox     *gui.SearchBox
+	body          *propertyViewport
+	contentHeight float64
+	layoutBusy    bool
 
 	// objCount is how many bound objects enumerated properties in the last
 	// Bind, and bindIndex which of them is enumerating right now. Together they
@@ -1036,6 +1040,12 @@ func (this *PropertySheet) Init(iw gui.IWidget) {
 	this.searchBox.SigTextChanged(func(s string) {
 		this.SetFilter(s)
 	})
+	this.body = new(propertyViewport)
+	this.body.sheet = this
+	this.body.Init(this.body)
+	this.body.SetParent(iw)
+	this.VertScrollBar().SetVisible(false)
+	this.VertScrollBar().SetFocusPolicy(gui.NoFocus)
 }
 
 // SetFilter narrows the sheet by label, persisted ID or category (including
@@ -1052,6 +1062,7 @@ func (this *PropertySheet) SetFilter(text string) {
 	// Keep the box in step when the filter is set programmatically. SetText
 	// re-enters here through SigTextChanged; the guard above ends the loop.
 	this.searchBox.SetText(text)
+	this.SetScrollY(0)
 	this.Layout()
 }
 
@@ -1117,6 +1128,9 @@ func (this *PropertySheet) Clear(owner interface{}) {
 	this.categoryLayout = nil
 	this.objCount = 0
 	this.bindIndex = 0
+	this.contentHeight = 0
+	this.SetScrollY(0)
+	this.layoutViewport()
 }
 
 // IsValidPropId reports whether s is usable as a property id. In this codebase
@@ -1296,14 +1310,16 @@ func (this *PropertySheet) Bind(objs []interface{}, configName string, owner int
 }
 
 func (this *PropertySheet) Layout() {
-	if this.suspendLayout {
+	if this.suspendLayout || this.layoutBusy {
 		return
 	}
+	this.layoutBusy = true
+	defer func() { this.layoutBusy = false }()
 	this.vlist = nil
 	this.categoryLayout = nil
 
 	this.searchBox.SetBounds(filterBoxMargin, filterBoxMargin,
-		this.Width()-filterBoxMargin*2, filterBoxHeight)
+		max(0, this.Width()-filterBoxMargin*2), filterBoxHeight)
 
 	// Group properties by category. Rows the filter rejects, and rows the
 	// config hides, are dropped here rather than skipped further down, so a
@@ -1317,7 +1333,7 @@ func (this *PropertySheet) Layout() {
 		if !p.IsVisible() || !inspectorMatchesFilter(p.Label(), p.Id(), cat, this.filter) ||
 			categoryHiddenForSelection(cat, this.objCount) {
 			p.vrow = -1
-			control := p.Control()
+			control := p.control
 			if control != nil {
 				control.SetVisible(false)
 			}
@@ -1359,7 +1375,7 @@ func (this *PropertySheet) Layout() {
 			// Hide all items in collapsed category
 			for _, p := range items {
 				p.vrow = -1
-				control := p.Control()
+				control := p.control
 				if control != nil {
 					control.SetVisible(false)
 				}
@@ -1386,16 +1402,17 @@ func (this *PropertySheet) Layout() {
 			// 显示控件
 			control := p.Control()
 			if control != nil {
-				control.SetBounds1(this.getItemRect(p, pitemControl))
 				control.SetVisible(true)
 			}
 		}
 	}
+	this.contentHeight = ypos - this.contentTop()
+	this.layoutViewport()
 	this.Update()
 }
 
 func (this *PropertySheet) vertSplitPx() float64 {
-	return this.Width() * this.vertSplit
+	return this.body.Width() * this.vertSplit
 }
 
 func (this *PropertySheet) headHight() float64 {
@@ -1418,7 +1435,7 @@ const (
 )
 
 func (this *PropertySheet) getItemRect(item *PropertyItem, part int) geom.Rect {
-	width := this.Width()
+	width := this.body.Width()
 	indent := float64(item.indent) * this.indentSize()
 	height := item.ItemHeight()
 	xedit := this.vertSplitPx()
@@ -1508,15 +1525,24 @@ func (this *PropertySheet) drawColorSwatch(g paint.Painter, p *PropertyItem, ite
 }
 
 func (this *PropertySheet) Draw(g paint.Painter) {
-	w := this.Width()
+	w := this.body.Width()
+	if w <= 0 || this.body.Height() <= 0 {
+		return
+	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, this.contentTop(), w, this.body.Height())
+	g.Clip()
+	g.Translate(0, -this.ScrollY())
 	xedit := this.vertSplitPx()
 
 	g.SetPen1(gui.Theme().BorderColor, 1)
-	g.Line(xedit, this.contentTop(), xedit, this.Height())
+	g.Line(xedit, this.contentTop()+this.ScrollY(), xedit, this.Height()+this.ScrollY())
 	g.Stroke()
 
 	// Draw using category layout
-	for _, entry := range this.categoryLayout {
+	start, end := this.visibleEntries()
+	for _, entry := range this.categoryLayout[start:end] {
 		if entry.isHeader {
 			this.drawCategoryHeader(g, entry.category, entry.ypos, w)
 		} else if entry.item != nil {
@@ -1529,23 +1555,6 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 		}
 	}
 
-	// If no category layout (empty), fall back to flat rendering.
-	// A filter that matches nothing legitimately empties the layout, and the
-	// fallback would redraw every label the user just filtered out.
-	if len(this.categoryLayout) == 0 && this.filter == "" {
-		g.SetBrush1(gui.Theme().TextColor)
-		for _, p := range this.rlist {
-			// A sheet whose rows are all hidden also lays out to nothing, and
-			// the fallback would draw exactly the labels Layout refused.
-			if !p.IsVisible() {
-				continue
-			}
-			this.drawPropertyLabel(g, p)
-			if isColorProperty(p) {
-				this.drawColorSwatch(g, p, p.ItemHeight())
-			}
-		}
-	}
 }
 
 // drawCategoryHeader renders a collapsible category header row.
@@ -1610,9 +1619,10 @@ func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, yp
 func (this *PropertySheet) OnLeftDown(x, y float64) {
 	// Match the clipped paint/client bounds, including zero-height panes.
 	// Positive comparisons deliberately reject NaN as well as infinities.
-	if !(x >= 0 && x < this.Width() && y >= this.contentTop() && y < this.Height()) {
+	if !(x >= 0 && x < this.body.Width() && y >= this.contentTop() && y < this.Height()) {
 		return
 	}
+	y += this.ScrollY()
 	// Check if click is on a category header
 	for _, entry := range this.categoryLayout {
 		if entry.isHeader {

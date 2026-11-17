@@ -30,6 +30,7 @@ func TestIsValidPropId(t *testing.T) {
 // inherit lookup short-circuits and never touches disk. Keeps the test GL-free.
 func newTestSheet() *PropertySheet {
 	sheet := NewPropertySheet()
+	sheet.SetSize(640, 1000) // A usable viewport; zero-size behavior is tested separately.
 	sheet.configFile = &PropertyConfigFile{name: "default", doc: core.NewTDoc()}
 	return sheet
 }

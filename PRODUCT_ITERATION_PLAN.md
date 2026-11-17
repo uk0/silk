@@ -9,6 +9,22 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: bounded, scrollable property inspector (2026-11-17)
+
+- [x] Preserve long-list, bounded-editor and nested focus-reveal failures.
+- [x] Keep search fixed, scroll only the clipped body; map label/header hits
+      to the same logical coordinates and close moved transient popups.
+- [x] Reveal keyboard-focused editors without polling, rebinding or model edits;
+      fence callback reentry and independent native popup ownership.
+- [x] Verify filter/collapse/resize, edit/undo/save, rendering, full/race/LSP
+      suites and current native platform behavior against frozen source.
+- [x] Refresh original macOS/Windows README captures, SDK docs, changelog and
+      evidence; profile 100/1,000-field scrolling without claiming virtualization.
+
+Publication requires exact tested/indexed source/media audit, commit/push and
+independent remote readback after acceptance. The broader product goal stays
+active. [Verification and remaining limits](PROPERTY_SCROLL_PROGRESS_20261117.md).
+
 ## Validated increment: coherent property inspector categories and rendering (2026-11-17)
 
 Baseline `2a68b14`; the full product goal stays active.

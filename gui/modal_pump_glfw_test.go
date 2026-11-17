@@ -25,6 +25,18 @@ import (
 // serviceUIFrame or the serviceUIFrame call from the modal loop turns a test
 // red.
 func TestServiceUIFrameDrainsPostedTasksAndBeats(t *testing.T) {
+	// This checks one frame's service wiring, not an unlimited drain. Isolate
+	// older fixtures' pending layout work: production intentionally yields
+	// after 64 tasks or 4ms so input/rendering cannot be starved by a backlog.
+	uiTaskMu.Lock()
+	savedTasks := uiTasks
+	uiTasks = nil
+	uiTaskMu.Unlock()
+	defer func() {
+		uiTaskMu.Lock()
+		uiTasks = append(savedTasks, uiTasks...)
+		uiTaskMu.Unlock()
+	}()
 	// init() arms the 47ms idle timer, and processTimers is part of the frame;
 	// swap the map out so this test fires no callback of anyone else's.
 	saved := timerMap
