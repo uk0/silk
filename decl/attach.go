@@ -56,8 +56,8 @@ func attachChild(parent, child interface{}) {
 	method.Call([]reflect.Value{pv})
 }
 
-// attachLayoutChild registers actual Grid/Form cells and invokes simple layout
-// adders. Merely SetParent-ing a Grid child leaves its private cell list empty.
+// attachLayoutChild registers actual Grid/Form cells and invokes container
+// adders. Plain SetParent does not establish private cell/content ownership.
 func attachLayoutChild(parent, child interface{}, parentType string, node *Node, index int) bool {
 	if manager, ok := parent.(interface{ LayoutEnabled() bool }); ok && !manager.LayoutEnabled() {
 		return false
@@ -90,7 +90,7 @@ func attachLayoutChild(parent, child interface{}, parentType string, node *Node,
 		for _, n := range values {
 			args = append(args, reflect.ValueOf(n))
 		}
-	case "gui.HBox", "gui.VBox":
+	case "gui.HBox", "gui.VBox", "gui.GroupBox":
 		method = "AddWidget"
 		args = []reflect.Value{reflect.ValueOf(child)}
 	default:

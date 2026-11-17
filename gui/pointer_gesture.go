@@ -15,28 +15,65 @@ func cancelPointerGesture(widget IWidget) {
 }
 
 func (win *Window) cancelPointerGestures() {
-	if win == nil {
+	if win == nil || win.cancelingPointer {
 		return
 	}
+	win.cancelingPointer = true
+	defer func() { win.cancelingPointer = false }()
+	win.autoCaptured, win.toCapture = false, false
 	oldMouse := lastMouseWidget
 	mouseOwned := oldMouse != nil && oldMouse.OwnerWindow() == win
-	// Cancellation may PopCapture or dispose a control. Snapshot the owner set
-	// before callbacks, without canceling gestures in independent native forms.
-	var targets []IWidget
+	// Snapshot ownership before host callbacks can dispose/reparent controls.
+	// Keep legacy captures too: no cancellation hook does not grant continued
+	// routing after the native surface has lost its input ownership.
+	var small [8]IWidget
+	retired := small[:0]
 	for _, captured := range captureStack {
 		if captured != nil && captured.OwnerWindow() == win {
-			if _, ok := captured.(IEventPointerCancel); ok {
-				targets = append(targets, captured)
-			}
+			retired = append(retired, captured)
 		}
 	}
-	for _, target := range targets {
-		cancelPointerGesture(target)
+	wasRetired := func(widget IWidget) bool {
+		for _, old := range retired {
+			if old.NakedWidget() == widget.NakedWidget() {
+				return true
+			}
+		}
+		return false
 	}
-	// PopCapture can restore an earlier independent capture and set it as
-	// lastMouseWidget. A canceled native event must not become that other
-	// surface's old press/release. Preserve the capture, not the stale event.
-	if mouseOwned && lastMouseWidget == curCapture() {
+	if mouseOwned && !wasRetired(oldMouse) {
+		retired = append(retired, oldMouse)
+	}
+	// Retire inner captures before their ancestors; restoring an already-
+	// canceled ancestor must not turn it back into a live gesture.
+	for i := len(retired) - 1; i >= 0; i-- {
+		cancelPointerGesture(retired[i])
+	}
+	if mouseHoverWidget != nil && mouseHoverWidget.OwnerWindow() == win {
+		setMouseHoverWidget(nil)
+	}
+	previous := curCapture()
+	kept := captureStack[:0]
+	for _, captured := range captureStack {
+		if captured != nil && captured.OwnerWindow() != win && !wasRetired(captured) {
+			kept = append(kept, captured)
+		}
+	}
+	clear(captureStack[len(kept):])
+	captureStack = kept
+	if current := curCapture(); current != previous {
+		if current == nil {
+			releaseCapture()
+		} else {
+			setCapture(current)
+		}
+	}
+	// PopCapture may restore an independent capture. Preserve that capture,
+	// not the canceled event's mouse target or an uncaptured old press.
+	if mouseOwned && (lastMouseWidget == oldMouse || lastMouseWidget == curCapture()) {
+		lastMouseWidget = nil
+	}
+	if lastMouseWidget != nil && lastMouseWidget.OwnerWindow() == win {
 		lastMouseWidget = nil
 	}
 }

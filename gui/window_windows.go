@@ -103,6 +103,7 @@ type Window struct {
 	//	staticTitle  bool
 	autoCaptured           bool
 	toCapture              bool
+	cancelingPointer       bool
 	mouseEntered           bool
 	alowDnd                bool
 	inModal                bool
@@ -458,7 +459,7 @@ func forgetWidgetsOfWindow(win *Window) {
 	clear(captureStack[len(kept):])
 	captureStack = kept
 	if win.hWnd != 0 && win32.GetCapture() == win.hWnd {
-		win32.ReleaseCapture()
+		releaseCapture()
 	}
 	win.autoCaptured, win.toCapture, win.mouseEntered = false, false, false
 	if activeForm == win {
@@ -848,7 +849,7 @@ func getCaptureWin() *Window {
 }
 
 func releaseCapture() {
-	win32.ReleaseCapture()
+	releaseWinCapture()
 }
 
 func setCapture(iw IWidget) {
@@ -856,7 +857,7 @@ func setCapture(iw IWidget) {
 	if win == nil {
 		return
 	}
-	win32.SetCapture(win.hWnd)
+	setWinCapture(win.hWnd)
 	lastMouseWidget = iw
 }
 
@@ -1377,7 +1378,10 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		}
 		win.dispatchUnicode(wParam)
 		return 0
-	case win32.WM_CAPTURECHANGED, win32.WM_CANCELMODE:
+	case win32.WM_CAPTURECHANGED:
+		win.nativeCaptureChanged(win32.HWND(lParam))
+		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
+	case win32.WM_CANCELMODE:
 		win.cancelPointerGestures()
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_KILLFOCUS:
@@ -1739,7 +1743,7 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 		setMouseHoverWidget(p)
 		lastMouseWidget = p
 		if win == capWin {
-			win32.ReleaseCapture()
+			releaseCapture()
 		}
 		if p != nil {
 			if i, ok := p.Self().(IEventMouseMove); ok && inputEnabled(p) {

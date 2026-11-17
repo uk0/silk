@@ -42,6 +42,9 @@ func isTabFocusable(w IWidget) bool {
 	case TabFocus:
 		return true
 	}
+	if stateful, ok := w.(interface{ autoTabFocusable() bool }); ok {
+		return stateful.autoTabFocusable()
+	}
 	// Composite fields leave automatic Tab focus to their editor descendant.
 	// Explicit policies above still win; normal traversal visits the child.
 	if proxy, ok := w.(interface{ tabFocusProxy() IWidget }); ok && proxy.tabFocusProxy() != nil {

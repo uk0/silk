@@ -126,12 +126,13 @@ type Window struct {
 	glOverlays       []chartOverlay
 	sceneComposition sceneCompositionWindow
 
-	pointer      pointerEventState
-	mouseEntered bool
-	autoCaptured bool
-	toCapture    bool
-	inModal      bool
-	closeOnHide  bool
+	pointer          pointerEventState
+	mouseEntered     bool
+	autoCaptured     bool
+	toCapture        bool
+	cancelingPointer bool
+	inModal          bool
+	closeOnHide      bool
 	// GLFW's shared GL context is not a native owner relationship. Keep the
 	// actual popup owner so transient windows cannot outlive its geometry or
 	// visibility, and remember logical focus for keyboard routing on dismiss.

@@ -370,3 +370,45 @@ func TestGroupBoxCaptionReservesFallbackInkHeight(t *testing.T) {
 		t.Fatalf("fallback ink exceeds header band: top=%g band=%g", inkTop, group.titleHeight())
 	}
 }
+
+func TestGroupBoxKeyboardFocusCueClipsToHeader(t *testing.T) {
+	isolateEnabledTest(t)
+	group := NewGroupBox(strings.Repeat("Options 中文 ", 8))
+	group.SetCheckable(true)
+	group.SetSize(100, 70)
+	base := paint.NewPixmap(130, 100)
+	defer paint.CloseSurface(base)
+	before := base.NewPainter()
+	before.Translate(10, 10)
+	group.Draw(before)
+	paint.ClosePainter(before)
+	baseImage, err := base.Image()
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.SetFocus()
+	focus := paint.NewPixmap(130, 100)
+	defer paint.CloseSurface(focus)
+	after := focus.NewPainter()
+	after.Translate(10, 10)
+	group.Draw(after)
+	paint.ClosePainter(after)
+	focusImage, err := focus.Image()
+	if err != nil {
+		t.Fatal(err)
+	}
+	different := 0
+	for y := 0; y < 100; y++ {
+		for x := 0; x < 130; x++ {
+			if focusImage.At(x, y) != baseImage.At(x, y) {
+				different++
+				if x < 10 || x >= 110 || y < 10 || float64(y) >= 10+group.titleHeight() {
+					t.Fatalf("header focus cue escaped allocation at %d,%d", x, y)
+				}
+			}
+		}
+	}
+	if different == 0 {
+		t.Fatal("keyboard focus has no visible header cue")
+	}
+}

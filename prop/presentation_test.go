@@ -164,3 +164,21 @@ func TestMixedPropertyHintUsesReadableThemeTextAndLocale(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupBoxPropertyLabelsKeepCanonicalIDs(t *testing.T) {
+	old := i18n.Locale()
+	t.Cleanup(func() { i18n.SetLocale(old) })
+	for _, locale := range []string{"en", "zh-CN"} {
+		i18n.SetLocale(locale)
+		for id, chinese := range map[string]string{"Checkable": "可勾选", "Checked": "选中"} {
+			item := addTestProp(newTestSheet(), id, func() bool { return true }, nil)
+			want := id
+			if locale == "zh-CN" {
+				want = chinese
+			}
+			if item.Label() != want || item.Id() != id || !propMatchesFilter(item.Label(), item.Id(), want) {
+				t.Fatalf("%s: canonical %s displays %q, want %q", locale, id, item.Label(), want)
+			}
+		}
+	}
+}

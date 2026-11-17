@@ -40,6 +40,8 @@ func (this *GroupBox) Init(self IWidget) {
 
 func (this *GroupBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("标题", this.Title, this.SetTitle)
+	list.AddProperty("Checkable", this.IsCheckable, this.SetCheckable)
+	list.AddProperty("Checked", this.IsChecked, this.SetChecked)
 }
 
 func (this *GroupBox) Title() string {
@@ -213,6 +215,19 @@ func (this *GroupBox) Draw(g paint.Painter) {
 	if this.checkable && checkW > 0 {
 		this.drawTitleCheck(g)
 	}
+	if this.checkable && this.HasFocus() {
+		// Keep the keyboard cue around the fitted header, never around the
+		// full unclipped title or the group's disabled content.
+		left := max(0, textX-checkW-2)
+		right := min(w, max(textX+ext.Width, textX-checkW+groupBoxCheckSize(t.IconSize))+2)
+		if right > left && min(h, titleH) > 2 {
+			color := t.HighLightColor
+			color.A = 90
+			roundedRect(g, left, 1, right-left, min(h, titleH)-2, 3)
+			g.SetPen1(color, 1.5)
+			g.Stroke()
+		}
+	}
 
 	// Draw the actual title text. When checkable and unchecked, dim the title
 	// to signal the disabled state (matching the disabled content).
@@ -273,6 +288,18 @@ func (this *GroupBox) OnLeftDown(x, y float64) {
 	}
 	this.SetFocus()
 	this.SetChecked(!this.checked)
+}
+
+// A plain frame must not add a Tab stop merely because checkable frames can
+// handle Space. Explicit NoFocus/TabFocus policies remain authoritative.
+func (this *GroupBox) autoTabFocusable() bool { return this.checkable }
+
+// OnKeyDown toggles a focused checkable header once per Space press. Repeated
+// key-downs do not oscillate the gate; Enter remains available to form actions.
+func (this *GroupBox) OnKeyDown(key int, repeat bool) {
+	if key == KeySpace && !repeat && this.checkable && inputEnabled(this.Self()) {
+		this.SetChecked(!this.checked)
+	}
 }
 
 func (this *GroupBox) Layout() {

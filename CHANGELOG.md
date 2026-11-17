@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — checkable group authoring and native capture (2026-11-17)
+
+- Add GroupBox header Space/Tab operation, repeat rejection and a clipped focus cue.
+- Expose localized Checkable/Checked designer properties, persist/reproduce their
+  state and add typed OnToggled creation/navigation/binding.
+- Connect typed generated handlers after construction, authored values and layout,
+  preventing initialization-time business callbacks; runtime signals remain.
+- Register decl GroupBox children through AddWidget, restoring actual content
+  ownership, nested layout and input gating in ordinary IDE-generated companions.
+- Fix internal Windows capture acknowledgements mistaken for external loss;
+  strengthen uncaptured/legacy/nested cancellation, reentry and backing-slot cleanup.
+- Pass frozen-source full/race: macOS arm64 9,553 named passes /29 skips each;
+  Linux arm64 9,492 /37; Windows amd64 9,350 /43. Twelve strict actual bundled-gopls
+  cases have no skips; all three post-test exports match 2,842 files /2,081 Go files.
+- Pass native macOS/Windows SDK keyboard, disabled/enabled same-coordinate controls,
+  inspector Undo/Redo, typed event creation, save/reopen/readback and normal exits.
+  Final Windows first toolbar Save retry succeeds after a read-only refusal;
+  three earlier fresh controls also pass. Actual IDE output compiles and executes.
+- Add three original native README captures and SDK/QA documentation. Renderer,
+  native GL, platform scripts and CI-scoped vet pass; full vet retains 501 unchanged
+  baseline diagnostics, none new. Retain superseded runtime failures and harness
+  failures separately. Development source only, not a binary release, universal
+  native/DPI/performance guarantee or full Qt Creator parity.
+  [Verification and remaining work](GROUPBOX_AUTHORING_PROGRESS_20261117.md).
+
 ## Unreleased — inherited input availability and GroupBox rendering (2026-11-16)
 
 - Fix GroupBox inward-curl corner arcs, constrained title overflow, empty-title

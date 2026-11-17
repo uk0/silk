@@ -3,6 +3,22 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 可勾选 GroupBox 与生成代码初始化（已验证开发源码）
+
+- `SetCheckable(true)` 后，标题可由 Tab 到达，Space 每次按下切换一次；自动重复
+  不反复切换，Enter 不切换。取消勾选后保留标题焦点，Tab 跳过禁用内容。
+  普通不可勾选 GroupBox 不增加默认 Tab 停靠点；显式焦点策略仍优先。
+- 设计器新增稳定属性 ID `Checkable`／`Checked`，显示名称随中英文切换；保存、
+  重开与生成代码保留状态，支持 `OnToggled(checked bool)` 事件。
+- 生成器在控件、初始属性与布局设置完成后才连接业务回调，避免构造期间意外触发。
+  这是有意的初始化行为调整：需要启动逻辑的应用请显式调用；运行时 setter 仍发信号。
+- IDE 默认 decl companion 经 `BuildWithIndex` 装配时，GroupBox 子节点通过
+  `AddWidget` 登记为实际 content，而非仅 `SetParent`；布局与输入 gate 因而生效。
+  decl 输出不嵌入 Go 事件源码，宿主通过 index 显式绑定；类型化 SDK 输出自动连接。
+- 冻结源码已通过 macOS arm64／Linux arm64／Windows amd64 full/race、12 项真实
+  bundled-gopls，以及 macOS／Windows 原生属性、事件、键盘、禁用/恢复与正常退出验收。
+  实际 IDE 生成文件在隔离模块编译运行；见 [验证与边界](../GROUPBOX_AUTHORING_PROGRESS_20261117.md)。
+
 ## 容器可用性与输入取消（已验证开发源码）
 
 - `Widget.IsEnabled()` 返回包含祖先／容器 gate 的实际输入可用性；

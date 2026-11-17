@@ -465,27 +465,6 @@ func (snapshot *CodeSnapshot) Generate(opts CodeGenOptions) CapturedCode {
 			buf.WriteString(fmt.Sprintf("\tui.%s.SetBounds(%s, %s, %s, %s)\n",
 				f.name, fmtFloat(f.x), fmtFloat(f.y), fmtFloat(f.w), fmtFloat(f.h)))
 		}
-		// Wire the events this widget contributes. handlerBindingsFor owns
-		// the rules (recorded bindings win, otherwise the widget's natural
-		// event) so the user-file stub collector resolves the exact same
-		// set — a handler the machine file calls is a handler the user file
-		// declares.
-		for _, b := range handlerBindingsFor(f.factoryName, f.code, f.eventHandlers) {
-			if emitEventBinding(&buf, imports, f.factoryName, f.name, b.event, handlerRef(b.handler, opts.SplitHandlers || b.method)) {
-				continue
-			}
-			// Unknown (factory, event) pair. widgetEvents is a
-			// hand-maintained table of widget→signal mappings;
-			// new pairs need an explicit entry. Emit guidance
-			// instead of a silent miss so reviewers see the gap.
-			// The line still compiles (it's a comment), so
-			// generated files stay buildable — the binding just
-			// doesn't fire until codegen learns the pair.
-			buf.WriteString(fmt.Sprintf(
-				"\t// codegen: no binding for %s.%s — add an entry to ged/codegen.go's widgetEvents.\n"+
-					"\t//          Handler %q is not connected at runtime.\n",
-				f.factoryName, b.event, b.handler))
-		}
 		buf.WriteString("\n")
 	}
 
@@ -537,6 +516,32 @@ func (snapshot *CodeSnapshot) Generate(opts CodeGenOptions) CapturedCode {
 		f := fields[i]
 		if isDesignerLayoutFactory(f.factoryName) {
 			fmt.Fprintf(&buf, "\tui.%s.Layout()\n", f.name)
+		}
+	}
+
+	// Match designer loading: authored initialization is not a user event.
+	// Connect handlers only after all widgets, scalar state and layouts exist.
+	for _, f := range fields {
+		// Wire the events this widget contributes. handlerBindingsFor owns
+		// the rules (recorded bindings win, otherwise the widget's natural
+		// event) so the user-file stub collector resolves the exact same
+		// set — a handler the machine file calls is a handler the user file
+		// declares.
+		for _, b := range handlerBindingsFor(f.factoryName, f.code, f.eventHandlers) {
+			if emitEventBinding(&buf, imports, f.factoryName, f.name, b.event, handlerRef(b.handler, opts.SplitHandlers || b.method)) {
+				continue
+			}
+			// Unknown (factory, event) pair. widgetEvents is a
+			// hand-maintained table of widget→signal mappings;
+			// new pairs need an explicit entry. Emit guidance
+			// instead of a silent miss so reviewers see the gap.
+			// The line still compiles (it's a comment), so
+			// generated files stay buildable — the binding just
+			// doesn't fire until codegen learns the pair.
+			buf.WriteString(fmt.Sprintf(
+				"\t// codegen: no binding for %s.%s — add an entry to ged/codegen.go's widgetEvents.\n"+
+					"\t//          Handler %q is not connected at runtime.\n",
+				f.factoryName, b.event, b.handler))
 		}
 	}
 
@@ -878,6 +883,9 @@ var widgetEvents = map[string][]widgetEvent{
 	"gui.CheckBox": {
 		{name: "OnToggled", code: "\tui.%s.SigCheck(func(checked bool) { %s(checked) })\n", params: "checked bool"},
 	},
+	"gui.GroupBox": {
+		{name: "OnToggled", code: "\tui.%s.SigToggled(func(checked bool) { %s(checked) })\n", params: "checked bool"},
+	},
 	"gui.Slider": {
 		{name: "OnValueChanged", code: "\tui.%s.SetValueChangedCallback(func(_ interface{}, v float64) { %s(v) })\n", params: "v float64"},
 	},
@@ -1139,6 +1147,7 @@ var industrialDesignProps = map[string][]designProp{
 	"gui.ProgressBar": {{"Value", "SetValue", dpFloat}},
 	"gui.SpinBox":     {{"Min", "SetMin", dpInt}, {"Max", "SetMax", dpInt}, {"Value", "SetValue", dpInt}, {"Step", "SetStep", dpInt}, {"PageStepOverride", "SetPageStep", dpInt}, {"Suffix", "SetSuffix", dpString}, {"IsReadOnly", "SetReadOnly", dpBool}},
 	"gui.CheckBox":    {{"IsChecked", "SetChecked", dpBool}},
+	"gui.GroupBox":    {{"IsCheckable", "SetCheckable", dpBool}, {"IsChecked", "SetChecked", dpBool}},
 	// Widgets whose entire designed content is a property: a Space is its axis
 	// and stretch, a ButtonBox is its button list. Without these rows a dropped
 	// one generates as the bare constructor and loses what was designed on it.

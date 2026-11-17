@@ -9,6 +9,30 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: checkable GroupBox authoring and native capture (2026-11-17)
+
+- [x] Reproduce missing header keyboard/Tab support, designer state rows and
+      OnToggled wiring; retain the initialization-order failure separately.
+- [x] Add bounded header focus cues, canonical localized state properties,
+      persistence/frozen-code reproduction and typed event binding.
+- [x] Connect generated handlers only after authored initialization; execute an
+      actual generated nested consumer to verify quiet construction/runtime signals.
+- [x] Execute the actual IDE decl companion, reproduce missing GroupBox content
+      registration and repair its public container attachment with a regression.
+- [x] Pass GUI/GED/property race and isolated macOS full/race preflights. Reproduce
+      the published Windows first-retry anomaly with foreground/ownership evidence.
+- [x] Trace/fix native capture, pass fresh first-save-retry controls and current
+      macOS/Windows keyboard, inspector, event and save/reopen/normal-exit replay.
+- [x] Pass final three-platform full/race/strict bundled-gopls gates and exact
+      independent source exports; execute actual IDE-generated consumers.
+- [x] Refresh three original README captures, SDK docs, changelog and QA report.
+- Publication requires exact tested/indexed source/media audit, commit/push and
+  independent remote HEAD readback. Do not reuse superseded preflight as acceptance.
+
+[Current work and evidence boundaries](GROUPBOX_AUTHORING_PROGRESS_20261117.md).
+The wider industrial bindings, editor/LSP, native DPI/IME and popup lifecycle
+requirements remain part of the unchanged product goal.
+
 ## Validated increment: effective input gates and GroupBox painting (2026-11-16)
 
 - [x] Reproduce 270-degree corner arcs, caption overflow/font-state leakage,
@@ -23,9 +47,10 @@ Do not substitute a small passing test for the whole product-readiness gate.
 - [x] Refresh three original README captures, SDK API documentation and changelog.
 - Publication requires exact tested/staged source and media audit, commit/push
   and independent remote HEAD readback; no binary release/tag is implied.
-- [ ] Continue GroupBox keyboard/inspector authoring, independently owned popup
-      lifecycle and first-save-retry click timing, Windows PMv2/IME and
-      large-workspace scheduling/profiling.
+- Keyboard/inspector authoring and the internal capture/first-save-retry defect
+  are covered by the November 17 increment above.
+- [ ] Continue independently owned popup lifecycle, Windows PMv2/IME,
+      first-frame damage and large-workspace scheduling/profiling.
 
 [Evidence and limits](GROUPBOX_INPUT_PROGRESS_20261116.md). Industrial point
 bindings, HTTP conversion pipelines, designer/code navigation and SDK integration

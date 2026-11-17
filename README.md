@@ -19,6 +19,54 @@ signed/notarized standalone apps.
 
 ---
 
+## Checkable groups and predictable event initialization (development branch)
+
+GroupBox now exposes localized **Checkable / Checked** designer properties and
+a typed **OnToggled(checked bool)** event. Tab reaches a checkable header; Space
+toggles once, ignores repeats, and keeps disabled nested content out of the Tab
+sequence. Ordinary frames do not gain an extra automatic Tab stop.
+
+Generated Go connects handlers **after** widget construction, authored property
+values and layouts. Initialization therefore does not accidentally run business
+callbacks; applications should call any startup logic explicitly. Runtime
+setters still emit their normal signals.
+
+![Actual macOS designer with saved GroupBox properties and an event handler](docs/images/groupbox-authoring-macos.jpg)
+
+Original source-built IDE capture: the inspector edits the group state and the
+context event action creates and navigates to the correctly typed handler.
+Save, property Undo/Redo, New/reopen and independent model readback were checked.
+The embedded handler and the ordinary generated companion are separate outputs;
+File Export remains SVG/PDF, not a Go export command.
+Typed SDK output wires the event; `decl.Node` consumers use `BuildWithIndex`
+to attach their own Go callbacks explicitly.
+
+<details>
+<summary>Native Windows designer authoring</summary>
+
+![Actual Windows 10 designer with saved group properties and a typed handler](docs/images/groupbox-authoring-windows.png)
+
+Original final-source capture. Inspector edits, saved Undo/Redo, owned event-menu
+navigation, New/reopen and independent document/handler/session readback pass
+before normal exit 0. The actual IDE-generated companion also compiles and runs
+its group ownership/input-gate test against the same frozen SDK.
+
+</details>
+
+![Actual generated macOS SDK consumer with keyboard focus on its group header](docs/images/groupbox-keyboard-macos.jpg)
+
+Original generated-consumer capture, not a mockup. Native keyboard operation,
+disabled-content rejection and enabled same-coordinate mouse controls were
+verified against an independent event journal before normal exit 0.
+
+Windows internal mouse-capture transfers now distinguish their own exact native
+acknowledgements from external capture loss, avoiding a hidden menu consuming
+the first Save retry. Frozen-source full/race checks pass on macOS arm64, Linux
+arm64 and Windows amd64, with 12 strict actual bundled-gopls cases, native
+macOS/Windows acceptance and independent source exports. See
+[verification and limits](GROUPBOX_AUTHORING_PROGRESS_20261117.md).
+This is development source, not a new packaged release or full Qt Creator parity.
+
 ## GroupBox rendering and nested input gates (development branch)
 
 GroupBox corners now use quarter arcs, and long titles fit their allocation

@@ -16,7 +16,9 @@ var legacyPropertyLabels = map[string]string{
 }
 
 func init() {
-	translations := map[string]string{multiValueText: "多值"}
+	translations := map[string]string{
+		multiValueText: "多值", "Checkable": "可勾选", "Checked": "选中",
+	}
 	for id, label := range legacyPropertyLabels {
 		translations[label] = id
 	}
