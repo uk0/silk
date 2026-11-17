@@ -44,9 +44,9 @@ func (s *PropertySheet) revealRow(row *PropertyItem) {
 	}
 	top := row.ypos - s.contentTop()
 	sy := s.ScrollY()
-	if top < sy || row.ItemHeight() > h {
+	if top < sy || row.resolvedLayoutHeight() > h {
 		s.SetScrollY(top)
-	} else if bottom := top + row.ItemHeight(); bottom > sy+h {
+	} else if bottom := top + row.resolvedLayoutHeight(); bottom > sy+h {
 		s.SetScrollY(bottom - h)
 	}
 }
@@ -119,9 +119,26 @@ func (e *TextEdit) OnMouseWheel(x, y, delta float64) {
 }
 
 func (s *PropertySheet) positionEditors() {
+	if s.positionBusy {
+		s.positionPending = true
+		return
+	}
+	s.positionBusy = true
+	defer func() { s.positionBusy = false }()
+	for pass := 0; pass < 2; pass++ {
+		s.positionPending = false
+		s.positionEditorPass()
+		if !s.positionPending {
+			return
+		}
+	}
+	s.RequestLayout()
+}
+
+func (s *PropertySheet) positionEditorPass() {
 	for _, row := range s.vlist {
 		control := row.control
-		if row.retired || control == nil || control.Parent() != s.body {
+		if row.retired || row.vrow < 0 || control == nil || control.Parent() != s.body {
 			continue
 		}
 		r := s.getItemRect(row, pitemControl)
@@ -129,8 +146,8 @@ func (s *PropertySheet) positionEditors() {
 		if control.Bounds1() != r {
 			// A native drop-down cannot remain at its old screen coordinates.
 			// Do not Deactivate text fields: scrolling must preserve edit sessions.
-			dismissPropertyPopups(control)
-			if !row.retired && row.control == control && control.Parent() == s.body {
+			gui.DismissInlinePopups(control)
+			if !row.retired && row.vrow >= 0 && row.control == control && control.Parent() == s.body {
 				// Dismiss callbacks may themselves transfer focus and scroll.
 				r = s.getItemRect(row, pitemControl)
 				r.Y -= s.contentTop() + s.ScrollY()
@@ -140,17 +157,11 @@ func (s *PropertySheet) positionEditors() {
 	}
 }
 
-func dismissPropertyPopups(root gui.IWidget) {
-	if popup, ok := root.(interface{ HideSubPopup() }); ok {
-		popup.HideSubPopup()
+func (row *PropertyItem) resolvedLayoutHeight() float64 {
+	if row.vrow >= 0 && row.layoutHeight > 0 {
+		return row.layoutHeight
 	}
-	for _, child := range root.Children() {
-		// A native child's parent may only be its logical owner; do not walk
-		// into independent popup/form surfaces while retiring inline popups.
-		if child.Parent() == root && child.Window() == nil {
-			dismissPropertyPopups(child)
-		}
-	}
+	return row.ItemHeight()
 }
 
 // Category entries are ordered and non-overlapping. Paint work is proportional
@@ -160,11 +171,7 @@ func (s *PropertySheet) visibleEntries() (int, int) {
 	bottom := top + s.body.Height()
 	start := sort.Search(len(s.categoryLayout), func(i int) bool {
 		e := s.categoryLayout[i]
-		h := categoryHeaderHeight
-		if e.item != nil {
-			h = e.item.ItemHeight()
-		}
-		return e.ypos+h > top
+		return e.ypos+e.height > top
 	})
 	end := sort.Search(len(s.categoryLayout), func(i int) bool {
 		return s.categoryLayout[i].ypos >= bottom

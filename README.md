@@ -19,6 +19,45 @@ signed/notarized standalone apps.
 
 ---
 
+## Coherent inspector geometry and popup lifetime (development branch)
+
+Property scrolling now reuses committed row geometry instead of repeatedly
+parsing configuration and copying child lists. The reproducible 100/1,000-field
+steady-state geometry benchmark reports **0 B/op, 0 allocs/op**; this does not
+include drawing, initial control creation or native input, and is not an FPS claim.
+
+Callbacks that resize, filter or rebind the inspector cannot overwrite its latest
+layout with old coordinates. Inline drop-downs retire from a validated snapshot;
+independent forms/popups retain their own lifetime. Inspector correction stays bounded on the UI
+thread without adding an idle timer or polling worker.
+
+![Original macOS designer after edit, saved Undo/Redo and exact-path reopen](docs/images/inspector-geometry-macos.jpg)
+
+The [geometry and popup QA record](INSPECTOR_GEOMETRY_PROGRESS_20261117.md)
+documents negative controls, benchmark scope, platform results and remaining work.
+The SDK contracts are in [SDK features](docs/SDK_FEATURES.md).
+
+<details>
+<summary>Original Windows 10 designer capture</summary>
+
+![Actual Windows designer after saved Undo/Redo, New/reopen and scrollbar dragging](docs/images/inspector-geometry-windows.png)
+
+The title, event binding and nested values survive independent saved-state reads.
+The source-built IDE and its adjacent bundled gopls exit normally after testing.
+
+</details>
+
+<details>
+<summary>Original SDK popup-retirement and reentrant-geometry capture</summary>
+
+![Native SDK host after palette retirement, its first real button click and a 53px row-height callback](docs/images/inspector-popup-retired-macos.jpg)
+
+The host reports one accepted native click, a 53px committed row and unchanged
+model/history. Its loopback QA driver calls public APIs on the UI thread; the
+button click is separate native input. This is not a product mockup.
+
+</details>
+
 ## A bounded, scrollable property inspector (development branch)
 
 Long property lists now scroll inside a dedicated content viewport. Search stays

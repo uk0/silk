@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — coherent inspector geometry and popup retirement (2026-11-17)
+
+- Commit row-height snapshots once per layout and reuse them for scroll/focus,
+  editor bounds and visible-label painting. Public height setters invalidate
+  layout; reject nonfinite heights and stale metadata from retired bindings.
+- Fence synchronous move/resize/popup callbacks that filter, relayout or rebind
+  the inspector. Bound correction to two passes before yielding to the existing
+  UI layout queue; do not introduce a timer, polling worker or background UI writes.
+- Add UI-thread-only `gui.DismissInlinePopups`: snapshot owners before callbacks,
+  revalidate current ancestry, preserve independent native forms/popups and invoke
+  each owner at most once across reentrant requests. Ordinary/small snapshots
+  allocate nothing; larger custom composites may spill. Cover panic recovery.
+- Preserve negative controls for allocation, 26/53px reentry geometry, nonfinite
+  ranges, ownership transfer and bounded correction. The reproducible 100/1,000
+  ordinary-field geometry benchmark now reports 0 B/op and 0 allocs/op; this is
+  steady-state geometry, not zero-allocation startup/drawing or a whole-IDE FPS claim.
+- Fix a load-sensitive existing HMI heartbeat test found by the Windows full
+  suite: use explicit sample time, fresh/stale recovery, exact-boundary and
+  repeated-tick checks rather than assuming constructor work fits within 1ms.
+  Preserve the failed run; production point behavior is unchanged.
+- Pass final macOS/Linux/Windows full/race suites, 171 renderer-subset cases
+  and twelve strict actual bundled-gopls cases. Native IDE saved Undo/Redo,
+  current-file reopen, actual generated consumers and SDK palette/capture/
+  first-click/53px reentry flows pass on both desktop platforms with normal
+  exits. All 2,859 manifest files match three source trees without extra Go;
+  full vet retains its 501 existing diagnostics with no additions or removals.
+- Add three original native README captures, public SDK contracts and the
+  [verification record](INSPECTOR_GEOMETRY_PROGRESS_20261117.md). Development
+  source only; broader product/platform acceptance remains explicitly scoped.
+
 ## Unreleased — bounded, scrollable property inspector (2026-11-17)
 
 - Add a true clipped content viewport below the fixed search bar, with a

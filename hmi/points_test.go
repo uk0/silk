@@ -190,6 +190,15 @@ func TestRuntimePointReadDoesNotWaitForPersistenceAndCancelDoesNotPublish(t *tes
 }
 
 func TestRuntimePointObserverHeartbeatStaleAndHTTPOwnership(t *testing.T) {
+	for _, initial := range []string{"fresh", "stale-before-heartbeat"} {
+		t.Run(initial, func(t *testing.T) {
+			testRuntimePointObserverHeartbeat(t, initial == "stale-before-heartbeat")
+		})
+	}
+}
+
+func testRuntimePointObserverHeartbeat(t *testing.T, initiallyStale bool) {
+	t.Helper()
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	defer server.Close()
@@ -201,6 +210,23 @@ func TestRuntimePointObserverHeartbeatStaleAndHTTPOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rt.Stop()
+	// Construction can already age a 1ms point on a loaded Windows host.
+	// Establish an explicit sample/clock before subscribing, instead of assuming
+	// NewRuntime finishes within the stale threshold. No sleeps or retries.
+	sample := core.Value{Raw: false, Quality: core.QualityGood, Time: time.Unix(1_700_000_000, 0)}
+	if err = rt.Publish(context.Background(), "DI11", sample); err != nil {
+		t.Fatal(err)
+	}
+	if initiallyStale {
+		rt.Tick(sample.Time.Add(time.Millisecond + time.Nanosecond))
+		aged, _ := rt.PointState("DI11")
+		if aged.Value.Quality != core.QualityUncertain {
+			t.Fatal("initial stale control did not age")
+		}
+		if err = rt.Publish(context.Background(), "DI11", sample); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var observed atomic.Int32
 	stop := rt.SubscribePoints(func(s hmi.PointState) {
 		if s.Definition.Name == "DI11" {
@@ -222,10 +248,19 @@ func TestRuntimePointObserverHeartbeatStaleAndHTTPOwnership(t *testing.T) {
 	if observed.Load() != 1 || after.Revision <= before.Revision {
 		t.Fatal("heartbeat notified or did not advance token")
 	}
-	rt.Tick(time.Now().Add(time.Second))
+	boundary := after.Value.Time.Add(time.Millisecond)
+	rt.Tick(boundary)
+	if at, _ := rt.PointState("DI11"); at.Value.Quality != core.QualityGood || observed.Load() != 1 {
+		t.Fatal("point aged at exact boundary")
+	}
+	rt.Tick(boundary.Add(time.Nanosecond))
 	after, _ = rt.PointState("DI11")
 	if after.Value.Quality != core.QualityUncertain || observed.Load() != 2 {
-		t.Fatal("stale quality missing")
+		t.Fatalf("stale quality missing: quality=%v notifications=%d", after.Value.Quality, observed.Load())
+	}
+	rt.Tick(boundary.Add(time.Second))
+	if observed.Load() != 2 {
+		t.Fatal("repeated stale tick notified")
 	}
 	if _, err = rt.WritePoint(context.Background(), "DI11", before.Token, true); !errors.Is(err, hmi.ErrPointConflict) {
 		t.Fatal("pre-stale token accepted")

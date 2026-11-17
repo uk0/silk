@@ -159,6 +159,8 @@ type Widget struct {
 	layoutRunning bool
 
 	dt *string
+	// UI-thread admission token for reentrant inline-popup retirement.
+	popupDismissPass uint64
 
 	//objname string
 }

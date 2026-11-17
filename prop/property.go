@@ -9,6 +9,7 @@ import (
 	//	"github.com/uk0/silk/core"
 	//	"encoding/json"
 	"fmt"
+	"math"
 	//	"io/ioutil"
 	//	"os"
 	"errors"
@@ -512,6 +513,8 @@ type PropertyItem struct {
 	multiValue bool
 
 	updatingControl bool
+	// Height of the committed layout, not a per-scroll configuration lookup.
+	layoutHeight float64
 	// Cleared rows can still receive delayed blur/dialog callbacks. Retire
 	// their write capability before detaching controls or changing owners.
 	retired bool
@@ -631,7 +634,7 @@ func (this *PropertyItem) IsReadOnly() bool {
 
 func (this *PropertyItem) ItemHeight() float64 {
 	height := this.CfgItemHeight()
-	if height <= 0 {
+	if height <= 0 || math.IsNaN(height) || math.IsInf(height, 0) {
 		height = this.sheet.DefaultItemHeight()
 	}
 	return height
@@ -643,8 +646,14 @@ func (this *PropertyItem) CfgItemHeight() (height float64) {
 }
 
 func (this *PropertyItem) SetCfgItemHeight(height float64) {
+	if this.retired {
+		return
+	}
 	this.prepareModifyConfig()
 	this.itemConfig.WriteAttr("height", height)
+	// Invalidate the committed geometry together; scrolling/painting must not
+	// mix a newly parsed height with the previous layout's row positions.
+	this.sheet.Layout()
 }
 
 func (this *PropertyItem) CfgOrder() (ret int) {
@@ -992,11 +1001,15 @@ type PropertySheet struct {
 	categoryBoldFont paint.Font
 
 	// 属性过滤
-	filter        string
-	searchBox     *gui.SearchBox
-	body          *propertyViewport
-	contentHeight float64
-	layoutBusy    bool
+	filter          string
+	searchBox       *gui.SearchBox
+	body            *propertyViewport
+	contentHeight   float64
+	layoutBusy      bool
+	layoutPending   bool
+	positionBusy    bool
+	positionPending bool
+	bindingRevision uint64
 
 	// objCount is how many bound objects enumerated properties in the last
 	// Bind, and bindIndex which of them is enumerating right now. Together they
@@ -1019,6 +1032,7 @@ type categoryLayoutEntry struct {
 	category string
 	item     *PropertyItem
 	ypos     float64
+	height   float64
 }
 
 func (this *PropertySheet) Init(iw gui.IWidget) {
@@ -1104,6 +1118,7 @@ func (this *PropertySheet) Title() string {
 }
 
 func (this *PropertySheet) Clear(owner interface{}) {
+	this.bindingRevision++
 	if owner != nil && owner != this.objOwner {
 		return
 	}
@@ -1310,11 +1325,37 @@ func (this *PropertySheet) Bind(objs []interface{}, configName string, owner int
 }
 
 func (this *PropertySheet) Layout() {
-	if this.suspendLayout || this.layoutBusy {
+	if this.suspendLayout {
+		return
+	}
+	if this.layoutBusy {
+		this.layoutPending = true
 		return
 	}
 	this.layoutBusy = true
 	defer func() { this.layoutBusy = false }()
+	// One corrective pass handles ordinary callback reentry synchronously.
+	// A continuously mutating host must yield to the next bounded UI turn.
+	for pass := 0; pass < 2; pass++ {
+		this.layoutPending = false
+		this.layoutPropertyRows()
+		if !this.layoutPending {
+			return
+		}
+	}
+	this.RequestLayout()
+}
+
+func (this *PropertySheet) layoutBindingCurrent(revision uint64) bool {
+	if this.bindingRevision == revision {
+		return true
+	}
+	this.layoutPending = true
+	return false
+}
+
+func (this *PropertySheet) layoutPropertyRows() {
+	revision := this.bindingRevision
 	this.vlist = nil
 	this.categoryLayout = nil
 
@@ -1329,6 +1370,9 @@ func (this *PropertySheet) Layout() {
 	// survived.
 	catItems := make(map[string][]*PropertyItem)
 	for _, p := range this.rlist {
+		if !this.layoutBindingCurrent(revision) {
+			return
+		}
 		cat := categoryOfPropID(p.Id())
 		if !p.IsVisible() || !inspectorMatchesFilter(p.Label(), p.Id(), cat, this.filter) ||
 			categoryHiddenForSelection(cat, this.objCount) {
@@ -1336,6 +1380,9 @@ func (this *PropertySheet) Layout() {
 			control := p.control
 			if control != nil {
 				control.SetVisible(false)
+			}
+			if !this.layoutBindingCurrent(revision) {
+				return
 			}
 			continue
 		}
@@ -1368,22 +1415,32 @@ func (this *PropertySheet) Layout() {
 			isHeader: true,
 			category: catKey,
 			ypos:     ypos,
+			height:   categoryHeaderHeight,
 		})
 		ypos += categoryHeaderHeight
 
 		if !cat.expanded && !filtering {
 			// Hide all items in collapsed category
 			for _, p := range items {
+				if !this.layoutBindingCurrent(revision) {
+					return
+				}
 				p.vrow = -1
 				control := p.control
 				if control != nil {
 					control.SetVisible(false)
+				}
+				if !this.layoutBindingCurrent(revision) {
+					return
 				}
 			}
 			continue
 		}
 
 		for _, p := range items {
+			if !this.layoutBindingCurrent(revision) {
+				return
+			}
 			this.vlist = append(this.vlist, p)
 			if p.parent != nil {
 				p.indent = p.parent.indent + 1
@@ -1393,21 +1450,35 @@ func (this *PropertySheet) Layout() {
 			p.vrow = vrow
 			vrow++
 			p.ypos = ypos
+			p.layoutHeight = p.ItemHeight()
 			this.categoryLayout = append(this.categoryLayout, categoryLayoutEntry{
 				isHeader: false,
 				item:     p,
 				ypos:     ypos,
+				height:   p.layoutHeight,
 			})
-			ypos += p.ItemHeight()
+			ypos += p.layoutHeight
 			// 显示控件
 			control := p.Control()
+			if !this.layoutBindingCurrent(revision) {
+				if p.retired && control != nil && control.Parent() == this.body {
+					control.SetParent(nil)
+				}
+				return
+			}
 			if control != nil {
 				control.SetVisible(true)
+			}
+			if !this.layoutBindingCurrent(revision) {
+				return
 			}
 		}
 	}
 	this.contentHeight = ypos - this.contentTop()
 	this.layoutViewport()
+	if !this.layoutBindingCurrent(revision) {
+		return
+	}
 	this.Update()
 }
 
@@ -1437,7 +1508,7 @@ const (
 func (this *PropertySheet) getItemRect(item *PropertyItem, part int) geom.Rect {
 	width := this.body.Width()
 	indent := float64(item.indent) * this.indentSize()
-	height := item.ItemHeight()
+	height := item.resolvedLayoutHeight()
 	xedit := this.vertSplitPx()
 	switch part {
 	case pitemExpander:
@@ -1550,7 +1621,7 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 			this.drawPropertyLabel(g, p)
 
 			if isColorProperty(p) {
-				this.drawColorSwatch(g, p, p.ItemHeight())
+				this.drawColorSwatch(g, p, entry.height)
 			}
 		}
 	}

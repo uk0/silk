@@ -9,6 +9,23 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: allocation-aware inspector geometry and popup retirement
+
+- [x] Reproduce current scroll allocation and geometry-callback failures.
+- [x] Cache committed row heights for scrolling/paint/focus; invalidate on
+      layout/config changes, and bound reentrant geometry work without polling.
+- [x] Add a snapshot-first, inline-only popup dismissal SDK helper that does not
+      allocate for ordinary fields and fences callback reparenting/native owners.
+- [x] Cover nonuniform rows, resize/filter, config changes, rebind/scroll callbacks,
+      popup admission and bounded reentry; compare repeatable benchmarks/profiles.
+- [x] Replace the load-sensitive 1ms HMI heartbeat test with explicit sample time,
+      fresh/stale recovery and exact-boundary controls; preserve Windows failure.
+- [x] Freeze and verify full/race/render/LSP/platform/native flows, document actual
+      results and three original captures; audit exact tested/indexed source and media.
+
+Publication requires commit/push and independent remote readback after acceptance.
+The wider product goal stays active. [Evidence and limits](INSPECTOR_GEOMETRY_PROGRESS_20261117.md).
+
 ## Validated increment: bounded, scrollable property inspector (2026-11-17)
 
 - [x] Preserve long-list, bounded-editor and nested focus-reveal failures.
