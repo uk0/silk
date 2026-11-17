@@ -9,6 +9,28 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: bidirectional process source navigation
+
+- [x] Index original JSON source positions on the bounded decode worker.
+- [x] Preselect a node/pipe under the caret, and explicitly return to its ID
+      from an unchanged draft with normal navigation history.
+- [x] Cover Unicode/CRLF, escaped and duplicate keys, stale revisions/tab
+      changes, draft undo, dirty source/disk invariants and Back/Forward.
+- [x] Verify actual macOS editor/canvas interactions, persisted caret and exact
+      disk readback; pass full/race and strict bundled-gopls on macOS.
+- [x] Pass focused changed-flow race tests on Linux arm64 and Windows 10 amd64.
+- [x] Pass full and race suites on Linux arm64/Xvfb using the same source bytes.
+- [x] Verify the pinned Linux arm64 gopls bundle with the same four strict
+      integration tests.
+- [x] Verify Windows 10 native interaction, Back/Forward, dirty-draft guard,
+      normal shutdown, persisted caret and byte-exact source readback.
+- [x] Pass Windows 10 full/race and strict bundled-gopls suites, with an exact
+      source-manifest readback after the runs.
+
+Runtime item navigation and further product gaps remain separate.
+
+[Verification and remaining limits](HMI_SOURCE_NAV_QA_20261117.md).
+
 ## Validated increment: shared, bounded obstacle-aware pipe routing
 
 - [x] Reproduce an ordinary endpoint-to-endpoint pipe crossing a third device.
@@ -671,7 +693,8 @@ does not complete the remaining runtime, alarms, routing or platform QA gaps.
 - In progress: `.silkhmi` JSON source mode, Tools/palette visual editing,
   revision-guarded async decoding, one host undo transaction and ordinary Save
   integration are implemented and tested after `bd3019d`.
-  Node-to-source-caret selection and integrated runtime panels remain open.
+  The visual editor's bidirectional source-caret workflow is in verification
+  above; the integrated runtime pane is a separate validated increment.
   The first candidate passed functional native editing/byte-exact host history,
   but its debug-enabled screenshot exposed inherited placeholder painting.
   It was retired. Explicit themed composite painting and light/dark raster
@@ -686,8 +709,6 @@ does not complete the remaining runtime, alarms, routing or platform QA gaps.
   a fresh quiet run's initial/+1s/+4s client-area pixels were identical and complete.
   Distinguishing capture/compositor timing from application first-frame damage
   remains open; do not claim it diagnosed or permanently fixed.
-- Obstacle-aware pipe routing with explicit port directions, bounded work,
-  deterministic fallback diagnostics and geometry-revision caches.
 - Equipment templates, point-prefix mapping and the first practical device
   library are implemented in the current increment. Persistent linked-prefab
   updates and a fuller inspector workflow remain future work.

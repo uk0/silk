@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2D process source navigation
+
+- Open the visual editor with the node or pipe under the current `.silkhmi`
+  caret selected; **Go to source** returns to that item's ID in the current
+  unsaved JSON buffer, with normal Back/Forward history.
+- Resolve original Unicode/CRLF/compact JSON positions on the decode worker.
+  Reject stale tab/revision results and never apply or discard visual draft
+  edits as part of navigation. No authored schema or generated code changes.
+
 ## Unreleased — bounded obstacle-aware process pipes (2026-11-17)
 
 - Add pure-Go `hmi.PipeRouter` with outward endpoint directions, conservative

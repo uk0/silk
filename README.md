@@ -453,10 +453,13 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
   save/load, designer palette integration and runnable Go generation.
 - Open `.silkhmi` as JSON in SilkIDE and use **Tools → Edit 2D Process...** for
   staged visual editing of the current buffer. Use changes is one host undo
-  transaction; Cancel discards, and ordinary Save / Save All persists.
+  transaction; Cancel discards, and ordinary Save / Save All persists. The
+  source caret preselects its device or pipe; **Go to source** on an unchanged
+  draft returns to the selected item's exact JSON ID with Back/Forward history.
 - Loading/drawing never starts acquisition; I/O stays off the UI thread and
   workers are cancelled/joined. This is a 2D foundation, not certified SCADA or
-  a complete P&ID/PLC control system; routing is not obstacle avoidance.
+  a complete P&ID/PLC control system. Pipes can opt into bounded obstacle
+  avoidance; legacy documents retain their original orthogonal doglegs.
 - **Device library**: searchable inert pump/heat-recovery/valve subgraphs,
   selection capture, independent point prefixes, explicit compatible point
   reuse and one-step insertion Undo. Save/load catalogs explicitly; templates
@@ -468,9 +471,12 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 [Foundation verification](SCADA_POINT_PROGRESS_20261114.md) ·
 [Group authoring QA](HMI_AUTHORING_QA_20261114.md) ·
 [IDE source/visual QA](HMI_IDE_QA_20261114.md) ·
+[Bidirectional source navigation QA](HMI_SOURCE_NAV_QA_20261117.md) ·
 [Reusable equipment QA](HMI_DEVICE_LIBRARY_QA_20261114.md)
 
 ![Windows native group authoring and owned Arrange menu](docs/images/hmi-authoring-arrange-windows.png)
+
+![Windows visual editor with the flowRoute pipe selected and Go to source enabled](docs/images/hmi-source-nav-windows.png)
 
 Windows native desktop capture: two selected devices, enabled alignment commands
 and disabled commands whose selection requirements are not met.

@@ -125,3 +125,71 @@ func TestProcessDocumentModalIsStagedAndCommitsOnlyAuthoredChanges(t *testing.T)
 		t.Fatal("invalid source accepted")
 	}
 }
+
+func TestProcessDocumentModalNavigationIsExplicitAndDraftSafe(t *testing.T) {
+	old := showProcessDocumentDialog
+	t.Cleanup(func() { showProcessDocumentDialog = old })
+	p := hmi.Template()
+	node := hmi.SourceTarget{Kind: hmi.SourceNode, ID: "reactor"}
+	pipe := hmi.SourceTarget{Kind: hmi.SourceLink, ID: "feed"}
+	canLocate := func(s hmi.SourceTarget) bool { return s == node || s == pipe }
+	commit := func(hmi.Project) error { t.Fatal("navigation committed text"); return nil }
+	showProcessDocumentDialog = func(d *Dialog) DialogResult {
+		e := d.Content().(*processDocumentEditor)
+		e.SetSize(1060, 680)
+		goTo := d.buttons[1]
+		if e.Diagram.SelectedNode() != "reactor" || !goTo.IsEnabled() || d.defaultButton() != d.buttons[2] {
+			t.Fatal("initial selection or default action wrong")
+		}
+		e.Diagram.SelectNodes([]string{"reactor", "exchanger"})
+		if goTo.IsEnabled() {
+			t.Fatal("multi-selection enabled jump")
+		}
+		e.Diagram.SelectNodes([]string{"exchanger"})
+		if goTo.IsEnabled() {
+			t.Fatal("unindexed node enabled jump")
+		}
+		e.Diagram.selectPipe("feed")
+		if !goTo.IsEnabled() {
+			t.Fatal("indexed pipe unavailable")
+		}
+		e.Diagram.SelectNodes([]string{"reactor"})
+		if err := e.Diagram.NudgeSelection(20, 10); err != nil {
+			t.Fatal(err)
+		}
+		if goTo.IsEnabled() {
+			t.Fatal("dirty draft enabled jump")
+		}
+		goTo.Action().Trigger(nil)
+		if d.closed || e.Diagram.Project().Nodes[0].X == p.Nodes[0].X {
+			t.Fatal("navigation discarded draft")
+		}
+		e.Diagram.Undo()
+		if !goTo.IsEnabled() {
+			t.Fatal("undo to baseline did not restore jump")
+		}
+		e.Diagram.selectPipe("feed")
+		goTo.Action().Trigger(nil)
+		if !d.closed {
+			t.Fatal("navigation did not dismiss modal")
+		}
+		return DialogNo
+	}
+	target, err := ShowNavigableProcessDocumentEditor(nil, p, commit, ProcessDocumentNavigation{Initial: node, HasTarget: canLocate})
+	if err != nil || target != pipe {
+		t.Fatal(target, err)
+	}
+
+	showProcessDocumentDialog = func(d *Dialog) DialogResult {
+		e := d.Content().(*processDocumentEditor)
+		if e.Diagram.SelectedLink() != "feed" || !d.buttons[1].IsEnabled() {
+			t.Fatal("pipe was not preselected")
+		}
+		d.buttons[0].Action().Trigger(nil)
+		return DialogCancel
+	}
+	target, err = ShowNavigableProcessDocumentEditor(nil, p, commit, ProcessDocumentNavigation{Initial: pipe, HasTarget: canLocate})
+	if err != nil || target.ID != "" {
+		t.Fatal("cancel emitted navigation", target, err)
+	}
+}

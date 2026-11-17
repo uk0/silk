@@ -115,6 +115,14 @@ including normal source navigation, instead of pretending to be Go source.
 editor over that exact buffer, including unsaved edits. Resize fitting keeps the
 document within the modal viewport; nested point/binding tables remain staged.
 
+Place the source caret inside a top-level node or pipe object before opening:
+the corresponding canvas item is selected. Select one canvas item and choose
+**Go to source** to jump to its exact authored ID (including in compact,
+non-ASCII or CRLF documents). The jump participates in ordinary Back/Forward
+history. It does not rewrite or save the source. If the visual draft has edits,
+apply them or undo the draft edits before using the jump; it never silently
+applies or discards changes. Coordinates from an older buffer revision are rejected.
+
 **Use changes** publishes all visual edits as one normal source-buffer undo
 transaction. It does not save the file. Ctrl/Cmd+S or Save All uses the ordinary
 IDE save/dirty/recovery workflow; Cancel or closing the visual editor discards
@@ -144,8 +152,8 @@ use compatible point names. Database-profile/migration UI is separate work.
 **View → Show Process Runtime** restores a hidden/removed tool instance without
 starting it. The generic Stop action also stops a process runtime; Go build/debug
 commands keep their existing meaning. The standalone workbench's `-project` /
-`-db` workflow remains available. Bidirectional node-to-JSON-caret selection,
-hot reload, alarm lifecycle and PLC command protocols remain later integration.
+`-db` workflow remains available. Live-runtime item navigation, hot reload,
+alarm lifecycle and PLC command protocols remain later integration.
 
 ![Context-sensitive Arrange menu inside the IDE modal](images/hmi-ide-arrange-windows.png)
 

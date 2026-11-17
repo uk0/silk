@@ -13,16 +13,25 @@ import (
 	"github.com/uk0/silk/i18n"
 )
 
-var showProcessAssetEditor = gui.ShowProcessDocumentEditor
-var processAssetOpening bool // UI-thread only; one bounded decode at a time.
-var startProcessAssetLoad = func(source string, done func(hmi.Project, error)) error {
+var showProcessAssetEditor = gui.ShowNavigableProcessDocumentEditor
+var processAssetOpening bool // UI-thread only; one decode or modal at a time.
+type indexedProcessAsset struct {
+	project hmi.Project
+	index   *hmi.SourceIndex
+}
+
+var startProcessAssetLoad = func(source string, done func(indexedProcessAsset, error)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	_, err := gui.RunAsync(ctx, nil, func(ctx context.Context) (hmi.Project, error) {
+	_, err := gui.RunAsync(ctx, nil, func(ctx context.Context) (indexedProcessAsset, error) {
 		if err := ctx.Err(); err != nil {
-			return hmi.Project{}, err
+			return indexedProcessAsset{}, err
 		}
-		return hmi.Parse([]byte(source))
-	}, func(p hmi.Project, err error) { cancel(); done(p, err) })
+		p, index, err := hmi.ParseIndexedSource(source)
+		if err == nil {
+			err = ctx.Err()
+		}
+		return indexedProcessAsset{p, index}, err
+	}, func(p indexedProcessAsset, err error) { cancel(); done(p, err) })
 	if err != nil {
 		cancel()
 	}
@@ -66,11 +75,11 @@ func editProcessAsset(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.Co
 		return
 	}
 	current := func() bool {
-		return openEditors[path] == ed && ed.FilePath() == path && ed.TextRevision() == revision && !ed.IsReadOnly() && !ed.Formatting() && visibleCaretEditor(tabs, canvas) == ed && !fileRenameAffects(path) && !workspaceSearchAffects(path)
+		return openEditors[path] == ed && ed.FilePath() == path && ed.TextRevision() == revision && !ed.IsReadOnly() && !ed.Formatting() && visibleCaretEditor(tabs, canvas) == ed && !fileRenameAffects(path) && !workspaceSearchAffects(path) && !editorCloseAffects(path)
 	}
 	processAssetOpening = true
-	err := startProcessAssetLoad(source, func(p hmi.Project, err error) {
-		processAssetOpening = false
+	err := startProcessAssetLoad(source, func(asset indexedProcessAsset, err error) {
+		defer func() { processAssetOpening = false }()
 		if !current() {
 			return
 		}
@@ -78,7 +87,11 @@ func editProcessAsset(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.Co
 			report(err)
 			return
 		}
-		report(showProcessAssetEditor(ed, p, func(next hmi.Project) error {
+		var initial hmi.SourceTarget
+		if caret, ok := ed.CursorTextPosition(); ok {
+			initial, _ = asset.index.AtPosition(caret.Line, caret.ByteColumn)
+		}
+		target, err := showProcessAssetEditor(ed, asset.project, func(next hmi.Project) error {
 			if !current() {
 				return fmt.Errorf("%s", i18n.T("Document changed; reopen the process editor"))
 			}
@@ -96,7 +109,30 @@ func editProcessAsset(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.Co
 			}
 			ed.ReplaceAllText(text)
 			return nil
-		}))
+		}, gui.ProcessDocumentNavigation{Initial: initial, HasTarget: func(s hmi.SourceTarget) bool {
+			_, _, ok := asset.index.IDPosition(s)
+			return ok
+		}})
+		if err != nil {
+			report(err)
+			return
+		}
+		if target.ID == "" {
+			return
+		}
+		// Never transfer a coordinate to a replacement tab/revision, even if the
+		// same path and ID are still present when the native modal releases.
+		if !current() {
+			report(fmt.Errorf("%s", i18n.T("Document changed; reopen the process editor")))
+			return
+		}
+		if line, col, ok := asset.index.IDPosition(target); ok {
+			from := ed.NavigationPosition()
+			ed.NavigateToLineCol(line, col)
+			if history := editorNavigation(tabs); history != nil && current() {
+				history.RecordJump(from, ed.NavigationPosition())
+			}
+		}
 	})
 	if err != nil {
 		processAssetOpening = false
