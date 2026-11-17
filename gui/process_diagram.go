@@ -47,6 +47,13 @@ type ProcessDiagram struct {
 	changed                          func()
 	err                              error
 	from                             *hmi.Endpoint
+	pipeRoutesDirty                  bool
+	pipeRoutes                       map[string]hmi.PipeRouteResult
+	pipeRouter                       *hmi.PipeRouter
+	pipeRouterError                  error
+	pipeRouteBuilds                  uint64
+	pipeRouteMessages                []string
+	pipeRouteWarning                 string
 }
 
 func init()                              { core.RegisterFactory("gui.ProcessDiagram", core.TypeOf((*ProcessDiagram)(nil))) }
@@ -83,6 +90,7 @@ func (v *ProcessDiagram) SetProject(p hmi.Project) error {
 	v.OnPointerCancel()
 	v.UnbindTags()
 	v.project = p
+	v.invalidatePipeRoutes()
 	v.text = string(data)
 	v.err = nil
 	v.views = map[string]*processNodeView{}
@@ -180,6 +188,7 @@ func (v *ProcessDiagram) BindTags(db *core.TagDB) (func(), error) {
 func (v *ProcessDiagram) applySample(name string, s core.Value) {
 	v.samples[name] = s
 	for _, view := range v.targets[name] {
+		oldX, oldY, oldRotation, oldVisible := view.node.X, view.node.Y, view.rotation, view.visible
 		if view.node.Tag == name {
 			sample := s
 			if view.node.Kind != "value" {
@@ -270,6 +279,9 @@ func (v *ProcessDiagram) applySample(name string, s core.Value) {
 				}
 			}
 		}
+		if view.node.X != oldX || view.node.Y != oldY || view.rotation != oldRotation || view.visible != oldVisible {
+			v.invalidatePipeRoutes()
+		}
 	}
 }
 func (v *ProcessDiagram) Close() {
@@ -278,6 +290,11 @@ func (v *ProcessDiagram) Close() {
 	v.closed = true
 	v.changed = nil
 	v.selectionChanged = nil
+	v.pipeRoutes = nil
+	v.pipeRouter = nil
+	v.pipeRouterError = nil
+	v.pipeRouteMessages = nil
+	v.pipeRouteWarning = ""
 }
 func (v *ProcessDiagram) SetParent(p IWidget) {
 	if p != v.Parent() {
@@ -344,13 +361,17 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 		if a == nil || b == nil || !a.visible || !b.visible {
 			continue
 		}
-		pts := hmi.Route(v.port(a, l.From.Port), v.port(b, l.To.Port), v.linkBends(l))
+		route := v.currentPipeRoute(l)
+		pts := route.Points
 		color := paint.Color{R: 90, G: 110, B: 130, A: 255}
 		sample, ok := v.samples[l.Tag]
 		if ok && sample.Quality == core.QualityGood {
 			if on, e := point.Convert(sample.Raw, point.Bool); e == nil && on == true {
 				color = paint.Color{R: 37, G: 210, B: 158, A: 255}
 			}
+		}
+		if route.Status != hmi.PipeRouteOK {
+			color = paint.Color{R: 255, G: 179, B: 0, A: 255}
 		}
 		if v.editing && v.selectedLink == l.ID {
 			color = paint.Color{R: 85, G: 172, B: 255, A: 255}
@@ -418,9 +439,22 @@ func (v *ProcessDiagram) Draw(g paint.Painter) {
 		}
 	}
 	v.drawInteractionOverlay(g)
+	// Diagnostics are viewport chrome, not document geometry. Undo the camera
+	// before drawing them so pan/zoom cannot hide a fallback warning.
+	g.Scale(1/v.zoom, 1/v.zoom)
+	g.Translate(-v.panX, -v.panY)
+	g.SetFont(Theme().Font)
 	if v.err != nil {
 		g.SetBrush1(paint.Color{R: 255, G: 155, B: 140, A: 255})
-		g.DrawText1(12, 22, elideToWidth(Theme().Font, v.err.Error(), max(0, w/v.zoom-24)))
+		g.DrawText1(12, 22, elideToWidth(Theme().Font, v.err.Error(), max(0, w-24)))
+	}
+	if warning := v.currentPipeWarning(); warning != "" {
+		y := 22.
+		if v.err != nil {
+			y += 20
+		}
+		g.SetBrush1(paint.Color{R: 255, G: 190, B: 70, A: 255})
+		g.DrawText1(12, y, elideToWidth(Theme().Font, warning, max(0, w-24)))
 	}
 }
 func (v *ProcessDiagram) port(n *processNodeView, s string) hmi.XY {

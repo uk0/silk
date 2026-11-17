@@ -2,8 +2,8 @@ package hmi
 
 import "github.com/uk0/silk/point"
 
-// Port returns document-space nozzle coordinates. Links follow device moves;
-// routing is deterministic orthogonal dogleg routing, not obstacle avoidance.
+// Port returns document-space nozzle coordinates. Route and PipeRouter share
+// these positions; choosing a routing policy does not change the device ports.
 func Port(n Node, port string) XY {
 	x, y := n.X+n.Width/2, n.Y+n.Height/2
 	body := max(1, n.Height-26)
@@ -38,6 +38,8 @@ func Port(n Node, port string) XY {
 	}
 	return XY{x, y}
 }
+// Route retains the unchecked legacy orthogonal doglegs. It does not avoid
+// obstacles; use PipeRouter for bounded, explicitly diagnosed avoidance.
 func Route(a, b XY, bends []XY) []XY {
 	result := []XY{a}
 	previous := a

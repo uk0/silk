@@ -9,6 +9,27 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: shared, bounded obstacle-aware pipe routing
+
+- [x] Reproduce an ordinary endpoint-to-endpoint pipe crossing a third device.
+- [x] Add a pure-Go router with explicit port directions, conservative clearance,
+      authored waypoints, deterministic work limits and honest fallback diagnostics.
+- [x] Keep legacy documents unchanged; expose avoidance in pipe authoring and
+      share cached geometry between rendering, picking and waypoint insertion.
+- [x] Invalidate only for geometry/visibility changes, including live bindings,
+      rotation, drag preview/cancellation and history; never poll or persist routes.
+- [x] Verify schema/device cloning, designer save/load/generated consumers,
+      allocation/work bounds and three-platform full/race/strict-LSP regressions.
+- [x] Exercise Windows native drag/cancel/history, waypoint menu/fallback, one
+      real point write, Stop, independent SQLite readback and actual generated
+      executable Save/normal exit; add three original README captures.
+
+Current macOS native UI remains unaccepted; source tests are not a substitute.
+Publication requires exact tested/indexed source and media audit plus remote
+readback. After publication, clean reviewed project-local development caches,
+preserving tools and compact verification evidence. The wider goal stays active.
+[Evidence and limits](PIPE_ROUTING_QA_20261117.md).
+
 ## Validated increment: exact industrial integers and status-word expressions
 
 - [x] Preserve JSON-number comparison and large-BI display failures before edits.

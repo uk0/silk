@@ -549,22 +549,29 @@ func (v *ProcessEditor) EditBindings() {
 }
 func (v *ProcessEditor) ApplyLinkRows(rows [][]string) error {
 	p := v.Diagram.Project()
-	old := map[string][]hmi.XY{}
+	old := map[string]hmi.Link{}
 	for _, l := range p.Links {
-		old[l.ID] = l.Bends
+		old[l.ID] = l
 	}
 	p.Links = nil
 	for _, r := range rows {
-		p.Links = append(p.Links, hmi.Link{Bends: old[cell(r, 0)], ID: cell(r, 0), From: hmi.Endpoint{Node: cell(r, 1), Port: cell(r, 2)}, To: hmi.Endpoint{Node: cell(r, 3), Port: cell(r, 4)}, Tag: cell(r, 5)})
+		previous, exists := old[cell(r, 0)]
+		routing := previous.Routing
+		if len(r) > 6 {
+			routing = cell(r, 6)
+		} else if !exists {
+			routing = hmi.RoutingAvoid
+		}
+		p.Links = append(p.Links, hmi.Link{Bends: previous.Bends, Routing: routing, ID: cell(r, 0), From: hmi.Endpoint{Node: cell(r, 1), Port: cell(r, 2)}, To: hmi.Endpoint{Node: cell(r, 3), Port: cell(r, 4)}, Tag: cell(r, 5)})
 	}
 	return v.Diagram.ApplyProject(p)
 }
 func (v *ProcessEditor) EditLinks() {
 	rows := [][]string{}
 	for _, l := range v.Diagram.Project().Links {
-		rows = append(rows, []string{l.ID, l.From.Node, l.From.Port, l.To.Node, l.To.Port, l.Tag})
+		rows = append(rows, []string{l.ID, l.From.Node, l.From.Port, l.To.Node, l.To.Port, l.Tag, l.Routing})
 	}
-	v.editRows("Pipe connections / automatic orthogonal routes", []string{"ID", "From node", "From port", "To node", "To port", "Flow point"}, rows, []string{"pipe_new", "reactor", "east", "exchanger", "west", "DI11"}, v.ApplyLinkRows)
+	v.editRows("Pipe connections / routing", []string{"ID", "From node", "From port", "To node", "To port", "Flow point", "Routing: avoid / orthogonal"}, rows, []string{"pipe_new", "reactor", "east", "exchanger", "west", "DI11", hmi.RoutingAvoid}, v.ApplyLinkRows, "avoid: respect port exits and equipment clearance. Empty / orthogonal: legacy doglegs. Amber routes and the canvas banner report a bounded fallback, not successful avoidance. Authored bends remain mandatory.")
 }
 
 // ConfigJSON is useful for an external source editor without leaking credentials.

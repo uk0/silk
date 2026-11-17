@@ -75,6 +75,8 @@ type Link struct {
 	To    Endpoint `json:"to"`
 	Tag   string   `json:"tag,omitempty"`
 	Bends []XY     `json:"bends,omitempty"`
+	// Empty keeps the legacy dogleg geometry of existing version-1 documents.
+	Routing string `json:"routing,omitempty"`
 }
 type Project struct {
 	Version       int      `json:"version"`
@@ -230,6 +232,9 @@ func (p Project) Validate() error {
 	}
 	links := map[string]bool{}
 	for _, l := range p.Links {
+		if l.Routing != "" && l.Routing != RoutingOrthogonal && l.Routing != RoutingAvoid {
+			return bad("unknown pipe routing mode")
+		}
 		if !validID(l.ID) || links[l.ID] || !nodes[l.From.Node] || !nodes[l.To.Node] || l.From.Node == l.To.Node || !validPort(l.From.Port) || !validPort(l.To.Port) || l.Tag != "" && pts[l.Tag] == "" || len(l.Bends) > 32 {
 			return bad("invalid link")
 		}

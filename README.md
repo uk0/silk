@@ -19,6 +19,37 @@ signed/notarized standalone apps.
 
 ---
 
+## Bounded obstacle-aware process pipes (development branch)
+
+New process connections can avoid equipment instead of drawing through it.
+Explicit port directions, conservative clearance and authored waypoints feed a
+bounded pure-Go router. Painting, picking and waypoint insertion share cached
+geometry; live movement/visibility/rotation and canceled drags invalidate it,
+while colors, selection and camera changes do not re-solve routes.
+
+Old documents keep their existing doglegs. **Pipes** selects `avoid` or
+`orthogonal`; amber pipes and a fixed-viewport warning explicitly mean fallback,
+not verified avoidance. Try `go run ./examples/processrouting` or see the
+[example contracts](examples/processrouting/README.md) and
+[verification record](PIPE_ROUTING_QA_20261117.md). No PLC commands or new
+acquisition workers are introduced.
+
+![Actual native-generated Go application with a port-aware pipe avoiding the reactor](docs/images/process-routing-windows.png)
+
+<details>
+<summary>Original failure and live-binding captures</summary>
+
+![Committed obstructed waypoint, visibly diagnosed in amber before Undo](docs/images/process-routing-fallback-windows.png)
+
+![Explicit live DI_SHOW=false write hides the reactor and recomputes a straight pipe](docs/images/process-routing-live-windows.png)
+
+The first image is the actual exported Go application; the two detail images
+are its SDK test workbench. These are original desktop captures, not mockups. The live manual
+point write does not replace the document's initial `true` value; Stop restores
+authored visibility. The example has no HTTP sources or PLC command channel.
+
+</details>
+
 ## Exact industrial counters and status words (development branch)
 
 Industrial BI counters now preserve signed 64-bit integer digits and comparisons,

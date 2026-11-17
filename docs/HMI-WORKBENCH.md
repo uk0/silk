@@ -27,10 +27,11 @@ cancels and joins them before authoring is unlocked. Closing also cancels/joins.
    for dynamic visible/enabled/x/y/rotation bindings. **Node / bindings** edits
    labels, point names, units and bounds. Removing a node removes incident pipes.
 6. **Pipes** edits endpoint ports and optional flow point; **Bends** edits ordered
-   route waypoints. Click a pipe, then use **Arrange → Add pipe waypoint** and
+   route waypoints and routing mode (`avoid` / `orthogonal`). Click a pipe, then use **Arrange → Add pipe waypoint** and
    drag its square handle. Delete removes the selected waypoint first, otherwise
-   the selected pipe. Routing is deterministic orthogonal doglegs, **not obstacle
-   avoidance**. Automatic dogleg corners are not authored waypoints.
+   the selected pipe. New connections default to bounded obstacle avoidance;
+   empty/`orthogonal` preserves legacy doglegs. Automatic corners are not authored
+   waypoints. Add waypoint uses the actual displayed/pickable path.
 7. **Save / Load** use `.silkhmi` documents. Save replaces atomically; Load
    validates before replacing and resets undo history. **Generate Go** writes
    `<project>.go`, refuses overwrite, and generates an inert runnable workbench.
@@ -42,6 +43,23 @@ cancels and joins them before authoring is unlocked. Closing also cancels/joins.
 Tables use staged edits: double-click a cell; Enter/click away commits the cell;
 Apply validates the complete candidate; invalid candidates remain open; Cancel
 leaves the document unchanged. IDs identify rows independently of table sorting.
+
+### Bounded obstacle-aware routing
+
+`avoid` respects outward endpoint directions, conservative equipment/label bounds
+and mandatory waypoint order. Geometry is shared by painting and picking, and is
+cached across color/selection/camera updates. Moving, resizing, rotating or hiding
+equipment invalidates that snapshot, including transient drag previews and live
+bindings; Escape and Stop restore authored geometry. Computed paths never enter
+the source document, Undo snapshots, point store or generated code.
+
+Each geometry snapshot has a shared collision-work budget and each request a
+search-state cap. Amber pipes plus a fixed-viewport banner report blocked exits,
+impossible waypoints or budget fallback. They do **not** imply successful avoidance.
+Rotated port positions remain exact, while their outward routing normals snap to
+the nearest cardinal direction. This is conservative schematic routing, not a
+shortest-path guarantee, pipe-crossing connectivity or certified P&ID logic.
+Try the [inert routing workbench](../examples/processrouting/README.md).
 
 ### Exact counters and status words
 

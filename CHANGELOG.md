@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — bounded obstacle-aware process pipes (2026-11-17)
+
+- Add pure-Go `hmi.PipeRouter` with outward endpoint directions, conservative
+  clearance, mandatory waypoints, interval-indexed collision queries and bounded
+  deterministic search/work. Round envelopes outward to prevent ULP boundary leaks.
+- Keep absent/`orthogonal` routing compatible with existing documents; newly
+  connected pipes use `avoid`. Blocked or exhausted routes explicitly fall back
+  with amber ink and a viewport-fixed diagnostic, never a false avoidance claim.
+- Share geometry between painting, picking and waypoint insertion. Cache by
+  geometry revision, including live position/rotation/visibility and canceled
+  previews; ignore color/selection/camera-only changes and unchanged grid snaps.
+  Budget priority follows document link order, not observer order.
+- Preserve routing modes through staged Pipes edits, device templates, `.silkui`,
+  preview and generated Go. Add the inert `examples/processrouting` workbench,
+  independent collision oracles, large-scene budget and raster/cache regressions.
+  [Verification and remaining limits](PIPE_ROUTING_QA_20261117.md).
+- Pass frozen macOS/Linux/Windows full and race suites, 181 renderer-subset cases
+  and twelve strict actual bundled-gopls checks; full vet retains 501 unchanged
+  baseline diagnostics. Native Windows drag/history/menu/fallback, real point
+  write/Stop, SQLite readback and the actual exported Go program's Save/normal
+  exit pass. Add three original README images; macOS native UI is not accepted.
+
 ## Unreleased — exact industrial integers and status words (2026-11-17)
 
 - Fix integral JSON expression comparisons silently merging adjacent values

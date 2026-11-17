@@ -116,6 +116,7 @@ func (v *ProcessDiagram) pruneSelection() {
 	v.notifySelection()
 }
 func (v *ProcessDiagram) resetAuthoredGeometry() {
+	v.invalidatePipeRoutes()
 	for _, n := range v.project.Nodes {
 		if view := v.views[n.ID]; view != nil {
 			view.node = n
@@ -218,11 +219,7 @@ func (v *ProcessDiagram) linkBends(l hmi.Link) []hmi.XY {
 	return l.Bends
 }
 func (v *ProcessDiagram) pipePoints(l hmi.Link) []hmi.XY {
-	a, b := v.views[l.From.Node], v.views[l.To.Node]
-	if a == nil || b == nil {
-		return nil
-	}
-	return hmi.Route(v.port(a, l.From.Port), v.port(b, l.To.Port), v.linkBends(l))
+	return v.currentPipeRoute(l).Points
 }
 func processSegmentDistance(x, y float64, a, b hmi.XY) float64 {
 	dx, dy := b.X-a.X, b.Y-a.Y
@@ -291,7 +288,7 @@ func (v *ProcessDiagram) pointerDown(x, y float64, mods processModifiers) {
 					return
 				}
 				p := v.Project()
-				p.Links = append(p.Links, hmi.Link{ID: nextProcessLinkID(p), From: *v.from, To: end})
+				p.Links = append(p.Links, hmi.Link{ID: nextProcessLinkID(p), From: *v.from, To: end, Routing: hmi.RoutingAvoid})
 				id := p.Links[len(p.Links)-1].ID
 				v.from = nil
 				if v.applyCommand(p, nil) == nil {
@@ -399,6 +396,7 @@ func (v *ProcessDiagram) pointerMove(x, y float64, mods processModifiers) {
 		return math.Round(n/10) * 10
 	}
 	dx, dy := x-g.x, y-g.y
+	geometryChanged := false
 	switch g.kind {
 	case "move":
 		anchor := g.nodes[0]
@@ -422,23 +420,32 @@ func (v *ProcessDiagram) pointerMove(x, y float64, mods processModifiers) {
 		}
 		for _, n := range g.nodes {
 			view := v.views[n.ID]
+			geometryChanged = geometryChanged || view.node.X != n.X+d.X || view.node.Y != n.Y+d.Y
 			view.node.X = n.X + d.X
 			view.node.Y = n.Y + d.Y
 		}
 		for id, base := range g.baseBends {
 			for i, p := range base {
-				g.previewBends[id][i] = hmi.XY{X: p.X + d.X, Y: p.Y + d.Y}
+				next := hmi.XY{X: p.X + d.X, Y: p.Y + d.Y}
+				geometryChanged = geometryChanged || g.previewBends[id][i] != next
+				g.previewBends[id][i] = next
 			}
 		}
 	case "resize":
 		n := g.nodes[0]
 		b := processResize(n, g.corner, dx, dy, v.project.Width, v.project.Height, snap, mods.shift)
 		view := v.views[n.ID]
+		geometryChanged = view.node.X != b.X || view.node.Y != b.Y || view.node.Width != b.Width || view.node.Height != b.Height
 		view.node.X, view.node.Y, view.node.Width, view.node.Height = b.X, b.Y, b.Width, b.Height
 		view.widget.SetSize(b.Width, b.Height)
 	case "bend":
 		old := g.baseBends[g.link][g.bend]
-		g.previewBends[g.link][g.bend] = hmi.XY{X: max(0, min(v.project.Width, snap(old.X+dx))), Y: max(0, min(v.project.Height, snap(old.Y+dy)))}
+		next := hmi.XY{X: max(0, min(v.project.Width, snap(old.X+dx))), Y: max(0, min(v.project.Height, snap(old.Y+dy)))}
+		geometryChanged = g.previewBends[g.link][g.bend] != next
+		g.previewBends[g.link][g.bend] = next
+	}
+	if geometryChanged {
+		v.invalidatePipeRoutes()
 	}
 	v.Update()
 }
@@ -550,13 +557,21 @@ func (v *ProcessDiagram) OnPointerCancel() {
 		v.PopCapture()
 	}
 	if g := v.gesture; g != nil {
+		geometryChanged := false
+		for id, points := range g.previewBends {
+			geometryChanged = geometryChanged || !slices.Equal(points, g.baseBends[id])
+		}
 		v.gesture = nil
 		v.PopCapture()
 		for _, n := range g.nodes {
 			if view := v.views[n.ID]; view != nil {
+				geometryChanged = geometryChanged || view.node.X != n.X || view.node.Y != n.Y || view.node.Width != n.Width || view.node.Height != n.Height
 				view.node = n
 				view.widget.SetSize(n.Width, n.Height)
 			}
+		}
+		if geometryChanged {
+			v.invalidatePipeRoutes()
 		}
 		if g.kind == "marquee" {
 			v.SelectNodes(g.selection)
@@ -572,22 +587,25 @@ func (v *ProcessDiagram) AddSelectedPipeBend() error {
 	}
 	for _, l := range v.project.Links {
 		if l.ID == v.selectedLink {
-			a := v.port(v.views[l.From.Node], l.From.Port)
 			bestLength := -1.
 			point := hmi.XY{}
 			index := 0
-			targets := append(slices.Clone(l.Bends), v.port(v.views[l.To.Node], l.To.Port))
-			for i, b := range targets {
-				path := hmi.Route(a, b, nil)
-				for j := 1; j < len(path); j++ {
-					length := math.Hypot(path[j].X-path[j-1].X, path[j].Y-path[j-1].Y)
-					if length > bestLength {
-						bestLength = length
-						point = hmi.XY{X: (path[j].X + path[j-1].X) / 2, Y: (path[j].Y + path[j-1].Y) / 2}
-						index = i
-					}
+			path := v.pipePoints(l)
+			section := 0
+			for j := 1; j < len(path); j++ {
+				// Successful routes retain every mandatory bend as a vertex.
+				for section < len(l.Bends) && path[j-1] == l.Bends[section] {
+					section++
 				}
-				a = b
+				length := math.Hypot(path[j].X-path[j-1].X, path[j].Y-path[j-1].Y)
+				if length > bestLength {
+					bestLength = length
+					point = hmi.XY{X: (path[j].X + path[j-1].X) / 2, Y: (path[j].Y + path[j-1].Y) / 2}
+					index = section
+				}
+			}
+			if bestLength <= 0 {
+				return fmt.Errorf("pipe has no drawable segment")
 			}
 			if err := v.applyCommand(hmi.EditLinkBend(v.project, l.ID, index, &point, true)); err != nil {
 				return err

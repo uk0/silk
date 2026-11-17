@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// Rect is an authored, axis-aligned document rectangle (not a screen rectangle).
+// Rect is an axis-aligned document-space rectangle, not a screen rectangle.
 type Rect struct{ X, Y, Width, Height float64 }
 
 // CloneProject returns an independent, validated document without I/O. Unlike a
