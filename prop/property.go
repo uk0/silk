@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 func init() {
@@ -879,7 +880,8 @@ func isEventPropID(id string) bool {
 	if !strings.HasPrefix(id, "On") || len(id) < 3 {
 		return false
 	}
-	return unicode.IsUpper(rune(id[2]))
+	first, _ := utf8.DecodeRuneInString(id[2:])
+	return unicode.IsUpper(first)
 }
 
 // categoryOfPropID classifies a property by its ID. Ids are matched against
@@ -895,6 +897,9 @@ func categoryOfPropID(id string) string {
 		return "events"
 	}
 	id = strings.ToLower(id)
+	if category := builtinPropertyCategory(id); category != "" {
+		return category
+	}
 	// Data binding is classified first, and by whole id: the appearance and
 	// behavior scans below match by substring, so a keyword added to either
 	// could otherwise file the tag row under 外观 and bury the binding a 组态
@@ -980,8 +985,10 @@ type PropertySheet struct {
 	icon  paint.Icon
 
 	// Category support
-	categories     map[string]*propertyCategory
-	categoryLayout []categoryLayoutEntry // ordered layout entries for drawing
+	categories       map[string]*propertyCategory
+	categoryLayout   []categoryLayoutEntry // ordered layout entries for drawing
+	categoryBaseFont paint.Font
+	categoryBoldFont paint.Font
 
 	// 属性过滤
 	filter    string
@@ -1031,8 +1038,9 @@ func (this *PropertySheet) Init(iw gui.IWidget) {
 	})
 }
 
-// SetFilter narrows the sheet to the properties whose label or id matches text
-// (case-insensitive substring); empty text restores every row. A category
+// SetFilter narrows the sheet by label, persisted ID or category (including
+// built-in English/Chinese names). Matching is a case-insensitive substring;
+// empty text restores every row. A category
 // header goes away with its last matching child and comes back with it. The
 // filter is a view setting and survives Bind/Clear, like the widget palette's
 // (ged/widget-list.go).
@@ -1306,7 +1314,7 @@ func (this *PropertySheet) Layout() {
 	catItems := make(map[string][]*PropertyItem)
 	for _, p := range this.rlist {
 		cat := categoryOfPropID(p.Id())
-		if !p.IsVisible() || !propMatchesFilter(p.Label(), p.Id(), this.filter) ||
+		if !p.IsVisible() || !inspectorMatchesFilter(p.Label(), p.Id(), cat, this.filter) ||
 			categoryHiddenForSelection(cat, this.objCount) {
 			p.vrow = -1
 			control := p.Control()
@@ -1507,14 +1515,10 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 	g.Line(xedit, this.contentTop(), xedit, this.Height())
 	g.Stroke()
 
-	font := gui.Theme().Font
-	fe := font.FontExtents()
-	g.SetFont(font)
-
 	// Draw using category layout
 	for _, entry := range this.categoryLayout {
 		if entry.isHeader {
-			this.drawCategoryHeader(g, entry.category, entry.ypos, w, fe)
+			this.drawCategoryHeader(g, entry.category, entry.ypos, w)
 		} else if entry.item != nil {
 			p := entry.item
 			this.drawPropertyLabel(g, p)
@@ -1548,41 +1552,35 @@ func (this *PropertySheet) Draw(g paint.Painter) {
 // categoryChevronOpen reports whether a category header should draw the open
 // (downward) chevron. Split out so the rule is testable without a painter.
 func categoryChevronOpen(expanded bool, filter string) bool {
-	return expanded || filter != ""
+	return expanded || strings.TrimSpace(filter) != ""
 }
 
-func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, ypos, width float64, fe *paint.FontExtents) {
+func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, ypos, width float64) {
 	cat := this.categories[catKey]
-	if cat == nil {
+	if cat == nil || width <= 0 {
 		return
 	}
+	g.Save()
+	defer g.Restore()
+	g.Rectangle(0, ypos, width, categoryHeaderHeight)
+	g.Clip()
 
 	// Background
-	headerBG := paint.Color{R: 70, G: 70, B: 85, A: 255}
-	if gui.CurrentThemeMode() == gui.ThemeLight {
-		headerBG = paint.Color{R: 210, G: 210, B: 220, A: 255}
-	}
-	g.SetBrush1(headerBG)
+	theme := gui.Theme()
+	g.SetBrush1(theme.FormColor)
 	g.Rectangle(0, ypos, width, categoryHeaderHeight)
 	g.Fill()
 
 	// Bottom border
-	borderColor := paint.Color{R: 90, G: 90, B: 105, A: 255}
-	if gui.CurrentThemeMode() == gui.ThemeLight {
-		borderColor = paint.Color{R: 180, G: 180, B: 190, A: 255}
-	}
-	g.SetPen1(borderColor, 1)
-	g.Line(0, ypos+categoryHeaderHeight, width, ypos+categoryHeaderHeight)
+	g.SetPen1(theme.BorderColor, 1)
+	g.Line(0, ypos+categoryHeaderHeight-0.5, width, ypos+categoryHeaderHeight-0.5)
 	g.Stroke()
 
 	// Expander triangle
 	triX := 6.0
 	triY := ypos + categoryHeaderHeight/2
 	triSize := 4.0
-	textColor := paint.Color{R: 220, G: 220, B: 230, A: 255}
-	if gui.CurrentThemeMode() == gui.ThemeLight {
-		textColor = paint.Color{R: 40, G: 40, B: 50, A: 255}
-	}
+	textColor := theme.TextColor
 	g.SetBrush1(textColor)
 	// An active filter shows a category's matching rows whatever its collapse
 	// state, so the chevron has to follow what is on screen rather than the
@@ -1603,15 +1601,18 @@ func (this *PropertySheet) drawCategoryHeader(g paint.Painter, catKey string, yp
 	}
 	g.Fill()
 
-	// Category name (bold-style: draw twice with slight offset for fake bold)
-	g.SetBrush1(textColor)
-	yt := ypos + fe.Ascent + (categoryHeaderHeight-fe.Height)*0.5
-	g.DrawText1(20, yt, i18n.T(cat.name))
-	g.DrawText1(20.5, yt, i18n.T(cat.name)) // fake bold offset
+	// One real-weight glyph pass; no fractional duplicate that blurs at HiDPI.
+	drawPropertyText(g, this.categoryFont(theme.Font), textColor,
+		20, ypos, width-24, categoryHeaderHeight-1, i18n.T(cat.name))
 }
 
 // OnLeftDown handles mouse clicks on category headers to toggle collapse.
 func (this *PropertySheet) OnLeftDown(x, y float64) {
+	// Match the clipped paint/client bounds, including zero-height panes.
+	// Positive comparisons deliberately reject NaN as well as infinities.
+	if !(x >= 0 && x < this.Width() && y >= this.contentTop() && y < this.Height()) {
+		return
+	}
 	// Check if click is on a category header
 	for _, entry := range this.categoryLayout {
 		if entry.isHeader {

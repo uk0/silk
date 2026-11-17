@@ -15,9 +15,16 @@ var legacyPropertyLabels = map[string]string{
 	"上边距": "Top Margin", "下边距": "Bottom Margin", "左边距": "Left Margin", "右边距": "Right Margin", "间距": "Spacing",
 }
 
+var canonicalPropertyLabels = map[string]string{
+	"Checkable": "可勾选", "Checked": "选中",
+}
+
 func init() {
 	translations := map[string]string{
-		multiValueText: "多值", "Checkable": "可勾选", "Checked": "选中",
+		multiValueText: "多值",
+	}
+	for id, label := range canonicalPropertyLabels {
+		translations[id] = label
 	}
 	for id, label := range legacyPropertyLabels {
 		translations[label] = id
@@ -32,6 +39,20 @@ func propertyDisplayName(id string) string {
 	return i18n.T(id)
 }
 
+// Cache at most one normal snapshot and one bold face per sheet. Compare
+// values, not pointers: themes may mutate their existing font in place.
+func (sheet *PropertySheet) categoryFont(font paint.Font) paint.Font {
+	if font == nil {
+		return nil
+	}
+	if sheet.categoryBaseFont == nil || !sheet.categoryBaseFont.Equal(font) {
+		sheet.categoryBaseFont = font.Dup()
+		sheet.categoryBoldFont = font.Dup()
+		sheet.categoryBoldFont.SetBold(true)
+	}
+	return sheet.categoryBoldFont
+}
+
 // Elision communicates truncation; clipping also contains overhanging glyphs.
 // Shared by labels, compact numbers and mixed-value hints in narrow panels.
 func drawPropertyText(g paint.Painter, font paint.Font, color paint.Color, x, y, width, height float64, text string) {
@@ -39,8 +60,14 @@ func drawPropertyText(g paint.Painter, font paint.Font, color paint.Color, x, y,
 		return
 	}
 	fitted := gui.ElideText(font, text, width)
+	previousFont := g.Font()
 	g.Save()
-	defer g.Restore()
+	defer func() {
+		g.Restore()
+		// The legacy Cairo backend restores its clip/CTM but retains Go-side
+		// style fields. Restore the caller's face explicitly on every backend.
+		g.SetFont(previousFont)
+	}()
 	g.Rectangle(x, y, width, height)
 	g.Clip()
 	g.SetFont(font)

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — coherent property inspector (2026-11-17)
+
+- Classify built-in Chinese/English property IDs explicitly: geometry and grid
+  placement in Layout, titles/icons/colors in Appearance, Checkable/Checked and
+  value/range state in Behavior, HTTP/conversion/device configuration in Data Binding.
+  Unknown extension IDs retain existing heuristics; no persisted IDs are renamed.
+- Search by built-in category names in English/Chinese and legacy English labels,
+  while preserving custom labels, hidden/multi-selection rows and stored collapse.
+- Replace duplicated half-pixel header text with cached real bold fonts, theme
+  colors and clipped/elided ink. Reject header hits outside the visible client;
+  whitespace-only searches no longer show a falsely expanded chevron.
+- Restore the caller font after inspector text painting on legacy Cairo, whose
+  Save/Restore does not restore its Go-side font field. Preserve negative tests.
+- Add three original macOS/Windows README images. Frozen full/race pass on macOS
+  (9,608 named passes /29 skips each), Linux (9,547 /37), Windows (9,405 /43);
+  twelve strict actual bundled-gopls cases pass without skips. All three independent
+  source exports match 2,845 files, with no extra Go files.
+- Pass native bilingual filtering/collapse, saved title edits and Undo/Redo, exact
+  current-file reopen, independent document/session reads and normal exits 0.
+  Actual new IDE companions execute constructor/state/input tests with race
+  instrumentation against the same SDK. Full vet retains 501 unchanged baseline
+  diagnostics, none new. Development source only, not a binary release or a
+  universal native/DPI/performance guarantee; exact index/remote readback gates apply.
+  [Current verification and limits](PROPERTY_INSPECTOR_PROGRESS_20261117.md).
+
 ## Unreleased — checkable group authoring and native capture (2026-11-17)
 
 - Add GroupBox header Space/Tab operation, repeat rejection and a clipped focus cue.

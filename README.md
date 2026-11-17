@@ -19,6 +19,38 @@ signed/notarized standalone apps.
 
 ---
 
+## Coherent inspector categories and bilingual search (development branch)
+
+Persisted Chinese and English property IDs now share consistent Layout,
+Appearance, Behavior and Data Binding groups. Search matches displayed property names and IDs, plus built-in category names
+in either English or Chinese. Filtering reveals
+matching rows without losing the user's collapse state or reviving hidden editors.
+Headers use one real-weight glyph pass, theme colors and clipped/elided text,
+rather than half-pixel duplicate text. Property IDs and generated Go remain stable.
+
+![Actual macOS designer after editing, Undo/Redo, saving and reopening the exact test document](docs/images/property-inspector-macos.jpg)
+
+![Chinese category search in the English macOS designer, with bundled gopls connected](docs/images/property-inspector-search-macos.jpg)
+
+Original source-built macOS captures, not mockups. Native documents and saved
+sessions were independently read back after normal exits.
+
+<details>
+<summary>Native Windows 10 inspector</summary>
+
+![Actual Windows inspector after title editing, saved Undo/Redo and file-tree reopening](docs/images/property-inspector-windows.png)
+
+The same source passes Windows category filtering/collapse, actual saved property
+edits, New/file-tree reopen and normal exit 0. Both native IDEs connect to their
+adjacent bundled gopls. Actual generated companions compile and execute against
+the frozen SDK; this is not merely a screenshot or a compilation-only check.
+
+</details>
+
+Three-platform full/race, twelve real bundled-gopls cases and source/media identity
+checks are recorded in [the QA record](PROPERTY_INSPECTOR_PROGRESS_20261117.md).
+This does not imply a new binary release or complete Qt Creator parity.
+
 ## Checkable groups and predictable event initialization (development branch)
 
 GroupBox now exposes localized **Checkable / Checked** designer properties and

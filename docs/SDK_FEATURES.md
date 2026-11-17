@@ -3,6 +3,23 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 属性分类与双语检索（已验证开发源码）
+
+- `EnumProperties` 仍传入原有持久化 ID，无需改接口，也不要为分类重命名属性。
+  例如 `标题` 在外观，`Checkable`／`Checked` 在行为，`布局行`／`跨列数` 在布局，
+  `HTTP Method`／`Request Body`／`JSON Pointer`／转换与颜色规则在数据绑定。
+- `PropertySheet.SetFilter("Behavior")` 与 `SetFilter("行为")` 都检索行为分组，
+  不受当前界面语言影响；显式自定义标签、原始 ID 及已有英文别名仍可检索。
+  空白查询等同清空；检索临时展开分组，清空后恢复原折叠状态。
+- 隐藏属性和多选时不允许出现的事件行，不会被分类检索重新显示。
+  未知扩展属性保留原有分类启发式；当前并未提供任意自定义分组 API。
+- 标题真实粗体字体每表只缓存当前普通快照／粗体各一份，原地修改主题字体后
+  会更新；文本和边框限定在标题带内，不增加绘制定时器或后台控件写入。
+- 三平台 full/race、12 项真实 bundled-gopls，以及 macOS／Windows 原生检索、
+  编辑／保存／撤销重做／准确路径重开、独立文档与 session 读回和正常退出已验证。
+  实际生成 companion 在当前 SDK 上带 race 执行；完整范围与未完成的产品工作
+  见 [本轮验收记录](../PROPERTY_INSPECTOR_PROGRESS_20261117.md)。
+
 ## 可勾选 GroupBox 与生成代码初始化（已验证开发源码）
 
 - `SetCheckable(true)` 后，标题可由 Tab 到达，Space 每次按下切换一次；自动重复

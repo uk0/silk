@@ -9,6 +9,28 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: coherent property inspector categories and rendering (2026-11-17)
+
+Baseline `2a68b14`; the full product goal stays active.
+
+- [x] Preserve failures for real GroupBox categorization, Chinese/HTTP/layout
+      property IDs, duplicate/overflowing header ink and whitespace chevrons.
+- [x] Add exact built-in categories without renaming persisted IDs, bilingual
+      category/name search and bounded real-weight, theme-derived headers.
+- [x] Preserve a failing outside-client header-hit control and caller-font leak;
+      guard pointer bounds and restore the legacy painter's Go-side font.
+- [x] Pass frozen Mac/Linux full/race/strict, renderer/scoped vet, unchanged
+      full-vet baseline and exact exports; finish current native macOS with
+      bundled gopls, exact-path reopen/session/exit and actual generated runtime.
+- [x] Finish frozen local/platform/race/render/LSP gates and current native IDE
+      inspection, category filtering/collapse, persistence and normal shutdown.
+- [x] Refresh three original README images, SDK/changelog/QA documentation.
+- Publication requires tested/indexed source/media identity, commit/push and
+  independent remote readback; no binary release/tag is implied.
+
+This is inspector work, not a claim that industrial routing, alarms, per-monitor
+DPI/IME or large-workspace performance requirements are completed.
+
 ## Validated increment: checkable GroupBox authoring and native capture (2026-11-17)
 
 - [x] Reproduce missing header keyboard/Tab support, designer state rows and
