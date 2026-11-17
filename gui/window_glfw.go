@@ -1092,6 +1092,7 @@ func pushCapture(w IWidget) bool {
 			}
 		}
 	}
+	clear(captureStack)
 	captureStack = append(captureStack[:0], w)
 	setCapture(w)
 	cancelPointerGesture(cur)
@@ -1111,11 +1112,13 @@ func popCapture(w IWidget) {
 	for n := n - 2; n >= 0; n-- {
 		p := captureStack[n]
 		if p.IsVisible() {
+			clear(captureStack[n+1:])
 			captureStack = captureStack[:n+1]
 			setCapture(p)
 			return
 		}
 	}
+	clear(captureStack)
 	captureStack = captureStack[:0]
 }
 
@@ -1981,6 +1984,7 @@ func dispatchMouseButtonAt(win *Window, button glfw.MouseButton, action glfw.Act
 	capWidget := curCapture()
 	hit := win.widget.FindWidgetAt(x, y)
 	if action == glfw.Press {
+		win.toCapture = false
 		if win.wt == WtForm {
 			activeForm = win
 		}
@@ -1991,6 +1995,10 @@ func dispatchMouseButtonAt(win *Window, button glfw.MouseButton, action glfw.Act
 			}
 			lastMouseWidget = capWidget
 		}
+		if !inputEnabled(lastMouseWidget) {
+			retireDisabledInput()
+			return
+		}
 		if button == glfw.MouseButtonLeft || button == glfw.MouseButtonRight {
 			win.toCapture = true
 			// Popup/container capture can choose a child on PRESS only. Once
@@ -1998,6 +2006,10 @@ func dispatchMouseButtonAt(win *Window, button glfw.MouseButton, action glfw.Act
 			if capWidget != nil && capWidget.NakedWidget().child != nil {
 				x1, y1 := capWidget.MapFromWindow(x, y)
 				if child := capWidget.FindWidgetAt(x1, y1); child != nil && child != capWidget {
+					if !inputEnabled(child) {
+						win.toCapture = false
+						return
+					}
 					lastMouseWidget = child
 					win.autoCaptured = pushCapture(child)
 					win.toCapture = false
@@ -2009,6 +2021,11 @@ func dispatchMouseButtonAt(win *Window, button glfw.MouseButton, action glfw.Act
 	if target == nil || target.OwnerWindow() != win {
 		return
 	}
+	if !inputEnabled(target) {
+		retireDisabledInput()
+		win.autoCaptured, win.toCapture = false, false
+		return
+	}
 	// Do not activate a captured button after release outside its hit area,
 	// and do not require stale hover state to activate a stationary menu row.
 	if hit == target {
@@ -2017,7 +2034,7 @@ func dispatchMouseButtonAt(win *Window, button glfw.MouseButton, action glfw.Act
 		setMouseHoverWidget(nil)
 	}
 	// Enter/leave handlers are host code and may close or reparent the target.
-	if lastMouseWidget != target || target.OwnerWindow() != win || !target.IsAllAncentorsVisible() {
+	if lastMouseWidget != target || target.OwnerWindow() != win || !target.IsAllAncentorsVisible() || !inputEnabled(target) {
 		return
 	}
 	lastMouseTime = time.Now()
@@ -2103,7 +2120,7 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 
 	if win.toCapture {
 		win.toCapture = false
-		if lastMouseWidget != nil {
+		if inputEnabled(lastMouseWidget) {
 			win.autoCaptured = pushCapture(lastMouseWidget)
 		}
 	}
@@ -2139,7 +2156,7 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 			if p1 != nil && p1 != widget {
 				x1, y1 := p1.MapFromWindow(x, y)
 				setMouseHoverWidget(p1)
-				if i, ok := p1.(IEventMouseMove); ok {
+				if i, ok := p1.(IEventMouseMove); ok && inputEnabled(p1) {
 					i.OnMouseMove(x1, y1)
 				}
 				redirect = true
@@ -2151,7 +2168,7 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 			} else {
 				setMouseHoverWidget(nil)
 			}
-			if i, ok := p.(IEventMouseMove); ok {
+			if i, ok := p.(IEventMouseMove); ok && inputEnabled(p) {
 				i.OnMouseMove(x1, y1)
 			}
 		}
@@ -2160,7 +2177,7 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 		setMouseHoverWidget(p)
 		lastMouseWidget = p
 		if p != nil {
-			if i, ok := p.Self().(IEventMouseMove); ok {
+			if i, ok := p.Self().(IEventMouseMove); ok && inputEnabled(p) {
 				x1, y1 := p.MapFromWindow(x, y)
 				i.OnMouseMove(x1, y1)
 			}
@@ -2186,7 +2203,7 @@ func deliverCapturedMouseMove(capWidget IWidget, capWin *Window, winX, winY floa
 	if p == nil {
 		p = capWidget
 	}
-	if p == nil {
+	if !inputEnabled(p) {
 		return
 	}
 	_, _, pw, ph := p.Bounds()
@@ -2203,7 +2220,7 @@ func deliverCapturedMouseMove(capWidget IWidget, capWin *Window, winX, winY floa
 		if p1 != nil && p1 != widget {
 			cx1, cy1 := p1.MapFromWindow(winX, winY)
 			setMouseHoverWidget(p1)
-			if i, ok := p1.(IEventMouseMove); ok {
+			if i, ok := p1.(IEventMouseMove); ok && inputEnabled(p1) {
 				i.OnMouseMove(cx1, cy1)
 			}
 			redirect = true
@@ -2215,7 +2232,7 @@ func deliverCapturedMouseMove(capWidget IWidget, capWin *Window, winX, winY floa
 		} else {
 			setMouseHoverWidget(nil)
 		}
-		if i, ok := p.(IEventMouseMove); ok {
+		if i, ok := p.(IEventMouseMove); ok && inputEnabled(p) {
 			i.OnMouseMove(x1, y1)
 		}
 	}

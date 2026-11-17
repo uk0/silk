@@ -122,12 +122,12 @@ func (this *CheckBox) Icon() paint.Icon {
 }
 
 func (this *CheckBox) IsEnabled() bool {
-	return !this.readonly
+	return this.Widget.IsEnabled() && !this.readonly
 }
 
 func (this *CheckBox) SetEnabled(b bool) {
 	this.readonly = !b
-	this.Update()
+	this.Widget.SetEnabled(b)
 }
 
 func (this *CheckBox) SizeHints() SizeHints {
@@ -176,7 +176,7 @@ func (this *CheckBox) SetChecked(b bool) {
 func (this *CheckBox) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
 	list.AddProperty("选中", this.IsChecked, this.SetChecked)
-	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
+	list.AddProperty("可用", this.IsExplicitlyEnabled, this.SetEnabled)
 }
 
 func (this *CheckBox) SigCheck(fn func(bool)) {

@@ -5,10 +5,15 @@ go run ./examples/layoutupdates
 ```
 
 Use **Long status / Short status**, **Toggle font**, **Toggle detail** and
-**Toggle spacing**, then resize the window. Wrapped text, its nested group and
+**Toggle spacing / Toggle title**, then resize the window. Wrapped text, its nested group and
 following controls recompute their preferred geometry without a polling timer
 or a manual `Layout()` in each action. Use a reasonably tall window: this
 example deliberately does not add automatic scrolling for undersized clients.
+
+The long Unicode group title contributes to natural size hints. When an explicit
+allocation is narrower, only the painted caption is fitted with an ellipsis;
+`GroupBox.Title()` retains the complete authored value. The outline uses four
+counterclockwise quarter turns without painting over the parent background.
 
 Custom widgets call `widget.InvalidateSizeHints()` after changing preferred-size
 inputs. `widget.RequestLayout()` also queues the widget's own layout. Both are

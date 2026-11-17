@@ -30,7 +30,7 @@ func main() {
 	title := gui.NewLabel("Live layout updates")
 	title.SetFont(paint.NewFont(gui.Theme().Font.Family(), 22, true, false))
 	form.body.AddWidget(title)
-	help := gui.NewLabel("Change text, font, spacing or visibility. The following controls move automatically; there is no polling timer or manual Layout call in these actions.")
+	help := gui.NewLabel("Change text, font, spacing, visibility or the group title. The following controls move automatically; there is no polling timer or manual Layout call in these actions.")
 	help.SetWrap(true)
 	form.body.AddWidget(help)
 
@@ -81,6 +81,15 @@ func main() {
 			inner.SetSpacing(18)
 		} else {
 			inner.SetSpacing(4)
+		}
+	})
+	longTitle := false
+	addAction("Toggle title", func() {
+		longTitle = !longTitle
+		if longTitle {
+			group.SetTitle("Runtime status — reactor R001 / heat recovery E0003 / 实时工艺数据")
+		} else {
+			group.SetTitle("Runtime status")
 		}
 	})
 

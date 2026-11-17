@@ -19,6 +19,50 @@ signed/notarized standalone apps.
 
 ---
 
+## GroupBox rendering and nested input gates (development branch)
+
+GroupBox corners now use quarter arcs, and long titles fit their allocation
+without covering child content or adjacent controls. Unchecking a group gates
+all nested input without overwriting each child's authored enabled flag.
+Disabling retires old drags, repeat actions, clipboard reads and transient
+editor hints; reenabling retains the document and remembered focus, not an old
+gesture. See [SDK contracts](docs/SDK_FEATURES.md) and
+[verification and remaining work](GROUPBOX_INPUT_PROGRESS_20261116.md).
+Frozen-source full/race suites and strict actual bundled-gopls checks pass on
+macOS arm64, Linux arm64 and Windows amd64. This is development-source
+verification, not a new packaged release or full Qt Creator parity.
+
+![Actual macOS SDK example with a fitted Unicode title and reflowed controls](docs/images/groupbox-title-narrow-macos.png)
+
+Original, unedited capture of the source-built `examples/layoutupdates` after
+native window resizing. The caption preserves both ends; the large wrapped
+status, detail row, following label and six actions remain separately laid out.
+All toggles were exercised both ways before normal exit 0. This is an SDK
+consumer, not a mockup, new packaged release or whole-product performance claim.
+
+<details>
+<summary>Native input and designer integration checks</summary>
+
+A published-baseline consumer reproduced an unchecked group accepting a nested
+mouse click. Final-source macOS and Windows SDK consumers block mouse and Space
+while unchecked, accept one action each while checked, and block both again
+after unchecking. Independent event journals and normal exit 0 verify the
+sequence; this is not an all-controls or all-native-states guarantee.
+
+![Actual macOS designer after moving and saving a control](docs/images/groupbox-designer-macos.png)
+
+![Actual Windows 10 designer after moving and saving the same fixture](docs/images/groupbox-designer-windows.png)
+
+Original, unedited captures from the final-source IDEs. The button was dragged
+from `(20,25)` to `(30,30)` and independently reloaded from disk; design and
+editor Undo/Redo, Unicode source persistence and generated-companion compilation
+were separately checked before normal exit. Windows additionally verifies
+read-only/sharing-denied saves, quit cancellation/refusal and successful Save All
+exit. Failed automation attempts are retained in the linked verification report;
+these checks do not certify every menu, popup, DPI/IME mode or large workspace.
+
+</details>
+
 ## Dynamic layout updates (development branch)
 
 The SDK adds coalesced UI-thread size-hint invalidation for
@@ -38,7 +82,7 @@ actions move the nested group and following controls without action-owned
 manual Layout calls. All toggles were tested in both directions before normal
 system Quit / exit 0. This is SDK-consumer evidence, not whole-IDE or Windows
 acceptance by itself; those checks have separate evidence in the linked report.
-The existing GroupBox corner-path polish remains separate work.
+These earlier captures precede the GroupBox corner-path fix shown above.
 
 <details>
 <summary>Native resize also wraps the button flow</summary>

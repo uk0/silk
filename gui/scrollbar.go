@@ -122,6 +122,10 @@ func (this *ScrollBar) OnMouseLeave() {
 }
 
 func (this *ScrollBar) onTimer() {
+	if !this.IsEnabled() {
+		this.OnPointerCancel()
+		return
+	}
 	this.tc++
 	if this.tc > 1 && this.tc < 4 {
 		return
@@ -141,6 +145,9 @@ func (this *ScrollBar) onTimer() {
 }
 
 func (this *ScrollBar) OnLeftDown(x, y float64) {
+	if !this.IsEnabled() {
+		return
+	}
 	this.pushed = true
 	this.part = this.PointToPart(x, y)
 	if this.part == 3 {

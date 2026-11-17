@@ -9,6 +9,28 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: effective input gates and GroupBox painting (2026-11-16)
+
+- [x] Reproduce 270-degree corner arcs, caption overflow/font-state leakage,
+      and an actual unchecked-group nested button accepting native mouse clicks.
+- [x] Separate authored enabled flags from inherited input availability; retire
+      captured gestures, pending paste and transient editor hints on disable.
+- [x] Preserve independent native forms/popups, remembered focus, explicit child
+      flags and reparenting during cancellation. Add common/platform regressions.
+- [x] Finish final5 frozen full/race/strict checks on macOS, Linux and Windows;
+      native macOS/Windows SDK and IDE replay, independent persistence, generated
+      compilation and normal exit. Retain failed attempts separately.
+- [x] Refresh three original README captures, SDK API documentation and changelog.
+- Publication requires exact tested/staged source and media audit, commit/push
+  and independent remote HEAD readback; no binary release/tag is implied.
+- [ ] Continue GroupBox keyboard/inspector authoring, independently owned popup
+      lifecycle and first-save-retry click timing, Windows PMv2/IME and
+      large-workspace scheduling/profiling.
+
+[Evidence and limits](GROUPBOX_INPUT_PROGRESS_20261116.md). Industrial point
+bindings, HTTP conversion pipelines, designer/code navigation and SDK integration
+remain part of the continuing product objective, not completed by this increment.
+
 ## Validated increment: event-driven dynamic layout invalidation (2026-11-16)
 
 - [x] Preserve setter/queue failures: nested text needs 176.4px but gets 19.6px;

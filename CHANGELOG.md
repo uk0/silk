@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — inherited input availability and GroupBox rendering (2026-11-16)
+
+- Fix GroupBox inward-curl corner arcs, constrained title overflow, empty-title
+  background erasure and leaked painter font; cache bounded title measurements.
+  Include complete titles/checkmarks in hints and queue changed-title layout.
+- Add `Widget.IsExplicitlyEnabled`, `IChildEnablement` and
+  `Widget.InvalidateEnabledState` without expanding required `IWidget` methods.
+  Effective enabled state includes logical ancestors and container gates while
+  independently owned native forms/popups retain their own input state.
+- Gate nested GroupBox content without rewriting authored child flags. Preserve
+  detached/replacement content ownership and factory checked defaults. Persist
+  local enabled flags in Button/CheckBox/ComboBox/ToggleSwitch properties.
+- Gate native mouse routing on GLFW/Win32; cancel stale gestures, scrollbar
+  repeat, clipboard reads and transient editor completion/hints without a fake
+  release, document replacement or loss of remembered focus. Reject parent cycles
+  before changing tree/input state; cancellation-time reparent cannot revive capture.
+- Clear discarded capture-stack backing slots on both native backends, including
+  pop/replacement during teardown. Isolate the line-splice allocation regression
+  from other asynchronous test work/collector accounting without relaxing its
+  four-allocation bound or changing application GC policy.
+- Independently validate native input, wheel, Tab and capture scopes for older
+  SDK controls whose local-only `IsEnabled` overrides omit ancestor checks.
+- Add platform mouse-dispatch and SDK regression tests. Extend the no-polling
+  layout example with a long Unicode GroupBox title toggle.
+- Pass frozen full/race suites: macOS arm64 9,538 named passes /29 skips each;
+  Linux arm64 9,477 /37; Windows amd64 9,326 /43. Four strict actual
+  bundled-gopls tests pass per platform, plus 1,340 focused race passes,
+  pure renderer/GUI, native GL and platform/release script gates. All three
+  source exports match 2,832 files /2,075 Go files. CI-scoped vet passes;
+  full vet retains 501 unchanged baseline diagnostics, with no new warnings.
+- Add three original macOS/Windows README captures. Real nested-input probes
+  accept one mouse and one Space action while checked, block both before/after
+  unchecking, and exit normally. Native IDE and generated-consumer results,
+  failed automation attempts and remaining platform limits are recorded in
+  [verification and remaining work](GROUPBOX_INPUT_PROGRESS_20261116.md).
+  Development source only; no packaged release or whole-product parity claim.
+
 ## Unreleased — owned dynamic layout invalidation (2026-11-16)
 
 - Add UI-only queued layout/size-hint invalidation, coalesced ancestors, bounded

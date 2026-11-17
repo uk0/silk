@@ -3,6 +3,28 @@
 本页列出 HTTP／同步异步能力、常用组装入口与设计器生成约定；不是对所有 SDK 模块的完整质量或跨平台认证。
 这些新增能力不增加第三方依赖。验收范围见 [HTTP SDK QA](../SDK_HTTP_QA_20261023.md) 、[字体／生成安全 QA](../FONT_GENERATION_QA_20261023.md) 和 [流式传输 QA](../TRANSFER_SDK_QA_20261023.md)。
 
+## 容器可用性与输入取消（已验证开发源码）
+
+- `Widget.IsEnabled()` 返回包含祖先／容器 gate 的实际输入可用性；
+  `Widget.IsExplicitlyEnabled()` 只读本控件的 `SetEnabled` 标志，适合属性保存。
+  临时禁用容器不会覆盖原本显式禁用的子控件。
+- 可选 `IChildEnablement.IsChildEnabled(child)` 支持复合控件的直接子级 gate；
+  必须是 UI 线程纯 getter，不可调用 `child.IsEnabled()` 造成递归。
+  自定义 gate 改变后，对受影响的直接子控件调用
+  `child.NakedWidget().InvalidateEnabledState()`，无需定时轮询或扩充 `IWidget`。
+- 可勾选 GroupBox 使用 gate 控制当前 content 的嵌套输入；标题仍可用。
+  独立 `WtForm`／`WtPopup` 不继承 owner 的临时禁用，`WtChild` 则继承。
+- 禁用同步取消旧拖拽、自动重复、异步粘贴与编辑器临时提示，不伪造鼠标释放／点击。
+  编辑文档和记忆焦点保留；禁用期间 `HasFocus()` 为 false，恢复后可继续原字段。
+  宿主语言服务仍须按 `LanguageHintRevision()` 等 token 拒绝迟到响应。
+- 自定义控件覆写 `IsEnabled()` 时应委托嵌入基类，以保持绘制状态一致；原生输入、
+  滚轮、Tab 与捕获取消另外验证完整祖先／gate，防止旧 SDK 的局部 getter 绕过禁用。
+- GroupBox 标题完整值保留；窄尺寸只对绘制内容做首尾省略，边框不再画内卷圆弧。
+  自然度量与单个分配宽度的缓存均有界；字体属性或主题改变后重新测量。
+  三平台 full/race 与严格 bundled-gopls 检查通过；macOS／Windows 的实际 SDK
+  消费者分别验证勾选前后鼠标和 Space 的阻断／恢复，不代表所有原生弹窗场景已覆盖。
+  [实现、验证状态与边界](../GROUPBOX_INPUT_PROGRESS_20261116.md)。
+
 ## 动态尺寸失效与合并重排（已验证开发源码）
 
 - `Widget.InvalidateSizeHints()`：自定义控件改变首选尺寸输入后调用；不在 setter 中

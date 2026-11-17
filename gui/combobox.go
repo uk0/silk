@@ -452,7 +452,7 @@ func (this *ComboBox) SigSelectionChanged(fn func(o interface{}, idx int)) {
 }
 
 func (this *ComboBox) EnumProperties(list core.IPropertyList) {
-	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
+	list.AddProperty("可用", this.IsExplicitlyEnabled, this.SetEnabled)
 	list.AddProperty("可见", this.IsVisible, this.SetVisible)
 	list.AddProperty("editable", this.IsEditable, this.SetEditable)
 	list.AddProperty("max_visible_items", this.MaxVisibleItems, this.SetMaxVisibleItems)

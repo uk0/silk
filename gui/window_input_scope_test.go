@@ -24,13 +24,17 @@ func TestInputScopeChecksWholeAncestorChain(t *testing.T) {
 		t.Fatal("visible descendant lost focus")
 	}
 	for _, widget := range []IWidget{root, grandparent, parent, field} {
+		var fallback IWidget = root
+		if widget == root {
+			fallback = nil // unavailable roots cannot be keyboard fallbacks
+		}
 		widget.NakedWidget().hidden = true
-		if win.keyTarget() != root || win.textInputTarget() != nil {
+		if win.keyTarget() != fallback || win.textInputTarget() != nil {
 			t.Fatalf("hidden %T still accepts input", widget)
 		}
 		widget.NakedWidget().hidden = false
 		widget.NakedWidget().disabled = true
-		if win.keyTarget() != root || win.textInputTarget() != nil {
+		if win.keyTarget() != fallback || win.textInputTarget() != nil {
 			t.Fatalf("disabled %T still accepts input", widget)
 		}
 		widget.NakedWidget().disabled = false

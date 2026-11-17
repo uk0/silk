@@ -66,12 +66,12 @@ func (this *ToggleSwitch) SetText(s string) {
 }
 
 func (this *ToggleSwitch) IsEnabled() bool {
-	return !this.readonly
+	return this.Widget.IsEnabled() && !this.readonly
 }
 
 func (this *ToggleSwitch) SetEnabled(b bool) {
 	this.readonly = !b
-	this.Self().Update()
+	this.Widget.SetEnabled(b)
 }
 
 func (this *ToggleSwitch) SigToggle(fn func(bool)) {
@@ -248,5 +248,5 @@ func (this *ToggleSwitch) SizeHints() SizeHints {
 func (this *ToggleSwitch) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
 	list.AddProperty("选中", this.IsChecked, this.SetChecked)
-	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
+	list.AddProperty("可用", this.IsExplicitlyEnabled, this.SetEnabled)
 }

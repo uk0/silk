@@ -12,7 +12,7 @@ func (this *Button) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
 	list.AddProperty("图标", this.IconName, this.SetIconName)
 	list.AddProperty("可见", this.IsVisible, this.SetVisible)
-	list.AddProperty("可用", this.IsEnabled, this.SetEnabled)
+	list.AddProperty("可用", this.IsExplicitlyEnabled, this.SetEnabled)
 }
 
 type IButton interface {
@@ -213,7 +213,7 @@ func (this *Button) OnHide() {
 func (this *Button) OnMouseStop(x, y float64) {
 	//this.Ow().Update()
 	//x, y = this.MapToGlobal(x, y)
-	if this.subPopup != nil && this.IsInPopupMenu() && !this.IsSubPopupVisible() {
+	if this.IsEnabled() && this.subPopup != nil && this.IsInPopupMenu() && !this.IsSubPopupVisible() {
 		this.ShowSubPopup()
 	}
 

@@ -1,9 +1,15 @@
 package gui
 
 import (
+	"context"
+	"os"
+	"os/exec"
 	"reflect"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -280,6 +286,30 @@ func TestLineCopyDeleteRoundTripMatrix(t *testing.T) {
 	}
 }
 func TestLineSpliceBatchAllocationCount(t *testing.T) {
+	// AllocsPerRun reads process-wide runtime.MemStats. Other editor tests
+	// intentionally start asynchronous analysis/completion, whose allocations
+	// must not be attributed to this pure line-index operation. Measure the
+	// same strict bound in an isolated instance of this test binary instead.
+	const child = "SILK_TEST_LINE_SPLICE_ALLOCATION_CHILD"
+	if os.Getenv(child) != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, executable, "-test.run=^TestLineSpliceBatchAllocationCount$", "-test.count=1")
+		cmd.Env = append(os.Environ(), child+"=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated allocation measurement: %v\n%s", err, output)
+		}
+		return
+	}
+	// Keep collector bookkeeping out of this small, process-isolated fixture.
+	// This changes only the child measurement, never an application's GC policy.
+	previousGC := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(previousGC)
+	runtime.GC()
 	e := &CodeEditor{lines: make([]string, 10000)}
 	changes := make([]editorLineSplice, 64)
 	for i := range changes {

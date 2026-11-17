@@ -208,6 +208,13 @@ func (this *Widget) SetParent(parent IWidget) {
 	if op == np {
 		return
 	}
+	// Reject a cycle before canceling queues or changing either owner's tree.
+	for p := np; p != nil; p = p.NakedWidget().parent {
+		if p.NakedWidget() == this {
+			core.Warn("Widget.SetParent: cyclic hierarchy rejected")
+			return
+		}
+	}
 	this.cancelQueuedLayouts()
 	cancelClipboardPastes(this.Self())
 
@@ -243,6 +250,11 @@ func (this *Widget) SetParent(parent IWidget) {
 		this.parent = np
 	}
 	this.syncWindow(this.IsVisible(), true)
+	// Reparenting can itself close an input gate. Retire the previous gesture
+	// now, before a later move back to an enabled parent could revive it.
+	if self := this.Self(); self != nil && !inputEnabled(self) {
+		this.InvalidateEnabledState()
+	}
 	notifyBusyAnimationVisibility(this.Self())
 	if op != nil {
 		op.NakedWidget().RequestLayout()
@@ -644,7 +656,8 @@ func (this *Widget) IsRedrawParent() bool {
 }
 
 func (this *Widget) HasFocus() bool {
-	return focusWidget == this.Self()
+	iw := this.Self()
+	return iw != nil && focusWidget == iw && inputEnabled(iw)
 }
 
 // FocusPolicy 返回控件的 Tab 焦点策略. 零值 (AutoFocus) 表示按启发式判定:
@@ -661,6 +674,9 @@ func (this *Widget) SetFocusPolicy(p FocusPolicy) {
 
 func (this *Widget) SetFocus() {
 	iw := this.Self()
+	if iw == nil || !inputEnabled(iw) {
+		return
+	}
 	if focusWidget == iw {
 		return
 	}
@@ -727,19 +743,12 @@ func (this *Widget) CheckAnyAncestor(checkFunc func(IWidget) bool) bool {
 	return false
 }
 
-func (this *Widget) IsEnabled() bool {
-	return !this.disabled
-}
-
 func (this *Widget) SetEnabled(b bool) {
 	if this.disabled == !b {
 		return
 	}
 	this.disabled = !b
-	if !b {
-		cancelClipboardPastes(this.Self())
-	}
-	this.Update()
+	this.InvalidateEnabledState()
 }
 
 func (this *Widget) IsVisible() bool {

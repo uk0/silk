@@ -886,6 +886,7 @@ func pushCapture(w IWidget) bool {
 			}
 		}
 	}
+	clear(captureStack)
 	captureStack = append(captureStack[:0], w)
 	//core.MoreDebug("pushCapture: captureStack = append(captureStack[:0], w)")
 	setCapture(w)
@@ -907,12 +908,14 @@ func popCapture(w IWidget) {
 		p := captureStack[n]
 		if p.IsVisible() {
 			//core.MoreDebug("popCapture: p.IsVisible()")
+			clear(captureStack[n+1:])
 			captureStack = captureStack[:n+1]
 			setCapture(p)
 			return
 		}
 	}
 
+	clear(captureStack)
 	captureStack = captureStack[:0]
 	//core.MoreDebug("popCapture: captureStack = captureStack[:0]")
 }
@@ -1509,7 +1512,7 @@ func (win *Window) on_WM_SHOWWINDOW(msg uint32, wParam, lParam uintptr) (ret uin
 
 func (win *Window) on_WM_LBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	lastMouseTime = time.Now()
-	win.toCapture = true
+	win.toCapture = false
 	x, y := posFromLParam(lParam)
 	if curCapture() == nil {
 		p := win.widget.FindWidgetAt(x, y)
@@ -1517,11 +1520,20 @@ func (win *Window) on_WM_LBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret ui
 		setMouseHoverWidget(p)
 	}
 	if lastMouseWidget != nil {
+		if !inputEnabled(lastMouseWidget) {
+			retireDisabledInput()
+			return 0
+		}
+		win.toCapture = true
 		x1, y1 := lastMouseWidget.MapFromWindow(x, y)
 		widget := lastMouseWidget.NakedWidget()
 		if widget.child != nil && curCapture() == lastMouseWidget {
 			p1 := widget.FindWidgetAt(x1, y1)
 			if p1 != nil && p1 != widget {
+				if !inputEnabled(p1) {
+					win.toCapture = false
+					return 0
+				}
 				lastMouseWidget = p1
 				x1, y1 = lastMouseWidget.MapFromWindow(x, y)
 				// 在子控件里点击, 无论是否拖动, 都要让子控件捕获鼠标
@@ -1541,7 +1553,9 @@ func (win *Window) on_WM_LBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 	lastMouseTime = time.Now()
 	if lastMouseWidget != nil {
 		cw := lastMouseWidget
-		if i, ok := lastMouseWidget.(IEventLeftUp); ok {
+		if !inputEnabled(lastMouseWidget) {
+			retireDisabledInput()
+		} else if i, ok := lastMouseWidget.(IEventLeftUp); ok {
 			x, y := posFromLParam(lParam)
 			x1, y1 := lastMouseWidget.MapFromWindow(x, y)
 			i.OnLeftUp(x1, y1)
@@ -1557,7 +1571,7 @@ func (win *Window) on_WM_LBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 
 func (win *Window) on_WM_RBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	lastMouseTime = time.Now()
-	win.toCapture = true
+	win.toCapture = false
 	x, y := posFromLParam(lParam)
 	if curCapture() == nil {
 		p := win.widget.FindWidgetAt(x, y)
@@ -1565,11 +1579,20 @@ func (win *Window) on_WM_RBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret ui
 		setMouseHoverWidget(p)
 	}
 	if lastMouseWidget != nil {
+		if !inputEnabled(lastMouseWidget) {
+			retireDisabledInput()
+			return 0
+		}
+		win.toCapture = true
 		x1, y1 := lastMouseWidget.MapFromWindow(x, y)
 		widget := lastMouseWidget.NakedWidget()
 		if widget.child != nil && curCapture() == lastMouseWidget {
 			p1 := widget.FindWidgetAt(x1, y1)
 			if p1 != nil && p1 != widget {
+				if !inputEnabled(p1) {
+					win.toCapture = false
+					return 0
+				}
 				lastMouseWidget = p1
 				x1, y1 = lastMouseWidget.MapFromWindow(x, y)
 				// 在子控件里点击, 无论是否拖动, 都要让子控件捕获鼠标
@@ -1589,7 +1612,9 @@ func (win *Window) on_WM_RBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 	lastMouseTime = time.Now()
 	if lastMouseWidget != nil {
 		cw := lastMouseWidget
-		if i, ok := lastMouseWidget.(IEventRightUp); ok {
+		if !inputEnabled(lastMouseWidget) {
+			retireDisabledInput()
+		} else if i, ok := lastMouseWidget.(IEventRightUp); ok {
 			x, y := posFromLParam(lParam)
 			x1, y1 := lastMouseWidget.MapFromWindow(x, y)
 			i.OnRightUp(x1, y1)
@@ -1613,7 +1638,7 @@ func (win *Window) on_WM_MBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret ui
 		lastMouseWidget = win.widget.FindWidgetAt(x, y)
 		setMouseHoverWidget(lastMouseWidget)
 	}
-	if lastMouseWidget != nil {
+	if inputEnabled(lastMouseWidget) {
 		if i, ok := lastMouseWidget.(IEventMiddleDown); ok {
 			x1, y1 := lastMouseWidget.MapFromWindow(x, y)
 			i.OnMiddleDown(x1, y1)
@@ -1624,7 +1649,7 @@ func (win *Window) on_WM_MBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret ui
 
 func (win *Window) on_WM_MBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uintptr) {
 	lastMouseTime = time.Now()
-	if lastMouseWidget != nil {
+	if inputEnabled(lastMouseWidget) {
 		if i, ok := lastMouseWidget.(IEventMiddleUp); ok {
 			x, y := posFromLParam(lParam)
 			x1, y1 := lastMouseWidget.MapFromWindow(x, y)
@@ -1656,7 +1681,7 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 	// 拖动时, 自动捕获鼠标
 	if win.toCapture {
 		win.toCapture = false
-		if lastMouseWidget != nil {
+		if inputEnabled(lastMouseWidget) {
 			win.autoCaptured = pushCapture(lastMouseWidget)
 		}
 	}
@@ -1684,7 +1709,7 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 				x1, y1 := p1.MapFromWindow(x, y)
 				setMouseHoverWidget(p1)
 
-				if i, ok := p1.(IEventMouseMove); ok {
+				if i, ok := p1.(IEventMouseMove); ok && inputEnabled(p1) {
 					//if ip, ok := p1.(IOnPrepare); ok {
 					//	ip.OnPrepare()
 					//}
@@ -1700,7 +1725,7 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 				setMouseHoverWidget(nil)
 			}
 
-			if i, ok := p.(IEventMouseMove); ok {
+			if i, ok := p.(IEventMouseMove); ok && inputEnabled(p) {
 				//if ip, ok := p.(IOnPrepare); ok {
 				//	ip.OnPrepare()
 				//}
@@ -1717,7 +1742,7 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 			win32.ReleaseCapture()
 		}
 		if p != nil {
-			if i, ok := p.Self().(IEventMouseMove); ok {
+			if i, ok := p.Self().(IEventMouseMove); ok && inputEnabled(p) {
 				//if ip, ok := p.(IOnPrepare); ok {
 				//	ip.OnPrepare()
 				//}

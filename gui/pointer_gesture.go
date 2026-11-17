@@ -18,6 +18,8 @@ func (win *Window) cancelPointerGestures() {
 	if win == nil {
 		return
 	}
+	oldMouse := lastMouseWidget
+	mouseOwned := oldMouse != nil && oldMouse.OwnerWindow() == win
 	// Cancellation may PopCapture or dispose a control. Snapshot the owner set
 	// before callbacks, without canceling gestures in independent native forms.
 	var targets []IWidget
@@ -30,6 +32,12 @@ func (win *Window) cancelPointerGestures() {
 	}
 	for _, target := range targets {
 		cancelPointerGesture(target)
+	}
+	// PopCapture can restore an earlier independent capture and set it as
+	// lastMouseWidget. A canceled native event must not become that other
+	// surface's old press/release. Preserve the capture, not the stale event.
+	if mouseOwned && lastMouseWidget == curCapture() {
+		lastMouseWidget = nil
 	}
 }
 

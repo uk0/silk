@@ -7,11 +7,14 @@ func (win *Window) focusedInputTarget() IWidget {
 	if win == nil || win.widget == nil {
 		return nil
 	}
+	if !inputEnabled(focusWidget) {
+		return nil
+	}
 	// Check every logical ancestor, including the focused widget itself. Stop
 	// at its native surface: an independent Form may be parented to another
 	// Form without sharing its visibility or disabled state.
 	for w := focusWidget; w != nil; w = w.Parent() {
-		if !w.IsVisible() || !w.IsEnabled() {
+		if !w.IsVisible() {
 			return nil
 		}
 		if owner := w.Window(); owner != nil {
@@ -28,7 +31,10 @@ func (win *Window) keyTarget() IWidget {
 	if target := win.focusedInputTarget(); target != nil {
 		return target
 	}
-	return win.widget
+	if win != nil && win.widget != nil && win.widget.IsVisible() && inputEnabled(win.widget) {
+		return win.widget
+	}
+	return nil
 }
 
 // Characters require actual eligible focus. Unlike key routing, do not fall
@@ -44,7 +50,7 @@ func (win *Window) textInputTarget() IEventTextInput {
 // a child handler cannot distinguish consumption from a silently ignored key.
 // Enter and ordinary keys deliberately remain owned by the focused child.
 func (win *Window) dispatchEscape(key int, repeat bool) bool {
-	if key != KeyEsc || win.widget == nil || !win.widget.IsVisible() {
+	if key != KeyEsc || win.widget == nil || !win.widget.IsVisible() || !inputEnabled(win.widget) {
 		return false
 	}
 	popup := win

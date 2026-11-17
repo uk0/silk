@@ -19,7 +19,7 @@ func dispatchMouseWheel(root IWidget, gx, gy, delta float64) bool {
 		if !w.IsVisible() || !w.IsAllAncentorsVisible() {
 			return false
 		}
-		if handler, ok := w.(IEventMouseWheel); ok && w.IsEnabled() {
+		if handler, ok := w.(IEventMouseWheel); ok && inputEnabled(w) {
 			x, y := w.MapFromGlobal(gx, gy)
 			handler.OnMouseWheel(x, y, delta)
 			return true

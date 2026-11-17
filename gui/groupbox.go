@@ -1,17 +1,17 @@
 package gui
 
 import (
+	"math"
+
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/paint"
-	"math"
 )
 
 func init() {
 	core.RegisterFactory("gui.GroupBox", core.TypeOf((*GroupBox)(nil)))
 }
 
-// GroupBox is a container widget with a titled border,
-// equivalent to QGroupBox in Qt.
+// GroupBox is a titled container with an optional content input gate.
 type GroupBox struct {
 	Widget
 	title   string
@@ -23,18 +23,19 @@ type GroupBox struct {
 	checkable bool
 	checked   bool
 	cbToggled func(bool)
+	caption   groupBoxCaptionCache
 }
 
 func NewGroupBox(title string) *GroupBox {
 	p := new(GroupBox)
 	p.Init(p)
 	p.title = title
-	p.checked = true // Qt defaults a checkable group to checked / enabled
 	return p
 }
 
 func (this *GroupBox) Init(self IWidget) {
 	this.Widget.Init(self)
+	this.checked = true
 }
 
 func (this *GroupBox) EnumProperties(list core.IPropertyList) {
@@ -46,7 +47,11 @@ func (this *GroupBox) Title() string {
 }
 
 func (this *GroupBox) SetTitle(s string) {
+	if this.title == s {
+		return
+	}
 	this.title = s
+	this.InvalidateSizeHints()
 	this.Self().Update()
 }
 
@@ -58,6 +63,7 @@ func (this *GroupBox) SetContent(w IWidget) {
 	if w != nil {
 		w.SetParent(this.Self())
 	}
+	this.applyEnabled()
 	this.InvalidateLayout()
 }
 
@@ -71,17 +77,15 @@ func (this *GroupBox) AddWidget(iw IWidget) {
 
 // SetCheckable turns the title check box on or off. Switching into checkable
 // mode applies the current checked state to the content so the enabled state
-// is consistent from the start; switching out re-enables the content.
+// is consistent from the start; switching out removes only the group's gate
+// and preserves each child's explicitly disabled state.
 func (this *GroupBox) SetCheckable(b bool) {
 	if this.checkable == b {
 		return
 	}
 	this.checkable = b
-	if b {
-		this.applyEnabled()
-	} else if this.content != nil {
-		this.content.SetEnabled(true)
-	}
+	this.applyEnabled()
+	this.InvalidateLayout()
 	this.Self().Update()
 }
 
@@ -116,11 +120,18 @@ func (this *GroupBox) SigToggled(fn func(bool)) {
 	this.cbToggled = fn
 }
 
-// applyEnabled mirrors the checked state onto the content widget so that an
-// unchecked group disables its child. No-op when there is no content.
+// IsChildEnabled gates only the currently owned content, leaving the header
+// interactive and preserving every child's explicit enabled flag.
+func (this *GroupBox) IsChildEnabled(child IWidget) bool {
+	if child == nil {
+		return false
+	}
+	return !this.checkable || this.checked || child != this.content || child.Parent() != this.Self()
+}
+
 func (this *GroupBox) applyEnabled() {
-	if this.content != nil {
-		this.content.SetEnabled(this.checked)
+	if this.content != nil && this.content.Parent() == this.Self() {
+		this.content.NakedWidget().InvalidateEnabledState()
 	}
 }
 
@@ -129,7 +140,7 @@ func (this *GroupBox) applyEnabled() {
 // of the title row, vertically centred on the title band.
 func (this *GroupBox) titleCheckRect() (x, y, size float64) {
 	t := Theme()
-	size = math.Floor(t.IconSize * 0.75)
+	size = groupBoxCheckSize(t.IconSize)
 	x = this.borderPadding() + 6.0
 	y = this.titleHeight()*0.5 - size*0.5
 	return
@@ -143,9 +154,11 @@ func (this *GroupBox) titleCheckGap() float64 {
 
 // titleHeight returns the vertical space reserved for the title text.
 func (this *GroupBox) titleHeight() float64 {
-	t := Theme()
-	fe := t.Font.FontExtents()
-	return fe.Height + 4
+	height := this.captionMetrics().lineHeight
+	if this.checkable {
+		height = max(height, groupBoxCheckSize(Theme().IconSize))
+	}
+	return height + 4
 }
 
 // borderPadding returns the inset from the border edge.
@@ -156,71 +169,48 @@ func (this *GroupBox) borderPadding() float64 {
 func (this *GroupBox) Draw(g paint.Painter) {
 	t := Theme()
 	w, h := this.Self().Size()
+	if w <= 0 || h <= 0 || math.IsNaN(w) || math.IsNaN(h) || math.IsInf(w, 0) || math.IsInf(h, 0) {
+		return
+	}
+	previousFont := g.Font()
+	g.Save()
+	defer func() {
+		g.Restore()
+		// Legacy Cairo Restore keeps Go-side styles. Do not let a caption's
+		// font leak into a caller even on that compatibility path.
+		g.SetFont(previousFont)
+	}()
+	g.Rectangle(0, 0, w, h)
+	g.Clip()
+	g.SetFont(t.Font)
+	metrics := this.captionMetrics()
 	titleH := this.titleHeight()
 	pad := this.borderPadding()
-	halfTitle := titleH * 0.5
-
-	// Draw title text
-	g.SetFont(t.Font)
-	fe := t.Font.FontExtents()
-
-	titleText := this.title
-	if titleText == "" {
-		titleText = " "
-	}
-	ext := t.Font.TextExtents(titleText)
-
 	textX := pad + 6.0
-	textY := halfTitle + fe.Ascent*0.5
+	textY := (titleH-metrics.ascent-metrics.descent)*0.5 + metrics.ascent
 
 	// When checkable, reserve room at the left of the title row for the check
 	// box indicator and push the title text to its right. checkW stays 0 in the
 	// default (non-checkable) path so the layout below is unchanged.
 	var checkW float64
-	if this.checkable {
+	if this.checkable && groupBoxCheckSize(t.IconSize) > 0 {
 		_, _, cbSize := this.titleCheckRect()
 		checkW = cbSize + this.titleCheckGap()
 		textX += checkW
 	}
-	// gapStart is the left edge of the border gap / background; it sits left of
-	// the indicator when checkable and equals the original textX-3 otherwise.
-	gapStart := textX - checkW - 3
-
-	// Draw rounded border, leaving a gap for the title
-	r := 4.0 // corner radius
-	borderY := halfTitle
-	borderH := h - halfTitle
-
-	g.Save()
-
-	// Top-left corner to title gap
-	g.MoveTo(gapStart, borderY)
-	g.LineTo(pad+r, borderY)
-	g.Arc(pad+r, borderY+r, r, -math.Pi/2, math.Pi)
-	g.LineTo(pad, borderY+borderH-r)
-	g.Arc(pad+r, borderY+borderH-r, r, math.Pi, math.Pi/2)
-
-	// Bottom edge
-	g.LineTo(w-pad-r, borderY+borderH)
-	g.Arc(w-pad-r, borderY+borderH-r, r, math.Pi/2, 0)
-
-	// Right edge
-	g.LineTo(w-pad, borderY+r)
-	g.Arc(w-pad-r, borderY+r, r, 0, -math.Pi/2)
-
-	// Top-right to title gap end
-	g.LineTo(textX+ext.Width+3, borderY)
-
+	// Fit only the rendered caption, keeping its authored text and natural
+	// hints intact. The gap ends before the rounded right corner.
+	text, ext := this.fitCaption(max(0, w-pad-4.5-3-textX))
+	gapStart, gapEnd := textX-checkW-3, textX+ext.Width+3
+	groupBoxBorderPath(g, pad+0.5, math.Floor(titleH*0.5)+0.5, w-pad-0.5, h-0.5,
+		gapStart, gapEnd, text != "" || checkW > 0)
 	g.SetPen1(t.BorderColor, 1)
 	g.Stroke()
-
-	// Draw title text with background fill to create gap effect
-	g.Rectangle(gapStart, 0, textX+ext.Width+3-gapStart, titleH)
-	g.SetBrush1(t.FormColor)
-	g.Fill()
+	// The path already has a gap. A FormColor rectangle here would erase a
+	// different parent background, even for an entirely empty caption.
 
 	// Draw the title check box indicator just left of the title text.
-	if this.checkable {
+	if this.checkable && checkW > 0 {
 		this.drawTitleCheck(g)
 	}
 
@@ -233,9 +223,9 @@ func (this *GroupBox) Draw(g paint.Painter) {
 	}
 	g.SetFont(t.Font)
 	g.Translate(textX-ext.XBearing, textY)
-	g.DrawText(this.title)
-
-	g.Restore()
+	if text != "" {
+		g.DrawText(text)
+	}
 }
 
 // drawTitleCheck renders the small title check box: a rounded square that is
@@ -268,7 +258,7 @@ func (this *GroupBox) drawTitleCheck(g paint.Painter) {
 // not checkable, so a plain group keeps its previous behaviour of having no
 // click handling. Toggling fires SigToggled and takes focus, like a check box.
 func (this *GroupBox) OnLeftDown(x, y float64) {
-	if !this.checkable {
+	if !this.checkable || !this.IsEnabled() {
 		return
 	}
 	if y < 0 || y > this.titleHeight() {
@@ -328,6 +318,13 @@ func (this *GroupBox) measureGroupWidth(width float64) SizeHints {
 	pad := this.borderPadding()
 
 	minW := 100.0
+	if this.title != "" || this.checkable {
+		captionW := this.captionMetrics().ext.Width + 2*pad + 13.5
+		if this.checkable {
+			captionW += groupBoxCheckSize(Theme().IconSize) + this.titleCheckGap()
+		}
+		minW = max(minW, captionW)
+	}
 	minH := titleH + pad*2 + 20
 	policy := GrowHorizontal | GrowVertical
 

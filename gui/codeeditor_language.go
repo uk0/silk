@@ -140,6 +140,16 @@ func (e *CodeEditor) DismissLanguageHints() {
 	e.invalidateHoverHint()
 }
 
+// A temporary input gate is not a document replacement or synthetic focus
+// change. Retire transient replies without discarding text, history or the
+// remembered focus needed when its container is enabled again.
+func (e *CodeEditor) onInputDisabled() {
+	e.breakTypingUndoGroup()
+	e.CancelCompletion()
+	e.ClearExternalCompletions()
+	e.DismissLanguageHints()
+}
+
 // Input retires async replies and hover text, but a call signature already
 // shown remains useful while typing an argument (including modifier keys).
 func (e *CodeEditor) invalidateHoverHint() {
