@@ -196,7 +196,9 @@ func (v *ProcessEditor) Close() {
 // EditRows creates an isolated staged table. Apply validates the complete
 // candidate; Cancel never mutates the live document. Rows carry explicit IDs
 // so sorting cannot silently address another point/source/node.
-func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string, newRow []string, apply func([][]string) error) {
+const processIntegerExpressionHelp = "Integer + - * and comparisons are exact. Bit/remainder operators (& | ^ &^ << >> %) require int; / remains floating-point. Example: (x & 8) != 0."
+
+func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string, newRow []string, apply func([][]string) error, help ...string) {
 	if v.running || v.locked {
 		return
 	}
@@ -211,7 +213,13 @@ func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string
 	table.Init(table)
 	table.SetModel(model)
 	table.SetCellsEditable(true)
-	hint := NewLabel("Double-click a cell to edit. Apply validates; Cancel discards.")
+	instructions := "Double-click a cell to edit. Apply validates; Cancel discards."
+	for _, text := range help {
+		if text != "" {
+			instructions += "\n" + text
+		}
+	}
+	hint := NewLabel(instructions)
 	hint.SetWrap(true)
 	box := NewVBox()
 	box.SetSpacing(6)
@@ -250,7 +258,7 @@ func (v *ProcessEditor) editRows(title string, headers []string, rows [][]string
 			all = append(all, append([]string(nil), model.RowData(i)...))
 		}
 		if e := apply(all); e != nil {
-			hint.SetText(e.Error())
+			hint.SetText(e.Error() + "\n" + instructions)
 			return
 		}
 		dlg.onBtnClick(dialogResultKey(DialogOK))
@@ -392,7 +400,7 @@ func (v *ProcessEditor) EditMappings() {
 	if len(v.Diagram.Project().Sources) == 0 {
 		return
 	}
-	v.editRows("HTTP response mappings", []string{"Source ID", "Point", "JSON Pointer", "Convert type", "Expression", "Advanced pipeline JSON (overrides)"}, rows, []string{"HTTP_NEW", "AI101", "/data/value", "", "", ""}, v.ApplyMappingRows)
+	v.editRows("HTTP response mappings", []string{"Source ID", "Point", "JSON Pointer", "Convert type", "Expression", "Advanced pipeline JSON (overrides)"}, rows, []string{"HTTP_NEW", "AI101", "/data/value", "", "", ""}, v.ApplyMappingRows, processIntegerExpressionHelp)
 }
 func (v *ProcessEditor) selectedIndex(p hmi.Project) int {
 	for i, n := range p.Nodes {
@@ -469,7 +477,7 @@ func (v *ProcessEditor) EditTransforms() {
 	for _, s := range p.Nodes[i].Steps {
 		rows = append(rows, []string{string(s.Type), s.Expr})
 	}
-	v.editRows("Conversion pipeline (type OR expression)", []string{"Type: float/int/bool/string", "Expression over x"}, rows, []string{"float", ""}, v.ApplyTransformRows)
+	v.editRows("Conversion pipeline (type OR expression)", []string{"Type: float/int/bool/string", "Expression over x"}, rows, []string{"float", ""}, v.ApplyTransformRows, processIntegerExpressionHelp)
 }
 func (v *ProcessEditor) ApplyColorRows(rows [][]string) error {
 	p := v.Diagram.Project()
@@ -494,7 +502,7 @@ func (v *ProcessEditor) EditColors() {
 	for _, r := range p.Nodes[i].Colors {
 		rows = append(rows, []string{r.When, r.Color, r.Text})
 	}
-	v.editRows("Ordered color / state rules", []string{"Condition over x", "#RRGGBB", "State text (optional)"}, rows, []string{"x >= 80", "#ffb300", ""}, v.ApplyColorRows)
+	v.editRows("Ordered color / state rules", []string{"Condition over x", "#RRGGBB", "State text (optional)"}, rows, []string{"x >= 80", "#ffb300", ""}, v.ApplyColorRows, "Conditions must return bool; the first matching rule wins.", processIntegerExpressionHelp)
 }
 func (v *ProcessEditor) ApplyBindingRows(rows [][]string) error {
 	p := v.Diagram.Project()
@@ -537,7 +545,7 @@ func (v *ProcessEditor) EditBindings() {
 		}
 		rows = append(rows, []string{b.Tag, b.Property, expr, advanced})
 	}
-	v.editRows("Dynamic visual properties", []string{"Point", "visible/enabled/x/y/rotation", "Expression (optional)", "Advanced pipeline JSON (overrides)"}, rows, []string{"DI11", "visible", "x", ""}, v.ApplyBindingRows)
+	v.editRows("Dynamic visual properties", []string{"Point", "visible/enabled/x/y/rotation", "Expression (optional)", "Advanced pipeline JSON (overrides)"}, rows, []string{"DI11", "visible", "x", ""}, v.ApplyBindingRows, processIntegerExpressionHelp)
 }
 func (v *ProcessEditor) ApplyLinkRows(rows [][]string) error {
 	p := v.Diagram.Project()

@@ -9,6 +9,25 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: exact industrial integers and status-word expressions
+
+- [x] Preserve JSON-number comparison and large-BI display failures before edits.
+- [x] Compile bounded, immutable numeric literals; support exact signed integer
+      arithmetic/comparison and explicit status-word bit/remainder operations.
+      Reject overflow, invalid shifts and unsupported evaluation, not fake zero.
+- [x] Present exact integer cards and condition colors, retaining a documented
+      legacy float projection only for visual geometry/compatibility.
+- [x] Prove HTTP body/JSON mapping to typed points, conversion, color, SQLite
+      readback, bad-field isolation/recovery and inert authored persistence.
+- [x] Verify designer persistence/generated code and three-platform full/race/LSP;
+      exercise Windows native Run/overflow/recovery/Stop/Save/Generate/normal exit.
+- [x] Add an original Windows README capture, SDK docs, changelog and scoped QA.
+
+macOS native capture failed with ScreenCaptureKit -3811/-3812; it is not a pass.
+Publication requires the exact tested/indexed source and media audit, commit/push
+and independent remote readback. The wider product goal remains active.
+[Evidence and native limits](INDUSTRIAL_INTEGER_QA_20261117.md).
+
 ## Validated increment: allocation-aware inspector geometry and popup retirement
 
 - [x] Reproduce current scroll allocation and geometry-callback failures.

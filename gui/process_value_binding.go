@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -115,12 +116,29 @@ func (w *ProcessValue) SetSample(s core.Value) {
 	}
 	v, e := w.pipeline.Apply(s.Raw)
 	nextValue := w.value
+	nextInteger, integer := int64(0), false
 	if e == nil {
-		// Boolean pipelines drive numeric/state cards as 0 or 1.
-		var n any
-		n, e = point.Convert(v, point.Float)
-		if e == nil {
-			nextValue = n.(float64)
+		switch n := v.(type) {
+		case int:
+			nextInteger, integer = int64(n), true
+		case int64:
+			nextInteger, integer = n, true
+		case json.Number:
+			if i, err := n.Int64(); err == nil {
+				nextInteger, integer = i, true
+			}
+		}
+		if integer {
+			// Only visual geometry/legacy Value use this approximate projection;
+			// formatting, condition rules and alarm comparisons retain int64.
+			nextValue = float64(nextInteger)
+		} else {
+			// Boolean pipelines drive numeric/state cards as 0 or 1.
+			var n any
+			n, e = point.Convert(v, point.Float)
+			if e == nil {
+				nextValue = n.(float64)
+			}
 		}
 	}
 	if e == nil {
@@ -145,6 +163,7 @@ func (w *ProcessValue) SetSample(s core.Value) {
 	}
 	if e == nil {
 		w.value = nextValue
+		w.integerValue, w.hasIntegerValue = nextInteger, integer
 	}
 	w.sampleError = e
 	w.valueText = ""
@@ -176,7 +195,15 @@ func (w *ProcessValue) DisplayText() string {
 		return w.ruleText
 	}
 	if w.valueText == "" {
-		w.valueText = fmt.Sprintf("%.*f %s", w.precision, w.value, w.unit)
+		if w.hasIntegerValue {
+			w.valueText = strconv.FormatInt(w.integerValue, 10)
+			if w.precision > 0 {
+				w.valueText += "." + strings.Repeat("0", w.precision)
+			}
+			w.valueText += " " + w.unit
+		} else {
+			w.valueText = fmt.Sprintf("%.*f %s", w.precision, w.value, w.unit)
+		}
 	}
 	return w.valueText
 }

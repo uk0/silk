@@ -43,6 +43,21 @@ Tables use staged edits: double-click a cell; Enter/click away commits the cell;
 Apply validates the complete candidate; invalid candidates remain open; Cancel
 leaves the document unchanged. IDs identify rows independently of table sorting.
 
+### Exact counters and status words
+
+Integer BI values now retain signed int64 precision through expression arithmetic,
+comparisons, numeric-card text and condition colors. `(x & 8) != 0` extracts a
+status bit; `(x >> 4) & 0xf` extracts a nibble. Cast to `int` explicitly when the
+response supplies a string/float instead of an integer token. Overflow, invalid
+shifts and division/remainder by zero mark the affected mapped point bad rather
+than silently wrapping or poisoning valid sibling fields.
+
+`+ - *` use checked integer arithmetic when both operands are integers; `/` keeps
+floating-point semantics. Comparisons do not round large integers to float first.
+The legacy SDK `ProcessValue.Value()` remains an approximate geometry projection;
+use `IntegerValue()` for exact current integer access, and store original typed
+points rather than that projection. See the [local status-word demo](../examples/processstatus/README.md).
+
 ### Live point inspection, writes and history
 
 **Live points** toggles a runtime view, not the authored point-definition table.

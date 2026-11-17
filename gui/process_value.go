@@ -14,6 +14,8 @@ type ProcessValue struct {
 	Widget
 	previewValue                float64
 	value, min, max, alarmAbove float64
+	integerValue                int64
+	hasIntegerValue             bool
 	title, unit, tagName        string
 	precision                   int
 	valueFont                   paint.Font
@@ -39,8 +41,17 @@ func (w *ProcessValue) Init(self IWidget) {
 	w.title = "Process"
 	w.precision = 1
 }
-func finiteProcess(v float64) bool     { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+func finiteProcess(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// Value is the legacy float projection used by visual geometry. For exact BI
+// samples outside the float exact-integer range, use IntegerValue instead.
 func (w *ProcessValue) Value() float64 { return w.value }
+
+// IntegerValue returns the last accepted integer and whether the current sample
+// is a valid good-quality integer. Bad samples preserve history but return false.
+func (w *ProcessValue) IntegerValue() (int64, bool) {
+	return w.integerValue, w.hasIntegerValue && w.quality == core.QualityGood && w.BindingError() == nil
+}
 
 // SetValue supplies a local good-quality sample; conversion rules apply exactly once.
 func (w *ProcessValue) SetValue(v float64) {
@@ -70,11 +81,40 @@ func (w *ProcessValue) SetAlarmAbove(v float64) {
 	}
 }
 func (w *ProcessValue) IsAlarm() bool {
-	return w.quality == core.QualityGood && w.sampleError == nil && w.value >= w.alarmAbove
+	if w.quality != core.QualityGood || w.BindingError() != nil {
+		return false
+	}
+	if w.hasIntegerValue {
+		cmp, err := point.CompareNumbers(w.integerValue, w.alarmAbove)
+		return err == nil && cmp >= 0
+	}
+	return w.value >= w.alarmAbove
 }
 func (w *ProcessValue) Fraction() float64 {
 	if w.max <= w.min {
 		return 0
+	}
+	if w.hasIntegerValue {
+		low, _ := point.CompareNumbers(w.integerValue, w.min)
+		high, _ := point.CompareNumbers(w.integerValue, w.max)
+		if low <= 0 {
+			return 0
+		}
+		if high >= 0 {
+			return 1
+		}
+		// Nearby large integer bounds must not collapse to the same float.
+		// Split only outside the exact-float range: for small integers the
+		// direct subtraction also preserves sub-unit fractional boundaries.
+		n := w.value - w.min
+		if w.integerValue > 1<<53 || w.integerValue < -(1<<53) {
+			n = (float64(w.integerValue>>32)*0x1p32 - w.min) + float64(uint32(w.integerValue))
+		}
+		span := w.max - w.min
+		if math.IsInf(span, 0) {
+			return (w.value/2 - w.min/2) / (w.max/2 - w.min/2)
+		}
+		return max(0, min(1, n/span))
 	}
 	if w.value <= w.min {
 		return 0

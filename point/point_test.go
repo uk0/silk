@@ -48,7 +48,7 @@ func TestStrictConversionsAndBoundedExpressions(t *testing.T) {
 			t.Fatal(source, e)
 		}
 	}
-	for _, source := range []string{"os.Exit(1)", "x[0]", "make([]int,5)", "y+1", "x%2", strings.Repeat("x+", 130) + "1", strings.Repeat("x", 1025)} {
+	for _, source := range []string{"os.Exit(1)", "x[0]", "make([]int,5)", "y+1", strings.Repeat("x+", 130) + "1", strings.Repeat("x", 1025)} {
 		if _, e := Compile(source); e == nil {
 			t.Fatal("unsafe/unbounded expression", source)
 		}

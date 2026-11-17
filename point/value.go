@@ -36,8 +36,10 @@ func Convert(v any, k Kind) (any, error) {
 		case int64:
 			return strconv.FormatInt(x, 10), nil
 		case json.Number:
-			if _, e := Convert(x, Float); e != nil {
-				return nil, e
+			// Formatting preserves the original token, not a rounded float.
+			// Validation need not impose the float conversion's integer limit.
+			if n, e := strconv.ParseFloat(x.String(), 64); e != nil || !finite(n) {
+				return nil, fmt.Errorf("point: invalid finite JSON number")
 			}
 			return x.String(), nil
 		case float64:
@@ -112,6 +114,12 @@ func number(v any) (float64, error) {
 	case string:
 		n, err = strconv.ParseFloat(strings.TrimSpace(x), 64)
 	case json.Number:
+		if i, integer, e := jsonInteger(x); integer {
+			if e != nil {
+				return 0, e
+			}
+			return number(i)
+		}
 		n, err = x.Float64()
 	default:
 		err = fmt.Errorf("unsupported scalar")

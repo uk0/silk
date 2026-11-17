@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — exact industrial integers and status words (2026-11-17)
+
+- Fix integral JSON expression comparisons silently merging adjacent values
+  above 2^53. Cache signed integer literals and add checked int64 arithmetic,
+  exact integer/float comparison, integer remainder and bounded bit/shift operators.
+  Preserve short circuit and the 1,024-byte/128-node no-calls expression boundary.
+- Reject lossy integer JSON-to-float casts while preserving exact token text
+  for string conversion. Integer overflow and invalid shifts fail, never wrap.
+- Add `ProcessValue.IntegerValue()` and exact integer card text, condition colors,
+  alarm comparisons and close large-integer range geometry. Legacy `Value()` is
+  an approximate visual projection, not an exact counter/persistence API.
+- Keep staged expression-table help visible on invalid Apply, and add a runnable
+  loopback-only `examples/processstatus` workbench with normal/overflow/recovery.
+- Add oracle, concurrent-evaluation, real HTTP/SQLite/UI recovery and designer
+  persistence/preview/generated-code regressions. Scope and platform/native
+  boundaries are recorded in [QA](INDUSTRIAL_INTEGER_QA_20261117.md).
+- Pass macOS/Linux/Windows full and race suites, 175 renderer-subset cases and
+  twelve strict actual bundled-gopls cases. Full vet retains 501 unchanged
+  baseline diagnostics; it is not a clean full-vet pass.
+- Add an original Windows workbench capture. Native Run, overflow isolation,
+  recovery, Stop, authored-only Save/Generate, independent SQLite readback and
+  normal exit pass. macOS native capture remains unverified due to
+  ScreenCaptureKit -3811/-3812; source tests do not replace that gap.
+
 ## Unreleased — coherent inspector geometry and popup retirement (2026-11-17)
 
 - Commit row-height snapshots once per layout and reuse them for scroll/focus,

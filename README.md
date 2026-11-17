@@ -19,6 +19,29 @@ signed/notarized standalone apps.
 
 ---
 
+## Exact industrial counters and status words (development branch)
+
+Industrial BI counters now preserve signed 64-bit integer digits and comparisons,
+including adjacent values above 2^53. Numeric cards use exact values for text,
+condition colors and alarms; invalid/overflow samples show bad quality rather
+than a plausible zero. Bounded expressions support integer bit masks, shifts
+and remainder for extracting DI/status fields from one HTTP response.
+
+Try `go run ./examples/processstatus`: explicitly Run a local mock source, then
+Stop before changing its request mode to `normal`, `overflow` or `recover`.
+The [example](examples/processstatus/README.md), [SDK contracts](docs/SDK_FEATURES.md)
+and [verification record](INDUSTRIAL_INTEGER_QA_20261117.md) describe exact-value
+APIs, persistence, platform checks and remaining native-test boundaries.
+This is a development-source update, not a new binary release or PLC-control
+certification.
+
+![Original Windows 10 workbench showing exact counter digits, condition colors and shared live points](docs/images/industrial-integer-windows.png)
+
+The red card shows `9007199254740993.0 pcs`, transformed from the exact stored
+integer `9007199254740995`; the same response drives status-nibble and DI views.
+This is an original native capture, not a mockup. Overflow and recovery are
+checked separately in the QA record.
+
 ## Coherent inspector geometry and popup lifetime (development branch)
 
 Property scrolling now reuses committed row geometry instead of repeatedly
