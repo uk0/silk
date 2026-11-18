@@ -23,7 +23,13 @@ Do not substitute a small passing test for the whole product-readiness gate.
 - [x] Integrate the monitor with the SilkIDE Process Runtime dock. Verify rule
       and history navigation, view switching, Stop, and no point writes in the
       native macOS IDE.
-- [ ] Finish Linux and Windows regression for the integrated alarm candidate.
+- [x] Pass Linux full/race and strict bundled-gopls on the history follow-up,
+      with exact source hashes before and after.
+- [x] Pass Windows full/race and strict bundled-gopls on the history follow-up;
+      repeat the five focused race tests 25 times and verify final source hashes.
+- [x] Keep a history selection on the exact event across refresh and sorting
+      of incoming rows. Clear it on retention expiry or a view change. Verify
+      source navigation after a real loopback HTTP update in the native IDE.
 
 The previous IDE runtime navigation gate runs on a separate frozen candidate.
 [Standalone verification and sample](HMI_TYPED_ALARMS_QA_20261117.md) ·
@@ -41,9 +47,12 @@ The previous IDE runtime navigation gate runs on a separate frozen candidate.
       source; pass Windows focused race tests on the four changed packages.
 - [x] Verify native macOS and Windows point/device/pipe jumps, history,
       stop/exit, persisted caret, unchanged source and SQLite readback.
-- [ ] Finish the Windows full/race/strict bundled-gopls matrix before publication.
-      The initial run exposed an existing one-nanosecond file-search timeout
-      fixture; its deterministic test-only correction is under separate replay.
+- [x] Pass Windows full/race/strict bundled-gopls on the integrated commit
+      containing this navigation (`d78deab`).
+      The Windows full replay passed after a deterministic file-search deadline
+      fix. An earlier race replay separated a scene test's one-drain timing
+      assumption from the scheduler's intentional time-budget yield. The
+      deterministic scene fixture is validated with the alarm follow-up.
 
 [Verification and limits](HMI_RUNTIME_NAV_QA_20261117.md).
 Alarm lifecycle, hot reload and wider IDE parity are still separate.

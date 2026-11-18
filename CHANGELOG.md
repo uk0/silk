@@ -9,6 +9,9 @@
   running. Both live and historical IDE rows can jump to the authored rule.
 - Acknowledge the selected occurrence without writing a point. Retired sessions
   and replacement occurrences reject old acknowledgment tokens.
+- Keep the selected history event when new alarms arrive, even when multiple
+  events share one rule ID. Expired events clear selection; changing back to
+  Live rules does not silently select an acknowledgment target.
 - Remove platform timer-resolution dependence from the expired file-search
   deadline test.
 

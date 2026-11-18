@@ -24,7 +24,7 @@ Source archive: 2,893 paths, SHA-256
 |---|---:|---:|
 | macOS arm64 | 9,710 named passes, 29 skips, 0 failures | 4 passes, no skips |
 | Linux arm64 / Xvfb | 9,649 named passes, 37 skips, 0 failures | 4 passes, no skips |
-| Windows 10 amd64 | Full passed with the test-only deadline fix; focused race passed on four changed packages; full race pending | Pending |
+| Windows 10 amd64 | Full passed with the test-only deadline fix; focused race passed on four changed packages; full race failed in a scene test | Not reached in this replay |
 
 The first Windows full run stopped on `filesearch.TestSearchContextErrorsCancellationAndSymlink`
 with a successful search from a still-live one-nanosecond timeout context
@@ -34,8 +34,18 @@ already in the past. The clean Windows replay applies only that test-file
 overlay, with an independent manifest and isolated results. The original
 targeted test passed 40 isolated repetitions (the original suite failure
 was intermittent); the corrected version passed 100 repetitions before the
-fresh full matrix began. The corrected full run exited zero; the race and
-strict gopls portions are separate gates.
+fresh full matrix began. The corrected full run exited zero. Its race replay
+failed at `TestSceneBindingsWideBurstYieldsToInputAndCancellation` with
+`wide batch starved UI 0`. The queue is designed to yield after a 4 ms drain
+budget; the initial test read its result after just one drain, before the
+deferred input callback ran. Holding the first binding chunk past the budget
+reproduced the same assertion locally. The corrected fixture requires the
+first drain to yield and the next drain to run the input before the second
+scene chunk, with exactly 256 updates applied. The production scheduler is
+unchanged. The subsequent integrated commit `d78deab` passed its Windows
+full, race and strict-gopls gates on the original scene test. The corrected
+fixture still receives a separate Windows replay with deterministic
+budget exhaustion. See [alarm dock verification](HMI_ALARM_DOCK_QA_20261117.md).
 
 Focused coverage: Unicode/CRLF and inherited key positions, namespace
 separation, read-only rotated/hidden/cached geometry, the actual runtime

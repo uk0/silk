@@ -124,6 +124,79 @@ func TestProcessAlarmMonitorSortRevokesPreviousSelection(t *testing.T) {
 	}
 }
 
+func TestProcessAlarmHistoryKeepsSelectedEventUntilEvicted(t *testing.T) {
+	ctx := context.Background()
+	p := hmi.Project{Version: hmi.Version, Width: 500, Height: 360,
+		Points: []hmi.Point{{Definition: point.Definition{Name: "DI1", Kind: point.Bool}, Initial: true}},
+		Alarms: []hmi.AlarmRule{{ID: "door", Point: "DI1", Condition: hmi.AlarmMatch, Priority: hmi.AlarmWarning, Threshold: true}},
+	}
+	rt, err := hmi.NewRuntime(ctx, p, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Stop()
+	var queued func()
+	v := newProcessAlarmMonitor(func(fn func()) { queued = fn })
+	defer v.Close()
+	v.SetRuntime(rt)
+	v.toggle.Action().Trigger(nil)
+	v.table.SetSelectedRow(0)
+	if v.SelectedAlarm() != "door" || v.model.RowCount() != 1 || v.ack.IsEnabled() {
+		t.Fatal("initial historical event not selected or unexpectedly actionable")
+	}
+	publish := func(on bool) {
+		t.Helper()
+		if err := rt.Publish(ctx, "DI1", core.Value{Raw: on, Quality: core.QualityGood, Time: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drain := func() {
+		t.Helper()
+		if queued == nil {
+			t.Fatal("alarm updates did not queue a UI refresh")
+		}
+		fn := queued
+		queued = nil
+		fn()
+	}
+	publish(false)
+	publish(true) // another raised event with the same rule ID
+	drain()
+	if got, want := v.table.SelectedRow(), v.model.RowCount()-1; got != want || v.SelectedAlarm() != "door" || v.ack.IsEnabled() {
+		t.Fatalf("refresh lost the original historical event or enabled ACK: row=%d want=%d target=%q", got, want, v.SelectedAlarm())
+	}
+	key := historyAlarmKey(v.model, v.table.SelectedRow())
+	if key == "" || v.model.ColumnCount() != 7 {
+		t.Fatal("history event key is missing or was exposed as a table column")
+	}
+	v.table.sortByColumn(2)
+	for i := 0; i < v.model.RowCount(); i++ {
+		if historyAlarmKey(v.model, i) == key {
+			v.table.SetSelectedRow(i)
+			break
+		}
+	}
+	publish(false)
+	publish(true)
+	drain()
+	if historyAlarmKey(v.model, v.table.SelectedRow()) != key || v.SelectedAlarm() != "door" {
+		t.Fatal("selection did not follow the exact event in the sorted history")
+	}
+	v.toggle.Action().Trigger(nil)
+	if v.history || v.SelectedAlarm() != "" || v.ack.IsEnabled() {
+		t.Fatal("history selection became an actionable live selection")
+	}
+	v.toggle.Action().Trigger(nil)
+	v.table.SetSelectedRow(v.model.RowCount() - 1)
+	for i := range hmi.AlarmHistoryLimit + 2 {
+		publish(i%2 == 1)
+	}
+	drain()
+	if v.model.RowCount() != hmi.AlarmHistoryLimit || v.table.SelectedRow() != -1 || v.SelectedAlarm() != "" || v.ack.IsEnabled() {
+		t.Fatal("evicted event was carried over to a different event for the same rule")
+	}
+}
+
 func TestTableClippedCellInkStaysOutOfNeighbor(t *testing.T) {
 	table := NewTable()
 	table.SetSize(250, 100)

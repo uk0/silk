@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/scene3d"
@@ -223,15 +224,34 @@ func TestSceneBindingsWideBurstYieldsToInputAndCancellation(t *testing.T) {
 	}
 	uiTaskMu.Lock()
 	queued := len(uiTasks)
+	if queued == 1 {
+		first := uiTasks[0]
+		uiTasks[0] = func() {
+			first()
+			// Model a first scene chunk that consumes the UI time budget,
+			// as observed under the Windows race detector.
+			time.Sleep(uiTaskTimeBudget)
+		}
+	}
 	uiTaskMu.Unlock()
 	if queued != 1 {
 		t.Fatal("seed storm", queued)
 	}
 	var atInput uint64
-	Post(func() { atInput = s.Revision() - before })
+	inputRan := false
+	Post(func() {
+		atInput = s.Revision() - before
+		inputRan = true
+	})
 	drainUITasks()
-	if atInput != 256 {
-		t.Fatal("wide batch starved UI", atInput)
+	if inputRan {
+		t.Fatal("budget-exhausted drain did not yield")
+	}
+	// The postponed input task belongs to the previous snapshot and must
+	// run before the continuation the first chunk posted.
+	drainUITasks()
+	if !inputRan || atInput != 256 {
+		t.Fatalf("wide batch did not yield before its continuation: input=%t applied=%d", inputRan, atInput)
 	}
 	for i := 0; i < 4; i++ {
 		drainUITasks()

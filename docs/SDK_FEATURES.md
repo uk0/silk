@@ -381,6 +381,25 @@ if err == nil {
 验收范围与限制：[实时点位 QA](../LIVE_POINT_MONITOR_QA_20261115.md)。这不是 PLC 命令协议、
 报警闭环或经过工业安全认证的联锁系统。
 
+## 工业报警规则、确认与会话历史
+
+- `.silkhmi` 的 `alarms` 规则引用已有的类型化点位。数字告警使用独立的触发／复归阈值，
+  整数按精确值比较；布尔和文本支持相等匹配。规则可配置触发和复归延时以及锁存。
+  坏值或不确定质量不算已复归。
+- `hmi.Runtime.AlarmStates()` 读取当前状态；`SubscribeAlarmChanges(fn)` 提供变化通知，
+  不是逐条事件交付。回调不要阻塞，也不要直接更新 UI；合并通知后在 UI 线程读取快照，
+  并在更换或停止运行时时取消订阅。
+- `AlarmEvents(after)` 以运行时内的递增 `Sequence` 返回最近 `AlarmHistoryLimit`（512）条
+  中比游标新的事件。读取方应检查序号缺口；更换运行时后从零开始。报警历史不写入
+  点位 SQLite，不承诺跨重启恢复。
+- 确认时把用户实际看到的 `AlarmState.ID` 和 `AlarmState.Token` 传给
+  `AcknowledgeAlarm`。收到 `ErrAlarmConflict` 时刷新并让用户重新确认，不用新令牌自动重试。
+  确认只影响该次报警，不写点位，不代表设备命令或安全联锁。
+- `gui.ProcessAlarmMonitor` 是可嵌入的监视面板。UI 线程通过 `SetRuntime(rt)` 借用运行时，
+  停止前解绑，销毁时调用 `Close()`。宿主可用 `SelectedAlarm()` 取得实时或历史行的规则 ID；
+  历史行不能确认。IDE 接入该 ID 跳回规则。项目有规则时，`hmiapp.RuntimeView.SetAlarmMode`
+  可切换到报警视图，不会重启采集。见 [IDE 报警验证](../HMI_ALARM_DOCK_QA_20261117.md)。
+
 ## 可嵌入运行视图与控件树可见性事件
 
 - `hmiapp.NewRuntimeView(RuntimeViewOptions)` 是普通控件，不新建原生窗口。

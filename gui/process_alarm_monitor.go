@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/uk0/silk/async"
 	"github.com/uk0/silk/core"
@@ -149,11 +150,19 @@ func processAlarmState(s hmi.AlarmState) string {
 }
 
 func (v *ProcessAlarmMonitor) selectedID() string {
-	row := v.table.SelectedRow()
-	if v.model != nil && row >= 0 && row < v.model.RowCount() {
-		return v.model.RowData(row)[0]
+	if v.model != nil {
+		return v.model.CellText(v.table.SelectedRow(), 0)
 	}
 	return ""
+}
+
+// History rows carry the runtime's sequence after the visible columns so
+// the identity travels with the cells when SimpleTableModel sorts them.
+func historyAlarmKey(m *SimpleTableModel, row int) string {
+	if m == nil {
+		return ""
+	}
+	return m.CellText(row, m.ColumnCount())
 }
 
 // SelectedAlarm returns the authored rule ID of the selected live or history
@@ -173,7 +182,7 @@ func (v *ProcessAlarmMonitor) SelectAlarm(id string) bool {
 		return false
 	}
 	for i := 0; i < v.model.RowCount(); i++ {
-		if v.model.RowData(i)[0] == id {
+		if v.model.CellText(i, 0) == id {
 			v.table.SetSelectedRow(i)
 			return true
 		}
@@ -182,7 +191,12 @@ func (v *ProcessAlarmMonitor) SelectAlarm(id string) bool {
 }
 
 func (v *ProcessAlarmMonitor) refresh() {
-	selected := v.selectedID()
+	var selected, selectedEvent string
+	if v.history && v.shownHistory {
+		selectedEvent = historyAlarmKey(v.model, v.table.SelectedRow())
+	} else if !v.history && !v.shownHistory {
+		selected = v.selectedID()
+	}
 	selectedToken := v.states[selected].Token
 	v.states = nil
 	cols := []string{"Alarm ID", "Point", "Alarm priority", "Alarm state", "Quality", "Value"}
@@ -221,7 +235,11 @@ func (v *ProcessAlarmMonitor) refresh() {
 			for i := len(events) - 1; i >= 0; i-- {
 				e := events[i]
 				s := e.State
-				model.AddRow(s.ID, s.Point, i18n.T(string(e.Kind)), i18n.T(string(s.Priority)), processPointQuality(s.Quality), processPointDisplay(s.Value), e.At.UTC().Format("2006-01-02 15:04:05.000"))
+				model.rows = append(model.rows, []string{
+					s.ID, s.Point, i18n.T(string(e.Kind)), i18n.T(string(s.Priority)),
+					processPointQuality(s.Quality), processPointDisplay(s.Value),
+					e.At.UTC().Format("2006-01-02 15:04:05.000"), strconv.FormatUint(e.Sequence, 10),
+				})
 			}
 			status = fmt.Sprintf("%s: %d / %d", i18n.T("Alarm history"), len(events), hmi.AlarmHistoryLimit)
 		}
@@ -239,9 +257,16 @@ func (v *ProcessAlarmMonitor) refresh() {
 		v.table.updateScroll()
 	}
 	row := -1
-	if !v.history && selected != "" && v.states[selected].Token == selectedToken {
+	if v.history && selectedEvent != "" {
 		for i := 0; i < v.model.RowCount(); i++ {
-			if v.model.RowData(i)[0] == selected {
+			if historyAlarmKey(v.model, i) == selectedEvent {
+				row = i
+				break
+			}
+		}
+	} else if !v.history && selected != "" && v.states[selected].Token == selectedToken {
+		for i := 0; i < v.model.RowCount(); i++ {
+			if v.model.CellText(i, 0) == selected {
 				row = i
 				break
 			}
