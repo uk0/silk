@@ -37,7 +37,7 @@ func TestGeneratedProjectCompilesAndDocumentRoundTrips(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	module := "module generatedhmi\n\ngo 1.26.10\n\nrequire github.com/uk0/silk v0.0.0\nreplace github.com/uk0/silk => " + filepath.ToSlash(root) + "\n"
+	module := "module generatedhmi\n\ngo 1.26.11\n\nrequire github.com/uk0/silk v0.0.0\nreplace github.com/uk0/silk => " + filepath.ToSlash(root) + "\n"
 	if e = os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0600); e != nil {
 		t.Fatal(e)
 	}

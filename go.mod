@@ -1,6 +1,6 @@
 module github.com/uk0/silk
 
-go 1.26.10
+go 1.26.11
 
 require (
 	fyne.io/systray v1.12.2
@@ -16,7 +16,7 @@ require (
 	github.com/simonvetter/modbus v1.6.4
 	github.com/traefik/yaegi v0.16.1
 	golang.org/x/image v0.45.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -25,16 +25,16 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/rs/xid v1.4.0 // indirect
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
 	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
-	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 

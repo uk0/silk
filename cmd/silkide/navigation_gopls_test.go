@@ -18,7 +18,7 @@ func TestRealGoplsNavigationUnsavedTypeImplementationAndBack(t *testing.T) {
 	bin := requireRealGopls(t)
 	w := testWorkbench(t)
 	dir := t.TempDir()
-	writeFile(t, dir, "go.mod", "module navigationqa\n\ngo 1.26.10\n")
+	writeFile(t, dir, "go.mod", "module navigationqa\n\ngo 1.26.11\n")
 	types := writeFile(t, dir, "types.go", "package demo\ntype Speaker interface { Speak() string }\ntype Greeter struct{}\nfunc (Greeter) Speak() string { return \"hello\" }\ntype Other struct{}\nfunc (Other) Speak() string { return \"other\" }\n")
 	source := writeFile(t, dir, "source 空间.go", "package demo\nfunc use() {}\n")
 	oldClient, oldDocs, oldQueue, oldPanel, oldToast := globalLSP, lspDocuments, symbolNavigation, globalReferencesPanel, silkideToast

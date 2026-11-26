@@ -16,7 +16,7 @@ func TestRealGoplsIncrementalUnicodeCRLFEdits(t *testing.T) {
 	path := filepath.Join(dir, "增量 空间.go")
 	uri := fileURIOf(path)
 	base := "package demo\r\n" + strings.Repeat("// unchanged padding 😀 中文\r\n", 24) + "var 文 = \"😀\"; var Initial = 1\r\nfunc use(){ _ = Initial }\r\n"
-	writeFile(t, dir, "go.mod", "module incrementalqa\n\ngo 1.26.10\n")
+	writeFile(t, dir, "go.mod", "module incrementalqa\n\ngo 1.26.11\n")
 	writeFile(t, dir, filepath.Base(path), base)
 	c, err := core.LaunchLSPClient(bin)
 	if err != nil {

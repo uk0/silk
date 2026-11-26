@@ -2,6 +2,12 @@
 
 ## Unreleased — typed HMI alarms
 
+- Require Go 1.26.11 for Silk and the map SDK, and build the bundled
+  gopls with Go 1.27.4, for the November 2026 Go security fixes.
+  Rebuild existing binaries to pick up the patched toolchains. Upgrade x/net to v0.62.0
+  and Gorilla WebSocket to the upstream revision that patches the MQTT
+  client's WebSocket dependency.
+
 - Search live rules and history by rule ID, point and priority (and event
   type in history). **Pending only** shows live rules awaiting acknowledgment
   without changing the runtime or dropping retained events.

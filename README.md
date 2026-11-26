@@ -2263,9 +2263,9 @@ See [the bundle audit and native recovery QA](GOPLS_AUDIT_QA_20261024.md).
   The source module is intentionally separate from the runtime `tools/gopls`
   executable so a checkout-root developer build cannot mistake it for a broken bundle.
   The security workflow scans this separate binary as well as the SDK.
-- The gopls build uses **Go 1.27.3** in an isolated tool module. Go may download
+- The gopls build uses **Go 1.27.4** in an isolated tool module. Go may download
   that compiler into its normal cache on first build; the SDK/IDE stays on the
-  root module's Go 1.26.10. End users do **not** need the gopls build compiler.
+  root module's Go 1.26.11. End users do **not** need the gopls build compiler.
   Current gopls supports Go 1.26/1.27 project toolchains; Go itself is not bundled.
   Desktop startup also checks stable official/Homebrew Go installation locations,
   without changing machine PATH or overriding an explicit user PATH.
@@ -2350,8 +2350,8 @@ fixed and its 192-case rendering run passes on macOS and Windows. This does not
 certify complete native Cairo parity, complex shaping or every desktop path.
 
 2026-10-22 review/security follow-up: [15-finding fixes and CVE audit](REVIEW_FIXES_20261022.md).
-The module now requires **Go 1.26.10**; use a security-patched toolchain
-(1.26.10, or at least 1.27.3 on the 1.27 branch). Upgraded Go networking/image/system
+The module now requires **Go 1.26.11**; use a security-patched toolchain
+(1.26.11, or at least 1.27.4 on the 1.27 branch). Upgraded Go networking/image/system
 modules and a pinned `govulncheck` workflow check for the audited vulnerable versions.
 Existing binaries must be rebuilt; the historical platform evidence above is not automatically upgraded.
 
@@ -2950,7 +2950,7 @@ which gofmt
 
 ## Tech Stack
 
-- **Go 1.26.10+** — compiler (see `go.mod`)
+- **Go 1.26.11+** — compiler (see `go.mod`)
 - **Cairo 2D** — 2D rendering
 - **GLFW 3.3** — macOS/Linux window management
 - **Win32 API** — Windows window management

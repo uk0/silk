@@ -21,7 +21,7 @@ import (
 const (
 	GoplsModule    = "golang.org/x/tools/gopls"
 	GoplsVersion   = "v0.24.0"
-	BuildToolchain = "go1.27.3"
+	BuildToolchain = "go1.27.4"
 	AMD64Baseline  = "v1"
 	ARM64Baseline  = "v8.0"
 )
