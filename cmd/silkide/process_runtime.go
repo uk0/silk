@@ -31,6 +31,7 @@ type processRuntimePane struct {
 	path            string
 	revision        uint64
 	index           *hmi.SourceIndex
+	invalidated     bool
 	generation      uint64
 	loading, closed bool
 	cancel          context.CancelFunc
@@ -44,6 +45,8 @@ func init() {
 		"Run 2D Process": "运行二维组态", "Stop 2D Process": "停止二维组态", "Show Process Runtime": "显示组态运行面板",
 		"Open a .silkhmi source document first": "请先打开 .silkhmi 源文件", "Stop the current process runtime first": "请先停止当前组态运行时", "Loading frozen source snapshot…": "正在读取源文件快照…", "Document changed; run the current buffer again": "文档已变化，请重新运行当前缓冲区",
 		"The selected item has no exact source location": "选中的项目没有精确的源码位置",
+		"Wait for source formatting to finish":           "请等待源码格式化完成",
+		"Document changed; use Run latest in this dock":  "文档已变化，请在此面板运行最新源码",
 	})
 }
 
@@ -85,6 +88,27 @@ func (p *processRuntimePane) current() bool {
 func (p *processRuntimePane) sourceAlive() bool {
 	return !p.closed && p.owner != nil && p.host != nil && openEditors[p.path] == p.owner && p.owner.FilePath() == p.path
 }
+func (p *processRuntimePane) syncSourceRunAction() {
+	if p.sourceAlive() {
+		p.view.SetSourceRunAction(p.runLatest, !p.loading)
+	} else {
+		p.view.SetSourceRunAction(nil, false)
+	}
+}
+
+// The dock action is an explicit request to run its own bound document.
+// It neither redirects to the active editor nor changes editor focus.
+func (p *processRuntimePane) runLatest() {
+	if !p.sourceAlive() || p.loading || p.view.Busy() || !gui.WidgetTreeVisible(p) {
+		return
+	}
+	if p.owner.Formatting() {
+		silkideToast(i18n.T("Wait for source formatting to finish"), gui.ToastWarning)
+		return
+	}
+	p.requestRun(p.owner, false)
+}
+
 func (p *processRuntimePane) focusSource() {
 	if !p.sourceAlive() {
 		return
@@ -138,16 +162,20 @@ func (p *processRuntimePane) stop() bool {
 		p.cancel = nil
 	}
 	p.view.Stop()
+	p.syncSourceRunAction()
 	return active
 }
 func (p *processRuntimePane) invalidate(ed *gui.CodeEditor) {
-	if p.closed || p.owner != ed {
+	if p.closed || p.owner != ed || p.invalidated {
 		return
 	}
+	// The first edit revokes the snapshot and cancels its loading/run intent.
+	// Further keystrokes have no snapshot or decode left to invalidate.
+	p.invalidated = true
 	p.stop()
 	p.index = nil
 	p.view.Invalidate()
-	p.info.SetText(i18n.T("Document changed; run the current buffer again"))
+	p.info.SetText(i18n.T("Document changed; use Run latest in this dock"))
 }
 func (p *processRuntimePane) retire(ed *gui.CodeEditor) {
 	if p.owner != ed {
@@ -155,6 +183,8 @@ func (p *processRuntimePane) retire(ed *gui.CodeEditor) {
 	}
 	p.invalidate(ed)
 	p.owner = nil
+	p.syncSourceRunAction()
+	p.info.SetText(i18n.T("Open a .silkhmi source document first"))
 	p.view.SetSourceAction(nil)
 	p.view.SetSourceTargetAction(nil)
 }
@@ -245,10 +275,22 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 		silkideToast(i18n.T("Stop the current process runtime first"), gui.ToastWarning)
 		return
 	}
-	path, revision, source := ed.FilePath(), ed.TextRevision(), ed.Text()
+	p.requestRun(ed, true)
+}
+
+func (p *processRuntimePane) requestRun(ed *gui.CodeEditor, requireActiveEditor bool) {
+	if p.closed || p.host == nil || p.loading || p.view.Busy() || !processRuntimeSource(ed) {
+		return
+	}
+	tabs, canvas := p.host.tabs, p.host.canvas
+	editorStillActive := func() bool {
+		return !requireActiveEditor || visibleCaretEditor(tabs, canvas) == ed
+	}
+	path := ed.FilePath()
 	if openEditors[path] != ed || rejectBusyFile(path) {
 		return
 	}
+	revision, source := ed.TextRevision(), ed.Text()
 	if len(source) > hmi.MaxDocumentBytes {
 		silkideToast("hmi: document too large", gui.ToastWarning)
 		return
@@ -259,12 +301,15 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 	p.owner = ed
 	p.path = path
 	p.revision = revision
+	p.invalidated = false
 	p.view.SetSourceAction(p.focusSource)
 	p.view.SetSourceTargetAction(p.focusSourceTarget)
-	if !p.reveal() {
+	if (requireActiveEditor && !p.reveal()) || !gui.WidgetTreeVisible(p) {
+		p.syncSourceRunAction()
 		return
 	}
 	p.loading = true
+	p.syncSourceRunAction()
 	p.generation++
 	generation := p.generation
 	p.info.SetText(filepath.Base(path) + " · " + i18n.T("Loading frozen source snapshot…"))
@@ -277,7 +322,8 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 		cancel()
 		p.cancel = nil
 		p.loading = false
-		if !p.current() || visibleCaretEditor(tabs, canvas) != ed {
+		defer p.syncSourceRunAction()
+		if !p.current() || ed.Formatting() || !editorStillActive() || !gui.WidgetTreeVisible(p) {
 			p.view.Invalidate()
 			return
 		}
@@ -296,7 +342,7 @@ func runProcessRuntime(tabs *gui.TabWidget, canvas *ged.GedView, expected *gui.C
 			silkideToast(err.Error(), gui.ToastWarning)
 			return
 		}
-		if p.generation != generation || p.index != asset.index || !p.current() || visibleCaretEditor(tabs, canvas) != ed {
+		if p.generation != generation || p.index != asset.index || !p.current() || !editorStillActive() {
 			return
 		}
 		p.startRuntime()

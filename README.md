@@ -192,7 +192,9 @@ Original source-built IDE capture: the inspector edits the group state and the
 context event action creates and navigates to the correctly typed handler.
 Save, property Undo/Redo, New/reopen and independent model readback were checked.
 The embedded handler and the ordinary generated companion are separate outputs;
-File Export remains SVG/PDF, not a Go export command.
+File Export remains SVG/PDF, not a Go export command. SVG and PDF preserve
+the designer canvas's dimensions in millimetres. Embedded widget images retain
+their authored placement and transparency, including disabled icon states.
 Typed SDK output wires the event; `decl.Node` consumers use `BuildWithIndex`
 to attach their own Go callbacks explicitly.
 

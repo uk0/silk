@@ -61,6 +61,8 @@ type RuntimeView struct {
 	err                error
 	status             *gui.Label
 	buttons            []*gui.Button
+	sourceRunAction    func()
+	sourceRunReady     bool
 	sourceAction       func()
 	sourceTargetAction func(hmi.SourceTarget)
 	post               func(func())
@@ -72,7 +74,8 @@ type RuntimeView struct {
 func init() {
 	i18n.AddMany("zh", map[string]string{
 		"Process Runtime": "组态运行", "Run snapshot": "运行快照", "Stop runtime": "停止运行", "Live diagram": "实时组态", "Live points": "实时点位", "Go to source": "返回源文件", "Fit diagram": "适应画布",
-		"Open the selected item in source":                       "在源文件中定位选中项",
+		"Open the selected item in source": "在源文件中定位选中项",
+		"Run latest":                       "运行最新源码", "Run the latest contents of the bound document": "运行已绑定文档的最新内容",
 		"No snapshot; use Run 2D Process from a source document": "没有运行快照，请从源文件运行二维组态",
 		"Ready; no acquisition until Run":                        "就绪；点击运行后才开始采集", "Starting process runtime…": "正在启动组态运行时…", "Running frozen source snapshot": "正在运行源文件快照", "Stopping process runtime…": "正在停止组态运行时…", "Stopped; no acquisition": "已停止；没有采集任务", "Source changed; run the current buffer again": "源文件已变化，请重新运行当前缓冲区",
 	})
@@ -101,7 +104,7 @@ func NewRuntimeView(options RuntimeViewOptions) *RuntimeView {
 		b.Action().BindFunc0(fn)
 		v.buttons = append(v.buttons, b)
 	}
-	add("Run snapshot", "run", v.Start)
+	add("Run snapshot", "run", v.runRequested)
 	add("Stop runtime", "stop", v.Stop)
 	add("Live diagram", "preview", func() { v.SetPointsMode(false) })
 	add("Live points", "tree-view", func() { v.SetPointsMode(true) })
@@ -189,6 +192,35 @@ func (v *RuntimeView) SetStartGuard(fn func() bool) { v.startGuard = fn; v.refre
 func (v *RuntimeView) Busy() bool                   { return v.session != nil }
 func (v *RuntimeView) LastError() error             { return v.err }
 
+// SetSourceRunAction opts into reloading the host's bound source from the
+// toolbar when no valid snapshot is staged. The host owns readiness and
+// validation; invoking it never runs an old snapshot or starts implicitly.
+func (v *RuntimeView) SetSourceRunAction(fn func(), ready bool) {
+	if v.closed {
+		return
+	}
+	ready = ready && fn != nil
+	changed := (fn == nil) != (v.sourceRunAction == nil) || ready != v.sourceRunReady
+	v.sourceRunAction, v.sourceRunReady = fn, ready
+	if changed && !v.configured {
+		v.refreshRunControl()
+	}
+}
+
+func (v *RuntimeView) canRequestSourceRun() bool {
+	return !v.closed && !v.configured && !v.Busy() && v.sourceRunAction != nil && v.sourceRunReady && gui.WidgetTreeVisible(v)
+}
+
+func (v *RuntimeView) runRequested() {
+	if v.configured {
+		v.Start()
+		return
+	}
+	if v.canRequestSourceRun() {
+		v.sourceRunAction()
+	}
+}
+
 // SetSourceTargetAction opts into item navigation. The host must verify its
 // source snapshot before applying a coordinate. With no selected entity, the
 // original document-level SetSourceAction is used instead.
@@ -248,11 +280,28 @@ func (v *RuntimeView) CanStart() bool {
 	}
 	return !v.closed && !v.Busy() && v.configured && gui.WidgetTreeVisible(v)
 }
+func (v *RuntimeView) refreshRunControl() {
+	if len(v.buttons) == 0 {
+		return
+	}
+	run := v.buttons[runtimeRunButton]
+	label := "Run snapshot"
+	tip := ""
+	if !v.configured && v.sourceRunAction != nil {
+		label, tip = "Run latest", "Run the latest contents of the bound document"
+	}
+	if label = i18n.T(label); run.Text() != label {
+		run.SetText(label)
+		gui.SetToolTip(run, i18n.T(tip))
+	}
+	run.SetEnabled(v.CanStart() || v.canRequestSourceRun())
+}
+
 func (v *RuntimeView) refreshControls() {
 	if len(v.buttons) == 0 {
 		return
 	}
-	v.buttons[runtimeRunButton].SetEnabled(v.CanStart())
+	v.refreshRunControl()
 	v.buttons[runtimeStopButton].SetEnabled(!v.closed && v.Busy() && !v.session.stopping)
 	for _, i := range []int{runtimeDiagramButton, runtimePointsButton} {
 		v.buttons[i].SetEnabled(!v.closed && v.configured)
@@ -448,6 +497,7 @@ func (v *RuntimeView) Close() {
 	}
 	v.Stop()
 	v.closed = true
+	v.sourceRunAction, v.sourceRunReady = nil, false
 	gui.SetToolTip(v.buttons[runtimeSourceButton], "")
 	v.Points.Close()
 	v.Alarms.Close()

@@ -151,6 +151,10 @@ Source changes, source close/rename, runtime-tab/dock hide and IDE shutdown reti
 pending loads and active acquisition. Revealing a dock or Undoing source edits
 never restarts it automatically. Stop cancels promptly; workers/store are joined
 outside the event loop. A stale async decode cannot start a different buffer.
+After editing the bound document, **Run latest** in the dock explicitly reads
+its current unsaved buffer. It does not switch the active tab or use a different
+open document. Invalid source can be corrected and retried without starting
+acquisition, and further editing or closing the document revokes a waiting run.
 
 The IDE isolates point stores by canonical source-path identity under application
 data; it does not place a database next to the source or save live values into

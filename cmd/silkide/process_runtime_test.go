@@ -113,6 +113,117 @@ func TestProcessRuntimeMenuPaletteAndF5UseUnsavedOwnedSource(t *testing.T) {
 	}
 }
 
+func TestProcessRuntimeDockRunsLatestBoundBufferWithoutSwitchingEditors(t *testing.T) {
+	w, p, ed, disk := testProcessRuntime(t)
+	started := 0
+	p.startRuntime = func() { started++ }
+	runProcessRuntime(w.tabs, w.canvas, ed)
+	if started != 1 {
+		t.Fatal("initial bound source did not stage")
+	}
+
+	getRunButton := func() *gui.Button {
+		t.Helper()
+		button, ok := p.view.FindWidgetAt(12, 12).(*gui.Button)
+		if !ok {
+			t.Fatal("missing Run action in the runtime toolbar")
+		}
+		return button
+	}
+	ownedPath := ed.FilePath()
+	otherPath := writeFile(t, t.TempDir(), "other.silkhmi", disk)
+	openTestEditorReady(t, w.tabs, otherPath)
+	other := activeTestEditorReady(t, w.tabs)
+	if other == ed || other.FilePath() != otherPath {
+		t.Fatal("wrong active document")
+	}
+
+	ed.ReplaceAllText("{invalid draft")
+	generation := p.generation
+	for _, draft := range []string{"{invalid", "{invali", "{invalid draft"} {
+		ed.ReplaceAllText(draft)
+		if p.generation != generation || !p.invalidated {
+			t.Fatal("keystroke retired an already invalidated snapshot")
+		}
+	}
+	run := getRunButton()
+	if !run.IsEnabled() || run.Text() != i18n.T("Run latest") || p.view.CanStart() {
+		t.Fatal("invalidated snapshot was not replaced with an explicit source action")
+	}
+	run.Action().Trigger(nil)
+	if started != 1 || p.view.CanStart() || !run.IsEnabled() || p.owner != ed || activeTestEditorReady(t, w.tabs) != other {
+		t.Fatal("invalid source started old acquisition, lost retry or switched documents")
+	}
+
+	project := processRuntimeProject()
+	project.Title = "latest unsaved source"
+	project.Points[0].Initial = int64(42)
+	latest, err := project.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed.ReplaceAllText(string(latest))
+	run.Action().Trigger(nil)
+	snapshot := p.view.Diagram.Project()
+	raw, err := point.Convert(snapshot.Points[0].Initial, point.Int)
+	if started != 2 || p.owner != ed || !p.current() || p.path != ownedPath ||
+		snapshot.Title != project.Title || err != nil || raw != int64(42) || run.Text() != i18n.T("Run snapshot") {
+		t.Fatal("dock did not stage its latest owned snapshot", snapshot.Title, raw, err)
+	}
+	if activeTestEditorReady(t, w.tabs) != other || ed.Text() != string(latest) || !ed.Modified() || !ed.CanUndo() {
+		t.Fatal("source action changed the active editor, text or undo state")
+	}
+	onDisk, err := os.ReadFile(ownedPath)
+	if err != nil || string(onDisk) != disk {
+		t.Fatal("running a draft changed the source on disk", err)
+	}
+
+	p.retire(ed)
+	if run.IsEnabled() || p.owner != nil {
+		t.Fatal("retired editor retained a source action")
+	}
+	run.Action().Trigger(nil)
+	if started != 2 {
+		t.Fatal("retired source ran")
+	}
+}
+
+func TestProcessRuntimeDockRejectsLateDecodeAfterFurtherEdit(t *testing.T) {
+	w, p, ed, _ := testProcessRuntime(t)
+	runProcessRuntime(w.tabs, w.canvas, ed)
+	ed.ReplaceAllText(ed.Text() + "\n")
+	run, ok := p.view.FindWidgetAt(12, 12).(*gui.Button)
+	if !ok || !run.IsEnabled() {
+		t.Fatal("missing Run latest action")
+	}
+	var complete func(indexedProcessAsset, error)
+	var ctx context.Context
+	starts, queued := 0, 0
+	p.startRuntime = func() { starts++ }
+	p.load = func(c context.Context, _ string, finish func(indexedProcessAsset, error)) error {
+		queued++
+		ctx, complete = c, finish
+		return nil
+	}
+	run.Action().Trigger(nil)
+	if queued != 1 || complete == nil || !p.loading || run.IsEnabled() {
+		t.Fatal("source run did not reserve a single bounded decode")
+	}
+	run.Action().Trigger(nil)
+	if queued != 1 {
+		t.Fatal("duplicate source run bypassed decode readiness")
+	}
+	asset, err := decodeProcessSource(context.Background(), ed.Text())
+	ed.ReplaceAllText(ed.Text() + "\n")
+	if ctx.Err() == nil || p.loading || !run.IsEnabled() {
+		t.Fatal("second edit failed to retire and restore the source action")
+	}
+	complete(asset, err)
+	if starts != 0 || p.index != nil || p.view.CanStart() {
+		t.Fatal("obsolete source callback republished a retired snapshot")
+	}
+}
+
 func TestProcessRuntimeItemJumpTracksExactUnsavedSourceAndHistory(t *testing.T) {
 	w, p, ed, disk := testProcessRuntime(t)
 	project := processRuntimeProject()

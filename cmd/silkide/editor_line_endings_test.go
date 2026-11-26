@@ -110,21 +110,40 @@ func TestEditMenuKeepsAdvancedCommandsInCompactSubmenus(t *testing.T) {
 	w.activate(modeEdit)
 	m := buildWorkbenchSubMenu("Edit", w.tabs, w.canvas)
 	defer releaseWorkbenchMenu(m)
-	for _, id := range []string{"editor.lineOps", "editor.lineEndings"} {
-		b := menuCommandButton(m, id)
-		if b == nil || b.Icon() == nil {
-			t.Fatal("missing submenu", id)
+	direct := make(map[string]*gui.Button)
+	rows := 0
+	for _, item := range m.Items() {
+		if b, ok := item.(*gui.Button); ok {
+			direct[b.Action().ObjName()] = b
+			rows++
 		}
-		if sub, ok := b.SubPopup().(*gui.Menu); !ok || len(sub.Items()) == 0 {
+	}
+	submenus := make(map[string]*gui.Menu)
+	for _, id := range []string{"editor.lineOps", "editor.lineEndings"} {
+		b := direct[id]
+		if b == nil || b.Icon() == nil {
+			t.Fatal("missing top-level submenu", id)
+		}
+		sub, ok := b.SubPopup().(*gui.Menu)
+		if !ok || len(sub.Items()) == 0 {
 			t.Fatal("empty submenu", id)
 		}
+		submenus[id] = sub
 	}
 	for _, spec := range editorCaretCommandSpecs() {
-		if menuCommandButton(m, spec.id) == nil {
-			t.Fatal("lost command", spec.id)
+		if direct[spec.id] != nil || menuCommandButton(submenus["editor.lineOps"], spec.id) == nil {
+			t.Fatal("command must appear only under Lines and Cursors", spec.id)
 		}
 	}
-	if h := m.SizeHints().Height; h > 720 {
-		t.Fatal("Edit menu exceeds an ordinary desktop viewport", h)
+	for _, spec := range editorLineEndingCommands() {
+		if direct[spec.id] != nil || menuCommandButton(submenus["editor.lineEndings"], spec.id) == nil {
+			t.Fatal("command must appear only under Line Endings", spec.id)
+		}
+	}
+	// Count actionable rows, not natural pixel height: LayoutPopup clamps
+	// the actual menu to each monitor and scrolls without shrinking rows.
+	const maxTopLevelActions = 25
+	if rows > maxTopLevelActions {
+		t.Fatalf("Edit has %d top-level actions; group advanced commands (budget %d)", rows, maxTopLevelActions)
 	}
 }

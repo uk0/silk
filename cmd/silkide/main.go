@@ -439,7 +439,7 @@ func exportDesignCanvas(path string, designCanvas *ged.GedView) error {
 
 	switch {
 	case strings.HasSuffix(lower, ".pdf"):
-		pp := pdfexport.New(w, h)
+		pp := pdfexport.NewMillimeters(w, h)
 		painter = pp
 		writeOut = func(w io.Writer) error { _, err := pp.WriteTo(w); return err }
 	default:
@@ -448,7 +448,7 @@ func exportDesignCanvas(path string, designCanvas *ged.GedView) error {
 		if !strings.HasSuffix(lower, ".svg") {
 			path += ".svg"
 		}
-		sp := svgexport.New(w, h)
+		sp := svgexport.NewMillimeters(w, h)
 		painter = sp
 		writeOut = func(w io.Writer) error { _, err := sp.WriteTo(w); return err }
 	}

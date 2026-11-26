@@ -24,8 +24,18 @@
 - Remove platform timer-resolution dependence from the expired file-search
   deadline test.
 
+## Unreleased — designer SVG/PDF export
+
+- Export canvas dimensions in millimetres instead of interpreting them as
+  pixels or PDF points. Raster widgets keep their authored position and size,
+  and icon exports preserve transparency and disabled-state colors.
+- Keep PDF text upright and apply the same rotation and scale to image,
+  label and rectangular clip geometry. SVG labels remain selectable.
+
 ## Unreleased — Process Runtime item navigation
 
+- **Run latest** in the dock explicitly revalidates and runs its bound source
+  after an edit, without changing the active tab or writing the draft.
 - Navigate from a live point row or a selected device/pipe to its original
   source declaration, with editor Back/Forward and exact snapshot ownership.
 - Inspect the rendered live diagram without enabling authoring or writes;

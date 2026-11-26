@@ -13,16 +13,10 @@
 //	p.Fill()
 //	p.WriteTo(file) // emits a complete <svg>…</svg> document
 //
-// The painter implements every paint.Painter method but treats
-// raster-only operations (DrawPixmap, DrawIcon, DrawGlyphs) as no-ops
-// because SVG has no native equivalent for "paste an arbitrary bitmap
-// from a glui glyph atlas". DrawText is rasterised into a single
-// <text> element, which is the SVG-correct way to preserve text as
-// selectable / accessible content rather than baked-in geometry.
-//
-// The CTM (current transformation matrix) is folded into emitted
-// coordinates at write time, so the output has no nested <g
-// transform> wrappers and stays small.
+// Text is represented as selectable SVG text. Pixmaps and icon rasters
+// are embedded as self-contained PNGs. Vector paths are transformed at
+// emission time; images keep an affine transform when needed for rotation,
+// shear or reflection.
 package svgexport
 
 import (
@@ -43,6 +37,7 @@ import (
 // Concurrency: not safe for concurrent use. One painter per export.
 type SVGPainter struct {
 	width, height float64
+	sizeUnit      string
 
 	// Output XML buffer. Populated incrementally as Fill/Stroke/etc.
 	// fire; finalised by WriteTo with the closing </svg> tag.
@@ -124,6 +119,14 @@ func New(width, height float64) *SVGPainter {
 	return p
 }
 
+// NewMillimeters preserves the physical viewport size while keeping the
+// drawing and viewBox coordinates in millimetres.
+func NewMillimeters(width, height float64) *SVGPainter {
+	p := New(width, height)
+	p.sizeUnit = "mm"
+	return p
+}
+
 // WriteTo serialises the recorded scene as a complete SVG document.
 // The painter is not consumed — multiple calls produce identical
 // output.
@@ -137,8 +140,8 @@ func (p *SVGPainter) WriteTo(w io.Writer) (int64, error) {
 	var buf strings.Builder
 	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	fmt.Fprintf(&buf,
-		`<svg xmlns="http://www.w3.org/2000/svg" width="%g" height="%g" viewBox="0 0 %g %g">`+"\n",
-		p.width, p.height, p.width, p.height)
+		`<svg xmlns="http://www.w3.org/2000/svg" width="%g%s" height="%g%s" viewBox="0 0 %g %g">`+"\n",
+		p.width, p.sizeUnit, p.height, p.sizeUnit, p.width, p.height)
 	if p.defs.Len() > 0 {
 		buf.WriteString("<defs>\n")
 		buf.WriteString(p.defs.String())
@@ -162,9 +165,8 @@ func (p *SVGPainter) String() string {
 	return b.String()
 }
 
-// transformPoint applies the current CTM to (x, y). All emitted
-// coordinates flow through here so the SVG output never carries
-// transform attributes — the math is pre-baked.
+// transformPoint applies the current CTM to (x, y). Vector path
+// coordinates use this transformation directly.
 func (p *SVGPainter) transformPoint(x, y float64) (float64, float64) {
 	return p.ctm.Transform(x, y)
 }
@@ -566,11 +568,27 @@ func blendModeForOp(op paint.Operator) string {
 
 // --- paint.Painter: transform stack -----------------------------------
 
-func (p *SVGPainter) ResetMatrix()             { p.ctm.InitIdentity() }
-func (p *SVGPainter) Translate(tx, ty float64) { p.ctm.Translate(tx, ty) }
-func (p *SVGPainter) Scale(sx, sy float64)     { p.ctm.Scale(sx, sy) }
-func (p *SVGPainter) Rotate(radians float64)   { p.ctm.Rotate(radians) }
-func (p *SVGPainter) Transform(m *geom.Mat3x2) { p.ctm.MultiplyWidth(m) }
+func (p *SVGPainter) ResetMatrix() { p.ctm.InitIdentity() }
+func (p *SVGPainter) Translate(tx, ty float64) {
+	var m geom.Mat3x2
+	m.InitTranslate(tx, ty)
+	p.Transform(&m)
+}
+func (p *SVGPainter) Scale(sx, sy float64) {
+	var m geom.Mat3x2
+	m.InitScale(sx, sy)
+	p.Transform(&m)
+}
+func (p *SVGPainter) Rotate(radians float64) {
+	var m geom.Mat3x2
+	m.InitRotate(radians)
+	p.Transform(&m)
+}
+func (p *SVGPainter) Transform(m *geom.Mat3x2) {
+	// Painter transforms compose in user space, matching Cairo: CTM · m.
+	// Mat3x2.Multiply takes its operands in application order (m, CTM).
+	p.ctm = m.Multiply(&p.ctm)
+}
 func (p *SVGPainter) SetMatrix(m *geom.Mat3x2) { p.ctm = *m }
 func (p *SVGPainter) GetMatrix(m *geom.Mat3x2) { *m = p.ctm }
 
@@ -605,8 +623,14 @@ func (p *SVGPainter) DrawText1(x, y float64, text string) {
 			fontSize = float64(s)
 		}
 	}
-	fmt.Fprintf(&p.body, `<text x="%g" y="%g" fill="%s" font-size="%g">%s</text>`+"\n",
-		tx, ty, colorString(col), fontSize, escapeXML(text))
+	m := p.ctm
+	if m.Xx == 1 && m.Xy == 0 && m.Yx == 0 && m.Yy == 1 {
+		fmt.Fprintf(&p.body, `<text x="%g" y="%g" fill="%s" font-size="%g">%s</text>`+"\n",
+			tx, ty, colorString(col), fontSize, escapeXML(text))
+	} else {
+		fmt.Fprintf(&p.body, `<text x="0" y="0" transform="matrix(%g %g %g %g %g %g)" fill="%s" font-size="%g">%s</text>`+"\n",
+			m.Xx, m.Yx, m.Xy, m.Yy, tx, ty, colorString(col), fontSize, escapeXML(text))
+	}
 	p.curX, p.curY = x, y
 }
 
@@ -625,12 +649,7 @@ func (p *SVGPainter) DrawGlyph(glyph *paint.Glyph)    {}
 // href attributes.
 
 func (p *SVGPainter) DrawPixmap(pixmap paint.Pixmap) {
-	if pixmap == nil {
-		return
-	}
-	w := float64(pixmap.Width())
-	h := float64(pixmap.Height())
-	p.DrawPixmap5(p.curX, p.curY, w, h, pixmap)
+	p.DrawPixmap1(0, 0, pixmap)
 }
 
 func (p *SVGPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
@@ -641,30 +660,47 @@ func (p *SVGPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
 }
 
 func (p *SVGPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64) {
-	// Source-offset variant. SVG <image> doesn't carry a clip-region
-	// without an extra <clipPath> setup; for the common case where
-	// callers want the full image at (x, y) we ignore (x0, y0) and
-	// emit the same as DrawPixmap1. Accurate sub-region rendering is
-	// a follow-up using preserveAspectRatio / viewBox tricks.
-	p.DrawPixmap1(x, y, pixmap)
+	p.DrawPixmap1(x+x0, y+y0, pixmap)
 }
 
 func (p *SVGPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
-	if pixmap == nil || w <= 0 || h <= 0 {
+	if pixmap == nil || !(w > 0 && h > 0) {
 		return
+	}
+	m := p.ctm
+	m.X0, m.Y0 = p.transformPoint(x, y)
+	width, height := w*m.Xx, h*m.Yy
+	for _, v := range [...]float64{w, h, m.X0, m.Y0, width, height, m.Xy, m.Yx} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return
+		}
 	}
 	dataURI := pixmapToDataURI(pixmap)
 	if dataURI == "" {
 		return
 	}
-	tx, ty := p.transformPoint(x, y)
+	if m.Xy == 0 && m.Yx == 0 && width > 0 && height > 0 {
+		fmt.Fprintf(&p.body,
+			`<image x="%g" y="%g" width="%g" height="%g" preserveAspectRatio="none" href="%s"/>`+"\n",
+			m.X0, m.Y0, width, height, dataURI)
+		return
+	}
 	fmt.Fprintf(&p.body,
-		`<image x="%g" y="%g" width="%g" height="%g" href="%s"/>`+"\n",
-		tx, ty, w, h, dataURI)
+		`<image x="0" y="0" width="%g" height="%g" preserveAspectRatio="none" transform="matrix(%g %g %g %g %g %g)" href="%s"/>`+"\n",
+		w, h, m.Xx, m.Yx, m.Xy, m.Yy, m.X0, m.Y0, dataURI)
 }
 
-func (p *SVGPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)        {}
-func (p *SVGPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool) {}
+func (p *SVGPainter) DrawIcon(ico paint.Icon, size float64, disabled bool) {
+	p.DrawIcon1(ico, 0, 0, size, disabled)
+}
+
+func (p *SVGPainter) DrawIcon1(ico paint.Icon, x, y, size float64, disabled bool) {
+	pix := paint.RasterizeExportIcon(ico, size, p.ctm, disabled)
+	if pix != nil {
+		defer paint.CloseSurface(pix)
+		p.DrawPixmap5(x, y, size, size, pix)
+	}
+}
 
 // pixmapToDataURI encodes pixmap as PNG and wraps in a "data:image/png;base64,…"
 // URI suitable for an SVG <image href="…"/> attribute. Returns empty

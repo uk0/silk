@@ -296,6 +296,7 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 			defer func() { recover() }()
 			gui.DrawWidgetAll(this.widget, og, 0, 0, 0, 0, ww, wh)
 		}()
+		paint.ClosePainter(og)
 
 		this.cachedPixmap = offscreen
 		this.cachedW = iww
@@ -308,8 +309,9 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 	// item origin, then scale from pixel-space back to mm-space so the
 	// pixmap appears at the correct size.
 	g.Translate(this.Pos())
-	scaleX := this.Width() / ww
-	scaleY := this.Height() / wh
+	// Map the rounded, actual pixel extent back to the exact item bounds.
+	scaleX := this.Width() / float64(iww)
+	scaleY := this.Height() / float64(iwh)
 	g.Scale(scaleX, scaleY)
 	g.DrawPixmap(this.cachedPixmap)
 

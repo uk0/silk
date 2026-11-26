@@ -16,6 +16,7 @@ import (
 	"github.com/uk0/silk/core"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/hmi"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/point"
 	pointsql "github.com/uk0/silk/point/sqlite"
 )
@@ -115,6 +116,100 @@ func TestRuntimeViewInertSnapshotOwnedModesAndCompactLayout(t *testing.T) {
 	v.Start()
 	if v.Busy() {
 		t.Fatal("invalid snapshot restarted")
+	}
+}
+
+func TestRuntimeViewRunLatestIsExplicitAndDoesNotReplaceSnapshotRun(t *testing.T) {
+	v, _ := runtimeViewTest(t, RuntimeViewOptions{})
+	button := v.buttons[runtimeRunButton]
+	requests := 0
+	reload := func() { requests++ }
+	v.SetSourceRunAction(reload, false)
+	if button.Text() != i18n.T("Run latest") || button.IsEnabled() {
+		t.Fatal("source action did not follow host readiness")
+	}
+	button.Action().Trigger(nil)
+	v.SetSourceRunAction(reload, true)
+	v.Start() // The SDK snapshot API never dispatches a host reload.
+	if requests != 0 || v.Busy() || !button.IsEnabled() || v.CanStart() {
+		t.Fatal("source readiness implicitly loaded or staged a project")
+	}
+	v.SetVisible(false)
+	button.Action().Trigger(nil)
+	if requests != 0 {
+		t.Fatal("hidden view dispatched a source action")
+	}
+	v.SetVisible(true)
+	button.Action().Trigger(nil)
+	if requests != 1 || v.Busy() {
+		t.Fatal("explicit source action was not dispatched exactly once")
+	}
+	if err := v.SetSnapshot(runtimeViewProject(), filepath.Join(t.TempDir(), "points.db")); err != nil {
+		t.Fatal(err)
+	}
+	v.SetStartGuard(func() bool { return false })
+	button.Action().Trigger(nil)
+	if requests != 1 || v.Busy() || button.IsEnabled() || button.Text() != i18n.T("Run snapshot") {
+		t.Fatal("source action bypassed the guard of a staged snapshot")
+	}
+	v.Invalidate()
+	// Identical readiness must still replace the function with the new owner.
+	replacementCalls := 0
+	v.SetSourceRunAction(func() { replacementCalls++ }, true)
+	button.Action().Trigger(nil)
+	v.Close()
+	button.Action().Trigger(nil)
+	if requests != 1 || replacementCalls != 1 || button.IsEnabled() {
+		t.Fatal("source action used an obsolete callback or dispatched after close")
+	}
+}
+
+func TestRuntimeViewRunLatestWaitsForRetiredStoreBeforeOpeningAgain(t *testing.T) {
+	if !pointsql.StoreAvailable() {
+		t.Skip("runtime reopening requires cgo for SQLite")
+	}
+	// Remove the fixture after the runtime's cleanup has joined its worker.
+	// Windows will not delete an open SQLite file (POSIX would hide this).
+	path := filepath.Join(t.TempDir(), "db", "points.db")
+	v, posts := runtimeViewTest(t, RuntimeViewOptions{EnsureDatabaseDirectory: true})
+	initial := runtimeViewProject()
+	if err := v.SetSnapshot(initial, path); err != nil {
+		t.Fatal(err)
+	}
+	v.Start()
+	pumpRuntimeView(t, posts, func() bool { return v.Runtime() != nil })
+	first := v.Runtime()
+	requests := 0
+	v.SetSourceRunAction(func() {
+		requests++
+		latest := runtimeViewProject()
+		latest.Points[0].Initial = true
+		if err := v.SetSnapshot(latest, path); err != nil {
+			t.Fatal(err)
+		}
+		v.Start()
+	}, true)
+	button := v.buttons[runtimeRunButton]
+	v.Invalidate()
+	button.Action().Trigger(nil)
+	if requests != 0 || button.IsEnabled() || v.Runtime() != nil {
+		t.Fatal("source action bypassed a retiring store")
+	}
+	pumpRuntimeView(t, posts, func() bool { return !v.Busy() })
+	if !button.IsEnabled() || requests != 0 || v.Runtime() != nil {
+		t.Fatal("idle retirement did not restore an inert source action")
+	}
+	button.Action().Trigger(nil)
+	pumpRuntimeView(t, posts, func() bool { return v.Runtime() != nil })
+	second := v.Runtime()
+	state, err := second.PointState("DI11")
+	if requests != 1 || first == second || err != nil || state.Value.Raw != true {
+		t.Fatal("explicit source action did not open a new runtime with the latest value", state.Value.Raw, err)
+	}
+	v.Stop()
+	pumpRuntimeView(t, posts, func() bool { return !v.Busy() })
+	if err := os.Rename(path, path+".closed"); err != nil {
+		t.Fatalf("retired runtime did not release its database: %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -144,7 +145,8 @@ func buildDocument(pages []pageData, images []imageData, compress bool) string {
 		// Page object.
 		offsets[pageObjID-1] = b.Len()
 		fmt.Fprintf(&b, "%d 0 obj\n", pageObjID)
-		fmt.Fprintf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %g %g]\n", pg.width, pg.height)
+		fmt.Fprintf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %s %s]\n",
+			strconv.FormatFloat(pg.width, 'f', -1, 64), strconv.FormatFloat(pg.height, 'f', -1, 64))
 		fmt.Fprintf(&b, "   /Resources << /Font << /F1 %d 0 R >>", fontID)
 		if len(images) > 0 {
 			b.WriteString("\n             /XObject << ")

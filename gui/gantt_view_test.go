@@ -261,13 +261,22 @@ func TestGanttCollapsePreservesNestedDataAndSharedScroll(t *testing.T) {
 	if len(c.rows) != 5 {
 		t.Fatal("undo did not rebuild visible tree")
 	}
-	c.SetSize(960, 150)
-	c.SetScrollOffsets(0, 60)
+	c.SetSize(960, 120)
+	// Deliberately leave half a logical pixel of the first visible row. A
+	// point 2 px below the header may already hit the next row.
+	const visibleTail = 0.5
+	target := 2*c.geometry().row - visibleTail
+	c.SetScrollOffsets(0, target)
 	l := c.geometry()
-	first, _ := c.visibleRange(l)
+	first, last := c.visibleRange(l)
+	if math.Abs(c.scrollY-target) > 1e-9 || first != 1 || last <= 2 {
+		t.Fatalf("fixture did not expose a partial row and its successor: scroll=%v want=%v range=%d..%d", c.scrollY, target, first, last)
+	}
 	for _, x := range []float64{40, l.split + 100} {
-		if hit := c.hitTest(x, l.top+2); hit.row != first {
-			t.Fatalf("scroll split mismatch %+v first=%d", hit, first)
+		for i, y := range []float64{l.top + visibleTail/2, l.top + 2*visibleTail} {
+			if hit := c.hitTest(x, y); hit.row != i+1 {
+				t.Fatalf("scroll split mismatch at (%v,%v): hit=%+v want row %d", x, y, hit, i+1)
+			}
 		}
 	}
 }

@@ -22,7 +22,11 @@ func TestDockTabsReserveWindowControls(t *testing.T) {
 		tx, _, tw, _ := d.tabbar.Bounds()
 		mx, _, mw, _ := d.minBtn.Bounds()
 		xx, _, xw, _ := d.maxBtn.Bounds()
-		if tx < 0 || tw < 0 || tx+tw > mx || mx+mw > xx || xx+xw > width {
+		// The controls share logical edges. A fractional-font layout can
+		// round an independently computed end a few ULPs above its neighbor.
+		const epsilon = 1e-9
+		if tx < -epsilon || tw < 0 || mw < 0 || xw < 0 ||
+			tx+tw > mx+epsilon || mx+mw > xx+epsilon || xx+xw > width+epsilon {
 			t.Fatalf("width=%v tabs=%v..%v min=%v..%v max=%v..%v", width, tx, tx+tw, mx, mx+mw, xx, xx+xw)
 		}
 	}

@@ -18,7 +18,7 @@
 // is top-left, Y down. We flip Y per coordinate at emit time so the
 // resulting PDF reads pixels with the same (x, y) the caller passed.
 //
-// Single-page output. The doc structure is the minimum PDF 1.4 viewers
+// The document structure is the minimum PDF 1.4 viewers
 // (Acrobat, macOS Preview, browser viewers) accept: %PDF-1.4 header,
 // Catalog/Pages/Page/Contents/Font objects, xref table, trailer.
 //
@@ -28,9 +28,8 @@
 // honoured but the family stays Helvetica until Type1/TrueType
 // embedding lands in a follow-up.
 //
-// Pixmap / Icon / Glyphs operations are recorded as no-ops (the same
-// limitation as svgexport); raster image embedding via the /XObject
-// dictionary is a follow-up.
+// Pixmaps and icon rasters are emitted as image XObjects with a soft alpha
+// mask when needed. Glyph-atlas calls are not exported.
 package pdfexport
 
 import (
@@ -40,6 +39,7 @@ import (
 	"image"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/uk0/silk/geom"
@@ -51,6 +51,7 @@ import (
 // Concurrency: one painter per export. Not safe for concurrent use.
 type PDFPainter struct {
 	width, height float64
+	pointsPerUnit float64
 
 	// content is the active page's content stream — PDF drawing
 	// commands accumulated as Fill / Stroke / DrawText / etc. fire.
@@ -113,10 +114,19 @@ type state struct {
 // (1/72 inch). A4 ≈ (595, 842); US Letter ≈ (612, 792); designer
 // canvases typically pass their own sizes.
 func New(width, height float64) *PDFPainter {
-	p := &PDFPainter{width: width, height: height}
+	p := &PDFPainter{width: width, height: height, pointsPerUnit: 1}
 	p.ctm.InitIdentity()
 	p.brush = &paint.SolidBrush{Color: paint.Color{R: 0, G: 0, B: 0, A: 255}}
 	p.pen = paint.NewPen(paint.Color{R: 0, G: 0, B: 0, A: 255}, 1)
+	return p
+}
+
+// NewMillimeters records page sizes and drawing commands in millimetres.
+// Serialization emits the physical page dimensions and scales the entire
+// page stream once, including strokes, glyphs, images and clips.
+func NewMillimeters(width, height float64) *PDFPainter {
+	p := New(width, height)
+	p.pointsPerUnit = 72.0 / 25.4
 	return p
 }
 
@@ -142,6 +152,13 @@ func (p *PDFPainter) snapshotPages() []pageData {
 		height:  p.height,
 		content: p.content.String(),
 	})
+	if f := p.pointsPerUnit; f != 0 && f != 1 {
+		for i := range out {
+			out[i].width *= f
+			out[i].height *= f
+			out[i].content = fmt.Sprintf("q\n%.12f 0 0 %.12f 0 0 cm\n%sQ\n", f, f, out[i].content)
+		}
+	}
 	return out
 }
 
@@ -190,8 +207,8 @@ func (p *PDFPainter) NewPage() {
 
 // NewPage1 is the explicit-size variant — useful when a document
 // alternates between portrait and landscape, or carries one
-// title page at a different size from the rest. Width / height are
-// in PDF user units (1/72 inch).
+// title page at a different size from the rest. Width and height are
+// in the units selected by the constructor (points or millimetres).
 func (p *PDFPainter) NewPage1(width, height float64) {
 	// Snapshot the current page.
 	p.finishedPages = append(p.finishedPages, pageData{
@@ -266,6 +283,28 @@ func (p *PDFPainter) CurrentState() int { return len(p.stack) }
 
 func (p *PDFPainter) CurrentPoint() (float64, float64) { return p.curX, p.curY }
 
+// writePDFOp keeps numbers in PDF decimal syntax, including the tiny
+// nonzero coefficients produced by a right-angle rotation. The full
+// command is buffered so invalid input cannot leave partial operands.
+func writePDFOp(out *strings.Builder, op string, numbers ...float64) {
+	var scratch [160]byte
+	line := scratch[:0]
+	for _, n := range numbers {
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return
+		}
+		if n == 0 {
+			line = append(line, '0')
+		} else {
+			line = strconv.AppendFloat(line, n, 'f', -1, 64)
+		}
+		line = append(line, ' ')
+	}
+	line = append(line, op...)
+	line = append(line, '\n')
+	out.Write(line)
+}
+
 // --- paint.Painter: path construction ---------------------------------
 //
 // PDF path operators take coordinates directly; we fold CTM + Y-flip
@@ -274,13 +313,13 @@ func (p *PDFPainter) CurrentPoint() (float64, float64) { return p.curX, p.curY }
 
 func (p *PDFPainter) MoveTo(x, y float64) {
 	tx, ty := p.transformPoint(x, y)
-	fmt.Fprintf(&p.path, "%g %g m\n", tx, ty)
+	writePDFOp(&p.path, "m", tx, ty)
 	p.curX, p.curY = x, y
 }
 
 func (p *PDFPainter) LineTo(x, y float64) {
 	tx, ty := p.transformPoint(x, y)
-	fmt.Fprintf(&p.path, "%g %g l\n", tx, ty)
+	writePDFOp(&p.path, "l", tx, ty)
 	p.curX, p.curY = x, y
 }
 
@@ -293,7 +332,7 @@ func (p *PDFPainter) CurveTo(x1, y1, x2, y2, x3, y3 float64) {
 	t1x, t1y := p.transformPoint(x1, y1)
 	t2x, t2y := p.transformPoint(x2, y2)
 	t3x, t3y := p.transformPoint(x3, y3)
-	fmt.Fprintf(&p.path, "%g %g %g %g %g %g c\n", t1x, t1y, t2x, t2y, t3x, t3y)
+	writePDFOp(&p.path, "c", t1x, t1y, t2x, t2y, t3x, t3y)
 	p.curX, p.curY = x3, y3
 }
 
@@ -355,14 +394,19 @@ func (p *PDFPainter) appendArc(xc, yc, radius, a0, a1 float64, sign float64) {
 }
 
 func (p *PDFPainter) Rectangle(x, y, w, h float64) {
-	// PDF has a native "re" rectangle operator: x y w h re. It expects
-	// the BOTTOM-left corner. After Y-flip our top-left (x, y) becomes
-	// PDF (x, H - y - h). w and h pass through unchanged.
-	tx, ty := p.transformPoint(x, y)
-	// Y has been flipped; the rect's bottom-left in PDF coords is at
-	// y = transformY(y+h) = H - (y+h) = (H - y) - h = ty - h.
-	bottomY := ty - h
-	fmt.Fprintf(&p.path, "%g %g %g %g re\n", tx, bottomY, w, h)
+	// re starts at the bottom-left in PDF space. It remains exact for
+	// axis-aligned scales, including reflections; shear/rotation need
+	// the four transformed corners of the same closed path.
+	if p.ctm.Xy == 0 && p.ctm.Yx == 0 {
+		tx, ty := p.transformPoint(x, y+h)
+		writePDFOp(&p.path, "re", tx, ty, w*p.ctm.Xx, h*p.ctm.Yy)
+	} else {
+		p.MoveTo(x, y+h)
+		p.LineTo(x+w, y+h)
+		p.LineTo(x+w, y)
+		p.LineTo(x, y)
+		p.path.WriteString("h\n")
+	}
 	p.curX, p.curY = x, y
 }
 
@@ -398,7 +442,7 @@ func (p *PDFPainter) emitFill(stroke bool) {
 	}
 	col := brushColor(p.brush)
 	p.content.WriteString(p.path.String())
-	fmt.Fprintf(&p.content, "%g %g %g rg\n", float64(col.R)/255, float64(col.G)/255, float64(col.B)/255)
+	writePDFOp(&p.content, "rg", float64(col.R)/255, float64(col.G)/255, float64(col.B)/255)
 	if stroke {
 		p.content.WriteString("B\n")
 	} else {
@@ -420,8 +464,8 @@ func (p *PDFPainter) emitStroke() {
 		}
 	}
 	p.content.WriteString(p.path.String())
-	fmt.Fprintf(&p.content, "%g %g %g RG\n", float64(col.R)/255, float64(col.G)/255, float64(col.B)/255)
-	fmt.Fprintf(&p.content, "%g w\n", w)
+	writePDFOp(&p.content, "RG", float64(col.R)/255, float64(col.G)/255, float64(col.B)/255)
+	writePDFOp(&p.content, "w", w)
 	writePenExtensionOps(&p.content, p.pen)
 	p.content.WriteString("S\n")
 }
@@ -444,9 +488,10 @@ func writePenExtensionOps(b *strings.Builder, pen paint.Pen) {
 				if i > 0 {
 					b.WriteByte(' ')
 				}
-				fmt.Fprintf(b, "%g", v)
+				b.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
 			}
-			fmt.Fprintf(b, "] %g d\n", dp.DashOffset())
+			b.WriteString("] ")
+			writePDFOp(b, "d", dp.DashOffset())
 		}
 	}
 	if cp, ok := pen.(paint.CappedPen); ok {
@@ -466,7 +511,7 @@ func writePenExtensionOps(b *strings.Builder, pen paint.Pen) {
 		}
 		if cp.LineJoin() == paint.LineJoinMiter {
 			if ml := cp.MiterLimit(); ml > 0 && ml != 10 {
-				fmt.Fprintf(b, "%g M\n", ml)
+				writePDFOp(b, "M", ml)
 			}
 		}
 	}
@@ -550,11 +595,27 @@ func (p *PDFPainter) SetOperator(op paint.Operator) {}
 
 // --- paint.Painter: transform stack -----------------------------------
 
-func (p *PDFPainter) ResetMatrix()             { p.ctm.InitIdentity() }
-func (p *PDFPainter) Translate(tx, ty float64) { p.ctm.Translate(tx, ty) }
-func (p *PDFPainter) Scale(sx, sy float64)     { p.ctm.Scale(sx, sy) }
-func (p *PDFPainter) Rotate(radians float64)   { p.ctm.Rotate(radians) }
-func (p *PDFPainter) Transform(m *geom.Mat3x2) { p.ctm.MultiplyWidth(m) }
+func (p *PDFPainter) ResetMatrix() { p.ctm.InitIdentity() }
+func (p *PDFPainter) Translate(tx, ty float64) {
+	var m geom.Mat3x2
+	m.InitTranslate(tx, ty)
+	p.Transform(&m)
+}
+func (p *PDFPainter) Scale(sx, sy float64) {
+	var m geom.Mat3x2
+	m.InitScale(sx, sy)
+	p.Transform(&m)
+}
+func (p *PDFPainter) Rotate(radians float64) {
+	var m geom.Mat3x2
+	m.InitRotate(radians)
+	p.Transform(&m)
+}
+func (p *PDFPainter) Transform(m *geom.Mat3x2) {
+	// Painter transforms compose in user space, matching Cairo: CTM · m.
+	// Mat3x2.Multiply takes its operands in application order (m, CTM).
+	p.ctm = m.Multiply(&p.ctm)
+}
 func (p *PDFPainter) SetMatrix(m *geom.Mat3x2) { p.ctm = *m }
 func (p *PDFPainter) GetMatrix(m *geom.Mat3x2) { *m = p.ctm }
 
@@ -595,10 +656,15 @@ func (p *PDFPainter) DrawText1(x, y float64, text string) {
 		}
 	}
 	p.content.WriteString("BT\n")
-	fmt.Fprintf(&p.content, "/F1 %g Tf\n", fontSize)
-	fmt.Fprintf(&p.content, "%g %g %g rg\n",
+	p.content.WriteString("/F1 ")
+	writePDFOp(&p.content, "Tf", fontSize)
+	writePDFOp(&p.content, "rg",
 		float64(col.R)/255, float64(col.G)/255, float64(col.B)/255)
-	fmt.Fprintf(&p.content, "1 0 0 -1 %g %g Tm\n", tx, ty)
+	// PDF glyphs already face up. The two basis vectors convert from
+	// document Y-down to PDF Y-up without mirroring an unrotated label.
+	a, b := p.ctm.Xx, -p.ctm.Yx
+	c, d := -p.ctm.Xy, p.ctm.Yy
+	writePDFOp(&p.content, "Tm", a, b, c, d, tx, ty)
 	fmt.Fprintf(&p.content, "(%s) Tj\n", escapePDFString(text))
 	p.content.WriteString("ET\n")
 	p.curX, p.curY = x, y
@@ -614,15 +680,8 @@ func (p *PDFPainter) DrawGlyph(glyph *paint.Glyph)    {}
 // into a separate object referenced from the page's Resources
 // dictionary as /Im1, /Im2, etc. The content stream emits a
 // "q w 0 0 h x y cm /ImN Do Q" block to draw the image at the
-// requested position with proper Y-flip (the unit-square
-// transformation puts image bottom-left at the PDF y_pdf = H - y - h).
-//
-// Alpha channel: PDF native alpha needs an SMask (separate gray-scale
-// XObject) per image — doubles the object count. We composite alpha
-// onto white during encoding instead, which works for the icons and
-// chart-marker use cases where the embedding is over a light
-// background. Apps that need precise transparency (drop shadows etc.)
-// can use SVG export instead until SMask support lands.
+// requested position and full affine transform. A soft mask preserves
+// transparency without compositing the image against a fixed background.
 
 func (p *PDFPainter) DrawPixmap(pixmap paint.Pixmap) {
 	if pixmap == nil {
@@ -630,7 +689,7 @@ func (p *PDFPainter) DrawPixmap(pixmap paint.Pixmap) {
 	}
 	w := float64(pixmap.Width())
 	h := float64(pixmap.Height())
-	p.DrawPixmap5(p.curX, p.curY, w, h, pixmap)
+	p.DrawPixmap5(0, 0, w, h, pixmap)
 }
 
 func (p *PDFPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
@@ -641,16 +700,28 @@ func (p *PDFPainter) DrawPixmap1(x, y float64, pixmap paint.Pixmap) {
 }
 
 func (p *PDFPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float64) {
-	// Source-offset variant — same simplification as svgexport: ignore
-	// (x0, y0) and emit the full image. Sub-region embedding requires
-	// a clip group around the Do operator, which is a follow-up.
-	p.DrawPixmap1(x, y, pixmap)
+	p.DrawPixmap1(x+x0, y+y0, pixmap)
 }
 
 func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
-	if pixmap == nil || w <= 0 || h <= 0 {
+	if pixmap == nil || !(w > 0 && h > 0) {
 		return
 	}
+	// PDF images have their origin at the bottom left and their positive
+	// vertical axis points UP. Map the bottom-left corner and both basis
+	// vectors (not just the anchor) into PDF user space.
+	tx, ty := p.transformPoint(x, y+h)
+	a, b := w*p.ctm.Xx, -w*p.ctm.Yx
+	c, d := -h*p.ctm.Xy, h*p.ctm.Yy
+	for _, v := range [...]float64{a, b, c, d, tx, ty} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return
+		}
+	}
+	p.drawImage(pixmap, a, b, c, d, tx, ty)
+}
+
+func (p *PDFPainter) drawImage(pixmap paint.Pixmap, a, b, c, d, tx, ty float64) {
 	img, err := pixmap.Image()
 	if err != nil || img == nil {
 		return
@@ -675,17 +746,23 @@ func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
 		name:       name,
 	})
 
-	tx, ty := p.transformPoint(x, y)
-	// PDF image's bottom-left lands at (tx, ty - h) after Y-flip.
-	bottomY := ty - h
 	p.content.WriteString("q\n")
-	fmt.Fprintf(&p.content, "%g 0 0 %g %g %g cm\n", w, h, tx, bottomY)
+	writePDFOp(&p.content, "cm", a, b, c, d, tx, ty)
 	fmt.Fprintf(&p.content, "/%s Do\n", name)
 	p.content.WriteString("Q\n")
 }
 
-func (p *PDFPainter) DrawIcon(ico paint.Icon, fSize float64, grayed bool)        {}
-func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, fSize float64, grayed bool) {}
+func (p *PDFPainter) DrawIcon(ico paint.Icon, size float64, disabled bool) {
+	p.DrawIcon1(ico, 0, 0, size, disabled)
+}
+
+func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, size float64, disabled bool) {
+	pix := paint.RasterizeExportIcon(ico, size, p.ctm, disabled)
+	if pix != nil {
+		defer paint.CloseSurface(pix)
+		p.DrawPixmap5(x, y, size, size, pix)
+	}
+}
 
 // encodePixmapToFlatedRGBAndSMask converts an image.Image into:
 //

@@ -149,7 +149,7 @@ func TestSaveRestoreEmitsQAndCapitalQ(t *testing.T) {
 }
 
 // TestDrawText1EmitsBTET verifies the BT…ET block, font selection
-// (/F1), text-matrix Y-flip, and Tj string emission.
+// (/F1), upright glyph direction and transformed baseline, and Tj emission.
 func TestDrawText1EmitsBTET(t *testing.T) {
 	p := New(595, 842)
 	p.SetBrush1(paint.Color{R: 0, G: 0, B: 0, A: 255})
@@ -159,7 +159,7 @@ func TestDrawText1EmitsBTET(t *testing.T) {
 	for _, want := range []string{
 		"BT\n",
 		"/F1 14 Tf\n",
-		"1 0 0 -1 ", // text matrix flip
+		"1 0 0 1 72 762 Tm\n",
 		"(Hello PDF) Tj\n",
 		"ET\n",
 	} {

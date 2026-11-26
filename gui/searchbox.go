@@ -1,11 +1,13 @@
 package gui
 
 import (
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/paint"
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
 // SearchBox 搜索框控件，带搜索图标和清除按钮
@@ -46,40 +48,58 @@ const (
 	searchBoxClearW = 24.0
 )
 
+// searchBoxShapingText preserves the old rune-prefix replacement semantics
+// for programmatically supplied invalid UTF-8 without copying valid text.
+func searchBoxShapingText(text string) string {
+	if utf8.ValidString(text) {
+		return text
+	}
+	return string([]rune(text))
+}
+
 // searchBoxCaretX returns the x offset, measured from the text origin, of the
 // caret sitting after the first n runes: the pen advance of that prefix. The
 // ink box (Width+XBearing) is deliberately not used — a prefix ending in a
-// space has no ink past the previous glyph, so it would report a caret several
-// pixels left of where the next character actually starts.
+// space has no ink past the previous glyph.
 func searchBoxCaretX(text string, font paint.Font, n int) float64 {
-	runes := []rune(text)
-	if n <= 0 || len(runes) == 0 {
+	return searchBoxPrefixAdvance(searchBoxShapingText(text), font, n)
+}
+
+// The caller has normalized UTF-8 once. Iterating rune boundaries keeps this
+// slice on the original text bytes rather than rebuilding a string each time.
+func searchBoxPrefixAdvance(text string, font paint.Font, n int) float64 {
+	if n <= 0 || text == "" {
 		return 0
 	}
-	if n > len(runes) {
-		n = len(runes)
+	for i := range text {
+		if n == 0 {
+			return font.TextExtents(text[:i]).XAdvance
+		}
+		n--
 	}
-	return font.TextExtents(string(runes[:n])).XAdvance
+	return font.TextExtents(text).XAdvance
 }
 
 // searchBoxCaretIndex maps an x offset, measured from the text origin, to the
-// rune index whose caret offset is nearest — so a click on the right half of a
-// glyph lands after it. Pure: no widget state, so it stays testable without a
-// window.
+// rune index whose caret offset is nearest. Preserve prefix shaping and exact
+// midpoint ties, including zero-width and combining glyphs.
 func searchBoxCaretIndex(text string, font paint.Font, x float64) int {
-	runes := []rune(text)
-	if x <= 0 || len(runes) == 0 {
+	if x <= 0 || text == "" {
 		return 0
 	}
+	text = searchBoxShapingText(text)
 	prev := 0.0
-	for i := 1; i <= len(runes); i++ {
-		cur := font.TextExtents(string(runes[:i])).XAdvance
+	n := 0
+	for end := 0; end < len(text); n++ {
+		_, size := utf8.DecodeRuneInString(text[end:])
+		end += size
+		cur := font.TextExtents(text[:end]).XAdvance
 		if x < (prev+cur)*0.5 {
-			return i - 1
+			return n
 		}
 		prev = cur
 	}
-	return len(runes)
+	return n
 }
 
 func NewSearchBox() *SearchBox {
@@ -374,7 +394,8 @@ func (this *SearchBox) Draw(g paint.Painter) {
 	// Text/caret stay in their own strip; long queries must not cover the
 	// search or clear icons, or float beyond the palette's parent panel.
 	textWidth := math.Max(0, w-searchBoxTextX-searchBoxClearW)
-	caretX := searchBoxCaretX(this.text, t.Font, this.cursorPos)
+	shaped := searchBoxShapingText(this.text)
+	caretX := searchBoxPrefixAdvance(shaped, t.Font, this.cursorPos)
 	this.scrollX = math.Max(0, math.Min(this.scrollX, caretX))
 	if caretX-this.scrollX > math.Max(0, textWidth-2) {
 		this.scrollX = caretX - math.Max(0, textWidth-2)
@@ -384,9 +405,17 @@ func (this *SearchBox) Draw(g paint.Painter) {
 	g.Clip()
 	textStartX -= this.scrollX
 	a, b := this.selection()
-	if this.focused && a != b {
-		x0 := textStartX + searchBoxCaretX(this.text, t.Font, a)
-		x1 := textStartX + searchBoxCaretX(this.text, t.Font, b)
+	selected := this.focused && a != b
+	var x0, x1 float64
+	if selected {
+		// A selection endpoint is always the caret. Shape the other
+		// endpoint just once for both the background and highlighted ink.
+		if this.cursorPos <= a {
+			x0, x1 = caretX, searchBoxPrefixAdvance(shaped, t.Font, b)
+		} else {
+			x0, x1 = searchBoxPrefixAdvance(shaped, t.Font, a), caretX
+		}
+		x0, x1 = textStartX+x0, textStartX+x1
 		g.SetBrush1(t.MenuActiveBGColor)
 		g.Rectangle(x0, (h-fe.Height)/2, x1-x0, fe.Height)
 		g.Fill()
@@ -404,9 +433,7 @@ func (this *SearchBox) Draw(g paint.Painter) {
 		g.Translate(textStartX, textY)
 		g.DrawText(this.text)
 		g.Translate(-textStartX, -textY)
-		if this.focused && a != b {
-			x0 := textStartX + searchBoxCaretX(this.text, t.Font, a)
-			x1 := textStartX + searchBoxCaretX(this.text, t.Font, b)
+		if selected {
 			g.Save()
 			g.Rectangle(x0, 0, x1-x0, h)
 			g.Clip()
@@ -418,7 +445,7 @@ func (this *SearchBox) Draw(g paint.Painter) {
 
 		// cursor
 		if this.focused {
-			cx := textStartX + searchBoxCaretX(this.text, t.Font, this.cursorPos)
+			cx := textStartX + caretX
 			g.MoveTo(cx, (h-fe.Height)/2)
 			g.LineTo(cx, (h+fe.Height)/2)
 			g.SetPen1(t.TextColor, 1)
