@@ -207,6 +207,12 @@ func setDefaultContent(w gui.IWidget, factoryName string) {
 	}
 }
 
+type fakeWidgetPreviewKey struct {
+	width, height int
+	themeRev      uint64
+	iconPalette   paint.IconPalette
+}
+
 type FakeWidget struct {
 	graph.Item
 	widget        gui.IWidget
@@ -215,11 +221,11 @@ type FakeWidget struct {
 	eventHandlers map[string]string
 	code          string // Go source code for event handlers
 
-	// Pixmap caching fields – avoids recreating the offscreen surface every frame
+	// Preview raster cache. A stable preview does not recreate its surface
+	// on every redraw, even when the item is being moved.
 	cachedPixmap  paint.Pixmap
+	cachedPreview fakeWidgetPreviewKey
 	pixmapDirty   bool
-	cachedW       int
-	cachedH       int
 	layoutManaged bool
 	layoutCell    layoutPlacement
 }
@@ -284,9 +290,11 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		return
 	}
 
-	// Reuse the cached pixmap when size is unchanged and content is clean.
-	// This avoids allocating a new cairo surface every single frame.
-	if this.cachedPixmap == nil || this.pixmapDirty || iww != this.cachedW || iwh != this.cachedH {
+	// Appearance can change without touching the widget or its geometry.
+	// Include the paint palette separately for SDK callers that customize
+	// icon colors without changing the GUI theme.
+	key := fakeWidgetPreviewKey{iww, iwh, gui.ThemeRev(), paint.CurrentIconPalette()}
+	if this.cachedPixmap == nil || this.pixmapDirty || this.cachedPreview != key {
 		offscreen := paint.NewPixmap(iww, iwh)
 		og := offscreen.NewPainter()
 		og.SetBrush1(gui.Theme().FormColor)
@@ -298,9 +306,10 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 		}()
 		paint.ClosePainter(og)
 
+		// Recorded paint commands may retain the previous pixmap. Publish
+		// a new surface instead of painting over or closing that snapshot.
 		this.cachedPixmap = offscreen
-		this.cachedW = iww
-		this.cachedH = iwh
+		this.cachedPreview = key
 		this.pixmapDirty = false
 	}
 

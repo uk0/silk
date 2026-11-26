@@ -24,8 +24,28 @@
 - Remove platform timer-resolution dependence from the expired file-search
   deadline test.
 
+## Unreleased — print preparation and PDF transparency
+
+- Capture a design only after Print is confirmed, then compress the detached
+  raster and submit on a worker. Cancel does not generate or stage a PDF.
+- Keep fully transparent pixels visible as cutouts even when a source image
+  contains no partially transparent pixels. Compress raster data by scanline
+  to reduce peak memory when exporting or printing large designs.
+
+## Unreleased — designer appearance
+
+- Use the measured size when opening GLFW popup menus. On X11, the first
+  open no longer shrinks a newly attached menu to one pixel.
+- Preserve the option to show a caption alongside a button icon when reopening
+  a design or generating Go code. Existing designs still use their widget defaults.
+- Refresh cached Designer previews after theme, UI font, or icon palette changes.
+- Keep the light and dark details inside disabled raster icons without reviving
+  saturated asset colors. Reuse the mask and apply the current theme tint on draw.
+
 ## Unreleased — designer SVG/PDF export
 
+- Choose SVG or PDF before opening the native save panel, so the filter and
+  suggested extension match the export rather than the SilkUI design file.
 - Export canvas dimensions in millimetres instead of interpreting them as
   pixels or PDF points. Raster widgets keep their authored position and size,
   and icon exports preserve transparency and disabled-state colors.

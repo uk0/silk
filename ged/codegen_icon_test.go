@@ -91,6 +91,72 @@ func TestButtonIconNameRoundTrip(t *testing.T) {
 	}
 }
 
+// Exercise the authored option through design persistence and the generated UI,
+// not just the text getter. A saved caption can exist but not be drawn.
+func TestButtonTextWithIconRoundTripAndCodegen(t *testing.T) {
+	for _, tt := range []struct {
+		name, factory          string
+		authored, legacy, want bool
+		call                   string
+	}{
+		{"ordinary", "gui.Button", true, false, true, ".SetTextVisible(true)"},
+		{"legacy icon-only", "gui.Button", false, true, false, ""},
+		{"print", "gui.PrintButton", true, false, true, ".SetTextVisible(true)"},
+		{"HTTP icon-only", "gui.HTTPButton", false, false, false, ".SetTextVisible(false)"},
+		{"legacy HTTP", "gui.HTTPButton", false, true, true, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type buttonLike interface {
+				Text() string
+				IsTextVisible() bool
+				SetTextVisible(bool)
+			}
+			scene := newIconScene(t, tt.factory, "btnLabel", "build")
+			source := scene.Children()[0].(*FakeWidget)
+			source.Widget().(buttonLike).SetTextVisible(tt.authored)
+			doc := source.SaveDesign()
+			if tt.legacy {
+				props := doc.ChildByKey("props", false)
+				children := props.Childdren()
+				props.Clear()
+				for _, child := range children {
+					if child.Key() != "有图标时显示文字" {
+						props.AddChild(child.Clone())
+					}
+				}
+			}
+
+			doc, err := core.LoadTDocStr(doc.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			loadedScene := NewGedScene()
+			loaded, err := NewFakeWidgetFromFactory(tt.factory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := loaded.LoadDesign(doc); err != nil {
+				t.Fatal(err)
+			}
+			b := loaded.Widget().(buttonLike)
+			if b.Text() == "" || b.IsTextVisible() != tt.want {
+				t.Fatalf("reloaded caption: text=%q shown=%v, want shown=%v", b.Text(), b.IsTextVisible(), tt.want)
+			}
+			cmd := graph.NewAddCommand()
+			cmd.AddItem(loaded, loadedScene)
+			loadedScene.PushCommand(cmd)
+			code := loadedScene.GenerateCode(CodeGenOptions{})
+			if tt.call == "" {
+				if strings.Contains(code, "ui.BtnLabel.SetTextVisible(") {
+					t.Fatalf("legacy factory default unexpectedly overridden:\n%s", code)
+				}
+			} else if !strings.Contains(code, "ui.BtnLabel"+tt.call) {
+				t.Fatalf("generated UI does not preserve caption visibility:\n%s", code)
+			}
+		})
+	}
+}
+
 // TestGenerateCodeButtonIconName: a designed icon comes out as the one call
 // that reproduces it.
 func TestGenerateCodeButtonIconName(t *testing.T) {

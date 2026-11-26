@@ -106,6 +106,80 @@ func TestPaletteEditorActionCannotMutateHiddenDocument(t *testing.T) {
 	}
 }
 
+func TestDesignExportMenuRoutesFormatAndProtectsConfirmedPath(t *testing.T) {
+	w := testWorkbench(t)
+	w.activate(modeDesign)
+	oldChoose, oldToast := chooseDesignExportFile, silkideToast
+	t.Cleanup(func() { chooseDesignExportFile, silkideToast = oldChoose, oldToast })
+	root := t.TempDir()
+	path, requested := "", ""
+	changeDesign := false
+	chooseDesignExportFile = func(extension string) string {
+		requested = extension
+		if changeDesign {
+			w.canvas.GedScene().SetFormTitle("Changed during save panel")
+			w.activate(modeWelcome)
+		}
+		return path
+	}
+	var level gui.ToastLevel
+	silkideToast = func(_ string, l gui.ToastLevel) { level = l }
+
+	for _, spec := range []struct {
+		ext, magic string
+	}{{"pdf", "%PDF-"}, {"svg", "<svg"}} {
+		id := "file.export." + spec.ext
+		button := menuCommandButton(buildFileMenu(w.tabs, w.canvas), id)
+		if button == nil || !button.IsEnabled() {
+			t.Fatalf("missing enabled command %s", id)
+		}
+		path = filepath.Join(root, "design."+spec.ext)
+		button.Action().Trigger(button)
+		body, err := os.ReadFile(path)
+		if requested != spec.ext || err != nil || !strings.Contains(string(body), spec.magic) || level != gui.ToastSuccess {
+			t.Fatalf("command %s requested %q, wrote wrong format: %v (toast %v)", id, requested, err, level)
+		}
+	}
+
+	pdf := menuCommandButton(buildWorkbenchSubMenu("Design", w.tabs, w.canvas), "design.export.pdf")
+	if pdf == nil || !pdf.IsEnabled() {
+		t.Fatal("Design menu lacks PDF")
+	}
+	path = filepath.Join(root, "design.svg")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf.Action().Trigger(pdf)
+	after, err := os.ReadFile(path)
+	if err != nil || string(before) != string(after) || level != gui.ToastWarning {
+		t.Fatal("wrong extension modified an existing file")
+	}
+	path = filepath.Join(root, "design")
+	pdf.Action().Trigger(pdf)
+	after, err = os.ReadFile(path + ".pdf")
+	if err != nil || !strings.HasPrefix(string(after), "%PDF-") || level != gui.ToastWarning {
+		t.Fatal("extensionless selection unexpectedly targeted an unconfirmed filename")
+	}
+	level = gui.ToastSuccess
+	path = ""
+	pdf.Action().Trigger(pdf)
+	if level != gui.ToastSuccess {
+		t.Fatal("cancellation emitted feedback")
+	}
+
+	changeDesign = true
+	path = filepath.Join(root, "stale.pdf")
+	pdf.Action().Trigger(pdf)
+	if _, err := os.Stat(path); !os.IsNotExist(err) || level != gui.ToastWarning {
+		t.Fatal("export crossed its confirmed design context")
+	}
+	disabled := menuCommandButton(buildFileMenu(w.tabs, w.canvas), "file.export.pdf")
+	if disabled == nil || disabled.IsEnabled() || disabled.Action().IsEnabled() {
+		t.Fatal("export available outside Design mode")
+	}
+}
+
 func TestExportFeedbackUsesActualWrittenPath(t *testing.T) {
 	old := silkideToast
 	t.Cleanup(func() { silkideToast = old })

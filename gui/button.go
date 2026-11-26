@@ -11,6 +11,7 @@ import (
 func (this *Button) EnumProperties(list core.IPropertyList) {
 	list.AddProperty("文本", this.Text, this.SetText)
 	list.AddProperty("图标", this.IconName, this.SetIconName)
+	list.AddProperty("有图标时显示文字", this.TextVisibleWithIcon, this.SetTextVisible)
 	list.AddProperty("可见", this.IsVisible, this.SetVisible)
 	list.AddProperty("可用", this.IsExplicitlyEnabled, this.SetEnabled)
 }
@@ -553,6 +554,11 @@ func (this *Button) IsTextVisible() bool {
 
 	return false
 }
+
+// TextVisibleWithIcon is the authored option, not the effective visibility.
+// Captions remain visible on text-only buttons and in popup menus regardless
+// of this option. Use IsTextVisible to find out whether the caption is drawn.
+func (this *Button) TextVisibleWithIcon() bool { return this.textVisible }
 
 func (this *Button) SetTextVisible(b bool) {
 	if this.textVisible == b {

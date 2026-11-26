@@ -907,7 +907,14 @@ func (this *Window) SetSize(w, h float64) {
 		this.dismissOwnedPopups()
 	}
 	if this.glfwWin != nil {
-		this.glfwWin.SetSize(int(w), int(h))
+		width, height := int(w), int(h)
+		this.glfwWin.SetSize(width, height)
+		// A hidden X11 window may not dispatch its ConfigureNotify until
+		// after Show. Popup layout and anchoring need this size immediately,
+		// before the native callback, or the first open uses old/zero bounds.
+		if this.wt == WtPopup && this.widget != nil && width > 0 && height > 0 && !this.IsVisible() {
+			this.widget.NakedWidget().setSize(float64(width), float64(height))
+		}
 		this.dirty = true
 	}
 }
@@ -1292,13 +1299,20 @@ func (this *Window) setVisible(b bool) {
 			if this.widget != nil {
 				_, _, ww, wh = this.widget.Bounds()
 			}
-			this.glfwWin.SetSize(1, 1)
-			this.glfwWin.Show()
-			this.glfwWin.SetPos(
-				int(math.Round(this.pendingPopupPos[0])),
-				int(math.Round(this.pendingPopupPos[1])))
-			if ww > 0 && wh > 0 {
-				this.glfwWin.SetSize(int(ww), int(wh))
+			x, y := int(math.Round(this.pendingPopupPos[0])), int(math.Round(this.pendingPopupPos[1]))
+			if runtime.GOOS == "darwin" {
+				this.glfwWin.SetSize(1, 1)
+				this.glfwWin.Show()
+				this.glfwWin.SetPos(x, y)
+				if ww > 0 && wh > 0 {
+					this.glfwWin.SetSize(int(ww), int(wh))
+				}
+			} else {
+				if ww > 0 && wh > 0 {
+					this.glfwWin.SetSize(int(ww), int(wh))
+				}
+				this.glfwWin.SetPos(x, y)
+				this.glfwWin.Show()
 			}
 			this.hasPendingPos = false
 		} else {

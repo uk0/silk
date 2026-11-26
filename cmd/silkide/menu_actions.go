@@ -92,17 +92,66 @@ func buildProjectSettingsDialog(parent gui.IWidget, root string) (*gui.Dialog, *
 	return dlg, panel
 }
 
-// All export entry points use identical cancellation, naming and feedback.
-func performExport(canvas *ged.GedView) {
-	if canvas == nil || canvas.GedScene() == nil {
+var designExportFormats = [...]struct {
+	extension, label string
+}{
+	{"svg", "Export as SVG..."},
+	{"pdf", "Export as PDF..."},
+}
+
+var chooseDesignExportFile = gui.SaveFileDialogForExtension
+
+// All entry points select a format before opening the native file chooser.
+func buildDesignExportMenu(tabs *gui.TabWidget, canvas *ged.GedView, id string) *gui.Menu {
+	menu := gui.NewPopupMenu()
+	for _, format := range designExportFormats {
+		appendFileMenuCommand(menu, fileMenuCommand{id + "." + format.extension, format.label, "document", "", func() {
+			performExport(tabs, canvas, format.extension)
+		}, designDocumentActive(tabs, canvas)})
+	}
+	return menu
+}
+
+func appendDesignExportMenu(parent *gui.Menu, tabs *gui.TabWidget, canvas *ged.GedView, id string) {
+	sub := buildDesignExportMenu(tabs, canvas, id)
+	_, header := parent.AddSubMenu(i18n.T("Export"), paint.LoadIcon("document"), sub)
+	header.Action().SetObjName(id)
+	enabled := designDocumentActive(tabs, canvas)
+	header.SetEnabled(enabled)
+	header.Action().SetEnabled(enabled)
+}
+
+func performExport(tabs *gui.TabWidget, canvas *ged.GedView, extension string) {
+	if !designDocumentActive(tabs, canvas) {
 		silkideToast(i18n.T("No design to export"), gui.ToastWarning)
 		return
 	}
-	path := gui.SaveFileDialog()
+	scene := canvas.GedScene()
+	checkpoint := scene.EditCheckpoint()
+	path := chooseDesignExportFile(extension)
 	if path == "" {
 		return
 	}
+	// Native panels can pump other UI work. A different active document or
+	// revised model does not inherit the user's export confirmation.
+	if !designDocumentActive(tabs, canvas) || canvas.GedScene() != scene || !checkpoint.ModelCurrent(scene) {
+		silkideToast(i18n.T("The design changed. Reopen Export for the current design."), gui.ToastWarning)
+		return
+	}
+	// Export only to the actual path confirmed by the native dialog, not a
+	// rewritten sibling that might already exist without user confirmation.
+	want := "." + extension
+	if !strings.EqualFold(filepath.Ext(path), want) {
+		silkideToast(i18n.Tf("Use the %s extension for this export.", want), gui.ToastWarning)
+		return
+	}
 	performExportTo(path, canvas)
+}
+
+func reportExportFailure(err error) {
+	reportBuildOutput("export failed: " + err.Error())
+	revealWorkbenchTool(globalBottomDock, globalBuildOutput)
+	silkideToast(i18n.T("Export failed"), gui.ToastError)
 }
 
 func designExportPath(path string) string {
@@ -122,9 +171,7 @@ func performExportTo(path string, canvas *ged.GedView) bool {
 	}
 	path = designExportPath(path)
 	if err := exportDesignCanvas(path, canvas); err != nil {
-		reportBuildOutput("export failed: " + err.Error())
-		revealWorkbenchTool(globalBottomDock, globalBuildOutput)
-		silkideToast(i18n.T("Export failed"), gui.ToastError)
+		reportExportFailure(err)
 		return false
 	}
 	reportBuildOutput("export: wrote " + path)
@@ -192,7 +239,7 @@ func buildFileMenu(tabs *gui.TabWidget, canvas *ged.GedView) *gui.Menu {
 	appendFileMenuCommand(m, fileMenuCommand{"file.closeAll", "Close All Editors", "close", "", func() { startEditorBatchClose(tabs, nil, closeAllEditors) }, activeEditorClose == nil && len(editorCloseTargets(tabs, nil, closeAllEditors)) > 0})
 	appendFileMenuCommand(m, fileMenuCommand{"file.cancelClose", "Cancel Closing Editors", "stop", "", cancelEditorBatchClose, activeEditorClose != nil && !activeEditorClose.cancelled})
 	m.AddSeparator()
-	appendFileMenuCommand(m, fileMenuCommand{"file.export", "Export...", "document", "", func() { performExport(canvas) }, designDocumentActive(tabs, canvas)})
+	appendDesignExportMenu(m, tabs, canvas, "file.export")
 	appendFileMenuCommand(m, fileMenuCommand{"file.print", "Print Design...", "printer", "", func() { performPrintDesign(canvas) }, canPrintDesign(canvas)})
 	return m
 }

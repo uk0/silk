@@ -141,7 +141,7 @@ func genProceduralIcon(name string, draw proceduralIconDrawer) *icon {
 		cc := s.NewContext()
 		draw(size, cc)
 		cc.Destroy()
-		out.subs = append(out.subs, &subIcon{size, "", s, nil})
+		out.subs = append(out.subs, &subIcon{size: size, img: s})
 	}
 	return out
 }

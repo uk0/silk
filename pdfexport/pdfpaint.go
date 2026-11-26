@@ -33,8 +33,6 @@
 package pdfexport
 
 import (
-	"bytes"
-	"compress/zlib"
 	"fmt"
 	"image"
 	"io"
@@ -704,52 +702,67 @@ func (p *PDFPainter) DrawPixmap2(x, y float64, pixmap paint.Pixmap, x0, y0 float
 }
 
 func (p *PDFPainter) DrawPixmap5(x, y, w, h float64, pixmap paint.Pixmap) {
-	if pixmap == nil || !(w > 0 && h > 0) {
+	if pixmap == nil {
 		return
 	}
-	// PDF images have their origin at the bottom left and their positive
-	// vertical axis points UP. Map the bottom-left corner and both basis
-	// vectors (not just the anchor) into PDF user space.
-	tx, ty := p.transformPoint(x, y+h)
-	a, b := w*p.ctm.Xx, -w*p.ctm.Yx
-	c, d := -h*p.ctm.Xy, h*p.ctm.Yy
-	for _, v := range [...]float64{a, b, c, d, tx, ty} {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return
-		}
+	t, err := p.rasterPlacement(x, y, w, h)
+	if err != nil {
+		return
 	}
-	p.drawImage(pixmap, a, b, c, d, tx, ty)
+	img, err := pixmap.Image()
+	if err == nil && img != nil {
+		_ = p.embedRaster(img, pixmap.Width(), pixmap.Height(), t)
+	}
 }
 
-func (p *PDFPainter) drawImage(pixmap paint.Pixmap, a, b, c, d, tx, ty float64) {
-	img, err := pixmap.Image()
-	if err != nil || img == nil {
-		return
+// DrawRaster embeds a detached Go image. It does not retain or mutate img;
+// a caller may release native drawing resources before calling it.
+func (p *PDFPainter) DrawRaster(x, y, w, h float64, img image.Image) error {
+	t, err := p.rasterPlacement(x, y, w, h)
+	if err != nil {
+		return err
 	}
-	imgW := pixmap.Width()
-	imgH := pixmap.Height()
-	if imgW <= 0 || imgH <= 0 {
-		return
+	if img == nil {
+		return fmt.Errorf("pdf: missing raster image")
 	}
+	b := img.Bounds()
+	return p.embedRaster(img, b.Dx(), b.Dy(), t)
+}
 
-	rgb, smask, ok := encodePixmapToFlatedRGBAndSMask(img, imgW, imgH)
-	if !ok {
-		return
+func (p *PDFPainter) rasterPlacement(x, y, w, h float64) ([6]float64, error) {
+	if !(w > 0 && h > 0) {
+		return [6]float64{}, fmt.Errorf("pdf: invalid raster size %g x %g", w, h)
 	}
-	idx := len(p.images) + 1
-	name := fmt.Sprintf("Im%d", idx)
+	// PDF images originate at the bottom left with a positive UP axis.
+	// Transform both basis vectors as well as the anchor.
+	tx, ty := p.transformPoint(x, y+h)
+	t := [6]float64{w * p.ctm.Xx, -w * p.ctm.Yx, -h * p.ctm.Xy, h * p.ctm.Yy, tx, ty}
+	for _, v := range t {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return [6]float64{}, fmt.Errorf("pdf: non-finite raster transform")
+		}
+	}
+	return t, nil
+}
+
+func (p *PDFPainter) embedRaster(img image.Image, w, h int, t [6]float64) error {
+	rgb, smask, ok := encodePixmapToFlatedRGBAndSMask(img, w, h)
+	if !ok {
+		return fmt.Errorf("pdf: invalid or unencodable raster %d x %d", w, h)
+	}
+	name := fmt.Sprintf("Im%d", len(p.images)+1)
 	p.images = append(p.images, imageData{
-		width:      imgW,
-		height:     imgH,
+		width:      w,
+		height:     h,
 		compressed: rgb,
 		smask:      smask,
 		name:       name,
 	})
-
 	p.content.WriteString("q\n")
-	writePDFOp(&p.content, "cm", a, b, c, d, tx, ty)
+	writePDFOp(&p.content, "cm", t[:]...)
 	fmt.Fprintf(&p.content, "/%s Do\n", name)
 	p.content.WriteString("Q\n")
+	return nil
 }
 
 func (p *PDFPainter) DrawIcon(ico paint.Icon, size float64, disabled bool) {
@@ -762,95 +775,6 @@ func (p *PDFPainter) DrawIcon1(ico paint.Icon, x, y, size float64, disabled bool
 		defer paint.CloseSurface(pix)
 		p.DrawPixmap5(x, y, size, size, pix)
 	}
-}
-
-// encodePixmapToFlatedRGBAndSMask converts an image.Image into:
-//
-//   - rgb:    zlib-compressed straight (un-premultiplied) RGB bytes
-//     for the main /XObject /Subtype /Image stream
-//   - smask:  zlib-compressed grayscale alpha bytes for the SMask
-//     companion XObject. Returned nil when every source
-//     pixel is fully opaque, so opaque-only documents still
-//     produce single-XObject images.
-//
-// Switching from "composite onto white" to "RGB + SMask" costs one
-// extra XObject per non-opaque image (doubling object count for that
-// image) but means transparency renders correctly over any
-// background — drop shadows, alpha overlays, half-tinted icons all
-// behave the way the source pixmap intends. PDF readers (Acrobat,
-// Preview, browser viewers) blend the SMask gray channel as alpha at
-// rasterisation time exactly like Cairo's PDF surface does.
-//
-// Un-premultiply: image.At RGBA() returns 16-bit values that ARE
-// premultiplied. Naively writing (r8, g8, b8) without unmultiplying
-// would double-apply alpha when the SMask is also active. We divide
-// by alpha here so the PDF rasteriser's own multiplication matches
-// the original source pixel.
-func encodePixmapToFlatedRGBAndSMask(img image.Image, w, h int) (rgb, smask []byte, ok bool) {
-	if img.Bounds().Dx() != w || img.Bounds().Dy() != h {
-		return nil, nil, false
-	}
-	rgbBuf := make([]byte, 0, w*h*3)
-	alphaBuf := make([]byte, 0, w*h)
-	hasAlpha := false
-	min := img.Bounds().Min
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			r, g, b, a := img.At(min.X+x, min.Y+y).RGBA()
-			a16 := uint32(a)
-			// 16-bit → 8-bit, plus straight (un-premultiplied) RGB.
-			var r8, g8, b8 byte
-			a8 := byte(a >> 8)
-			switch {
-			case a16 == 0:
-				// Fully transparent; the actual RGB doesn't matter
-				// because alpha=0 will erase contribution at render
-				// time. Pick white so dithered viewers don't glow.
-				r8, g8, b8 = 255, 255, 255
-			case a16 < 0xFFFF:
-				hasAlpha = true
-				// Un-premultiply with rounding: src*255/alpha.
-				r8 = byte((uint32(r)*255 + a16/2) / a16)
-				g8 = byte((uint32(g)*255 + a16/2) / a16)
-				b8 = byte((uint32(b)*255 + a16/2) / a16)
-			default: // fully opaque
-				r8 = byte(r >> 8)
-				g8 = byte(g >> 8)
-				b8 = byte(b >> 8)
-			}
-			rgbBuf = append(rgbBuf, r8, g8, b8)
-			alphaBuf = append(alphaBuf, a8)
-		}
-	}
-	rgbZ, ok1 := flateBytes(rgbBuf)
-	if !ok1 {
-		return nil, nil, false
-	}
-	rgb = rgbZ
-	if hasAlpha {
-		alphaZ, ok2 := flateBytes(alphaBuf)
-		if !ok2 {
-			return nil, nil, false
-		}
-		smask = alphaZ
-	}
-	return rgb, smask, true
-}
-
-// flateBytes compresses raw with the standard zlib compressor.
-// Used by encodePixmapToFlatedRGBAndSMask for both the colour and
-// alpha streams.
-func flateBytes(raw []byte) ([]byte, bool) {
-	var buf bytes.Buffer
-	zw := zlib.NewWriter(&buf)
-	if _, err := zw.Write(raw); err != nil {
-		zw.Close()
-		return nil, false
-	}
-	if err := zw.Close(); err != nil {
-		return nil, false
-	}
-	return buf.Bytes(), true
 }
 
 // --- helpers ----------------------------------------------------------

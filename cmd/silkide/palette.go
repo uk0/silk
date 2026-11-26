@@ -262,9 +262,12 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	})
 	add("Preview", actionKeyHint()+"+Shift+R", func() { previewDesign(designCanvas) })
 	add("Print Design...", "", func() { performPrintDesign(designCanvas) })
-	add("Export...", "", func() {
-		performExport(designCanvas)
-	})
+	for _, format := range designExportFormats {
+		add(format.label, "", func() { performExport(editorTabs, designCanvas, format.extension) })
+		paletteCommands[len(paletteCommands)-1].Available = func() bool {
+			return designDocumentActive(editorTabs, designCanvas)
+		}
+	}
 
 	// Design actions share guards and handlers with the context toolbar.
 	for _, action := range designerActionSpecs(designCanvas) {

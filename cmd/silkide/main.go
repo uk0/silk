@@ -393,9 +393,19 @@ func buildToolBar(frame *gui.Frame, editorTabs *gui.TabWidget, designCanvas *ged
 	if button := tb.AddAction(i18n.T("Preview"), paint.LoadIcon("preview"), func() { previewDesign(designCanvas) }); button != nil {
 		gui.SetToolTip(button, i18n.T("Preview")+" ("+actionKeyHint()+"+Shift+R)")
 	}
-	// Export is separate from live preview and writes the scene as SVG/PDF.
-	addIconAction("", "document", "Export...", func() {
-		performExport(designCanvas)
+	// Use the toolbar button's anchored submenu (rather than a floating
+	// format dialog) before opening a format-specific native file chooser.
+	exportButton := addIconAction("", "document", "Export", nil)
+	exportMenu := buildDesignExportMenu(editorTabs, designCanvas, "toolbar.export")
+	exportButton.SetSubPopup(exportMenu)
+	exportButton.SetSubPopupCallback(func(gui.IButton) {
+		enabled := designDocumentActive(editorTabs, designCanvas)
+		for _, item := range exportMenu.Children() {
+			if button, ok := item.(*gui.Button); ok {
+				button.SetEnabled(enabled)
+				button.Action().SetEnabled(enabled)
+			}
+		}
 	})
 	// Focus the right-dock property sheet (Project Settings still lives in
 	// the hamburger menu). The propsheet glyph now matches its target: it

@@ -19,6 +19,18 @@ signed/notarized standalone apps.
 
 ---
 
+## Designer export menus and captions (development branch)
+
+Choose SVG or PDF from **File → Export** or the toolbar before opening the
+matching native save filter. Buttons now keep their authored icon-caption
+setting across reopen and Go code generation.
+
+![SilkIDE on Linux showing its anchored SVG/PDF export submenu and two buttons with captions](docs/images/designer-export-linux-x11.png)
+
+This is an actual Linux ARM64/X11 capture from the Designer. The same session
+reopened the design, canceled without writing, and exported both formats. Both
+files retained the 280 × 115 mm page and authored button positions.
+
 ## Bounded obstacle-aware process pipes (development branch)
 
 New process connections can avoid equipment instead of drawing through it.

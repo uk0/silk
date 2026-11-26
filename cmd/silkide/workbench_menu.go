@@ -215,11 +215,7 @@ func buildWorkbenchSubMenu(group string, tabs *gui.TabWidget, canvas *ged.GedVie
 				previewDesign(canvas)
 			}
 		})
-		add("design.export", "Export...", "document", "", design, func() {
-			if designDocumentActive(tabs, canvas) {
-				performExport(canvas)
-			}
-		})
+		appendDesignExportMenu(menu, tabs, canvas, "design.export")
 	case "Build":
 		add("build.run", "Run", "run", "F5", true, func() { runProjectInTerminal(canvas) })
 		add("build.build", "Build", "build", "F6", true, func() { buildProject(canvas) })

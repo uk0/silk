@@ -31,6 +31,7 @@ func init() {
 		{"CascadeDependencies", "SetCascadeDependencies", dpBool},
 	}
 	industrialDesignProps["gui.PrintButton"] = []designProp{
+		{"TextVisibleWithIcon", "SetTextVisible", dpBool},
 		{"DocumentPath", "SetDocumentPath", dpString},
 		{"PrinterName", "SetPrinterName", dpString},
 		{"Copies", "SetCopies", dpInt},

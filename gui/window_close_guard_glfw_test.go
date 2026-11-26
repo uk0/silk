@@ -39,6 +39,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SILK_TEST_NATIVE_POPUP_ALPHA") == "1" {
 		nativePopupSurfaceErr = runNativePopupSurfaceProbe()
 	}
+	if os.Getenv("SILK_TEST_NATIVE_POPUP_GEOMETRY") == "1" {
+		nativePopupGeometryErr = runNativePopupGeometryProbe()
+	}
 	if os.Getenv("SILK_TEST_NATIVE_BACKBUFFER") == "1" {
 		nativeBackbufferErr = runNativeBackbufferProbe()
 	}

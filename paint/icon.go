@@ -31,6 +31,9 @@ type subIcon struct {
 	path string
 	img  *cairoSurface
 	pat  *cairo.Pattern
+
+	disabledMask      *subIcon
+	disabledMaskReady bool
 }
 
 type icon struct {
@@ -131,7 +134,7 @@ func LoadIcon(name string) Icon {
 		//im = src.load(size)
 		ico = new(icon)
 		for _, ss := range src.subs {
-			ico.subs = append(ico.subs, &subIcon{ss.size, ss.path, nil, nil})
+			ico.subs = append(ico.subs, &subIcon{size: ss.size, path: ss.path})
 		}
 		ico.name = name
 		ico.resource = true
@@ -230,7 +233,7 @@ func genMissingIcon() *icon {
 		for _, size := range []int{16, 22, 32, 48} {
 			img := genMissingSubIcon(size)
 			//pat := NewPatternForSurface(img)
-			errIcon.subs = append(errIcon.subs, &subIcon{size, "", img, nil})
+			errIcon.subs = append(errIcon.subs, &subIcon{size: size, img: img})
 		}
 		errIcon.name = "image-missing"
 	}

@@ -1127,10 +1127,11 @@ type designProp struct {
 	kind           designPropKind
 }
 
-// industrialDesignProps lists the configurable design-time properties codegen
-// reproduces per SCADA/组态 widget. Only properties whose value differs from a
+// industrialDesignProps lists configurable design-time properties codegen
+// reproduces for each registered widget. Only properties whose value differs from a
 // fresh instance's default are emitted, so unchanged widgets stay terse.
 var industrialDesignProps = map[string][]designProp{
+	"gui.Button":         {{"TextVisibleWithIcon", "SetTextVisible", dpBool}},
 	"gui.CodeEditor":     {{"IsReadOnly", "SetReadOnly", dpBool}},
 	"gui.Tank":           {{"Color", "SetColor", dpColor}, {"Min", "SetMin", dpFloat}, {"Max", "SetMax", dpFloat}, {"ShowLabel", "SetShowLabel", dpBool}},
 	"gui.Indicator":      {{"Color", "SetColor", dpColor}, {"OffColor", "SetOffColor", dpColor}, {"IsBlink", "SetBlink", dpBool}},

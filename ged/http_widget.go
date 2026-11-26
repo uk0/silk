@@ -16,6 +16,7 @@ func init() {
 		panic(err)
 	}
 	industrialDesignProps["gui.HTTPButton"] = []designProp{
+		{"TextVisibleWithIcon", "SetTextVisible", dpBool},
 		{"URL", "SetURL", dpString}, {"Method", "SetMethod", dpString},
 		{"HeadersJSON", "SetHeadersJSON", dpString}, {"Body", "SetBody", dpString},
 		{"ResultType", "SetResultType", dpString}, {"JSONPointer", "SetJSONPointer", dpString},

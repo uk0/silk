@@ -15,12 +15,13 @@ import (
 )
 
 type printDialogDeps struct {
-	client *printing.Client
-	modal  func(*Dialog) DialogResult
-	choose func() string
-	spawn  func(func())
-	post   func(func())
-	notify func(IWidget, printing.Job, error)
+	client  *printing.Client
+	modal   func(*Dialog) DialogResult
+	choose  func() string
+	spawn   func(func())
+	post    func(func())
+	notify  func(IWidget, printing.Job, error)
+	capture func() (*widgetPDFSnapshot, error)
 }
 
 // ShowPrintDialog must be called on the UI thread. It returns after the modal
@@ -30,10 +31,33 @@ type printDialogDeps struct {
 // callbacks are delivered on the UI thread, including an explicit ErrCanceled.
 // No job is sent without an affirmative Print decision.
 func ShowPrintDialog(owner IWidget, path string, options printing.Options, finished ...func(printing.Job, error)) {
-	showPrintDialogWith(owner, path, options, finished, printDialogDeps{
+	showPrintDialogWith(owner, path, options, finished, defaultPrintDialogDeps())
+}
+
+// ShowWidgetPrintDialog prepares a widget document only after an explicit
+// Print decision. Source construction and raster capture run on the calling
+// UI thread; encoding, staging and printer submission run off-thread. A
+// canceled dialog never calls source or creates a temporary PDF.
+func ShowWidgetPrintDialog(owner IWidget, source func() (IWidget, error), options printing.Options, finished ...func(printing.Job, error)) {
+	deps := defaultPrintDialogDeps()
+	deps.capture = func() (*widgetPDFSnapshot, error) {
+		if source == nil {
+			return nil, fmt.Errorf("print: widget source is required")
+		}
+		widget, err := source()
+		if err != nil {
+			return nil, err
+		}
+		return captureWidgetPDF(widget)
+	}
+	showPrintDialogWith(owner, "", options, finished, deps)
+}
+
+func defaultPrintDialogDeps() printDialogDeps {
+	return printDialogDeps{
 		client: printing.NewClient(nil), modal: func(d *Dialog) DialogResult { return d.ShowModal() },
 		choose: OpenFileDialog, spawn: func(fn func()) { go fn() }, post: Post, notify: notifyPrintResult,
-	})
+	}
 }
 
 func showPrintDialogWith(owner IWidget, path string, options printing.Options, finished []func(printing.Job, error), deps printDialogDeps) {
@@ -46,6 +70,12 @@ func showPrintDialogWith(owner IWidget, path string, options printing.Options, f
 		}
 	}
 	s := newPrintDialog(owner, path, options, deps.choose)
+	if deps.capture != nil {
+		s.generated = true
+		s.body.path.SetText(i18n.T("Current design"))
+		s.body.path.SetEnabled(false)
+		s.body.choose.SetEnabled(false)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	deps.spawn(func() {
@@ -66,7 +96,11 @@ func showPrintDialogWith(owner IWidget, path string, options printing.Options, f
 	// Recheck rather than trusting only a disabled UI button. This also covers
 	// stale selection, keyboard defaults and host-specific modal implementations.
 	if !s.canPrint() {
-		finish(printing.Job{}, fmt.Errorf("%w: select a PDF and a printer", printing.ErrInvalidOptions))
+		if s.generated {
+			finish(printing.Job{}, fmt.Errorf("%w: select a printer", printing.ErrInvalidOptions))
+		} else {
+			finish(printing.Job{}, fmt.Errorf("%w: select a PDF and a printer", printing.ErrInvalidOptions))
+		}
 		return
 	}
 	options.PrinterName = s.printers[s.body.printer.ActiveIndex()].Name
@@ -75,16 +109,37 @@ func showPrintDialogWith(owner IWidget, path string, options printing.Options, f
 	if options.Title == "" {
 		options.Title = filepath.Base(s.body.path.Text())
 	}
-	staged, cleanup, err := stagePrintDocument(s.body.path.Text())
-	if err != nil {
-		finish(printing.Job{}, err)
-		return
+	var stage func() (string, func(), error)
+	if deps.capture != nil {
+		snapshot, err := deps.capture()
+		if err != nil {
+			finish(printing.Job{}, err)
+			return
+		}
+		stage = func() (string, func(), error) {
+			return stagePrivatePrintPDF(snapshot.writePDF)
+		}
+	} else {
+		// Preserve the existing PDF API's ownership guarantee: the caller
+		// may delete or overwrite its original file as soon as we return.
+		file, cleanup, err := stagePrintDocument(s.body.path.Text())
+		if err != nil {
+			finish(printing.Job{}, err)
+			return
+		}
+		stage = func() (string, func(), error) { return file, cleanup, nil }
 	}
 	deps.spawn(func() {
-		defer cleanup()
-		ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
-		defer cancel()
-		job, err := deps.client.SubmitPDF(ctx, staged, options)
+		job, err := func() (printing.Job, error) {
+			file, cleanup, err := stage()
+			if err != nil {
+				return printing.Job{}, err
+			}
+			defer cleanup()
+			ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+			defer cancel()
+			return deps.client.SubmitPDF(ctx, file, options)
+		}()
 		deps.post(func() { finish(job, err) })
 	})
 }
@@ -96,6 +151,7 @@ type printDialogState struct {
 	printers     []printing.Printer
 	discoveryErr error
 	closed       bool
+	generated    bool
 }
 
 func newPrintDialog(owner IWidget, path string, options printing.Options, choose func() string) *printDialogState {
@@ -112,6 +168,9 @@ func newPrintDialog(owner IWidget, path string, options printing.Options, choose
 	s.dialog.markDefaultButton()
 	s.body.status.SetText(i18n.T("Finding printers..."))
 	s.body.choose.Action().BindFunc0(func() {
+		if s.generated {
+			return
+		}
 		if path := choose(); path != "" {
 			s.body.path.SetText(path)
 		}
@@ -124,7 +183,7 @@ func newPrintDialog(owner IWidget, path string, options printing.Options, choose
 
 func (s *printDialogState) canPrint() bool {
 	i := s.body.printer.ActiveIndex()
-	return s.discoveryErr == nil && strings.TrimSpace(s.body.path.Text()) != "" && i >= 0 && i < len(s.printers)
+	return s.discoveryErr == nil && (s.generated || strings.TrimSpace(s.body.path.Text()) != "") && i >= 0 && i < len(s.printers)
 }
 
 func (s *printDialogState) setPrinters(printers []printing.Printer, err error, wanted string) {
@@ -158,7 +217,7 @@ func (s *printDialogState) refresh() {
 		message = PrintErrorMessage(s.discoveryErr)
 	case len(s.printers) == 0:
 		message = i18n.T("Finding printers...")
-	case strings.TrimSpace(s.body.path.Text()) == "":
+	case !s.generated && strings.TrimSpace(s.body.path.Text()) == "":
 		message = i18n.T("Select a PDF document to print.")
 	case s.body.printer.ActiveIndex() < 0:
 		message = i18n.T("Select a printer.")
@@ -222,6 +281,16 @@ func stagePrintDocument(path string) (string, func(), error) {
 	if info, err := src.Stat(); err != nil || !info.Mode().IsRegular() || info.Size() > maxDocument {
 		return "", nil, printing.ErrInvalidDocument
 	}
+	return stagePrivatePrintPDF(func(out io.Writer) error {
+		n, err := io.Copy(out, io.LimitReader(src, maxDocument+1))
+		if err != nil || n > maxDocument {
+			return fmt.Errorf("%w: copy failed or PDF exceeds 256 MiB", printing.ErrInvalidDocument)
+		}
+		return nil
+	})
+}
+
+func stagePrivatePrintPDF(write func(io.Writer) error) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "silk-print-")
 	if err != nil {
 		return "", nil, err
@@ -233,11 +302,14 @@ func stagePrintDocument(path string) (string, func(), error) {
 		cleanup()
 		return "", nil, err
 	}
-	n, copyErr := io.Copy(out, io.LimitReader(src, maxDocument+1))
+	err = write(out)
 	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil || n > maxDocument {
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("%w: copy failed or PDF exceeds 256 MiB", printing.ErrInvalidDocument)
+		return "", nil, err
 	}
 	if _, err := printing.ValidatePDF(dst); err != nil {
 		cleanup()

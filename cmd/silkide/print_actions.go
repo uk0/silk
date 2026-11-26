@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/uk0/silk/ged"
 	"github.com/uk0/silk/gui"
@@ -11,16 +10,15 @@ import (
 	"github.com/uk0/silk/printing"
 )
 
-var showDesignPrintDialog = gui.ShowPrintDialog
+var showDesignPrintDialog = gui.ShowWidgetPrintDialog
 
 func canPrintDesign(canvas *ged.GedView) bool {
 	return canvas != nil && canvas.GedScene() != nil &&
 		(globalWorkbench == nil || documentMode(globalWorkbench.tabs, canvas) == modeDesign)
 }
 
-// Render a detached preview tree, never the editor selection/handles or a
-// screenshot of the desktop. ShowPrintDialog stages the PDF before it returns,
-// so the host temporary file can be removed on every exit path.
+// Render a detached runtime preview after confirmation, not the design
+// surface's selection handles and not a screenshot of the desktop.
 func performPrintDesign(canvas *ged.GedView) {
 	if !canPrintDesign(canvas) {
 		silkideToast(i18n.T("Switch to Design mode to print"), gui.ToastWarning)
@@ -31,24 +29,15 @@ func performPrintDesign(canvas *ged.GedView) {
 		silkideToast(i18n.T("Cannot print a design with missing widgets"), gui.ToastError)
 		return
 	}
-	preview := scene.Generate().Form()
-	file, err := os.CreateTemp("", "silk-design-print-*.pdf")
-	if err != nil {
-		reportPrintFailure(err)
-		return
-	}
-	path := file.Name()
-	defer os.Remove(path)
-	err = gui.RenderWidgetPDF(file, preview)
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		reportPrintFailure(err)
-		return
-	}
-	showDesignPrintDialog(canvas, path, printing.Options{Title: scene.FormTitle(), Copies: 1}, func(job printing.Job, err error) {
+	showDesignPrintDialog(canvas, func() (gui.IWidget, error) {
+		if !canPrintDesign(canvas) || canvas.GedScene() != scene {
+			return nil, errors.New(i18n.T("The design changed. Reopen Print for the current design."))
+		}
+		if len(scene.MissingWidgets()) != 0 {
+			return nil, errors.New(i18n.T("Cannot print a design with missing widgets"))
+		}
+		return scene.Generate().Form(), nil
+	}, printing.Options{Title: scene.FormTitle(), Copies: 1}, func(job printing.Job, err error) {
 		if errors.Is(err, printing.ErrCanceled) {
 			return
 		}
@@ -63,10 +52,4 @@ func performPrintDesign(canvas *ged.GedView) {
 			reportBuildOutput(fmt.Sprintf("print: queued %s on %s", job.ID, job.PrinterName))
 		}
 	})
-}
-
-func reportPrintFailure(err error) {
-	reportBuildOutput("print: " + err.Error())
-	revealWorkbenchTool(globalBottomDock, globalBuildOutput)
-	silkideToast(i18n.T("Printing could not complete")+": "+err.Error(), gui.ToastError)
 }

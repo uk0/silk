@@ -416,34 +416,33 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 	var retainedSub *subIcon
 	switch x := ico.(type) {
 	case *atlasIcon:
-		sub := x.getSub(size)
-		retainedSub = sub
-		img = sub.img
-		if sub.pat == nil {
-			sub.pat = cairo.NewPatternForSurface(img.Surface)
-			runtime.SetFinalizer(sub, func(s *subIcon) { s.pat.Destroy() })
-		}
-		pat = sub.pat
+		retainedSub = x.getSub(size)
 	case *icon:
-		sub := x.getNearest(size)
-		retainedSub = sub
-		if sub == nil {
-			return
-		}
-		img = sub.img
-		if sub.pat == nil {
-			sub.pat = cairo.NewPatternForSurface(img.Surface)
-			runtime.SetFinalizer(sub, func(s *subIcon) { s.pat.Destroy() })
-		}
-		pat = sub.pat
+		retainedSub = x.getNearest(size)
 	default:
 		var ok bool
 		img, ok = ico.Pixmap(size).(*cairoSurface)
 		if !ok || img == nil || img.Width() <= 0 || img.Height() <= 0 {
 			return
 		}
+		if grayed {
+			if mask := tonalDisabledIconMask(img); mask != nil {
+				defer CloseSurface(mask)
+				img = mask
+			}
+		}
 		pat = cairo.NewPatternForSurface(img.Surface)
 		defer pat.Destroy()
+	}
+	if retainedSub != nil {
+		if grayed {
+			retainedSub = retainedSub.disabledPresentation()
+		}
+		img = retainedSub.img
+		pat = retainedSub.sourcePattern()
+	}
+	if pat == nil {
+		return
 	}
 	// Keep the requested fractional logical extent: rounding it to an integer
 	// enlarges small icons and adds a second resampling step at fractional DPI.
@@ -453,8 +452,8 @@ func (this *cairoPainter) DrawIcon(ico Icon, fSize float64, grayed bool) {
 	this.cairo.Save()
 	this.cairo.SetSource(pat)
 	if grayed {
-		// Alpha-mask with a neutral theme color; HSL on a transparent
-		// destination leaked the original saturated bitmap colors.
+		// Apply only the current disabled tint. Cached raster masks retain
+		// tonal variation without leaking saturated source colors.
 		this.cairo.SetSourceRGBA(currentIconPalette.Disabled.NRGBAf())
 		this.cairo.Mask(pat)
 	} else {
