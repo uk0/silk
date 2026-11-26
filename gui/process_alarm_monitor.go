@@ -3,6 +3,8 @@ package gui
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/uk0/silk/async"
 	"github.com/uk0/silk/core"
@@ -23,6 +25,8 @@ type ProcessAlarmMonitor struct {
 	model        *SimpleTableModel
 	ack          *Button
 	toggle       *Button
+	search       *SearchBox
+	pending      *CheckBox
 	status       *Label
 	states       map[string]hmi.AlarmState
 	history      bool
@@ -34,6 +38,8 @@ func init() {
 	i18n.AddMany("zh", map[string]string{
 		"Live alarms": "实时报警", "Alarm history": "报警历史", "Live rules": "实时规则",
 		"Acknowledge alarm": "确认报警", "No configured alarms": "没有配置报警规则",
+		"Find alarms": "搜索报警", "Pending only": "只看待确认",
+		"Showing %d of %d": "显示 %d / %d", "Alarm search is limited to 128 characters": "报警搜索最多支持 128 个字符",
 		"No runtime; use Run or SetRuntime explicitly": "未连接运行时，请显式运行或绑定",
 		"Alarm state": "报警状态", "Normal": "正常", "Active alarm": "活动报警",
 		"Active / acknowledged": "活动 / 已确认", "Returned / awaiting acknowledgment": "已复归 / 待确认",
@@ -70,9 +76,18 @@ func newProcessAlarmMonitor(post func(func())) *ProcessAlarmMonitor {
 	v.toggle.Action().BindFunc0(func() {
 		if v.runtime != nil && !v.closed {
 			v.history = !v.history
+			v.layoutTriage()
 			v.refresh()
 		}
 	})
+	v.search = NewSearchBox()
+	v.search.SetPlaceholder(i18n.T("Find alarms"))
+	v.search.SetParent(v)
+	v.search.SigTextChanged(func(string) { v.refreshFilter() })
+	v.pending = NewCheckBox()
+	v.pending.SetText(i18n.T("Pending only"))
+	v.pending.SetParent(v)
+	v.pending.SigCheck(func(bool) { v.refreshFilter() })
 	v.status = NewLabel("")
 	v.status.SetParent(v)
 	v.refresh()
@@ -90,12 +105,41 @@ func (v *ProcessAlarmMonitor) Draw(g paint.Painter) {
 }
 
 func (v *ProcessAlarmMonitor) OnResize() {
+	v.layoutTriage()
+}
+
+func (v *ProcessAlarmMonitor) layoutTriage() {
+	if v.status == nil {
+		return
+	}
 	w, h := v.Size()
-	bw := min(190, max(0, (w-20)/2))
+	const margin, gap = 8., 4.
+	content := max(0, w-2*margin)
+	bw := min(180, max(0, (content-gap)/2))
+	x, y := margin+2*bw+2*gap, 6.
+	if w < 660 {
+		x, y = margin, 40
+	}
+	filterWidth := max(0, w-margin-x)
+	pendingWidth := 0.
+	if !v.history {
+		pendingWidth = min(144, max(0, (filterWidth-gap)*.45))
+		filterWidth = max(0, filterWidth-pendingWidth-gap)
+	}
+	v.pending.SetVisible(!v.history)
 	v.ack.SetBounds(8, 6, bw, 30)
 	v.toggle.SetBounds(12+bw, 6, bw, 30)
-	v.table.SetBounds(8, 42, max(0, w-16), max(0, h-70))
-	v.status.SetBounds(8, max(42, h-26), max(0, w-16), 22)
+	v.search.SetBounds(x, y, filterWidth, 30)
+	v.pending.SetBounds(x+filterWidth+gap, y, pendingWidth, 30)
+	tableY := y + 36
+	v.table.SetBounds(margin, tableY, content, max(0, h-tableY-28))
+	v.status.SetBounds(margin, max(tableY, h-26), content, 22)
+}
+
+func (v *ProcessAlarmMonitor) refreshFilter() {
+	if v.runtime != nil && !v.closed {
+		v.refresh()
+	}
 }
 
 // SetRuntime subscribes to lifecycle/quality changes; analog-only changes do
@@ -107,6 +151,9 @@ func (v *ProcessAlarmMonitor) SetRuntime(rt *hmi.Runtime) {
 	}
 	v.detach()
 	v.history = false
+	v.search.Clear()
+	v.pending.SetChecked(false)
+	v.layoutTriage()
 	v.table.SetSelectedRow(-1) // a replacement runtime never inherits an ACK target
 	v.runtime = rt
 	if rt != nil {
@@ -190,6 +237,30 @@ func (v *ProcessAlarmMonitor) SelectAlarm(id string) bool {
 	return false
 }
 
+// Every search term may match a different field. Raw priority and event
+// names are accepted in addition to their localized labels.
+func alarmMatches(terms []string, fields ...string) bool {
+	if len(terms) == 0 {
+		return true
+	}
+	for i := range fields {
+		fields[i] = strings.ToLower(fields[i])
+	}
+	for _, term := range terms {
+		match := false
+		for _, f := range fields {
+			if strings.Contains(f, term) {
+				match = true
+				break
+			}
+		}
+		if !match {
+			return false
+		}
+	}
+	return true
+}
+
 func (v *ProcessAlarmMonitor) refresh() {
 	var selected, selectedEvent string
 	if v.history && v.shownHistory {
@@ -214,6 +285,13 @@ func (v *ProcessAlarmMonitor) refresh() {
 	}
 	status := i18n.T("No runtime; use Run or SetRuntime explicitly")
 	if rt := v.runtime; rt != nil {
+		query := v.search.Text()
+		tooLong := len(query) > 512 || utf8.RuneCountInString(query) > 128
+		var terms []string
+		if !tooLong {
+			terms = strings.Fields(strings.ToLower(query))
+		}
+		pendingOnly := !v.history && v.pending.IsChecked()
 		states := rt.AlarmStates()
 		v.states = make(map[string]hmi.AlarmState, len(states))
 		active := 0
@@ -222,26 +300,40 @@ func (v *ProcessAlarmMonitor) refresh() {
 				active++
 			}
 			v.states[s.ID] = s
-			if !v.history {
-				model.AddRow(s.ID, s.Point, i18n.T(string(s.Priority)), processAlarmState(s), processPointQuality(s.Quality), processPointDisplay(s.Value))
+			if !v.history && !tooLong && (!pendingOnly || s.Active && !s.Acknowledged) {
+				priority := i18n.T(string(s.Priority))
+				if alarmMatches(terms, s.ID, s.Point, string(s.Priority), priority) {
+					model.AddRow(s.ID, s.Point, priority, processAlarmState(s), processPointQuality(s.Quality), processPointDisplay(s.Value))
+				}
 			}
 		}
+		total := len(states)
 		status = i18n.T("No configured alarms")
 		if len(states) != 0 {
 			status = fmt.Sprintf("%s: %d / %d", i18n.T("Live alarms"), active, len(states))
 		}
 		if v.history {
 			events := rt.AlarmEvents(0)
-			for i := len(events) - 1; i >= 0; i-- {
+			for i := len(events) - 1; i >= 0 && !tooLong; i-- {
 				e := events[i]
 				s := e.State
+				kind, priority := i18n.T(string(e.Kind)), i18n.T(string(s.Priority))
+				if !alarmMatches(terms, s.ID, s.Point, string(s.Priority), priority, string(e.Kind), kind) {
+					continue
+				}
 				model.rows = append(model.rows, []string{
-					s.ID, s.Point, i18n.T(string(e.Kind)), i18n.T(string(s.Priority)),
+					s.ID, s.Point, kind, priority,
 					processPointQuality(s.Quality), processPointDisplay(s.Value),
 					e.At.UTC().Format("2006-01-02 15:04:05.000"), strconv.FormatUint(e.Sequence, 10),
 				})
 			}
+			total = len(events)
 			status = fmt.Sprintf("%s: %d / %d", i18n.T("Alarm history"), len(events), hmi.AlarmHistoryLimit)
+		}
+		if tooLong {
+			status = i18n.T("Alarm search is limited to 128 characters")
+		} else if len(terms) != 0 || pendingOnly {
+			status = fmt.Sprintf(i18n.T("Showing %d of %d"), model.RowCount(), total) + " · " + status
 		}
 	}
 	if v.model == nil || v.shownHistory != v.history {
@@ -273,7 +365,10 @@ func (v *ProcessAlarmMonitor) refresh() {
 		}
 	}
 	v.table.SetSelectedRow(row)
-	v.toggle.SetEnabled(v.runtime != nil && !v.closed)
+	bound := v.runtime != nil && !v.closed
+	v.toggle.SetEnabled(bound)
+	v.search.SetEnabled(bound)
+	v.pending.SetEnabled(bound && !v.history)
 	toggle := "Alarm history"
 	if v.history {
 		toggle = "Live rules"

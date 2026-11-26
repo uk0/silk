@@ -2,6 +2,9 @@
 
 ## Unreleased — typed HMI alarms
 
+- Search live rules and history by rule ID, point and priority (and event
+  type in history). **Pending only** shows live rules awaiting acknowledgment
+  without changing the runtime or dropping retained events.
 - Author point alarm rules with exact numeric hysteresis or typed bool/text
   matching, individual raise/clear delays, quality gating and optional latching.
 - Browse live alarms and bounded session history in the standalone workbench

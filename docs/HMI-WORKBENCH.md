@@ -198,6 +198,17 @@ not start acquisition, and replaces the point monitor while visible. In the
 IDE, select a live rule or history row and choose **Go to source** to locate
 the authored rule. History is read-only; stopping detaches the monitor, and
 editing the source invalidates the running snapshot and its rule targets.
+
+**Find alarms** matches rule IDs, point names and priorities in either view,
+and event types in history. Separate words can match different columns.
+**Pending only** shows active, unacknowledged rules, including a returned
+alarm still held by a latch. It never filters the history view. Counts
+distinguish matching rows from all available rows. Hiding a selected row
+clears the selection; clearing the filter does not act on or reselect it.
+Filters reset when the monitor leaves or replaces its runtime.
+
+![Alarm triage widget preview: a pending rule matched by rule name and point ID](images/hmi-alarm-triage-live.png)
+
 SDK consumers can subscribe to
 `Runtime.SubscribeAlarmChanges`, read `AlarmStates` / `AlarmEvents`, and use
 `AcknowledgeAlarm` with the displayed token. The event ring is bounded and

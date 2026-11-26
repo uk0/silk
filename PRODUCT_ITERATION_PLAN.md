@@ -9,6 +9,25 @@ Each iteration must prove authored state, preview/runtime behavior, persistence,
 generated code, cancellation/thread ownership and relevant platform behavior.
 Do not substitute a small passing test for the whole product-readiness gate.
 
+## Validated increment: alarm triage
+
+- [x] Add inline multi-field search to live and history views, plus a live-only
+      pending filter. Keep the same acquisition session and bounded history.
+- [x] Restore selection only when the same event or live occurrence still
+      matches. Retire selection and acknowledgment on filter-out or rebind.
+- [x] Pass macOS full/race and strict bundled-gopls against the frozen
+      candidate; verify the before/after source manifests.
+- [x] Verify Linux arm64/Xvfb full/race, strict bundled-gopls and final hashes
+      against the same portable source archive.
+- [x] Verify compact and wide Windows native layouts, search, acknowledgment,
+      source navigation, Stop and normal exit with unchanged fixture and no
+      point writes. Pass Windows full/race/strict bundled-gopls and verify all
+      frozen source hashes on the same candidate.
+
+[Alarm triage verification](HMI_ALARM_TRIAGE_QA_20261126.md).
+The macOS native capture timeout is documented separately; automated macOS
+results do not stand in for a native interaction pass.
+
 ## In verification: typed alarm lifecycle and authoring
 
 - [x] Add bounded schema validation and exact typed thresholds, with separate

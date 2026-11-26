@@ -461,7 +461,8 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
   the editor buffer. Runtime selection is read-only.
 - Edit **Alarm rules** with exact typed thresholds, hysteresis, debounce and
   optional latching. Both the standalone HMI workbench and **Process Runtime**
-  show live alarms and session history. In the IDE, **Go to source** opens the
+  show searchable live alarms and session history. **Pending only** isolates
+  live alarms that still need acknowledgment. In the IDE, **Go to source** opens the
   selected alarm rule from either view.
 - Loading/drawing never starts acquisition; I/O stays off the UI thread and
   workers are cancelled/joined. This is a 2D foundation, not certified SCADA or
@@ -482,7 +483,10 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
 [Process Runtime source navigation QA](HMI_RUNTIME_NAV_QA_20261117.md) ·
 [Typed alarm lifecycle QA](HMI_TYPED_ALARMS_QA_20261117.md) ·
 [IDE alarm dock QA](HMI_ALARM_DOCK_QA_20261117.md) ·
+[Alarm triage QA](HMI_ALARM_TRIAGE_QA_20261126.md) ·
 [Reusable equipment QA](HMI_DEVICE_LIBRARY_QA_20261114.md)
+
+![Windows SilkIDE: filtered alarm acknowledgment with the exact source rule open](docs/images/hmi-alarm-triage-windows-history.png)
 
 ![Windows native group authoring and owned Arrange menu](docs/images/hmi-authoring-arrange-windows.png)
 
