@@ -272,8 +272,8 @@ func installLocale() {
 func registerSilkideTranslations() {
 	i18n.AddMany("zh-CN", map[string]string{
 		"Lay Out Horizontally": "水平布局", "Lay Out Vertically": "垂直布局", "Lay Out in a Grid": "网格布局", "Lay Out in a Form": "表单布局", "Break Layout": "解除布局", "Fit to View": "适应视口",
-		"Select two or more unlocked siblings, or a matching free-layout container. Form layout pairs labels and fields.": "多选同父的至少两个未锁定控件，或选中同类型自由布局容器直接启用；表单布局左右配对",
-		"Select an unlocked layout container; keep its children and remove the layout.":                                   "选择未锁定的布局容器，保留子控件并解除排列",
+		"Select unlocked siblings, a matching free-layout container, or the form itself. With no selection, apply to the whole form.": "可选中同父的未锁定控件、同类型自由布局容器或窗体本身；没有选中控件时应用于整个窗体",
+		"Select an unlocked layout container; keep its children and remove the layout.":                                               "选择未锁定的布局容器，保留子控件并解除排列",
 		"Show the complete form (%s+Shift+0)": "缩放画布以显示完整表单 (%s+Shift+0)",
 	})
 	i18n.Default.AddMany("zh-CN", map[string]string{

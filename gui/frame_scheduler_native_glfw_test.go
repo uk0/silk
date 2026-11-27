@@ -34,9 +34,16 @@ func runNativeFirstFrameProbe() error {
 		return err
 	}
 	defer form.DetachWindow()
+	win := form.Window().NakedWindow()
+	// GLFW may defer callbacks for an unmapped native toplevel. A resize
+	// after attachment still has to reach the widget before Show, so callers
+	// can lay out the content without reading stale client dimensions.
+	form.SetSize(520, 360)
+	if form.Width() != 520 || form.Height() != 360 || win.canRenderFrame() {
+		return fmt.Errorf("hidden resize: logical=%gx%g, expected 520x360 without drawing", form.Width(), form.Height())
+	}
 	form.Show()
 	defer form.Hide()
-	win := form.Window().NakedWindow()
 	deadline := time.Now().Add(2 * time.Second)
 	for !win.IsVisible() && time.Now().Before(deadline) {
 		glfw.WaitEventsTimeout(.02)

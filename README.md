@@ -61,6 +61,15 @@ cannot overwrite an occupied target cell or discard an incompatible span.
 
 ![Native Wayland Designer previewing a Pump control transfer from a vertical layout to the second column of a form](docs/images/designer-layout-transfer-wayland.png)
 
+### Apply a layout to the whole form
+
+Select the form in the **Objects** panel, or clear the selection on the
+canvas, then choose horizontal, vertical, grid or form layout. The layout
+fills the form's client area and follows window resizing, both in the preview
+and in applications built from the generated Go or loaded with `gui.LoadForm`.
+Other layouts created from a selection still use the controls' bounding box.
+Choose **Break Layout** to return to free placement.
+
 ## Designer export menus and captions (development branch)
 
 Choose SVG or PDF from **File → Export** or the toolbar before opening the

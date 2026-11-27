@@ -97,10 +97,14 @@ func (pc *previewController) preview(scene *ged.GedScene) {
 // the backend wiring in preview so that lifecycle logic stays free of window
 // handling. Must run on the UI thread.
 func (pc *previewController) showForm(title string, form *gui.Form) {
-	// Dock.AddView immediately resizes its view. Capture the designed size first.
-	designW, designH := form.Size()
-	frame := gui.NewFrameWindow()
-	frame.SetTitle("Preview — " + title)
+	frame := newPreviewFrame(title, form)
+	_ = gui.AppIcon() // Match NewFrameWindow's default icon selection.
+	if err := frame.TryAttachWindow(gui.WtForm); err != nil {
+		pc.stopPreview()
+		frame.Close()
+		core.Warn("preview: attach window: ", err)
+		return
+	}
 	frame.SetClosedCallback(func(*gui.Frame) {
 		// This callback fires because the window is already closing; forget the
 		// frame first so the stopPreview below doesn't try to re-close it, then
@@ -108,28 +112,30 @@ func (pc *previewController) showForm(title string, form *gui.Form) {
 		pc.frame = nil
 		pc.stopPreview()
 	})
-	if dock, ok := frame.SuggestDocDock().(*gui.Dock); ok && dock != nil {
-		dock.AddView(form)
-	}
 	pc.frame = frame
-
-	// Account for dock/menu chrome as well as the form itself. Otherwise
-	// controls near the form's right/bottom edge are silently clipped.
-	sizePreviewFrame(frame, form, designW, designH)
-	if win := frame.Window(); win != nil {
-		win.SetSize(frame.Size())
-		win.MoveToCenter()
-	}
+	frame.Window().MoveToCenter()
 	frame.Show()
 }
 
-// sizePreviewFrame is also exercised with an unattached native-free frame.
-func sizePreviewFrame(frame *gui.Frame, form *gui.Form, width, height float64) {
+// Prepare the layout before attaching a native window. In particular, a
+// Wayland toplevel may not get its first resize callback until it is shown.
+func newPreviewFrame(title string, form *gui.Form) *gui.Frame {
+	// Dock.AddView immediately resizes its view. Capture the designed size first.
+	width, height := form.Size()
+	frame := gui.NewFrame()
+	frame.Hide()
+	frame.SetTitle("Preview — " + title)
+	if dock, ok := frame.SuggestDocDock().(*gui.Dock); ok && dock != nil {
+		dock.AddView(form)
+	}
+
+	// Allow for dock chrome so the form's right and bottom edge are not clipped.
 	frame.SetSize(max(320, width), max(240, height))
 	frame.Layout()
 	viewW, viewH := form.Size()
 	frame.SetSize(frame.Width()+max(0, width-viewW), frame.Height()+max(0, height-viewH))
 	frame.Layout()
+	return frame
 }
 
 // stopPreview tears the current preview down: it unwires the live screen, stops

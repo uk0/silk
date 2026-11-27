@@ -6,11 +6,14 @@ import (
 	"github.com/uk0/silk/i18n"
 )
 
-// Layout ownership constrains a child's geometry, not the layout container's
-// own geometry and not the child's normal selection/property editing.
+// Layout ownership constrains geometry, not selection. A regular container
+// can move on its own; a form's root layout instead follows the form.
 func managedGeometryItem(item graph.IItem) bool {
 	if item == nil {
 		return false
+	}
+	if scene, ok := item.Parent().(*GedScene); ok {
+		return scene.activeFormLayout() == item
 	}
 	parent, ok := item.Parent().(*FakeWidget)
 	return ok && parent.layoutManaged && isDesignerLayoutFactory(parent.WidgetFactoryName())

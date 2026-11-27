@@ -87,6 +87,7 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 		idx[n.ID] = obj
 	}
 
+	formLayoutAttached := false
 	for childIndex, c := range n.Children {
 		if c == nil {
 			continue
@@ -102,6 +103,9 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 		// or our concrete obj.
 		if !attachLayoutChild(obj, child, n.Type, c, childIndex) {
 			attachChild(obj, child)
+		}
+		if n.Type == "gui.Form" && !formLayoutAttached {
+			formLayoutAttached = attachFormLayoutRoot(obj, child, c)
 		}
 	}
 

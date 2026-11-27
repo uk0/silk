@@ -39,6 +39,7 @@ type ObjectInspector struct {
 	gui.Widget
 	scene       *GedScene
 	view        *GedView
+	changeToken int
 	items       []inspectorItem
 	selectedIdx int
 	hoverIdx    int
@@ -107,10 +108,13 @@ func (this *ObjectInspector) Layout() {
 // row press sets the canvas selection, and a drag re-parent reuses the command
 // that selection generates. A scene nobody is showing yields a read-only tree.
 func (this *ObjectInspector) SetScene(scene *GedScene) {
-	this.scene = scene
-	this.view = nil
+	if this.scene != nil {
+		this.scene.RemoveDesignChangedCallback(this.changeToken)
+	}
+	this.scene, this.view, this.changeToken = scene, nil, 0
 	if scene != nil {
 		this.view, _ = scene.View().(*GedView)
+		this.changeToken = scene.AddDesignChangedCallback(this.Rebuild)
 	}
 	this.Rebuild()
 }
@@ -854,7 +858,8 @@ const parentInsetMm = 2.0
 // picks up its handles and every selection-driven panel (property sheet,
 // code panel, status bar) follows the tree.
 func (this *ObjectInspector) selectOnCanvas(item graph.IItem) {
-	if this.view == nil || item == nil || item == graph.IItem(this.scene) {
+	if this.view == nil || item == nil || this.scene != this.view.Scene() ||
+		item.Scene() != this.scene || !item.IsSelectable() {
 		return
 	}
 	sel := this.view.Selection()

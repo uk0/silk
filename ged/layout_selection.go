@@ -48,6 +48,9 @@ func (v *GedView) CanLayoutSelection(kind LayoutKind) bool {
 	if !isDesignerLayoutFactory(string(kind)) {
 		return false
 	}
+	if scene := v.selectedFormForLayout(); scene != nil {
+		return scene.canApplyFormLayout()
+	}
 	if v.containerLayoutTarget(kind) != nil {
 		return true
 	}
@@ -181,8 +184,11 @@ func layoutPlacements(items []*FakeWidget, kind LayoutKind) []layoutPlacement {
 }
 
 func (v *GedView) CanBreakLayout() bool {
-	for _, it := range v.Selection().ItemList() {
-		if f, ok := it.(*FakeWidget); ok && isDesignerLayoutFactory(f.WidgetFactoryName()) && !f.IsLockPos() && f.HasChildren() && f.Scene() == v.Scene() {
+	if s := v.selectedFormForLayout(); s != nil {
+		return v.breakableLayout(s) != nil
+	}
+	for _, item := range v.Selection().ItemList() {
+		if v.breakableLayout(item) != nil {
 			return true
 		}
 	}
@@ -235,6 +241,9 @@ func (c *layoutSelectionCommand) Undo() {
 func (v *GedView) LayoutSelection(kind LayoutKind) bool {
 	if !v.CanLayoutSelection(kind) {
 		return false
+	}
+	if scene := v.selectedFormForLayout(); scene != nil {
+		return v.applyFormLayout(scene, kind)
 	}
 	if container := v.containerLayoutTarget(kind); container != nil {
 		return v.layoutContainer(container, kind)
@@ -303,12 +312,19 @@ func setLayoutSelection(view *GedView, items []graph.IItem) {
 type breakLayoutCommand struct {
 	move            *graph.ReparentCommand
 	view            *GedView
+	form            *GedScene
 	original, freed []graph.IItem
 }
 
 func (c *breakLayoutCommand) Text() string { return "Break Layout" }
 func (c *breakLayoutCommand) Redo()        { c.move.Redo(); setLayoutSelection(c.view, c.freed) }
-func (c *breakLayoutCommand) Undo()        { c.move.Undo(); setLayoutSelection(c.view, c.original) }
+func (c *breakLayoutCommand) Undo() {
+	c.move.Undo()
+	if c.form != nil {
+		c.form.syncFormLayout(true)
+	}
+	setLayoutSelection(c.view, c.original)
+}
 
 // BreakLayout dissolves only layout containers and preserves both geometry
 // and selection through undo/redo. Ordinary Card/GroupBox widgets are retained.
@@ -317,10 +333,19 @@ func (v *GedView) BreakLayout() bool {
 		return false
 	}
 	cmd := &breakLayoutCommand{move: graph.NewReparentCommand("Break Layout"), view: v, original: append([]graph.IItem(nil), v.Selection().ItemList()...)}
-	for _, item := range cmd.original {
-		box, ok := item.(*FakeWidget)
-		if !ok || !isDesignerLayoutFactory(box.factoryName) || box.IsLockPos() || !box.HasChildren() || box.Parent() == nil {
+	targets := cmd.original
+	if s := v.selectedFormForLayout(); s != nil {
+		targets = []graph.IItem{s}
+	}
+	visited := make(map[*FakeWidget]bool)
+	for _, item := range targets {
+		box := v.breakableLayout(item)
+		if box == nil || visited[box] {
 			continue
+		}
+		visited[box] = true
+		if form, ok := box.Parent().(*GedScene); ok && box == form.activeFormLayout() {
+			cmd.form = form
 		}
 		for _, child := range box.Children() {
 			x, y := graph.TranslateBetweenParents(box, box.Parent(), child.X(), child.Y())

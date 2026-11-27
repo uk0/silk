@@ -3,6 +3,7 @@ package ged
 import (
 	"errors"
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/decl"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
@@ -649,6 +650,13 @@ func loadChildWidgets(childrenDoc *core.TDoc, parent graph.IItem, skipped *[]str
 		}
 		child.SetParent(parent)
 		child.loadDesign(v, skipped)
+		if scene, ok := parent.(*GedScene); ok && scene.activeFormLayout() == nil && managedLayoutTarget(child) != nil {
+			var fill bool
+			_ = v.ReadAttr(decl.FormLayoutFillProp, &fill)
+			if fill {
+				scene.formLayout = child
+			}
+		}
 	}
 }
 
@@ -731,10 +739,17 @@ func (this *FakeWidget) loadDesign(doc *core.TDoc, skipped *[]string) {
 func (this *FakeWidget) EnumProperties(list prop.IPropertyList) {
 	list.AddProperty("控件名称", this.WidgetName, this.SetWidgetName)
 	list.AddProperty("控件类型", this.WidgetFactoryName, nil)
-	list.AddProperty("X 位置 (mm)", this.X, this.setDesignX)
-	list.AddProperty("Y 位置 (mm)", this.Y, this.setDesignY)
-	list.AddProperty("宽度 (mm)", this.Width, this.SetWidth)
-	list.AddProperty("高度 (mm)", this.Height, this.SetHeight)
+	if managedGeometryItem(this) {
+		list.AddProperty("X 位置 (mm)", this.X, nil)
+		list.AddProperty("Y 位置 (mm)", this.Y, nil)
+		list.AddProperty("宽度 (mm)", this.Width, nil)
+		list.AddProperty("高度 (mm)", this.Height, nil)
+	} else {
+		list.AddProperty("X 位置 (mm)", this.X, this.setDesignX)
+		list.AddProperty("Y 位置 (mm)", this.Y, this.setDesignY)
+		list.AddProperty("宽度 (mm)", this.Width, this.SetWidth)
+		list.AddProperty("高度 (mm)", this.Height, this.SetHeight)
+	}
 	list.AddProperty("锁定", this.IsLocked, this.SetLocked)
 	this.enumLayoutPlacementProperties(list)
 

@@ -74,13 +74,20 @@ func previewBlockers(scene *GedScene) []string {
 	return out
 }
 
-// PreviewForm is the window root of a 预览. It owns the title, Esc and handing
-// keyboard focus back, and nothing else: the generated form hangs underneath it
-// exactly as GedScene.Generate produced it, so what the user sees is the tree
-// the code generator would emit and not a re-interpretation of it.
+// PreviewForm hosts the generated widget tree and hands keyboard focus back
+// when it closes. Only a design with a root layout follows the preview size;
+// free-placement documents retain their authored viewport.
 type PreviewForm struct {
 	gui.Form
-	focusBack gui.IWidget
+	focusBack  gui.IWidget
+	responsive *gui.Form
+}
+
+func (p *PreviewForm) Layout() {
+	p.Form.Layout()
+	if content := p.responsive; content != nil && content.Parent() == p {
+		content.SetBounds(0, 0, p.Width(), p.Height())
+	}
 }
 
 func newPreviewForm() *PreviewForm {
@@ -115,6 +122,9 @@ func BuildPreview(scene *GedScene) (*PreviewForm, []string) {
 	host.SetSize(w, h)
 	form.SetBounds(0, 0, w, h)
 	form.SetParent(host)
+	if form.LayoutRoot() != nil {
+		host.responsive = form
+	}
 	// Generate hands back a hidden form — it builds trees for callers that only
 	// read them. Only the host gets Show()n, so without this the preview window
 	// opens empty.

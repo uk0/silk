@@ -37,6 +37,18 @@
 - Apply the new parent and the source/target layout updates as one Undo edit.
   Preserve explicit spans and legacy implicit cell positions in the source.
 
+## Unreleased — responsive form layouts
+
+- Select the form to create a layout that fills its client area, including on
+  an empty form. Horizontal, vertical, grid and form layouts share the same
+  behavior in the Designer, the Go SDK, and both code generators.
+- The layout's size follows the form instead of being independently editable.
+  Break Layout returns the children to free placement; Undo restores the
+  original ownership, coordinates and stacking order.
+- Lay out the preview before attaching its native window. Wayland previews
+  now open with a drawable client area even if the compositor defers resize
+  notifications until the window is shown.
+
 ## Unreleased — tabular layout editing
 
 - Drag palette controls into empty Grid/Form cells and move or swap existing

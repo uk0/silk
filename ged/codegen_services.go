@@ -28,7 +28,7 @@ type fieldInfo struct {
 	parentAdd      bool        // parent is a simple-AddWidget container
 	fake           *FakeWidget // the designed item this field was collected from
 	// Captured on UI before widget/fake are stripped from a CodeSnapshot.
-	layoutManaged, gridParent                      bool
+	layoutManaged, gridParent, fillsForm           bool
 	placement                                      [4]int
 	textSetter, iconName, propertyCode, layoutCode string
 }

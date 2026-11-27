@@ -17,8 +17,13 @@ func TestDesignActionsSelectionAndModeGuards(t *testing.T) {
 	if !w.designToolbar.IsVisible() || len(w.designActions) != 6 {
 		t.Fatal("design row missing")
 	}
-	if w.designActions[0].button.IsEnabled() {
-		t.Fatal("layout enabled for empty selection")
+	for i, a := range w.designActions[:4] {
+		if !a.button.IsEnabled() {
+			t.Fatalf("layout %d must target the whole form with no selection", i)
+		}
+	}
+	if w.designActions[4].button.IsEnabled() {
+		t.Fatal("break enabled with no existing layout")
 	}
 	for i := 0; i < 2; i++ {
 		widget, err := ged.NewFakeWidgetFromFactory("gui.Button")
@@ -28,6 +33,14 @@ func TestDesignActionsSelectionAndModeGuards(t *testing.T) {
 		widget.SetBounds(float64(10+i*40), 10, 30, 10)
 		widget.SetParent(w.canvas.GedScene())
 		w.canvas.Selection().Add(widget)
+		if i == 0 {
+			w.syncMode()
+			for _, action := range w.designActions[:4] {
+				if action.button.IsEnabled() {
+					t.Fatalf("action %q would silently lay out the form with one selected control", action.spec.label)
+				}
+			}
+		}
 	}
 	w.syncMode() // Same mode: selection state must still update.
 	grid := w.designActions[2]
@@ -156,7 +169,7 @@ func TestDesignPaletteAvailabilityMatchesToolbar(t *testing.T) {
 		}
 	}
 	w.activate(modeDesign)
-	check() // Empty canvas: only Fit to View is available.
+	check() // Empty selection uses the form as the layout target.
 	for i := 0; i < 2; i++ {
 		widget, err := ged.NewFakeWidgetFromFactory("gui.Button")
 		if err != nil {
@@ -190,8 +203,12 @@ func TestDesignPaletteAvailabilityMatchesToolbar(t *testing.T) {
 		t.Fatal("palette break layout lost children")
 	}
 	w.canvas.Selection().Clear()
+	check()
+	if !grid.available() {
+		t.Fatal("whole-form layout missing from the command palette")
+	}
 	dlg, selection := newCommandPalette(w.canvas)
-	selection.choose(dlg, grid)
+	selection.choose(dlg, find(w.designActions[4].spec.label))
 	if selection.command != nil {
 		t.Fatal("disabled command closed palette")
 	}

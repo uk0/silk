@@ -223,6 +223,9 @@ func (this *Widget) SetParent(parent IWidget) {
 	cancelClipboardPastes(this.Self())
 
 	if op != nil {
+		if owner, ok := op.(interface{ releaseLayoutRoot(IWidget) }); ok {
+			owner.releaseLayoutRoot(this.Self())
+		}
 		bop := op.NakedWidget()
 		if this.next == this {
 			bop.child = nil

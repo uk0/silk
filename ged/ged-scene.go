@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/decl"
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
@@ -37,8 +38,9 @@ type GedScene struct {
 	saveIntent      *designSaveIntent
 	designRevision  uint64
 	graph.SceneItem
-	filename string
-	title    string
+	filename   string
+	title      string
+	formLayout *FakeWidget // retained across detach/undo; active only when directly attached
 	// User-placed ruler guides, saved with the design (see guides.go).
 	guides sceneGuides
 	grid   GridModel
@@ -241,8 +243,7 @@ func sizeLabelX(x0, w, textWidth, inset float64) float64 {
 }
 
 func (this *GedScene) Layout() {
-	//this.form.SetPos(0, 0)
-	//this.form.SetSize(this.Size())
+	this.syncFormLayout(false)
 }
 func (this *GedScene) OpenFile(filename string) error {
 	doc, err := core.LoadTDocFile(filename)
@@ -281,6 +282,9 @@ func (this *GedScene) SaveDesign() *core.TDoc {
 			}); ok {
 				p := ia.SaveDesign()
 				if p != nil {
+					if c == this.activeFormLayout() {
+						p.WriteAttr(decl.FormLayoutFillProp, true)
+					}
 					child.AddChild(p)
 				}
 			}
@@ -313,6 +317,7 @@ func (this *GedScene) Save() bool {
 
 func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	this.designRevision++
+	this.formLayout = nil
 	var bounds geom.Rect
 	doc.ReadAttr("bounds", &bounds)
 	this.SetBounds1(bounds)
@@ -345,6 +350,7 @@ func (this *GedScene) LoadDesign(doc *core.TDoc) error {
 	// success); an all-unknown file simply yields an empty scene.
 	var skipped []string
 	loadChildWidgets(doc.ChildByKey("children", false), this, &skipped)
+	this.Layout()
 	this.missing = skipped
 	if len(skipped) > 0 {
 		core.Warn("silkui load: skipped ", len(skipped), " widget(s) with unknown factories")
@@ -386,6 +392,9 @@ func (this *GedScene) Generate() *Design {
 			w := fake.Generate()
 			if w != nil {
 				w.SetParent(form)
+				if fake == this.activeFormLayout() {
+					form.SetLayoutRoot(w)
+				}
 				if fake.name != "" {
 					design.index[fake.name] = w
 				}

@@ -929,13 +929,16 @@ func (this *Window) SetSize(w, h float64) {
 		this.Update()
 		return
 	}
-	if this.glfwWin != nil {
+	if native := this.glfwWin; native != nil {
 		width, height := int(w), int(h)
-		this.glfwWin.SetSize(width, height)
-		// A hidden X11 window may not dispatch its ConfigureNotify until
-		// after Show. Popup layout and anchoring need this size immediately,
-		// before the native callback, or the first open uses old/zero bounds.
-		if this.wt == WtPopup && this.widget != nil && width > 0 && height > 0 && !this.IsVisible() {
+		native.SetSize(width, height)
+		if this.glfwWin != native {
+			return // A synchronous resize callback retired this window.
+		}
+		// An unmapped window may not get a resize event until Show. Publish
+		// the requested client size for pre-show layout and popup anchoring.
+		// Once mapped, resize callbacks remain authoritative.
+		if this.widget != nil && width > 0 && height > 0 && !this.IsVisible() {
 			this.widget.NakedWidget().setSize(float64(width), float64(height))
 		}
 		this.dirty = true

@@ -37,7 +37,7 @@ func designerActionSpecs(canvas *ged.GedView) []designActionSpec {
 		kind := layout.kind
 		enabled := func() bool { return active() && canvas.CanLayoutSelection(kind) }
 		specs = append(specs, designActionSpec{layout.label, layout.icon,
-			i18n.T("Select two or more unlocked siblings, or a matching free-layout container. Form layout pairs labels and fields."), enabled,
+			i18n.T("Select unlocked siblings, a matching free-layout container, or the form itself. With no selection, apply to the whole form."), enabled,
 			func() {
 				if enabled() {
 					canvas.LayoutSelection(kind)

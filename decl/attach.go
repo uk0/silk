@@ -56,6 +56,38 @@ func attachChild(parent, child interface{}) {
 	method.Call([]reflect.Value{pv})
 }
 
+// FormLayoutFillProp marks one direct layout child as filling its form.
+const FormLayoutFillProp = "layout_fill_form"
+
+func attachFormLayoutRoot(form, child interface{}, node *Node) bool {
+	raw, _ := node.PropValue(FormLayoutFillProp)
+	lit, ok := raw.(Lit)
+	if !ok {
+		return false
+	}
+	fill, ok := asBool(lit.V)
+	if !ok || !fill {
+		return false
+	}
+	// A malformed marker on an ordinary widget must not move it.
+	switch node.Type {
+	case "gui.HBox", "gui.VBox", "gui.GridLayout", "gui.FormLayout":
+	default:
+		return false
+	}
+	call := reflect.ValueOf(form).MethodByName("SetLayoutRoot")
+	value := reflect.ValueOf(child)
+	if !call.IsValid() || !value.IsValid() {
+		return false
+	}
+	mt := call.Type()
+	if mt.NumIn() != 1 || !value.Type().AssignableTo(mt.In(0)) ||
+		mt.NumOut() != 1 || mt.Out(0).Kind() != reflect.Bool {
+		return false
+	}
+	return call.Call([]reflect.Value{value})[0].Bool()
+}
+
 // attachLayoutChild registers actual Grid/Form cells and invokes container
 // adders. Plain SetParent does not establish private cell/content ownership.
 func attachLayoutChild(parent, child interface{}, parentType string, node *Node, index int) bool {

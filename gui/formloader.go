@@ -165,6 +165,9 @@ func SaveForm(form *Form, filename string) error {
 		childDoc.SetKey("children")
 		for _, c := range children {
 			if sub := serializeWidget(c); sub != nil {
+				if c == form.LayoutRoot() {
+					_ = sub.WriteAttr(decl.FormLayoutFillProp, true)
+				}
 				childDoc.AddChild(sub)
 			}
 		}

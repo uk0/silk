@@ -321,6 +321,7 @@ func (scene *GedScene) captureCodeSnapshot() (*CodeSnapshot, []*FakeWidget) {
 		f := &fields[i]
 		widgets[i] = f.fake
 		f.layoutManaged = f.fake.layoutManaged
+		f.fillsForm = f.fake == scene.activeFormLayout()
 		f.gridParent = f.parentField != "" && isGridOrFormParent(f.fake) && f.fake.Parent().(*FakeWidget).layoutManaged
 		if f.gridParent {
 			p := placementForChild(f.fake)
@@ -514,7 +515,9 @@ func (snapshot *CodeSnapshot) Generate(opts CodeGenOptions) CapturedCode {
 	// Reverse order lets nested size hints settle before their parents arrange.
 	for i := len(fields) - 1; i >= 0; i-- {
 		f := fields[i]
-		if isDesignerLayoutFactory(f.factoryName) {
+		if f.fillsForm {
+			fmt.Fprintf(&buf, "\tui.Form.SetLayoutRoot(ui.%s)\n", f.name)
+		} else if isDesignerLayoutFactory(f.factoryName) {
 			fmt.Fprintf(&buf, "\tui.%s.Layout()\n", f.name)
 		}
 	}

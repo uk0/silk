@@ -15,14 +15,65 @@ func init() {
 type Form struct {
 	Widget
 
-	icon  paint.Icon
-	title string
+	icon       paint.Icon
+	title      string
+	layoutRoot IWidget
 }
 
 func NewForm() *Form {
 	p := new(Form)
 	p.Init(p)
 	return p
+}
+
+// SetLayoutRoot designates an already attached, active layout as the form's
+// client-area layout. Other direct children are left alone. Passing nil clears
+// the policy. It never reparents a widget or creates another native window.
+func (this *Form) SetLayoutRoot(widget IWidget) bool {
+	if widget != nil && !this.isLayoutRoot(widget) {
+		return false
+	}
+	this.layoutRoot = widget
+	if widget != nil {
+		before := widget.Bounds1()
+		this.Layout()
+		// A just-initialized generated form may already have the right
+		// size, but its latest content/properties still need final layout.
+		if widget.Bounds1() == before {
+			widget.NakedWidget().layoutNow()
+		}
+	}
+	return true
+}
+
+func (this *Form) isLayoutRoot(widget IWidget) bool {
+	if widget == nil || widget.Parent() != this.Self() {
+		return false
+	}
+	manager, ok := widget.(interface{ LayoutEnabled() bool })
+	return ok && manager.LayoutEnabled()
+}
+
+func (this *Form) releaseLayoutRoot(widget IWidget) {
+	if this.layoutRoot == widget {
+		this.layoutRoot = nil
+	}
+}
+
+// LayoutRoot returns the active layout, or nil if none is attached.
+func (this *Form) LayoutRoot() IWidget {
+	if !this.isLayoutRoot(this.layoutRoot) {
+		return nil
+	}
+	return this.layoutRoot
+}
+
+// Layout keeps the designated layout within the logical client area. The
+// normal Widget resize path calls it for both embedded and native forms.
+func (this *Form) Layout() {
+	if child := this.LayoutRoot(); child != nil {
+		child.SetBounds(0, 0, this.Width(), this.Height())
+	}
 }
 
 func (this *Form) SetTitle(s string) {

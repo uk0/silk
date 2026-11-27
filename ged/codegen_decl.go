@@ -101,7 +101,11 @@ func buildSceneDeclNode(scene *GedScene) *decl.Node {
 		if !ok {
 			continue
 		}
-		root.Children = append(root.Children, buildFakeDeclNode(fake))
+		child := buildFakeDeclNode(fake)
+		if fake == scene.activeFormLayout() {
+			child.SetProp(decl.FormLayoutFillProp, decl.Lit{V: true})
+		}
+		root.Children = append(root.Children, child)
 	}
 	return root
 }

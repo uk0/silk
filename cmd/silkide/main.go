@@ -623,12 +623,9 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		globalInspector = inspector
 		rightDock.AddView(inspector)
 
-		// Trigger an inspector rebuild whenever the design canvas's
-		// selection changes. Without this the inspector stays stuck
-		// on whatever was selected when SetScene fired.
-		designCanvas.AddSelectionCallback(func(items []graph.IItem) {
-			inspector.Rebuild()
-		})
+		// ObjectInspector observes document changes itself. A selection
+		// event only moves the highlight; it does not rebuild the tree.
+		designCanvas.AddSelectionCallback(inspector.SyncSelection)
 
 		// Live property sheet — sibling tab of the Object Inspector. The
 		// canvas drives the binding itself: GraphView.emitSelectionChanged
