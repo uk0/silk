@@ -32,6 +32,26 @@ This is an actual Sway/Wayland capture. Palette insertion uses a plus badge;
 reordering uses arrows along the layout axis. See the
 [layout workflow and current limits](DESIGNER_GAPS.md#布局使用).
 
+### Grid and form cells
+
+Drag from the palette into an empty cell. Move an existing control within the
+same layout, or drop it onto a compatible occupied cell to swap the two.
+The designer highlights the solved cell, and refuses occupied spans, locked
+controls and drops that would clip a control out of view.
+
+![Native Wayland Designer highlighting the empty field cell in row 1 of the form layout](docs/images/designer-tabular-placement-wayland.png)
+
+A free canvas drop uses the actual release point, and one Undo restores both
+the original position and parent. If a control would be fully clipped by an
+ancestor, the canvas corrects only the direction that is out of bounds.
+
+<details>
+<summary>Native canvas clip regression capture</summary>
+
+![Visible button after release at the edge of a clipped nested canvas container](docs/images/designer-canvas-clipping-wayland.png)
+
+</details>
+
 ## Designer export menus and captions (development branch)
 
 Choose SVG or PDF from **File → Export** or the toolbar before opening the

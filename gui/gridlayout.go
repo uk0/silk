@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
 )
 
@@ -147,24 +148,84 @@ func (this *GridLayout) gridDimensions() (maxRows, maxCols int) {
 }
 
 func (this *GridLayout) Layout() {
-	if this.layoutDisabled {
+	if this.layoutDisabled || len(this.cells) == 0 {
 		return
 	}
-	if len(this.cells) == 0 {
-		return
-	}
-
-	w, h := this.Self().Size()
-	x0, y0, w, h := applyLayoutPadding(this.padding, w, h)
-
 	maxRows, maxCols := this.gridDimensions()
 	if maxRows == 0 || maxCols == 0 {
 		return
 	}
-
-	// Use a pooled scratch buffer for column widths, row heights, and the
-	// cumulative offset arrays. This avoids 4 allocations per Layout() call.
 	scratch := acquireGridScratch()
+	this.solveTracks(this.trackContent(), maxRows, maxCols, scratch)
+	colW, rowH, colX, rowY := scratch.colW, scratch.rowH, scratch.colX, scratch.rowY
+
+	// Position each widget (skip hidden)
+	for _, c := range this.cells {
+		if !this.activeCell(c) {
+			continue
+		}
+		if c.col >= len(colX) || c.row >= len(rowY) {
+			// Earlier Resize callbacks can relocate a later registered cell.
+			// Its new coordinates belong to the next requested track solution.
+			continue
+		}
+		cx := colX[c.col]
+		cy := rowY[c.row]
+
+		// Sum spanned column widths
+		var cw float64
+		for j := c.col; j < c.col+c.colSpan && j < maxCols; j++ {
+			cw += colW[j]
+			if j > c.col {
+				cw += this.spacing
+			}
+		}
+
+		// Sum spanned row heights
+		var ch float64
+		for j := c.row; j < c.row+c.rowSpan && j < maxRows; j++ {
+			ch += rowH[j]
+			if j > c.row {
+				ch += this.spacing
+			}
+		}
+
+		c.widget.SetBounds(cx, cy, cw, ch)
+	}
+
+	releaseGridScratch(scratch)
+}
+
+func (this *GridLayout) trackContent() geom.Rect {
+	w, h := this.Self().Size()
+	x, y, w, h := applyLayoutPadding(this.padding, w, h)
+	return geom.Rect{X: x, Y: y, Width: w, Height: h}
+}
+
+// CellTracks exposes the same logical tracks Layout uses, including empty
+// cells bounded by existing tracks. The normal layout path stays pooled.
+func (this *GridLayout) CellTracks() LayoutCellTracks {
+	out := LayoutCellTracks{Content: this.trackContent()}
+	rows, cols := this.gridDimensions()
+	if this.layoutDisabled || rows == 0 || cols == 0 {
+		return out
+	}
+	scratch := acquireGridScratch()
+	this.solveTracks(out.Content, rows, cols, scratch)
+	rowTracks := make([]LayoutTrack, rows+cols)
+	out.Rows = rowTracks[:rows:rows]
+	out.Columns = rowTracks[rows:]
+	for i := range out.Rows {
+		out.Rows[i] = LayoutTrack{i, scratch.rowY[i], scratch.rowH[i]}
+	}
+	for i := range out.Columns {
+		out.Columns[i] = LayoutTrack{i, scratch.colX[i], scratch.colW[i]}
+	}
+	releaseGridScratch(scratch)
+	return out
+}
+func (this *GridLayout) solveTracks(content geom.Rect, maxRows, maxCols int, scratch *gridScratch) {
+	x0, y0, w, h := content.X, content.Y, content.Width, content.Height
 
 	colW := this.measureColumns(w, true, maxCols, scratch.colW)
 	scratch.colW = colW
@@ -203,42 +264,6 @@ func (this *GridLayout) Layout() {
 	for i := 1; i < maxRows; i++ {
 		rowY[i] = rowY[i-1] + rowH[i-1] + this.spacing
 	}
-
-	// Position each widget (skip hidden)
-	for _, c := range this.cells {
-		if !this.activeCell(c) {
-			continue
-		}
-		if c.col >= len(colX) || c.row >= len(rowY) {
-			// Earlier Resize callbacks can relocate a later registered cell.
-			// Its new coordinates belong to the next requested track solution.
-			continue
-		}
-		cx := colX[c.col]
-		cy := rowY[c.row]
-
-		// Sum spanned column widths
-		var cw float64
-		for j := c.col; j < c.col+c.colSpan && j < maxCols; j++ {
-			cw += colW[j]
-			if j > c.col {
-				cw += this.spacing
-			}
-		}
-
-		// Sum spanned row heights
-		var ch float64
-		for j := c.row; j < c.row+c.rowSpan && j < maxRows; j++ {
-			ch += rowH[j]
-			if j > c.row {
-				ch += this.spacing
-			}
-		}
-
-		c.widget.SetBounds(cx, cy, cw, ch)
-	}
-
-	releaseGridScratch(scratch)
 }
 
 func (this *GridLayout) Draw(g paint.Painter) {

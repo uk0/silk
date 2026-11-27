@@ -2,6 +2,7 @@ package gui
 
 import (
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
 	"math"
 )
@@ -169,16 +170,32 @@ func (this *FormLayout) Layout() {
 		return
 	}
 
+	m := this.solveTracks()
+	this.visitFormRows(&m, func(_ int, row FormRow, labelActive, fieldActive bool, y, height float64) {
+		if labelActive {
+			row.label.SetBounds(m.Content.X, y, m.Columns[0].Size, height)
+		}
+		if fieldActive && row.widget.Parent() == this.Self() && row.widget.IsVisible() {
+			row.widget.SetBounds(m.Columns[1].Start, y, m.Columns[1].Size, height)
+		}
+	})
+	releaseLayoutScratch(m.scratch)
+}
+
+type formTrackSolution struct {
+	Content geom.Rect
+	Columns [2]LayoutTrack
+	scratch *layoutScratch
+	flexH   float64
+}
+
+func (this *FormLayout) solveTracks() formTrackSolution {
+	n := len(this.rows)
 	w, h := this.Self().Size()
 	x0, y0, w, h := applyLayoutPadding(this.padding, w, h)
-
 	labelW := math.Min(this.labelWidth, w)
 	widgetX := x0 + labelW + this.spacing
-	widgetW := w - labelW - this.spacing
-	if widgetW < 0 {
-		widgetW = 0
-	}
-
+	widgetW := math.Max(0, w-labelW-this.spacing)
 	// Pooled scratch for row heights — reuse the generic layoutScratch sizes
 	// buffer (it's an []float64 already). This eliminates the per-call
 	// `make([]float64, n)`.
@@ -225,32 +242,42 @@ func (this *FormLayout) Layout() {
 		flexH = remaining / float64(flexCount)
 	}
 
-	yOff := y0
+	return formTrackSolution{
+		Content: geom.Rect{X: x0, Y: y0, Width: w, Height: h},
+		Columns: [2]LayoutTrack{{0, x0, labelW}, {1, widgetX, widgetW}},
+		scratch: scratch, flexH: flexH,
+	}
+}
+
+func (this *FormLayout) visitFormRows(m *formTrackSolution, visit func(int, FormRow, bool, bool, float64, float64)) {
+	y := m.Content.Y
 	for i, row := range this.rows {
 		labelActive := row.label != nil && row.label.Parent() == this.Self() && row.label.IsVisible()
 		fieldActive := row.widget != nil && row.widget.Parent() == this.Self() && row.widget.IsVisible()
 		if !labelActive && !fieldActive {
 			continue
 		}
-		rh := heights[i]
+		rh := m.scratch.sizes[i]
 		if rh == 0 {
-			rh = flexH
+			rh = m.flexH
 		}
-
-		// Label: right-aligned in the label column
-		if labelActive {
-			row.label.SetBounds(x0, yOff, labelW, rh)
-		}
-
-		// Widget: fills the remaining width
-		if fieldActive && row.widget.Parent() == this.Self() && row.widget.IsVisible() {
-			row.widget.SetBounds(widgetX, yOff, widgetW, rh)
-		}
-
-		yOff += rh + this.spacing
+		visit(i, row, labelActive, fieldActive, y, rh)
+		y += rh + this.spacing
 	}
+}
 
-	releaseLayoutScratch(scratch)
+// CellTracks exposes the label/field columns and the active rows at their
+// current pixel bounds. Empty sparse rows have no visual track.
+func (this *FormLayout) CellTracks() LayoutCellTracks {
+	m := this.solveTracks()
+	defer releaseLayoutScratch(m.scratch)
+	out := LayoutCellTracks{Content: m.Content, Columns: m.Columns[:]}
+	if !this.layoutDisabled {
+		this.visitFormRows(&m, func(i int, _ FormRow, _, _ bool, y, h float64) {
+			out.Rows = append(out.Rows, LayoutTrack{i, y, h})
+		})
+	}
+	return out
 }
 
 func (this *FormLayout) Draw(g paint.Painter) {

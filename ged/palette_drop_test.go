@@ -176,7 +176,7 @@ func TestPaletteDropFeedbackPaintsAndClears(t *testing.T) {
 	}
 }
 
-func TestPaletteDropAppendsWithoutOverwritingSparseLayoutCells(t *testing.T) {
+func TestPaletteDropUsesAvailableSparseLayoutCells(t *testing.T) {
 	for _, kind := range []LayoutKind{LayoutGrid, LayoutForm} {
 		view := NewGedView()
 		scene := view.GedScene()
@@ -188,20 +188,20 @@ func TestPaletteDropAppendsWithoutOverwritingSparseLayoutCells(t *testing.T) {
 		two := sceneWidget(t, scene, "gui.Button", "two", 15, 40, 25, 7)
 		two.SetParent(box)
 		two.layoutCell = layoutPlacement{Row: 1, Column: 0, RowSpan: 1, ColumnSpan: 1, Valid: true}
+		box.Layout()
 		want := layoutPlacement{Row: 2, Column: 0, RowSpan: 1, ColumnSpan: 1, Valid: true}
+		sx, sy := 40.0, 79.5 // explicit bottom insertion band
 		if kind == LayoutForm {
 			want.Row, want.Column = 1, 1
-		}
-		if got := appendPaletteLayoutCell(box); got != want {
-			t.Fatalf("%s append cell = %+v, want %+v", kind, got, want)
+			sx, sy = centerOfTabularCell(t, box, want.Row, want.Column)
 		}
 		ctx := &dropCtx{pa: gui.DndCopy, payload: "gui.Button"}
-		x, y := view.MapFromScene(78, 78)
+		x, y := view.MapFromScene(sx, sy)
 		view.OnDragMove(x, y, ctx)
-		if !view.paletteDrop.valid || !view.paletteDrop.autoLayout || view.paletteDrop.hint != i18n.Tf(dropAppendLayout, "Button", box.WidgetName()) {
-			t.Fatalf("%s did not advertise automatic placement: %+v", kind, view.paletteDrop)
+		if p := view.paletteDrop; !p.valid || !p.autoLayout || p.cell.cell != want || p.cell.span.IsEmpty() {
+			t.Fatalf("%s did not advertise the targeted cell: %+v", kind, p)
 		}
-		button := placeFromPalette(t, view, "gui.Button", 78, 78)
+		button := placeFromPalette(t, view, "gui.Button", sx, sy)
 		if button.layoutCell != want || button.Parent() != graph.IItem(box) {
 			t.Fatalf("%s drop collided with existing cell metadata", kind)
 		}

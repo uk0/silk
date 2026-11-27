@@ -735,14 +735,17 @@ func (this *ObjectInspector) reparentInto(row int) {
 // it does not overlap, which is precisely the invisible widget the park exists
 // to prevent.
 type parkStep struct {
-	items  []graph.IItem
-	parent graph.IItem
-	move   *graph.MoveCommand
+	items       []graph.IItem
+	parent      graph.IItem
+	move        *graph.MoveCommand
+	keepLanding bool
+	prepared    bool
 }
 
 func (this *parkStep) Redo() {
-	if this.move == nil {
-		this.move = parkInsideParent(this.items, this.parent)
+	if !this.prepared {
+		this.move = parkUnderVisibleParent(this.items, this.parent, this.keepLanding)
+		this.prepared = true
 	}
 	if this.move != nil {
 		this.move.Redo()
@@ -762,7 +765,7 @@ func (this *parkStep) Text() string {
 }
 
 // parkInsideParent returns the move that brings re-parented widgets into their
-// new parent's box, or nil when none of them fell outside it.
+// new parent's visible ancestor intersection, or nil when nothing was clipped.
 //
 // A tree drop has no pointer — the widget keeps the scene rect it had somewhere
 // else entirely. A canvas drop has one, but the container is chosen from the
@@ -790,26 +793,57 @@ func (this *parkStep) Text() string {
 // dropped them, which is the same widget lost from the other side. parkStep
 // carries the result into the re-parent's own undo step.
 func parkInsideParent(items []graph.IItem, parent graph.IItem) *graph.MoveCommand {
+	return parkUnderVisibleParent(items, parent, false)
+}
+
+func parkCanvasLanding(items []graph.IItem, parent graph.IItem) *graph.MoveCommand {
+	return parkUnderVisibleParent(items, parent, true)
+}
+
+func parkUnderVisibleParent(items []graph.IItem, parent graph.IItem, keepLanding bool) *graph.MoveCommand {
 	if parent == nil {
-		return nil // the form root clips nothing
+		return nil // the object tree does not park drops onto its root
 	}
-	px, py := parent.X(), parent.Y()
-	pw, ph := parent.Width(), parent.Height()
+	clip := designDropArea(parent.MapRectToScene1(parent.Bounds1()), parent)
+	if clip.IsEmpty() {
+		return nil // moving the child cannot reveal a fully clipped owner
+	}
+	px := clip.X + math.Min(parentInsetMm, clip.Width/2)
+	py := clip.Y + math.Min(parentInsetMm, clip.Height/2)
 	cmd := graph.NewMoveCommand()
 	for _, it := range items {
 		if it == nil || it.Parent() != parent || it.IsLockPos() {
 			continue
 		}
-		x, y, w, h := it.X(), it.Y(), it.Width(), it.Height()
-		if x < px+pw && x+w > px && y < py+ph && y+h > py {
-			continue // already overlaps; leave the layout alone
+		rect := it.MapRectToScene1(it.Bounds1())
+		if rect.IsEmpty() || !rect.IntersectCopy(clip).IsEmpty() {
+			continue // nothing to move, or already visible through every ancestor
 		}
-		graph.AddMoveSubtree(cmd, it, px+parentInsetMm-x, py+parentInsetMm-y)
+		x, y := px, py
+		if keepLanding {
+			x = parkLandingAxis(rect.X, rect.Width, clip.X, clip.Right())
+			y = parkLandingAxis(rect.Y, rect.Height, clip.Y, clip.Bottom())
+		}
+		graph.AddMoveSubtree(cmd, it, x-rect.X, y-rect.Y)
 	}
 	if cmd.Count() == 0 {
 		return nil // nothing had fallen outside; the step has nothing to replay
 	}
 	return cmd
+}
+
+// A canvas drop carries a pointer location. Keep each axis that already
+// overlaps and otherwise choose the near edge instead of jumping to a corner.
+func parkLandingAxis(start, size, lo, hi float64) float64 {
+	inset := math.Min(parentInsetMm, (hi-lo)/2)
+	switch {
+	case start+size <= lo:
+		return lo + inset
+	case start >= hi:
+		return math.Max(lo, hi-size-inset)
+	default:
+		return start
+	}
 }
 
 // parentInsetMm keeps a parked widget off its container's own border so the

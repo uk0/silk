@@ -11,6 +11,7 @@ import (
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 )
 
@@ -99,19 +100,14 @@ type GedView struct {
 	showGuides bool
 	guideDrag  guideDragState
 
-	// Re-parent state for a canvas drag. dropContainer is the container the
-	// release would nest the selection into, nil meaning the form root — the
-	// same fallback a palette drop uses. dragMovesItems records whether the
-	// gesture is a widget drag at all, so neither a marquee nor a plain
-	// selection click re-parents anything.
-	dropContainer  graph.IItem
-	dragMovesItems bool
-	paletteDrop    paletteDropFeedback
-	managedPress   bool
-	managedPressX  float64
-	managedPressY  float64
-	managedHint    paletteDropFeedback
-	layoutReorder  layoutReorderGesture
+	// Visual preview only. A move command resolves its target at release.
+	dropContainer graph.IItem
+	paletteDrop   paletteDropFeedback
+	managedPress  bool
+	managedPressX float64
+	managedPressY float64
+	managedHint   paletteDropFeedback
+	layoutReorder layoutReorderGesture
 
 	// gestureSeq groups the commands pushed by one continuous keyboard
 	// gesture so they collapse into a single undo step; see beginGesture.
@@ -358,9 +354,10 @@ func (this *GedView) OnDragLeave() {
 
 func (this *GedView) OnDragMove(x, y float64, dnd gui.IDndContext) {
 	this.paletteDrop = this.resolvePaletteDrop(x, y, dnd)
-	this.dropContainer = this.paletteDrop.container
+	this.dropContainer = nil
 	dnd.SetAction(gui.DndIgnore)
 	if this.paletteDrop.valid {
+		this.dropContainer = this.paletteDrop.container
 		dnd.SetAction(gui.DndCopy)
 	}
 	this.Self().Update()
@@ -374,6 +371,16 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	defer this.clearPaletteDrop()
 	if !placement.valid {
 		return
+	}
+	if placement.cell.valid {
+		if !this.canCommitTabularDrop() {
+			return
+		}
+		next := this.resolvePaletteDrop(x, y, dnd)
+		if !next.valid || !next.cell.valid || next.parent != placement.parent {
+			return
+		}
+		placement = next
 	}
 	item, err := NewFakeWidgetFromFactory(placement.factoryName)
 	if err != nil {
@@ -391,8 +398,13 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	}
 	item.SetBounds(x1-dx, y1-dy, placement.bounds.Width, placement.bounds.Height)
 	item.Layout()
-	if parent, ok := placement.parent.(*FakeWidget); ok && parent.layoutManaged && !placement.insertion.valid {
-		item.layoutCell = appendPaletteLayoutCell(parent)
+	if placement.cell.valid {
+		parent := placement.parent.(*FakeWidget)
+		if !this.tabularReleaseFits(parent, item, placement.cell, true) {
+			this.showStatus(i18n.T(dropCellClipped))
+			return
+		}
+		item.layoutCell = placement.cell.cell
 	}
 	add := graph.NewAddCommand()
 	if placement.insertion.valid {
@@ -1728,7 +1740,7 @@ func (this *GedView) OnLeftDown(x, y float64) {
 	this.managedPressX, this.managedPressY = x, y
 	this.layoutReorder = layoutReorderGesture{}
 	if this.managedPress {
-		this.layoutReorder = this.linearReorderPress(x, y)
+		this.layoutReorder = this.managedReorderPress(x, y)
 	}
 	this.GraphView.OnLeftDown(x, y)
 
@@ -1739,10 +1751,8 @@ func (this *GedView) OnLeftDown(x, y float64) {
 	this.isDragging = !this.managedPress
 	this.alignGuides = nil
 
-	// Both are (re)decided by OnMouseMove; a press that is never followed by
-	// one is a selection click and must leave the tree alone.
+	// A press without a drag shows no drop target.
 	this.dropContainer = nil
-	this.dragMovesItems = false
 }
 
 // onDoubleClick opens the code panel for the double-clicked widget and scrolls
@@ -2630,7 +2640,7 @@ func (this *GedView) Draw(g paint.Painter) {
 	wantGrid := this.showGrid && grid.Visible && grid.Pitch > 0
 	manual := this.activeGuides()
 	wantGuides := !manual.isEmpty() || this.guideDrag.active
-	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid || this.managedHint.insertion.valid {
+	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid || !this.paletteDrop.cell.span.IsEmpty() || this.managedHint.insertion.valid || !this.managedHint.cell.span.IsEmpty() {
 		// Clip to the page area so neither the grid nor the guides bleed into
 		// the padding region, then re-enter scene-mm coordinate space (the
 		// same transform GraphView.Draw uses for the scene) so every overlay
@@ -2767,32 +2777,28 @@ func (this *GedView) OnMouseMove(x, y float64) {
 	// happens to end over a container as a widget move — and silently re-parents
 	// the widget mid-resize, undo step and drop highlight included.
 	if decor, _ := this.FindHandleAt(this.dragOriginX, this.dragOriginY); decor != nil {
-		this.dragMovesItems = false
 		return
 	}
 	hit := this.Scene().FindItemAt(this.dragOriginX, this.dragOriginY,
 		graph.TraversalCond_SelectableAndMoveable)
 	// Match MovePart: the selectable form root is still only the background
 	// for a body drag, and must not turn a marquee into a move/re-parent.
-	this.dragMovesItems = hit != nil && hit != this.Scene()
-	if this.dragMovesItems {
+	if hit != nil && hit != this.Scene() {
 		this.dropContainer = nearestDropContainer(
 			this.Scene().FindItemAt(sx, sy, nil), sel.Contains)
+		if blockedTabularCanvasTarget(this.dropContainer) {
+			this.dropContainer = nil
+		}
 	}
 }
 
 // OnLeftUp overrides GraphView.OnLeftUp to clear alignment guides when
 // the drag ends.
 func (this *GedView) OnLeftUp(x, y float64) {
-	// Grid snapping/reparenting can adjust geometry after the command signal.
+	// Resize snapping still adjusts geometry after the command signal.
 	defer this.RefreshSelectionStatus()
 	if this.managedPress {
-		arm := this.layoutReorder
-		slot, from := this.layoutReorderSlot(x, y)
-		this.finishManagedPress()
-		if slot.valid && arm.item.Parent() == arm.parent && arm.parent.Scene() == this.Scene() && arm.item.IndexInParent() == from {
-			this.Scene().PushCommand(&linearLayoutOrderCommand{item: arm.item, parent: arm.parent, from: from, to: slot.index})
-		}
+		this.commitManagedDrag(x, y)
 		this.refreshPropertyValues()
 		return
 	}
@@ -2806,62 +2812,19 @@ func (this *GedView) OnLeftUp(x, y float64) {
 		return
 	}
 
-	wasDragging := this.isDragging
-	// The target and the gesture kind are read before GraphView.OnLeftUp so a
-	// tool that clears the drag state cannot take them away from us. resized is
-	// read here for the same reason and one more: GraphView.OnLeftUp is where
-	// DecorPart commits the resize and drops the moving flag it is asking about.
-	target, movesItems := this.dropContainer, this.dragMovesItems
+	// MovePart submits the complete canvas transaction through the scene.
+	// DecorPart still uses the resize-specific snap after its own commit.
 	resized := this.resizeGestureItem()
 	stack := this.Scene().UndoStack()
 	historyBefore := stack.Current()
 	this.GraphView.OnLeftUp(x, y)
-	// isDragging starts at mouse-down, so it alone also describes a click,
-	// sub-threshold jitter or marquee. Mouse move/resize commands do not merge:
-	// only a geometry command actually committed by the graph tool may be
-	// tidied by the snap, never newly selected widgets from a selection gesture.
-	geometryCommitted := stack.Current() != historyBefore && (movesItems || resized != nil)
+	if resized != nil && stack.Current() != historyBefore {
+		this.snapSelectionToGrid()
+		this.snapSelectionSizeToGrid(resized)
+	}
 	this.isDragging = false
 	this.alignGuides = nil
 	this.dropContainer = nil
-	this.dragMovesItems = false
-
-	// Snap the dragged widget(s) onto grid intersections once the base
-	// MovePart has committed the move command. We snap after the commit
-	// (rather than rewriting the delta mid-drag, which lives in the graph
-	// MovePart we don't own) so the final resting position lands on the
-	// grid. The align guides drawn during the drag are purely visual and
-	// don't move the widget, so grid snap and the guides compose cleanly.
-	if wasDragging && geometryCommitted {
-		this.snapSelectionToGrid()
-		// The size snap answers to the resize gesture alone. Every other canvas
-		// gesture ends here too — a selection click, a click on empty canvas
-		// (which selects the form), a marquee, a plain move drag — and not one
-		// of them changed a size for the snap to tidy: rounding one there would
-		// resize a widget the user never grabbed a handle on, with nothing on
-		// the undo stack (the snap mutates directly) and nothing on screen (the
-		// old status bar also rounded the size to an integer).
-		if resized != nil {
-			this.snapSelectionSizeToGrid(resized)
-		}
-		if movesItems {
-			// After the snap, so the re-parent records the resting position —
-			// and so the park judges that same position. target was chosen
-			// from the cursor mid-drag, before the snap existed; the snap then
-			// moves the widget by up to half a grid pitch (a manual guide,
-			// further still), which is enough to carry a widget released near
-			// a container's edge clear of the container it is about to be
-			// parented into. The park follows the re-parent rather than
-			// preceding it — parkInsideParent measures against the new parent
-			// and only sees items already owned by it — and rides its undo
-			// step, because between the two the widget is owned by a container
-			// it does not overlap and DrawAll erases it.
-			this.reparentSelection(target, &parkStep{
-				items:  this.Selection().ItemList(),
-				parent: target,
-			})
-		}
-	}
 
 	this.refreshPropertyValues()
 	this.Self().Update()
@@ -2871,10 +2834,8 @@ func (this *GedView) OnLeftUp(x, y float64) {
 // the form root — a container is only one case of a drop target, the same way
 // OnDrop falls back to the scene root for a palette drop over empty canvas.
 //
-// One ReparentCommand carries parent, sibling index and position for every
-// item, so Ctrl+Z returns each one to the owner and slot it left. The move
-// itself is MovePart's own command underneath, so a drag that crosses into a
-// container leaves two undo steps: the re-parent, then the move.
+// Object-tree drops have no pointer move. This submits their re-parent and
+// parked position together. Canvas moves use canvasMoveGesture instead.
 //
 // park is the rescue both drops need — the tree's because it has no pointer at
 // all, the canvas's because the grid snap displaces the widget after the drop

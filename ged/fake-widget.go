@@ -228,6 +228,8 @@ type FakeWidget struct {
 	pixmapDirty   bool
 	layoutManaged bool
 	layoutCell    layoutPlacement
+	cellTracks    gui.LayoutCellTracks
+	hasCellTracks bool
 }
 
 func NewFakeWidget() *FakeWidget {
@@ -761,7 +763,15 @@ func (this *FakeWidget) OnResize() {
 	}
 }
 
-func (this *FakeWidget) Generate() gui.IWidget {
+func (this *FakeWidget) Generate() gui.IWidget { return this.generate(nil) }
+
+// A layout trial changes only root-level registration in a detached runtime.
+type layoutTrial struct {
+	cells    map[*FakeWidget]layoutPlacement
+	children map[*FakeWidget]gui.IWidget
+}
+
+func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 	fake, err := NewFakeWidgetFromFactory(this.factoryName)
 	if err != nil {
 		return nil
@@ -806,6 +816,12 @@ func (this *FakeWidget) Generate() gui.IWidget {
 		}
 		if layoutAdder, ok := fake.widget.(layoutWidgetAdder); ok && this.layoutManaged {
 			p := this.childPlacement(cf, childIndex)
+			if trial != nil {
+				if next, found := trial.cells[cf]; found {
+					p = next
+				}
+				trial.children[cf] = cw
+			}
 			layoutAdder.AddLayoutWidget(cw, p.Row, p.Column, p.RowSpan, p.ColumnSpan)
 		} else if useAdd {
 			adder.AddWidget(cw)

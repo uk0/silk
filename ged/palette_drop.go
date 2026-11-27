@@ -24,6 +24,7 @@ type paletteDropFeedback struct {
 	x, y          float64 // pointer in view pixels, for the legible hint badge
 	hint          string
 	insertion     linearPaletteInsertion
+	cell          tabularDropPlan
 }
 
 func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) paletteDropFeedback {
@@ -85,6 +86,20 @@ func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) palet
 	p.hint = fmt.Sprintf("%s · %.0f × %.0f mm → %s", widgetFriendlyName(name), w, h, target)
 	if p.autoLayout {
 		if fw, ok := p.parent.(*FakeWidget); ok {
+			if isTabularLayout(fw) {
+				p.cell = view.tabularLayoutDrop(fw, available, sx, sy, nil)
+				if !p.cell.valid {
+					p.valid = false
+					p.hint = i18n.T(p.cell.failure)
+					return p
+				}
+				message := dropInsertCell
+				if p.cell.appendRow {
+					message = dropAppendCell
+				}
+				p.hint = i18n.Tf(message, widgetFriendlyName(name), target, p.cell.cell.Row+1, p.cell.cell.Column+1)
+				return p
+			}
 			p.insertion = linearPaletteSlot(fw, available, sx, sy)
 		}
 		if p.insertion.valid {
@@ -118,15 +133,20 @@ func (view *GedView) clearPaletteDrop() {
 
 func (view *GedView) drawPaletteDropBounds(g paint.Painter) {
 	p := view.paletteDrop
-	if !p.active && view.managedHint.insertion.valid {
+	if !p.active && (view.managedHint.insertion.valid || !view.managedHint.cell.span.IsEmpty()) {
 		p = view.managedHint
 	}
-	if !p.active || !p.valid || (p.autoLayout && !p.insertion.valid) {
+	hasCell := !p.cell.span.IsEmpty()
+	if !p.active || (!p.valid && !hasCell) || (p.autoLayout && !p.insertion.valid && !hasCell) {
 		return
 	}
 	g.Save()
 	defer g.Restore()
-	color := paint.CurrentIconPalette().Accent
+	palette := paint.CurrentIconPalette()
+	color := palette.Accent
+	if !p.valid {
+		color = palette.Danger
+	}
 	// Device-independent thickness so the slot is legible at every zoom.
 	scale := gui.ScreenDpmm() * view.ZoomFactor()
 	if !finiteDropCoordinate(scale) || scale <= 0 {
@@ -140,6 +160,9 @@ func (view *GedView) drawPaletteDropBounds(g paint.Painter) {
 		g.Stroke()
 		return
 	}
+	if hasCell {
+		p.bounds = p.cell.span
+	}
 	fill := color
 	fill.A = 28
 	g.SetBrush1(fill)
@@ -152,7 +175,7 @@ func (view *GedView) drawPaletteDropBounds(g paint.Painter) {
 
 func (view *GedView) drawPaletteDropHint(g paint.Painter) {
 	p := view.paletteDrop
-	reorder := !p.active && view.managedHint.insertion.valid
+	reorder := !p.active && (view.managedHint.insertion.valid || view.managedHint.cell.valid)
 	if !p.active {
 		p = view.managedHint
 	}
@@ -183,7 +206,7 @@ func (view *GedView) drawPaletteDropHint(g paint.Painter) {
 	g.SetPen1(color, 1.75)
 	switch {
 	case reorder:
-		drawReorderArrows(g, x+15, y+13, p.insertion.marker.Height == 0)
+		drawReorderArrows(g, x+15, y+13, p.insertion.valid && p.insertion.marker.Height == 0)
 	case p.valid:
 		g.MoveTo(x+9, y+13)
 		g.LineTo(x+21, y+13)
@@ -247,39 +270,4 @@ func (cmd *paletteAddCommand) relayoutParent() {
 	if parent, ok := cmd.parent.(*FakeWidget); ok && parent.layoutManaged {
 		parent.Layout()
 	}
-}
-
-// Explicit grid cells need an explicit append location: deriving it from the
-// child count can collide with a sparse grid's existing row/column metadata.
-func appendPaletteLayoutCell(parent *FakeWidget) layoutPlacement {
-	p := layoutPlacement{Valid: true, RowSpan: 1, ColumnSpan: 1}
-	count, nextRow, lastColumn := 0, 0, -1
-	for _, it := range parent.Children() {
-		child, ok := it.(*FakeWidget)
-		if !ok {
-			continue
-		}
-		cell := parent.childPlacement(child, count)
-		count++
-		endRow := cell.Row + cell.RowSpan
-		if endRow > nextRow {
-			nextRow, lastColumn = endRow, cell.Column+cell.ColumnSpan-1
-		} else if endRow == nextRow && cell.Column+cell.ColumnSpan-1 > lastColumn {
-			lastColumn = cell.Column + cell.ColumnSpan - 1
-		}
-	}
-	switch LayoutKind(parent.WidgetFactoryName()) {
-	case LayoutHorizontal:
-		p.Column = count
-	case LayoutVertical:
-		p.Row = count
-	case LayoutGrid:
-		p.Row = nextRow
-	case LayoutForm:
-		p.Row = nextRow
-		if nextRow > 0 && lastColumn == 0 {
-			p.Row, p.Column = nextRow-1, 1
-		}
-	}
-	return p
 }

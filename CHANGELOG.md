@@ -29,6 +29,23 @@
 - Refresh or remove a visible hint when its registration changes, without
   a separate native window or a repeating tooltip timer.
 
+## Unreleased — tabular layout editing
+
+- Drag palette controls into empty Grid/Form cells and move or swap existing
+  controls within the same layout. Show the real cell footprint and reject
+  occupied spans, locked cells and drops that would hide controls.
+- Expose read-only row and column geometry from the runtime layout solver.
+  Designer highlights stay aligned with tracks, spacing and insets.
+
+## Unreleased — canvas drag transactions
+
+- Move and snap an existing control, change its parent, and keep it visible
+  through nested container clips in a single undoable edit. A drop uses the
+  actual release point, not the last hover. Releasing outside the form leaves
+  history and geometry unchanged.
+- Expose an optional graph move-gesture builder for applications that need to
+  compose additional operations before applying a pointer move.
+
 ## Unreleased — visual layout editing
 
 - Drag controls from the palette to an explicit slot in horizontal and

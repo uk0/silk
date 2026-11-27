@@ -70,24 +70,23 @@ func TestCanvasDragReparentsIntoContainer(t *testing.T) {
 		t.Errorf("position after the re-parent = (%v,%v), want (100,40) — the widget moved", x, y)
 	}
 
-	// Undo pops the re-parent: back under the scene root, in slot 0 (it was
-	// added before the VBox), still at the dragged position.
-	view.Scene().UndoStack().Undo()
+	// A single undo restores both the original owner/order and geometry.
+	view.Undo()
 	if btn.Parent() != graph.IItem(scene) {
 		t.Fatalf("parent after undo = %v, want the scene root", btn.Parent())
 	}
 	if got := btn.IndexInParent(); got != 0 {
 		t.Errorf("sibling index after undo = %d, want 0", got)
 	}
-	if x, y := btn.Pos(); x != 100 || y != 40 {
-		t.Errorf("position after undo = (%v,%v), want (100,40) — undo of a re-parent must not move the widget", x, y)
+	if x, y := btn.Pos(); x != 10 || y != 10 || scene.UndoStack().CanUndo() {
+		t.Errorf("position/stack after one undo = (%v,%v), want (10,10) and no other command", x, y)
 	}
-
-	// The move underneath it is a separate step, so a second undo restores the
-	// pre-drag position.
-	view.Scene().UndoStack().Undo()
-	if x, y := btn.Pos(); x != 10 || y != 10 {
-		t.Errorf("position after undoing the move = (%v,%v), want (10,10)", x, y)
+	if !view.Selection().Contains(btn) {
+		t.Fatal("undo lost the moved widget selection")
+	}
+	view.Redo()
+	if x, y := btn.Pos(); btn.Parent() != graph.IItem(vbox) || x != 100 || y != 40 {
+		t.Fatalf("redo parent/position = %v/(%v,%v)", btn.Parent(), x, y)
 	}
 }
 

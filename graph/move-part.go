@@ -1,10 +1,17 @@
 package graph
 
 import (
-	//"github.com/uk0/silk/core"
-	//	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/paint"
 )
+
+// MoveGestureCommandBuilder is an optional GraphView owner interface. It
+// composes a completed pointer drag before the graph applies any geometry or
+// touches history. The supplied coordinates are the actual release in scene
+// units. Return nil to cancel or move to keep the standard behavior.
+type MoveGestureCommandBuilder interface {
+	BuildMoveGestureCommand(move *MoveCommand, sceneX, sceneY float64) gui.ICommand
+}
 
 type MovePart struct {
 	Part
@@ -50,9 +57,15 @@ func (this *MovePart) OnLeftUp(x, y float64) {
 	dx := this.TrackRect().Width
 	dy := this.TrackRect().Height
 	if dx != 0 || dy != 0 {
-		cmd := this.View().Selection().GenerateMoveCommand(dx, dy)
-		if cmd != nil {
-			this.Scene().PushCommand(cmd)
+		move := this.View().Selection().GenerateMoveCommand(dx, dy)
+		if move != nil {
+			var cmd gui.ICommand = move
+			if owner, ok := this.View().Self().(MoveGestureCommandBuilder); ok {
+				cmd = owner.BuildMoveGestureCommand(move, x, y)
+			}
+			if cmd != nil {
+				this.Scene().PushCommand(cmd)
+			}
 		}
 	}
 	this.View().Update()

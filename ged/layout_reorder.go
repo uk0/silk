@@ -13,7 +13,7 @@ type layoutReorderGesture struct {
 	moved        bool
 }
 
-func (view *GedView) linearReorderPress(x, y float64) layoutReorderGesture {
+func (view *GedView) managedReorderPress(x, y float64) layoutReorderGesture {
 	if view.Selection().Count() > 1 || designerActionKeyDown() || keyDown(gui.KeyShift) || keyDown(gui.KeyMenu) {
 		return layoutReorderGesture{}
 	}
@@ -26,7 +26,8 @@ func (view *GedView) linearReorderPress(x, y float64) layoutReorderGesture {
 		return layoutReorderGesture{}
 	}
 	parent, ok := item.Parent().(*FakeWidget)
-	if !ok || !canReorderLinearLayout(parent) || len(parent.Children()) < 2 {
+	if !ok || !parent.layoutManaged || !unlockedLayoutAncestors(parent) ||
+		(!isTabularLayout(parent) && (!canReorderLinearLayout(parent) || len(parent.Children()) < 2)) {
 		return layoutReorderGesture{}
 	}
 	return layoutReorderGesture{item: item, parent: parent}
@@ -36,12 +37,7 @@ func canReorderLinearLayout(parent *FakeWidget) bool {
 	if !parent.layoutManaged || (parent.factoryName != string(LayoutHorizontal) && parent.factoryName != string(LayoutVertical)) {
 		return false
 	}
-	for p := graph.IItem(parent); p != nil; p = p.Parent() {
-		if fw, ok := p.(*FakeWidget); ok && fw.IsLockPos() {
-			return false
-		}
-	}
-	return true
+	return unlockedLayoutAncestors(parent)
 }
 
 func (view *GedView) layoutReorderSlot(x, y float64) (linearPaletteInsertion, int) {
@@ -92,6 +88,10 @@ func (view *GedView) updateManagedPress(x, y float64) {
 	if !view.layoutReorder.moved {
 		return
 	}
+	if isTabularLayout(view.layoutReorder.parent) {
+		view.updateTabularDrag(x, y)
+		return
+	}
 	slot, from := view.layoutReorderSlot(x, y)
 	if !slot.valid {
 		if from < 0 {
@@ -115,7 +115,6 @@ func (view *GedView) finishManagedPress() {
 	view.isDragging = false
 	view.alignGuides = nil
 	view.dropContainer = nil
-	view.dragMovesItems = false
 	view.GraphView.OnLeftUp(x, y)
 	view.Self().Update()
 }

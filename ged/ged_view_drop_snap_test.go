@@ -60,53 +60,41 @@ func TestCanvasDropSnapKeepsTheWidgetVisible(t *testing.T) {
 	checkWidgetsAreDrawn(t, scene, "canvas drop near a container edge")
 }
 
-// TestCanvasDropSnapParkRidesTheReparentsUndoStep is the placement half: the
-// park has to be applied and taken back with the re-parent as a single step.
-// Pushed as a step of its own it would leave a state one Ctrl+Z can stop in —
-// the widget owned by the box and snapped outside it — which is the invisible
-// widget the park exists to prevent; and left unrecorded it would not replay,
-// so Ctrl+Y would put the widget back under the box without it.
-//
-// The same drag as above, so what changes here is only what the undo stack
-// does with it.
-func TestCanvasDropSnapParkRidesTheReparentsUndoStep(t *testing.T) {
+// TestCanvasDropSnapParkIsOneUndoStep ensures there is no history or listener
+// state where a newly owned control has been clipped completely out of view.
+func TestCanvasDropSnapParkIsOneUndoStep(t *testing.T) {
 	view := NewGedView()
 	scene := view.GedScene()
 	scene.SetSize(200, 150)
 
 	btn := sceneWidget(t, scene, "gui.Button", "btn", 10, 10, 25, 7)
-	sceneWidget(t, scene, "gui.VBox", "box", 66, 10, 74, 60)
+	box := sceneWidget(t, scene, "gui.VBox", "box", 66, 10, 74, 60)
+	changes := 0
+	scene.SigDesignChanged(func() {
+		changes++
+		if btn.Parent() != graph.IItem(box) || drawnRect(btn).IsEmpty() {
+			t.Errorf("design signal %d observed incomplete drop: parent=%v clip=%v", changes, btn.Parent(), drawnRect(btn))
+		}
+	})
 
 	view.Selection().Add(btn)
 	dragOnCanvas(view, 34, 11.75, 66.4, 41.75)
 
-	// One step back: out of the box again, at the position the drag left it.
-	// Undrawn here is the stack having stopped between the re-parent and its
-	// park — on the very state the pair exists to skip over.
-	view.Scene().UndoStack().Undo()
-	if r := drawnRect(btn); r.IsEmpty() {
-		t.Errorf("one undo left btn at (%.1f,%.1f) owned by %v and drawing as %v — the park came off the stack on its own and stranded the widget inside a container it does not overlap",
-			btn.X(), btn.Y(), btn.Parent(), r)
+	if changes != 1 || scene.UndoStack().Count() != 1 {
+		t.Fatalf("release committed %d changes / %d history entries; want 1/1", changes, scene.UndoStack().Count())
 	}
-	if btn.Parent() != graph.IItem(scene) {
-		t.Errorf("parent after one undo = %v, want the form root — one Ctrl+Z has to take the whole re-parent back", btn.Parent())
+	scene.SigDesignChanged(nil)
+	after := btn.Bounds1()
+	view.Undo()
+	if btn.Parent() != graph.IItem(scene) || scene.UndoStack().CanUndo() || drawnRect(btn).IsEmpty() {
+		t.Fatal("one undo did not restore the visible original root widget")
 	}
-	if x, y := btn.Pos(); x != 40 || y != 40 {
-		t.Errorf("position after one undo = (%v,%v), want the snapped drop position (40,40) — undoing the park must not leave the widget where the park put it", x, y)
-	}
-
-	// And forward again: the re-done re-parent must bring its park with it.
-	view.Scene().UndoStack().Redo()
-	if r := drawnRect(btn); r.IsEmpty() {
-		t.Errorf("btn draws as %v after redo — it is at (%.1f,%.1f), back under the box and outside it", r, btn.X(), btn.Y())
-	}
-	checkWidgetsAreDrawn(t, scene, "redo of a canvas drop near a container edge")
-
-	// The move underneath is still its own step: a second undo restores the
-	// pre-drag position, exactly as it did before the park existed.
-	view.Scene().UndoStack().Undo()
-	view.Scene().UndoStack().Undo()
 	if x, y := btn.Pos(); x != 10 || y != 10 {
-		t.Errorf("position after undoing the move too = (%v,%v), want (10,10)", x, y)
+		t.Fatalf("restored position = (%v,%v), want original (10,10)", x, y)
 	}
+	view.Redo()
+	if btn.Parent() != graph.IItem(box) || btn.Bounds1() != after || drawnRect(btn).IsEmpty() {
+		t.Fatalf("redo lost the parked placement: bounds=%v want %v", btn.Bounds1(), after)
+	}
+	checkWidgetsAreDrawn(t, scene, "redo one atomic canvas drop")
 }

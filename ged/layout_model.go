@@ -92,12 +92,16 @@ type layoutWidgetAdder interface {
 // layoutDesignChildren mirrors the *same runtime layout* on the editable
 // canvas; it never binds the real designer widgets to the temporary preview.
 func (f *FakeWidget) layoutDesignChildren() {
-	if !f.layoutManaged || !f.HasChildren() || !isDesignerLayoutFactory(f.factoryName) {
+	f.cellTracks, f.hasCellTracks = gui.LayoutCellTracks{}, false
+	if !f.layoutManaged || !isDesignerLayoutFactory(f.factoryName) || (!f.HasChildren() && !isTabularLayout(f)) {
 		return
 	}
 	runtime := f.Generate()
 	if runtime == nil {
 		return
+	}
+	if source, ok := runtime.(gui.LayoutCellTrackSource); ok {
+		f.cellTracks, f.hasCellTracks = source.CellTracks(), true
 	}
 	children := runtime.Children()
 	i := 0
