@@ -88,18 +88,7 @@ func buildInto(n *Node, idx map[string]interface{}) (interface{}, error) {
 	}
 
 	formLayoutAttached := false
-	singleContent := false
-	if n.Type == "gui.GroupBox" {
-		// A standalone GroupBox keeps its legacy one-child fill behavior.
-		// Multiple children have authored positions and must all be retained.
-		children := 0
-		for _, child := range n.Children {
-			if child != nil {
-				children++
-			}
-		}
-		singleContent = children == 1
-	}
+	singleContent := usesContentSlot(n)
 	for childIndex, c := range n.Children {
 		if c == nil {
 			continue

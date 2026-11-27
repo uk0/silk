@@ -438,7 +438,7 @@ func (this *GedView) containerUnder(x, y float64) graph.IItem {
 func nearestContainerAncestor(hit graph.IItem) graph.IItem {
 	for it := hit; it != nil; it = it.Parent() {
 		if isContainerItem(it) {
-			return it
+			return contentDropTarget(it)
 		}
 	}
 	return nil
@@ -462,7 +462,10 @@ func nearestDropContainer(hit graph.IItem, moving func(graph.IItem) bool) graph.
 			continue
 		}
 		if found == nil && isContainerItem(it) {
-			found = it
+			target := contentDropTarget(it)
+			if !moving(target) {
+				found = target
+			}
 		}
 	}
 	return found

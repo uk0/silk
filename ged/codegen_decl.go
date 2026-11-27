@@ -123,6 +123,9 @@ func buildFakeDeclNode(fake *FakeWidget) *decl.Node {
 	if isDesignerLayoutFactory(fake.factoryName) {
 		n.SetProp("layout_enabled", decl.Lit{V: fake.layoutManaged})
 	}
+	if fake.supportsContentLayout() && fake.contentPlacement != contentLegacy {
+		n.SetProp(decl.ContentLayoutProp, decl.Lit{V: fake.activeContentLayout() != nil})
+	}
 	localX, localY := runtimePosition(fake)
 	n.SetProp("x", decl.Lit{V: roundPx(localX)})
 	n.SetProp("y", decl.Lit{V: roundPx(localY)})

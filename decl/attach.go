@@ -59,6 +59,56 @@ func attachChild(parent, child interface{}) {
 // FormLayoutFillProp marks one direct layout child as filling its form.
 const FormLayoutFillProp = "layout_fill_form"
 
+// ContentLayoutProp records an explicit single managed layout (true) or
+// authored free placement (false) within a Card or GroupBox.
+const ContentLayoutProp = "layout_fill_content"
+
+func usesContentSlot(n *Node) bool {
+	if n.Type != "gui.Card" && n.Type != "gui.GroupBox" {
+		return false
+	}
+	var only *Node
+	for _, child := range n.Children {
+		if child == nil {
+			continue
+		}
+		if only != nil {
+			return false // Never replace freely placed siblings one by one.
+		}
+		only = child
+	}
+	if only == nil {
+		return false
+	}
+	mode, explicit := n.PropValue(ContentLayoutProp)
+	if !explicit {
+		return n.Type == "gui.GroupBox"
+	}
+	lit, ok := mode.(Lit)
+	if !ok {
+		return false
+	}
+	fill, ok := asBool(lit.V)
+	if !ok || !fill {
+		return false
+	}
+	if enabled, explicit := only.PropValue("layout_enabled"); explicit {
+		lit, ok := enabled.(Lit)
+		if !ok {
+			return false
+		}
+		on, valid := asBool(lit.V)
+		if !valid || !on {
+			return false
+		}
+	}
+	switch only.Type {
+	case "gui.HBox", "gui.VBox", "gui.GridLayout", "gui.FormLayout":
+		return true
+	}
+	return false
+}
+
 func attachFormLayoutRoot(form, child interface{}, node *Node) bool {
 	raw, _ := node.PropValue(FormLayoutFillProp)
 	lit, ok := raw.(Lit)
@@ -122,7 +172,7 @@ func attachLayoutChild(parent, child interface{}, parentType string, node *Node,
 		for _, n := range values {
 			args = append(args, reflect.ValueOf(n))
 		}
-	case "gui.GroupBox":
+	case "gui.Card", "gui.GroupBox":
 		if !singleContent {
 			return false
 		}

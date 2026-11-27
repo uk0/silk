@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/paint"
 )
 
@@ -53,20 +54,21 @@ func (this *GroupBox) SetTitle(s string) {
 		return
 	}
 	this.title = s
-	this.InvalidateSizeHints()
-	this.Self().Update()
+	this.InvalidateLayout()
 }
 
 func (this *GroupBox) SetContent(w IWidget) {
-	if this.content != nil && this.content.Parent() == this.Self() {
-		this.content.SetParent(nil)
-	}
-	this.content = w
-	if w != nil {
-		w.SetParent(this.Self())
+	if !setContentSlot(this.Self(), &this.content, w) {
+		return
 	}
 	this.applyEnabled()
 	this.InvalidateLayout()
+}
+
+func (this *GroupBox) releaseOwnedChild(w IWidget) {
+	if this.content == w {
+		this.content = nil
+	}
 }
 
 func (this *GroupBox) Content() IWidget {
@@ -305,27 +307,21 @@ func (this *GroupBox) OnKeyDown(key int, repeat bool) {
 	}
 }
 
-func (this *GroupBox) Layout() {
-	if this.content == nil || this.content.Parent() != this.Self() || !this.content.IsVisible() {
-		return
-	}
+// ContentBounds returns the current local client rectangle of the content
+// slot in logical pixels, excluding the title row and border insets.
+func (this *GroupBox) ContentBounds() geom.Rect {
 	titleH := this.titleHeight()
 	pad := this.borderPadding()
 	w, h := this.Self().Size()
-
 	cx := pad + 4
 	cy := titleH + 4
-	cw := w - 2*(pad+4)
-	ch := h - titleH - 4 - pad - 4
+	return geom.Rect{X: cx, Y: cy, Width: max(0, w-2*cx), Height: max(0, h-cy-cx)}
+}
 
-	if cw < 0 {
-		cw = 0
+func (this *GroupBox) Layout() {
+	if this.content != nil && this.content.Parent() == this.Self() && this.content.IsVisible() {
+		this.content.SetBounds1(this.ContentBounds())
 	}
-	if ch < 0 {
-		ch = 0
-	}
-
-	this.content.SetBounds(cx, cy, cw, ch)
 }
 
 func (this *GroupBox) SizeHints() SizeHints {

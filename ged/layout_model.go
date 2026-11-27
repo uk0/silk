@@ -55,6 +55,9 @@ func (f *FakeWidget) childPlacement(child *FakeWidget, index int) layoutPlacemen
 	return p.normalized()
 }
 func (f *FakeWidget) saveLayout(doc *core.TDoc) {
+	if f.supportsContentLayout() && f.contentPlacement != contentLegacy {
+		doc.WriteAttr(decl.ContentLayoutProp, f.activeContentLayout() != nil)
+	}
 	if f.layoutManaged {
 		doc.WriteAttr("layout_managed", true)
 	}
@@ -68,6 +71,15 @@ func (f *FakeWidget) saveLayout(doc *core.TDoc) {
 }
 func (f *FakeWidget) loadLayout(doc *core.TDoc) {
 	doc.ReadAttr("layout_managed", &f.layoutManaged)
+	if f.supportsContentLayout() {
+		var layout bool
+		if doc.ReadAttr(decl.ContentLayoutProp, &layout) == nil {
+			f.contentPlacement = contentFree
+			if layout {
+				f.contentPlacement = contentManaged
+			}
+		}
+	}
 	if doc.ChildByKey("layout_row", false) != nil {
 		p := layoutPlacement{Valid: true}
 		doc.ReadAttr("layout_row", &p.Row)
@@ -202,5 +214,5 @@ func (f *FakeWidget) enumLayoutPlacementProperties(list prop.IPropertyList) {
 // ManagesChildGeometry distinguishes explicit layouts from free-positioned
 // containers for graph gestures that must carry shared-coordinate descendants.
 func (f *FakeWidget) ManagesChildGeometry() bool {
-	return f.layoutManaged && isDesignerLayoutFactory(f.factoryName)
+	return f.activeContentLayout() != nil || f.layoutManaged && isDesignerLayoutFactory(f.factoryName)
 }

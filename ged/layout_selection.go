@@ -36,7 +36,7 @@ func (v *GedView) layoutCandidates() []*FakeWidget {
 	var items []*FakeWidget
 	for _, it := range raw {
 		f, ok := it.(*FakeWidget)
-		if !ok || f.IsLockPos() || hasSelectedAncestor(it, selected) {
+		if !ok || f.IsLockPos() || isOwnedContentRoot(f) || hasSelectedAncestor(it, selected) {
 			continue
 		}
 		items = append(items, f)
@@ -50,6 +50,9 @@ func (v *GedView) CanLayoutSelection(kind LayoutKind) bool {
 	}
 	if scene := v.selectedFormForLayout(); scene != nil {
 		return scene.canApplyFormLayout()
+	}
+	if v.selectedContentHost() != nil {
+		return true
 	}
 	if v.containerLayoutTarget(kind) != nil {
 		return true
@@ -245,6 +248,9 @@ func (v *GedView) LayoutSelection(kind LayoutKind) bool {
 	if scene := v.selectedFormForLayout(); scene != nil {
 		return v.applyFormLayout(scene, kind)
 	}
+	if owner := v.selectedContentHost(); owner != nil {
+		return v.applyContentLayout(owner, kind)
+	}
 	if container := v.containerLayoutTarget(kind); container != nil {
 		return v.layoutContainer(container, kind)
 	}
@@ -313,15 +319,26 @@ type breakLayoutCommand struct {
 	move            *graph.ReparentCommand
 	view            *GedView
 	form            *GedScene
+	contentHosts    []*FakeWidget
 	original, freed []graph.IItem
 }
 
 func (c *breakLayoutCommand) Text() string { return "Break Layout" }
-func (c *breakLayoutCommand) Redo()        { c.move.Redo(); setLayoutSelection(c.view, c.freed) }
+func (c *breakLayoutCommand) Redo() {
+	for _, owner := range c.contentHosts {
+		owner.contentPlacement = contentFree
+	}
+	c.move.Redo()
+	setLayoutSelection(c.view, c.freed)
+}
 func (c *breakLayoutCommand) Undo() {
 	c.move.Undo()
 	if c.form != nil {
 		c.form.syncFormLayout(true)
+	}
+	for _, owner := range c.contentHosts {
+		owner.contentPlacement = contentManaged
+		owner.Layout()
 	}
 	setLayoutSelection(c.view, c.original)
 }
@@ -346,6 +363,9 @@ func (v *GedView) BreakLayout() bool {
 		visited[box] = true
 		if form, ok := box.Parent().(*GedScene); ok && box == form.activeFormLayout() {
 			cmd.form = form
+		}
+		if owner, ok := box.Parent().(*FakeWidget); ok && owner.activeContentLayout() == box {
+			cmd.contentHosts = append(cmd.contentHosts, owner)
 		}
 		for _, child := range box.Children() {
 			x, y := graph.TranslateBetweenParents(box, box.Parent(), child.X(), child.Y())

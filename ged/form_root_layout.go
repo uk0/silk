@@ -44,49 +44,45 @@ func (v *GedView) selectedFormForLayout() *GedScene {
 }
 
 func (s *GedScene) canApplyFormLayout() bool {
-	if s.activeFormLayout() != nil {
-		return false
-	}
-	var unlocked func(graph.IItem) bool
-	unlocked = func(parent graph.IItem) bool {
-		for _, it := range parent.Children() {
-			if _, ok := it.(*FakeWidget); !ok || it.IsLockPos() || it.IsLockSize() || !unlocked(it) {
-				return false
-			}
-		}
-		return true
-	}
-	return unlocked(s)
+	return s.activeFormLayout() == nil && layoutChildrenUnlocked(s)
 }
 
-type formRootLayoutCommand struct {
+func layoutChildrenUnlocked(parent graph.IItem) bool {
+	for _, it := range parent.Children() {
+		if _, ok := it.(*FakeWidget); !ok || it.IsLockPos() || it.IsLockSize() || !layoutChildrenUnlocked(it) {
+			return false
+		}
+	}
+	return true
+}
+
+type ownedRootLayoutCommand struct {
 	view     *GedView
-	scene    *GedScene
 	box      *FakeWidget
-	oldRoot  *FakeWidget
 	move     *graph.ReparentCommand
 	before   []layoutSnapshot
 	original []graph.IItem
 	items    []*FakeWidget
 	cells    []layoutPlacement
+	text     string
+	bind     func(applied bool)
 }
 
-func (c *formRootLayoutCommand) Text() string { return "Lay Out Form" }
+func (c *ownedRootLayoutCommand) Text() string { return c.text }
 
-func (c *formRootLayoutCommand) Redo() {
+func (c *ownedRootLayoutCommand) Redo() {
 	c.move.Redo()
 	for i, w := range c.items {
 		w.layoutCell = c.cells[i]
 	}
-	c.scene.formLayout = c.box
 	c.box.layoutManaged = true
-	c.scene.syncFormLayout(true)
+	c.bind(true)
 	setLayoutSelection(c.view, []graph.IItem{c.box})
 }
 
-func (c *formRootLayoutCommand) Undo() {
+func (c *ownedRootLayoutCommand) Undo() {
 	c.move.Undo()
-	c.scene.formLayout = c.oldRoot
+	c.bind(false)
 	for _, s := range c.before {
 		s.item.layoutCell = s.placement
 		s.item.SetBounds1(s.bounds)
@@ -102,12 +98,32 @@ func (v *GedView) applyFormLayout(scene *GedScene, kind LayoutKind) bool {
 	if v.selectedFormForLayout() != scene || !scene.canApplyFormLayout() {
 		return false
 	}
-	box, err := NewFakeWidgetFromFactory(string(kind))
-	if err != nil {
+	const title = "Lay Out Form"
+	cmd := v.prepareOwnedRootLayout(scene, kind, title)
+	if cmd == nil {
 		return false
 	}
-	cmd := &formRootLayoutCommand{view: v, scene: scene, box: box, oldRoot: scene.formLayout,
-		move: graph.NewReparentCommand("Lay Out Form"), original: append([]graph.IItem(nil), v.Selection().ItemList()...)}
+	prior := scene.formLayout
+	cmd.bind = func(applied bool) {
+		scene.formLayout = prior
+		if applied {
+			scene.formLayout = cmd.box
+			scene.syncFormLayout(true)
+		}
+	}
+	scene.PushCommand(cmd)
+	return true
+}
+
+// prepareOwnedRootLayout is shared by forms and titled containers. Callers
+// validate the host/descendants and supply the owning geometry policy.
+func (v *GedView) prepareOwnedRootLayout(owner graph.IItem, kind LayoutKind, title string) *ownedRootLayoutCommand {
+	box, err := NewFakeWidgetFromFactory(string(kind))
+	if err != nil {
+		return nil
+	}
+	cmd := &ownedRootLayoutCommand{view: v, box: box, text: title,
+		move: graph.NewReparentCommand(title), original: append([]graph.IItem(nil), v.Selection().ItemList()...)}
 	var capture func(graph.IItem)
 	capture = func(parent graph.IItem) {
 		for _, child := range parent.Children() {
@@ -116,8 +132,8 @@ func (v *GedView) applyFormLayout(scene *GedScene, kind LayoutKind) bool {
 			capture(f)
 		}
 	}
-	capture(scene)
-	for _, item := range scene.Children() {
+	capture(owner)
+	for _, item := range owner.Children() {
 		cmd.items = append(cmd.items, item.(*FakeWidget))
 	}
 	sort.SliceStable(cmd.items, func(i, j int) bool {
@@ -128,17 +144,18 @@ func (v *GedView) applyFormLayout(scene *GedScene, kind LayoutKind) bool {
 		return a.Y() < b.Y()
 	})
 	cmd.cells = layoutPlacements(cmd.items, kind)
-	cmd.move.Add(box, nil, scene)
+	cmd.move.Add(box, nil, owner)
 	for _, w := range cmd.items {
-		cmd.move.AddMoved(w, scene, box, w.X(), w.Y())
+		cmd.move.AddMoved(w, owner, box, w.X(), w.Y())
 	}
-	scene.PushCommand(cmd)
-	return true
+	return cmd
 }
 
 func (v *GedView) breakableLayout(item graph.IItem) *FakeWidget {
 	if scene, ok := item.(*GedScene); ok {
 		item = scene.activeFormLayout()
+	} else if owner, ok := item.(*FakeWidget); ok && owner.activeContentLayout() != nil {
+		item = owner.activeContentLayout()
 	}
 	box, ok := item.(*FakeWidget)
 	if !ok || box == nil || box.Scene() != v.Scene() || box.IsLockPos() ||
@@ -149,6 +166,9 @@ func (v *GedView) breakableLayout(item graph.IItem) *FakeWidget {
 		return box
 	}
 	if scene, ok := box.Parent().(*GedScene); ok && scene.activeFormLayout() == box {
+		return box
+	}
+	if owner, ok := box.Parent().(*FakeWidget); ok && owner.activeContentLayout() == box {
 		return box
 	}
 	return nil

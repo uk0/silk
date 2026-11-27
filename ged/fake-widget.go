@@ -224,13 +224,14 @@ type FakeWidget struct {
 
 	// Preview raster cache. A stable preview does not recreate its surface
 	// on every redraw, even when the item is being moved.
-	cachedPixmap  paint.Pixmap
-	cachedPreview fakeWidgetPreviewKey
-	pixmapDirty   bool
-	layoutManaged bool
-	layoutCell    layoutPlacement
-	cellTracks    gui.LayoutCellTracks
-	hasCellTracks bool
+	cachedPixmap     paint.Pixmap
+	cachedPreview    fakeWidgetPreviewKey
+	pixmapDirty      bool
+	layoutManaged    bool
+	layoutCell       layoutPlacement
+	contentPlacement contentPlacementMode
+	cellTracks       gui.LayoutCellTracks
+	hasCellTracks    bool
 }
 
 func NewFakeWidget() *FakeWidget {
@@ -474,6 +475,7 @@ func (this *FakeWidget) Layout() {
 		layouter.Layout()
 	}
 	this.layoutDesignChildren()
+	this.syncContentLayout()
 	this.MarkDirty()
 }
 
@@ -824,7 +826,7 @@ func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 			items = virtual
 		}
 	}
-	useAdd := hasAdd && this.usesAddWidget(len(items))
+	useAdd := hasAdd && this.usesAddWidget(items)
 	for childIndex, c := range items {
 		cf, ok := c.(*FakeWidget)
 		if !ok {

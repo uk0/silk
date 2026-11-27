@@ -54,7 +54,7 @@ func (this *Form) isLayoutRoot(widget IWidget) bool {
 	return ok && manager.LayoutEnabled()
 }
 
-func (this *Form) releaseLayoutRoot(widget IWidget) {
+func (this *Form) releaseOwnedChild(widget IWidget) {
 	if this.layoutRoot == widget {
 		this.layoutRoot = nil
 	}

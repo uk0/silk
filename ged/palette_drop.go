@@ -59,6 +59,11 @@ func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) palet
 	// All ancestors clip their children. A partly off-page nested container
 	// may have less usable space than its own rectangle promises.
 	available := designDropArea(page, p.parent)
+	if isOwnedContentRoot(p.parent) && !pointInDropRect(available, sx, sy) {
+		p.hint = i18n.T(dropCellGap)
+		p.container = nil
+		return p
+	}
 	w, h := defaultSizeForWidget(name)
 	if fw, ok := p.container.(*FakeWidget); ok {
 		p.autoLayout = fw.layoutManaged

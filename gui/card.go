@@ -1,9 +1,11 @@
 package gui
 
 import (
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/paint"
 	"math"
+
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/geom"
+	"github.com/uk0/silk/paint"
 )
 
 // Card 卡片容器控件，带圆角边框和可选标题
@@ -36,16 +38,19 @@ func (this *Card) Radius() float64  { return this.radius }
 func (this *Card) HasShadow() bool  { return this.shadow }
 
 func (this *Card) SetTitle(s string) {
+	if this.title == s {
+		return
+	}
 	this.title = s
-	this.Self().Update()
+	this.InvalidateLayout()
 }
 
 func (this *Card) SetPadding(v float64) {
-	this.padding = v
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
+	if this.padding == v {
+		return
 	}
-	this.Self().Update()
+	this.padding = v
+	this.InvalidateLayout()
 }
 
 func (this *Card) SetRadius(v float64) {
@@ -59,15 +64,15 @@ func (this *Card) SetShadow(b bool) {
 }
 
 func (this *Card) SetContent(w IWidget) {
-	if this.content != nil {
-		this.content.SetParent(nil)
+	if !setContentSlot(this.Self(), &this.content, w) {
+		return
 	}
-	this.content = w
-	if w != nil {
-		w.SetParent(this.Self())
-	}
-	if i, ok := this.Self().(ILayout); ok {
-		i.Layout()
+	this.InvalidateLayout()
+}
+
+func (this *Card) releaseOwnedChild(w IWidget) {
+	if this.content == w {
+		this.content = nil
 	}
 }
 
@@ -123,7 +128,7 @@ func (this *Card) Draw(g paint.Painter) {
 
 	// title bar
 	titleH := this.titleHeight()
-	if this.title == "" && this.content == nil {
+	if this.title == "" && this.child == nil {
 		// Designer placeholder
 		g.SetFont(t.Font)
 		g.SetBrush1(paint.Color{180, 185, 200, 255})
@@ -162,26 +167,19 @@ func (this *Card) Draw(g paint.Painter) {
 	g.Restore()
 }
 
-func (this *Card) Layout() {
-	if this.content == nil {
-		return
-	}
+// ContentBounds returns the current local client rectangle of the content
+// slot in logical pixels, excluding the title band and padding.
+func (this *Card) ContentBounds() geom.Rect {
 	pad := this.padding
 	titleH := this.titleHeight()
 	w, h := this.Self().Size()
+	return geom.Rect{X: pad, Y: titleH + pad, Width: max(0, w-2*pad), Height: max(0, h-titleH-2*pad)}
+}
 
-	cx := pad
-	cy := titleH + pad
-	cw := w - pad*2
-	ch := h - titleH - pad*2
-
-	if cw < 0 {
-		cw = 0
+func (this *Card) Layout() {
+	if this.content != nil {
+		this.content.SetBounds1(this.ContentBounds())
 	}
-	if ch < 0 {
-		ch = 0
-	}
-	this.content.SetBounds(cx, cy, cw, ch)
 }
 
 func (this *Card) SizeHints() SizeHints {

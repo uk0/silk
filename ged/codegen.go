@@ -37,16 +37,22 @@ func isSimpleAddContainer(factoryName string) bool {
 	return simpleAddContainers[factoryName]
 }
 
-func (f *FakeWidget) usesAddWidget(childCount int) bool {
+func (f *FakeWidget) usesAddWidget(children []graph.IItem) bool {
 	if !isSimpleAddContainer(f.factoryName) {
 		return false
 	}
 	if isDesignerLayoutFactory(f.factoryName) {
 		return f.layoutManaged
 	}
+	switch f.contentPlacement {
+	case contentFree:
+		return false
+	case contentManaged:
+		return contentLayoutIn(children) != nil
+	}
 	// Card and GroupBox expose a single content slot. Treat multiple
 	// authored children as free placement instead of replacing them one by one.
-	return childCount == 1
+	return len(children) == 1
 }
 
 // GeneratedCodeHeader identifies machine files owned by the designer exporter.
@@ -324,7 +330,7 @@ func (scene *GedScene) captureCodeSnapshot() (*CodeSnapshot, []*FakeWidget) {
 
 			if fake.HasChildren() {
 				children := fake.Children()
-				collect(children, fieldName, fake.usesAddWidget(len(children)))
+				collect(children, fieldName, fake.usesAddWidget(children))
 			}
 		}
 	}

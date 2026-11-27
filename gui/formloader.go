@@ -228,6 +228,17 @@ func serializeWidgetAt(w IWidget, parentX, parentY float64) *core.TDoc {
 	if _, ok := w.(*ComboBox); ok {
 		kids = nil
 	}
+	switch w.(type) {
+	case *Card, *GroupBox:
+		if len(kids) == 1 {
+			content := w.(interface{ Content() IWidget }).Content()
+			if content == nil {
+				_ = node.WriteAttr(decl.ContentLayoutProp, false)
+			} else if manager, ok := content.(interface{ LayoutEnabled() bool }); ok && manager.LayoutEnabled() {
+				_ = node.WriteAttr(decl.ContentLayoutProp, true)
+			}
+		}
+	}
 	if len(kids) > 0 {
 		childDoc := core.NewTDoc()
 		childDoc.SetKey("children")

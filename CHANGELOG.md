@@ -1,11 +1,25 @@
 # Changelog
 
+## Unreleased — responsive content layouts
+
+- Apply horizontal, vertical, grid or form layouts directly to a Card or
+  GroupBox. The layout fills the content area while keeping the title and
+  border insets clear. Break Layout returns the controls to free placement
+  inside the same container. Both actions can be undone.
+- Preview, SDK document loading and the generated builders use the same
+  content slot. A single control left after Break Layout stays free.
+
 ## Unreleased — container child ownership
 
 - Retain all directly placed Card and GroupBox controls in Designer previews,
   loaded forms, and generated Go. Attaching another free child no longer
   replaces the preceding one. Unchecking a GroupBox gates its free controls
   without overwriting their individual enabled settings.
+- Moving content to another container clears the old content slot. Resizing
+  or changing the old container can no longer move or detach the transferred
+  widget. Invalid parent cycles leave the existing content intact.
+- Card and GroupBox expose the content rectangle in logical pixels and update
+  the managed child when the title or padding changes.
 
 ## Unreleased — active call parameter
 

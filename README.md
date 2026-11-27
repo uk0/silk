@@ -70,6 +70,10 @@ and in applications built from the generated Go or loaded with `gui.LoadForm`.
 Other layouts created from a selection still use the controls' bounding box.
 Choose **Break Layout** to return to free placement.
 
+You can also select a **Card** or **GroupBox** and apply any of the four
+layouts. The controls follow the container's content area without covering
+its title. **Break Layout** keeps the controls inside the original container.
+
 ![Native Wayland preview resized with the Designer’s two-by-two grid filling the form client area](docs/images/designer-responsive-form-wayland.png)
 
 ## Designer export menus and captions (development branch)

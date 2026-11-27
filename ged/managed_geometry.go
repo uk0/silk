@@ -16,7 +16,7 @@ func managedGeometryItem(item graph.IItem) bool {
 		return scene.activeFormLayout() == item
 	}
 	parent, ok := item.Parent().(*FakeWidget)
-	return ok && parent.layoutManaged && isDesignerLayoutFactory(parent.WidgetFactoryName())
+	return ok && (parent.activeContentLayout() == item || parent.layoutManaged && isDesignerLayoutFactory(parent.WidgetFactoryName()))
 }
 
 func (view *GedView) selectionHasManagedGeometry() bool {

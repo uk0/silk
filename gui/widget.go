@@ -223,8 +223,10 @@ func (this *Widget) SetParent(parent IWidget) {
 	cancelClipboardPastes(this.Self())
 
 	if op != nil {
-		if owner, ok := op.(interface{ releaseLayoutRoot(IWidget) }); ok {
-			owner.releaseLayoutRoot(this.Self())
+		// Release auxiliary references together with tree ownership. This
+		// hook only clears metadata; it must not reparent or call user code.
+		if owner, ok := op.(interface{ releaseOwnedChild(IWidget) }); ok {
+			owner.releaseOwnedChild(this.Self())
 		}
 		bop := op.NakedWidget()
 		if this.next == this {
