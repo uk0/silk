@@ -295,6 +295,14 @@ without stealing focus or requesting global always-on-top.
 
 *Actual SDK captures without a window manager, not screenshots of SilkIDE.*
 
+An open submenu closes when its inline panel is detached or moved into a
+hidden container or another native window. Returning the panel does not
+reopen the submenu; an explicit reopen can reuse the same native window.
+
+![Native X11 comparison: detaching closes the menu; an explicit reopen displays it again](docs/images/native-submenu-anchor-move-x11.png)
+
+*Actual SDK captures from X11/Openbox, not screenshots of SilkIDE.*
+
 
 ## Coherent inspector categories and bilingual search (development branch)
 
