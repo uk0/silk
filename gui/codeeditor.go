@@ -4225,28 +4225,20 @@ func isSignatureTrigger(s string) bool {
 
 // tryTriggerCompletion checks whether to show the completion popup after input.
 func (this *CodeEditor) tryTriggerCompletion(typed string) {
-	if this.readOnly {
+	if this.readOnly || typed == "" {
 		return
 	}
-	if this.completion == nil {
-		this.completion = NewCompletionPopup(this)
-	}
-	if len(typed) == 0 {
-		return
-	}
-	lastRune, _ := utf8.DecodeLastRuneInString(typed)
-	if lastRune == '.' {
-		// Trigger after dot
-		this.showCompletion("")
-		return
-	}
-	if unicode.IsLetter(lastRune) || unicode.IsDigit(lastRune) || lastRune == '_' {
-		// Build prefix from current word
-		prefix := this.currentWordPrefix()
-		if len(prefix) >= 1 {
-			this.showCompletion(prefix)
+	last, _ := utf8.DecodeLastRuneInString(typed)
+	// Avoid caret conversion for punctuation that never requests completion.
+	if last == '.' || codeCompletionWordRune(last) {
+		if pos, ok := this.CursorTextPosition(); ok {
+			if prefix, ok := AutomaticCodeCompletionPrefix(this.lines[pos.Line], pos.ByteColumn); ok {
+				this.showCompletion(prefix)
+				return
+			}
 		}
-	} else {
+	}
+	if this.completion != nil {
 		this.completion.Dismiss()
 	}
 }

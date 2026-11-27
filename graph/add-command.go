@@ -7,6 +7,7 @@ import (
 
 type addRecord struct {
 	item, parent IItem
+	index        int
 }
 
 type AddCommand struct {
@@ -19,11 +20,17 @@ func NewAddCommand() *AddCommand {
 }
 
 func (cmd *AddCommand) AddItem(item, parent IItem) {
+	cmd.AddItemAt(item, parent, -1)
+}
+
+// AddItemAt records an unparented item to insert into the given sibling slot
+// when the command is applied. Indices are interpreted in application order,
+// with -1 preserving the usual append. Redo restores the same slot.
+func (cmd *AddCommand) AddItemAt(item, parent IItem, index int) {
 	if item.Parent() != nil {
-		panic("item.Parent() != ni")
+		panic("add: item already has a parent")
 	}
-	record := addRecord{item, parent}
-	cmd.records = append(cmd.records, record)
+	cmd.records = append(cmd.records, addRecord{item, parent, index})
 }
 
 func (cmd *AddCommand) Redo() {
@@ -31,7 +38,12 @@ func (cmd *AddCommand) Redo() {
 		panic("irregal Redo()")
 	}
 	for i := 0; i < len(cmd.records); i++ {
-		cmd.records[i].item.SetParent(cmd.records[i].parent)
+		r := cmd.records[i]
+		if r.index == -1 {
+			r.item.SetParent(r.parent)
+		} else {
+			r.item.SetParentAt(r.parent, r.index)
+		}
 	}
 	cmd.isUndo = true
 }

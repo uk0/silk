@@ -19,6 +19,19 @@ signed/notarized standalone apps.
 
 ---
 
+## Drag controls into a layout slot (development branch)
+
+In the Designer, drag a palette item into a horizontal or vertical layout to
+insert it at the blue line. Drag the body of an existing control to reorder it
+within the same layout. Each drop is one undoable action. Escape cancels the
+drag; locked controls cannot be moved or crossed.
+
+![SilkIDE on native Wayland showing a vertical layout slot and a directional Move to position 3 hint](docs/images/designer-linear-layout-wayland.png)
+
+This is an actual Sway/Wayland capture. Palette insertion uses a plus badge;
+reordering uses arrows along the layout axis. See the
+[layout workflow and current limits](DESIGNER_GAPS.md#布局使用).
+
 ## Designer export menus and captions (development branch)
 
 Choose SVG or PDF from **File → Export** or the toolbar before opening the
@@ -948,6 +961,8 @@ drawn inside the editor rather than in a separate window, without taking focus.
 While you continue typing, the hint follows the latest arguments. When the
 completion list is open, the signature moves out of its way. Typing over the
 closing parenthesis dismisses both without inserting a duplicate.
+Numbers do not open automatic completions, but still update the parameter hint.
+Press Ctrl+Space to request completion explicitly.
 
 ![SilkIDE on native Wayland: the active parameter above the source line and the unobstructed completion list below](docs/images/editor-signature-completion-wayland.png)
 

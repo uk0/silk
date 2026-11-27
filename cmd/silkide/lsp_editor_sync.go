@@ -118,10 +118,10 @@ func updateLSPDocument(path string, ed *gui.CodeEditor, text string) {
 			if p, ok := ed.CursorTextPosition(); ok {
 				s.line, s.col = p.Line, p.UTF16Column
 				s.signatureEpoch, s.signature = ed.SignatureHelpIntent()
-				// Newline/paste/undo still synchronize. Automatic popup policy stays in
-				// the editor; no document split or whole-line rune copy on this hot path.
-				ch := p.PreviousRune
-				s.complete = p.HasPreviousRune && (ch == '.' || ch == '_' || unicode.IsLetter(ch) || unicode.IsDigit(ch))
+				// Share the local completion admission policy. Numeric edits still
+				// flush the latest document and can request call-signature help.
+				line, _ := ed.LineText(p.Line)
+				_, s.complete = gui.AutomaticCodeCompletionPrefix(line, p.ByteColumn)
 			}
 		}
 	}

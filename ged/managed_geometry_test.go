@@ -7,6 +7,7 @@ import (
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
 
 func managedGeometryFixture(t *testing.T) (*GedView, *FakeWidget, *FakeWidget) {
@@ -31,7 +32,7 @@ func TestManagedChildDragIsSelectionWithoutGeometryOrUndo(t *testing.T) {
 	}
 	dx, dy := view.MapFromScene(55, 50)
 	view.OnMouseMove(dx, dy)
-	if !view.managedHint.active || view.managedHint.hint != managedGeometryMessage {
+	if !view.managedHint.active || view.managedHint.hint != i18n.T(managedGeometryMessage) {
 		t.Fatal("blocked drag has no explicit layout explanation")
 	}
 	view.OnLeftUp(dx, dy)

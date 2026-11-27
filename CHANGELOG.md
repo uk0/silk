@@ -12,6 +12,8 @@
   for a slower signature response.
 - Keep signature help beside, rather than on top of, the completion list.
   Typing over the existing call closer closes both without editing the file.
+- Do not request local or gopls automatic completions for a number literal.
+  Numeric input still updates the document and keeps parameter help current.
 
 ## Unreleased — owned editor hints
 
@@ -26,6 +28,17 @@
   layout; dismiss it on leave, click, scroll, capture, or owner changes.
 - Refresh or remove a visible hint when its registration changes, without
   a separate native window or a repeating tooltip timer.
+
+## Unreleased — visual layout editing
+
+- Drag controls from the palette to an explicit slot in horizontal and
+  vertical layouts, or drag an existing control to reorder it within the
+  same layout. The insertion line previews the exact position.
+- Keep the reordered control selected and its identity intact. Each drop
+  is one undoable action; leaving the layout, canceling, or crossing a
+  locked item never commits a reorder.
+- Use separate vector badges for insert, reorder, and invalid targets.
+  Position hints follow the IDE's language.
 
 ## Unreleased — native Wayland
 

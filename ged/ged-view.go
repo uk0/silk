@@ -111,6 +111,7 @@ type GedView struct {
 	managedPressX  float64
 	managedPressY  float64
 	managedHint    paletteDropFeedback
+	layoutReorder  layoutReorderGesture
 
 	// gestureSeq groups the commands pushed by one continuous keyboard
 	// gesture so they collapse into a single undo step; see beginGesture.
@@ -390,12 +391,16 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	}
 	item.SetBounds(x1-dx, y1-dy, placement.bounds.Width, placement.bounds.Height)
 	item.Layout()
-	if parent, ok := placement.parent.(*FakeWidget); ok && parent.layoutManaged {
+	if parent, ok := placement.parent.(*FakeWidget); ok && parent.layoutManaged && !placement.insertion.valid {
 		item.layoutCell = appendPaletteLayoutCell(parent)
 	}
-
 	add := graph.NewAddCommand()
-	add.AddItem(item, placement.parent)
+	if placement.insertion.valid {
+		// Ordered layout factories use the sibling order, not grid metadata.
+		add.AddItemAt(item, placement.parent, placement.insertion.index)
+	} else {
+		add.AddItem(item, placement.parent)
+	}
 	this.Scene().PushCommand(&paletteAddCommand{
 		add: add, selection: this.Selection(), item: item, parent: placement.parent,
 		previous: this.Selection().ItemList(),
@@ -1721,6 +1726,10 @@ func (this *GedView) OnLeftDown(x, y float64) {
 	this.managedHint = paletteDropFeedback{}
 	this.managedPress = this.managedGeometryAt(x, y)
 	this.managedPressX, this.managedPressY = x, y
+	this.layoutReorder = layoutReorderGesture{}
+	if this.managedPress {
+		this.layoutReorder = this.linearReorderPress(x, y)
+	}
 	this.GraphView.OnLeftDown(x, y)
 
 	// Record drag origin in scene coordinates for alignment guide computation
@@ -1807,9 +1816,7 @@ var keyDown = gui.IsKeyDown
 // OnKeyDown handles keyboard shortcuts for the GED editor.
 func (this *GedView) OnKeyDown(key int, repeat bool) {
 	if key == gui.KeyEsc && this.managedPress {
-		this.GraphView.OnLeftUp(this.managedPressX, this.managedPressY)
-		this.managedPress = false
-		this.managedHint = paletteDropFeedback{}
+		this.finishManagedPress()
 	}
 	ctrl := designerActionKeyDown()
 	alt := keyDown(gui.KeyMenu)
@@ -2623,7 +2630,7 @@ func (this *GedView) Draw(g paint.Painter) {
 	wantGrid := this.showGrid && grid.Visible && grid.Pitch > 0
 	manual := this.activeGuides()
 	wantGuides := !manual.isEmpty() || this.guideDrag.active
-	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid {
+	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid || this.managedHint.insertion.valid {
 		// Clip to the page area so neither the grid nor the guides bleed into
 		// the padding region, then re-enter scene-mm coordinate space (the
 		// same transform GraphView.Draw uses for the scene) so every overlay
@@ -2693,9 +2700,7 @@ func (this *GedView) drawDropContainer(g paint.Painter) {
 // while dragging selected items.
 func (this *GedView) OnMouseMove(x, y float64) {
 	if this.managedPress {
-		if math.Abs(x-this.managedPressX) > 1 || math.Abs(y-this.managedPressY) > 1 {
-			this.showManagedGeometryHint(x, y)
-		}
+		this.updateManagedPress(x, y)
 		return
 	}
 	if this.managedHint.active {
@@ -2782,16 +2787,13 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// Grid snapping/reparenting can adjust geometry after the command signal.
 	defer this.RefreshSelectionStatus()
 	if this.managedPress {
-		// The graph tool only saw a press, never a drag. Release at that press
-		// point to preserve normal click selection without committing geometry.
-		this.GraphView.OnLeftUp(this.managedPressX, this.managedPressY)
-		this.managedPress = false
-		this.isDragging = false
-		this.alignGuides = nil
-		this.dropContainer = nil
-		this.dragMovesItems = false
+		arm := this.layoutReorder
+		slot, from := this.layoutReorderSlot(x, y)
+		this.finishManagedPress()
+		if slot.valid && arm.item.Parent() == arm.parent && arm.parent.Scene() == this.Scene() && arm.item.IndexInParent() == from {
+			this.Scene().PushCommand(&linearLayoutOrderCommand{item: arm.item, parent: arm.parent, from: from, to: slot.index})
+		}
 		this.refreshPropertyValues()
-		this.Self().Update()
 		return
 	}
 	// End Space+Drag pan

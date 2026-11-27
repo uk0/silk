@@ -8,6 +8,7 @@ import (
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 )
 
@@ -22,10 +23,11 @@ type paletteDropFeedback struct {
 	bounds        geom.Rect
 	x, y          float64 // pointer in view pixels, for the legible hint badge
 	hint          string
+	insertion     linearPaletteInsertion
 }
 
 func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) paletteDropFeedback {
-	p := paletteDropFeedback{active: true, x: x, y: y, hint: "无法投放：请从控件面板拖入"}
+	p := paletteDropFeedback{active: true, x: x, y: y, hint: i18n.T("Drag a widget from the palette")}
 	if !finiteDropCoordinate(x) || !finiteDropCoordinate(y) {
 		p.x, p.y = 0, 0
 		return p
@@ -44,7 +46,7 @@ func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) palet
 	}
 	page := view.Scene().MapRectToScene1(view.Scene().Bounds1())
 	if !pointInDropRect(page, sx, sy) || (view.showGuides && (x < rulerThicknessPx || y < rulerThicknessPx)) {
-		p.hint = "无法投放：请移入表单范围"
+		p.hint = i18n.T("Drop inside the form")
 		return p
 	}
 	p.parent = view.Scene()
@@ -55,17 +57,14 @@ func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) palet
 
 	// All ancestors clip their children. A partly off-page nested container
 	// may have less usable space than its own rectangle promises.
-	available := page
-	for parent := p.parent; parent != nil; parent = parent.Parent() {
-		available = available.IntersectCopy(parent.MapRectToScene1(parent.Bounds1()))
-	}
+	available := designDropArea(page, p.parent)
 	w, h := defaultSizeForWidget(name)
 	if fw, ok := p.container.(*FakeWidget); ok {
 		p.autoLayout = fw.layoutManaged
 	}
 	if available.IsEmpty() || (!p.autoLayout && (w > available.Width || h > available.Height)) {
 		p.container = nil
-		p.hint = "无法投放：容器空间不足，请先调整大小"
+		p.hint = i18n.T(dropContainerTooSmall)
 		return p
 	}
 	x1, y1 := view.snapToGrid(sx, sy)
@@ -76,7 +75,7 @@ func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) palet
 	y1 = math.Max(available.Y, math.Min(y1, available.Bottom()-h))
 	p.bounds = geom.Rect{X: x1, Y: y1, Width: w, Height: h}
 	p.valid = true
-	target := "表单"
+	target := i18n.T("Form")
 	if fw, ok := p.container.(*FakeWidget); ok {
 		target = widgetFriendlyName(fw.WidgetFactoryName())
 		if fw.WidgetName() != "" {
@@ -85,9 +84,24 @@ func (view *GedView) resolvePaletteDrop(x, y float64, dnd gui.IDndContext) palet
 	}
 	p.hint = fmt.Sprintf("%s · %.0f × %.0f mm → %s", widgetFriendlyName(name), w, h, target)
 	if p.autoLayout {
-		p.hint = fmt.Sprintf("%s → %s（追加到自动布局）", widgetFriendlyName(name), target)
+		if fw, ok := p.parent.(*FakeWidget); ok {
+			p.insertion = linearPaletteSlot(fw, available, sx, sy)
+		}
+		if p.insertion.valid {
+			p.hint = i18n.Tf(dropInsertSlot, widgetFriendlyName(name), target, p.insertion.ordinal)
+		} else {
+			p.hint = i18n.Tf(dropAppendLayout, widgetFriendlyName(name), target)
+		}
 	}
 	return p
+}
+
+func designDropArea(page geom.Rect, parent graph.IItem) geom.Rect {
+	visible := page
+	for p := parent; p != nil; p = p.Parent() {
+		visible = visible.IntersectCopy(p.MapRectToScene1(p.Bounds1()))
+	}
+	return visible
 }
 
 func finiteDropCoordinate(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
@@ -104,22 +118,33 @@ func (view *GedView) clearPaletteDrop() {
 
 func (view *GedView) drawPaletteDropBounds(g paint.Painter) {
 	p := view.paletteDrop
-	if !p.active || !p.valid || p.autoLayout {
+	if !p.active && view.managedHint.insertion.valid {
+		p = view.managedHint
+	}
+	if !p.active || !p.valid || (p.autoLayout && !p.insertion.valid) {
 		return
 	}
 	g.Save()
 	defer g.Restore()
 	color := paint.CurrentIconPalette().Accent
+	// Device-independent thickness so the slot is legible at every zoom.
+	scale := gui.ScreenDpmm() * view.ZoomFactor()
+	if !finiteDropCoordinate(scale) || scale <= 0 {
+		scale = 1
+	}
+	if p.insertion.valid {
+		line := p.insertion.marker
+		g.SetPen1(color, 3/scale)
+		g.MoveTo(line.X, line.Y)
+		g.LineTo(line.Right(), line.Bottom())
+		g.Stroke()
+		return
+	}
 	fill := color
 	fill.A = 28
 	g.SetBrush1(fill)
 	g.Rectangle1(p.bounds)
 	g.Fill()
-	// Device-independent two-pixel outline rather than a zoom-scaled stroke.
-	scale := gui.ScreenDpmm() * view.ZoomFactor()
-	if scale <= 0 {
-		scale = 1
-	}
 	g.SetPen1(color, 2/scale)
 	g.Rectangle1(p.bounds)
 	g.Stroke()
@@ -127,6 +152,7 @@ func (view *GedView) drawPaletteDropBounds(g paint.Painter) {
 
 func (view *GedView) drawPaletteDropHint(g paint.Painter) {
 	p := view.paletteDrop
+	reorder := !p.active && view.managedHint.insertion.valid
 	if !p.active {
 		p = view.managedHint
 	}
@@ -153,14 +179,17 @@ func (view *GedView) drawPaletteDropHint(g paint.Painter) {
 	g.SetPen1(color, 1)
 	g.Rectangle(x+0.5, y+0.5, width-1, height-1)
 	g.Stroke()
-	// Vector plus / forbidden mark: no PNG or fallback icon can go missing.
+	// Paint in the owner canvas so the badge never needs a separate surface.
 	g.SetPen1(color, 1.75)
-	if p.valid {
+	switch {
+	case reorder:
+		drawReorderArrows(g, x+15, y+13, p.insertion.marker.Height == 0)
+	case p.valid:
 		g.MoveTo(x+9, y+13)
 		g.LineTo(x+21, y+13)
 		g.MoveTo(x+15, y+7)
 		g.LineTo(x+15, y+19)
-	} else {
+	default:
 		g.MoveTo(x+10, y+8)
 		g.LineTo(x+20, y+18)
 		g.MoveTo(x+10, y+18)
@@ -170,6 +199,23 @@ func (view *GedView) drawPaletteDropHint(g paint.Painter) {
 	g.SetBrush1(gui.Theme().TextColor)
 	fe := font.FontExtents()
 	g.DrawText1(x+29, y+(height-fe.Height)/2+fe.Ascent, p.hint)
+}
+
+// drawReorderArrows points along the move axis, perpendicular to the slot line.
+func drawReorderArrows(g paint.Painter, x, y float64, vertical bool) {
+	point := func(along, across float64) (float64, float64) {
+		if vertical {
+			return x + across, y + along
+		}
+		return x + along, y + across
+	}
+	g.MoveTo(point(-6, 0))
+	g.LineTo(point(6, 0))
+	for _, end := range []float64{-1, 1} {
+		g.MoveTo(point(end*2, -4))
+		g.LineTo(point(end*6, 0))
+		g.LineTo(point(end*2, 4))
+	}
 }
 
 // The palette gesture is one undoable addition, including its visible

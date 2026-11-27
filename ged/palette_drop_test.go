@@ -3,12 +3,12 @@ package ged
 import (
 	"math"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/uk0/silk/geom"
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 	"github.com/uk0/silk/paint"
 )
 
@@ -100,7 +100,7 @@ func TestPaletteDropRejectsContainerTooSmallWithoutChangingIt(t *testing.T) {
 	ctx := &dropCtx{pa: gui.DndCopy, payload: "gui.Button"}
 	x, y := view.MapFromScene(22, 22)
 	view.OnDragMove(x, y, ctx)
-	if ctx.Action() != gui.DndIgnore || !strings.Contains(view.paletteDrop.hint, "空间不足") {
+	if ctx.Action() != gui.DndIgnore || view.paletteDrop.hint != i18n.T(dropContainerTooSmall) {
 		t.Fatal("undersized target did not show an explicit refusal")
 	}
 	view.OnDrop(x, y, ctx)
@@ -198,7 +198,7 @@ func TestPaletteDropAppendsWithoutOverwritingSparseLayoutCells(t *testing.T) {
 		ctx := &dropCtx{pa: gui.DndCopy, payload: "gui.Button"}
 		x, y := view.MapFromScene(78, 78)
 		view.OnDragMove(x, y, ctx)
-		if !view.paletteDrop.valid || !view.paletteDrop.autoLayout || !strings.Contains(view.paletteDrop.hint, "自动布局") {
+		if !view.paletteDrop.valid || !view.paletteDrop.autoLayout || view.paletteDrop.hint != i18n.Tf(dropAppendLayout, "Button", box.WidgetName()) {
 			t.Fatalf("%s did not advertise automatic placement: %+v", kind, view.paletteDrop)
 		}
 		button := placeFromPalette(t, view, "gui.Button", 78, 78)

@@ -3,9 +3,8 @@ package ged
 import (
 	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
+	"github.com/uk0/silk/i18n"
 )
-
-const managedGeometryMessage = "自动布局管理位置；解除布局后可自由移动/调整尺寸"
 
 // Layout ownership constrains a child's geometry, not the layout container's
 // own geometry and not the child's normal selection/property editing.
@@ -52,9 +51,10 @@ func (view *GedView) managedGeometryAt(x, y float64) bool {
 }
 
 func (view *GedView) showManagedGeometryHint(x, y float64) {
-	view.managedHint = paletteDropFeedback{active: true, x: x, y: y, hint: managedGeometryMessage}
+	hint := i18n.T(managedGeometryMessage)
+	view.managedHint = paletteDropFeedback{active: true, x: x, y: y, hint: hint}
 	if frame := gui.FindOwnerFrame(view); frame != nil && frame.StatusBar() != nil {
-		frame.StatusBar().ShowMessage(managedGeometryMessage)
+		frame.StatusBar().ShowMessage(hint)
 	}
 	gui.SetOverrideCursor(nil)
 	view.Self().Update()
