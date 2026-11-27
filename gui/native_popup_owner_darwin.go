@@ -42,3 +42,5 @@ func nativeApplicationActive(keyWindowFocused bool) bool {
 	}
 	return active != 0
 }
+
+func prepareNativePopupOwner(popup, owner *glfw.Window) {}

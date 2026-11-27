@@ -335,9 +335,9 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	switch wt {
 	case WtPopup:
 		glfw.WindowHint(glfw.Decorated, glfw.False)
-		if runtime.GOOS == "darwin" {
-			// Cocoa child ordering, not global floating-window level, keeps
-			// menus above their owner without pinning them over other apps.
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+			// A native popup relationship, rather than global always-on-top,
+			// keeps the menu above its owner. Wayland uses in-client popups.
 			glfw.WindowHint(glfw.Floating, glfw.False)
 		} else {
 			glfw.WindowHint(glfw.Floating, glfw.True)
@@ -1353,6 +1353,9 @@ func (this *Window) setVisible(b bool) {
 		this.refreshPopupOwner()
 		if this.wt == WtPopup && focusWidget != this.widget {
 			this.popupRestoreFocus = focusTargetForOwner(this.popupOwner, focusWidget)
+		}
+		if this.wt == WtPopup && this.popupOwner != nil && this.popupOwner.glfwWin != nil {
+			prepareNativePopupOwner(this.glfwWin, this.popupOwner.glfwWin)
 		}
 		if this.wt == WtPopup && this.hasPendingPos {
 			// ── Popup zero-flicker strategy ──

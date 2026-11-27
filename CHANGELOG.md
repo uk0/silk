@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — keep reused X11 menus above their owner
+
+- Native Linux X11 popups advertise their transient owner instead of
+  requesting global always-on-top. Showing a reusable popup raises it
+  without changing native focus, including when no window manager is running.
+
 ## Unreleased — hide already-open menus with their panels
 
 - Hiding an inline panel dismisses the submenus already opened by its
