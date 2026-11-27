@@ -21,6 +21,18 @@ CTM 哈希与比较也不一致。`paint/font_cache_test.go` 检查字号、样�
 
 `-short` 会跳过外部 SDK 编译，不能替代完整验收。
 
+## 大项目拖动基准
+
+```sh
+GOMAXPROCS=2 go test -p 1 ./gui -run '^$' \
+  -bench '^BenchmarkGanttDraggedSummaryAcrossSnappedDays$' \
+  -benchmem -benchtime=500ms -count=3
+```
+
+测量拖动父任务跨日期时的排程验证与可见行更新，不包含原生事件和绘图。
+样本为 1,000 / 5,000 个子任务，包含任务间依赖。拖动只在松手后生成一条撤销记录；
+鼠标按下后若源计划已变更，旧预览不得覆盖它。
+
 ## 真实界面复现
 
 生成隔离测试文件和渲染图片（不要指向需要保留的设计文件目录）：

@@ -1,9 +1,6 @@
 package gui
 
-import (
-	"math"
-	"reflect"
-)
+import "math"
 
 type ganttHit struct {
 	kind string
@@ -12,6 +9,8 @@ type ganttHit struct {
 type ganttGesture struct {
 	kind, id                           string
 	x, y, scrollX, scrollY, tableWidth float64
+	model                              *GanttModel
+	modelRevision                      uint64
 	before                             []GanttTask
 	task                               GanttTask
 	preview                            *GanttModel
@@ -116,6 +115,7 @@ func (c *GanttChart) OnLeftDown(x, y float64) {
 	if hit.row >= 0 {
 		d.id = c.rows[hit.row].Task.ID
 		d.task = c.rows[hit.row].Task
+		d.model, d.modelRevision = c.model, c.model.Revision()
 		d.before = c.Tasks()
 	}
 	c.drag = d
@@ -169,6 +169,10 @@ func (c *GanttChart) previewGesture(x, y float64) {
 	if d == nil || !ganttFinite(x) || !ganttFinite(y) {
 		return
 	}
+	if d.model != nil && (c.model != d.model || c.model.Revision() != d.modelRevision) {
+		c.CancelInteraction()
+		return
+	}
 	days := int(ganttClamp(math.Round((x-d.x)/c.dayWidth), -3650000, 3650000))
 	if (d.kind == "move" || d.kind == "start" || d.kind == "end") && days == d.lastDays {
 		return
@@ -214,11 +218,10 @@ func (c *GanttChart) previewGesture(x, y float64) {
 			return
 		}
 	}
-	m, err := NewGanttModel(d.before)
-	if err != nil {
-		c.lastError = err
-		return
-	}
+	// before is a snapshot of an already validated model. The edit makes
+	// its own writable copy; do not validate and clone the baseline again.
+	m := &GanttModel{tasks: d.before}
+	var err error
 	switch d.kind {
 	case "move":
 		err = m.MoveTask(d.id, days, c.cascadeDependencies)
@@ -263,14 +266,13 @@ func (c *GanttChart) OnLeftUp(x, y float64) {
 	}
 	c.drag = nil
 	c.PopCapture()
-	if d.preview != nil && !reflect.DeepEqual(d.before, d.preview.Tasks()) {
-		if err := c.model.Restore(d.preview.Snapshot()); err != nil {
-			c.lastError = err
-		} else {
-			c.rebuildRows(false)
-			c.commitNotification(d.before)
-			return
-		}
+	// The preview already validated the proposed edit. Publish it as a
+	// single history step only on the exact model revision it was based on.
+	if d.preview != nil && c.model == d.model && c.model.Revision() == d.modelRevision &&
+		c.model.commitPrepared(d.preview.tasks) {
+		c.rebuildRows(false)
+		c.commitNotification(d.before)
+		return
 	}
 	c.rebuildRows(false)
 	c.Update()

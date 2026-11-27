@@ -192,3 +192,63 @@ func TestGanttReadOnlyAndDisabledCursorCannotAdvertiseEditing(t *testing.T) {
 		t.Fatal("disabled ancestor retained resize cursor")
 	}
 }
+
+func TestGanttPreparedDragDoesNotOverwriteNewModelRevision(t *testing.T) {
+	c := chartFixture(t)
+	x, y := chartBarPoint(c, "project", "move")
+	c.OnLeftDown(x, y)
+	c.OnMouseMove(x+c.DayWidth(), y)
+	if c.drag == nil || c.drag.preview == nil {
+		t.Fatal("expected a prepared drag edit")
+	}
+	// Simulate a newer model edit reaching the widget before mouse-up.
+	if err := c.model.SetProgress("a", .82); err != nil {
+		t.Fatal(err)
+	}
+	want, revision := c.Tasks(), c.model.Revision()
+	commits := 0
+	c.SetEditCommittedCallback(func(_, _ []GanttTask) { commits++ })
+	c.OnLeftUp(x+c.DayWidth(), y)
+	if c.drag != nil || c.HasCapture() || commits != 0 ||
+		c.model.Revision() != revision || !reflect.DeepEqual(c.Tasks(), want) {
+		t.Fatal("stale preview changed a newer schedule or left capture behind")
+	}
+	if !c.Undo() || c.CanUndo() {
+		t.Fatal("only the independent model edit should be in history")
+	}
+}
+
+func TestGanttPreparedDragKeepsDependencySnapshotsDetached(t *testing.T) {
+	c := chartFixture(t)
+	before := c.Tasks()
+	committed := false
+	c.SetEditCommittedCallback(func(a, b []GanttTask) {
+		if !committed {
+			committed = true
+			for i := range a {
+				if len(a[i].Dependencies) > 0 {
+					a[i].Dependencies[0] = "mutated-before"
+				}
+				if len(b[i].Dependencies) > 0 {
+					b[i].Dependencies[0] = "mutated-after"
+				}
+			}
+		}
+	})
+	x, y := chartBarPoint(c, "project", "move")
+	c.OnLeftDown(x, y)
+	c.OnLeftUp(x+c.DayWidth(), y)
+	if !committed {
+		t.Fatal("drag did not commit")
+	}
+	after := c.Tasks()
+	for i := range after {
+		if !reflect.DeepEqual(after[i].Dependencies, before[i].Dependencies) {
+			t.Fatal("callback alias changed live dependency links")
+		}
+	}
+	if !c.Undo() || !reflect.DeepEqual(c.Tasks(), before) ||
+		!c.Redo() || !reflect.DeepEqual(c.Tasks(), after) {
+		t.Fatal("callback alias changed undo or redo snapshot")
+	}
+}

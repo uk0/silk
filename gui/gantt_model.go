@@ -88,12 +88,23 @@ func (m *GanttModel) Redo() bool {
 	return true
 }
 func (m *GanttModel) commit(tasks []GanttTask, cascade bool) error {
-	prepared, err := ganttPrepare(tasks, cascade)
-	if err != nil {
+	return m.commitOwned(cloneGanttTasks(tasks), cascade)
+}
+
+// commitOwned may normalize or schedule tasks in place, including on failure.
+// Only pass a detached working slice (and detached dependency slices).
+func (m *GanttModel) commitOwned(tasks []GanttTask, cascade bool) error {
+	if err := ganttPrepareOwned(tasks, cascade); err != nil {
 		return err
 	}
+	m.commitPrepared(tasks)
+	return nil
+}
+
+// commitPrepared takes ownership of an already validated snapshot.
+func (m *GanttModel) commitPrepared(prepared []GanttTask) bool {
 	if (len(m.tasks) == 0 && len(prepared) == 0) || reflect.DeepEqual(m.tasks, prepared) {
-		return nil
+		return false
 	}
 	m.undo = append(m.undo, m.tasks)
 	if len(m.undo) > ganttHistoryLimit {
@@ -102,7 +113,7 @@ func (m *GanttModel) commit(tasks []GanttTask, cascade bool) error {
 	}
 	m.tasks, m.redo = prepared, nil
 	m.revision++
-	return nil
+	return true
 }
 func (m *GanttModel) SetTasks(tasks []GanttTask) error { return m.commit(tasks, false) }
 func (m *GanttModel) MarshalJSON() ([]byte, error)     { return json.Marshal(m.Tasks()) }
@@ -171,7 +182,7 @@ func (m *GanttModel) MoveTask(id string, days int, cascade bool) error {
 	if err := ganttShift(tasks, i, days); err != nil {
 		return err
 	}
-	return m.commit(tasks, cascade)
+	return m.commitOwned(tasks, cascade)
 }
 func (m *GanttModel) ResizeTask(id string, start, end time.Time, cascade bool) error {
 	tasks := m.Tasks()
@@ -189,7 +200,7 @@ func (m *GanttModel) ResizeTask(id string, start, end time.Time, cascade bool) e
 		}
 	}
 	tasks[i].Start, tasks[i].End = start, end
-	return m.commit(tasks, cascade)
+	return m.commitOwned(tasks, cascade)
 }
 func (m *GanttModel) SetProgress(id string, progress float64) error {
 	tasks := m.Tasks()
@@ -203,7 +214,7 @@ func (m *GanttModel) SetProgress(id string, progress float64) error {
 		}
 	}
 	tasks[i].Progress = progress
-	return m.commit(tasks, false)
+	return m.commitOwned(tasks, false)
 }
 func (m *GanttModel) SetCollapsed(id string, collapsed bool) error {
 	tasks := m.Tasks()
@@ -496,17 +507,24 @@ func ganttValidateDependencies(tasks []GanttTask, tree *ganttTree) error {
 
 func ganttPrepare(input []GanttTask, cascade bool) ([]GanttTask, error) {
 	tasks := cloneGanttTasks(input)
+	if err := ganttPrepareOwned(tasks, cascade); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func ganttPrepareOwned(tasks []GanttTask, cascade bool) error {
 	for i := range tasks {
 		tasks[i].Start = GanttDate(tasks[i].Start)
 		tasks[i].End = GanttDate(tasks[i].End)
 	}
 	tree, err := ganttValidate(tasks)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ganttSummarize(tasks, tree)
 	if err := ganttValidateDependencies(tasks, tree); err != nil {
-		return nil, err
+		return err
 	}
 	for pass := 0; pass <= len(tasks); pass++ {
 		changed := false
@@ -518,18 +536,18 @@ func ganttPrepare(input []GanttTask, cascade bool) ([]GanttTask, error) {
 					continue
 				}
 				if !cascade {
-					return nil, fmt.Errorf("任务 %q 不能早于前置任务 %q 的结束日期", tasks[i].ID, id)
+					return fmt.Errorf("任务 %q 不能早于前置任务 %q 的结束日期", tasks[i].ID, id)
 				}
 				if err := ganttShift(tasks, i, days); err != nil {
-					return nil, err
+					return err
 				}
 				ganttSummarize(tasks, tree)
 				changed = true
 			}
 		}
 		if !changed {
-			return tasks, nil
+			return nil
 		}
 	}
-	return nil, fmt.Errorf("甘特依赖级联未能收敛；编辑已取消")
+	return fmt.Errorf("甘特依赖级联未能收敛；编辑已取消")
 }

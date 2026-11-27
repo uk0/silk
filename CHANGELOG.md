@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Gantt interaction
+
+- Reduce allocations and latency when dragging large Gantt plans: validate
+  only the new schedule and reuse it on drop rather than rescheduling again.
+- Discard a drag when its source model has changed. Undo remains a single
+  edit, and host callbacks cannot mutate live dependencies or history.
+
 ## Unreleased — typed HMI alarms
 
 - Require Go 1.26.11 for Silk and the map SDK, and build the bundled
