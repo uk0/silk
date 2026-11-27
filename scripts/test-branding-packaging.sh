@@ -38,6 +38,16 @@ assert_copy "$out/tools/gopls" "$app/MacOS/tools/gopls"
 assert_copy "$out/tools/gopls.json" "$app/MacOS/tools/gopls.json"
 assert_copy "$out/tools/licenses/gopls/LICENSE" "$app/MacOS/tools/licenses/gopls/LICENSE"
 [[ -x "$app/MacOS/tools/gopls" ]]
+# MSYS can emulate non-native symlinks with copies. Check the link itself on
+# Unix and check both lookup paths on all fixture hosts.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *) [[ $(readlink "$app/MacOS/tools") == ../Resources/tools ]] ;;
+esac
+[[ ! -L "$app/Resources/tools" ]]
+assert_copy "$out/tools/gopls" "$app/Resources/tools/gopls"
+assert_copy "$out/tools/gopls.json" "$app/Resources/tools/gopls.json"
+assert_copy "$out/tools/licenses/gopls/LICENSE" "$app/Resources/tools/licenses/gopls/LICENSE"
 # A repeat build must replace executable inodes, not truncate signed/running
 # Mach-O files in place. Hard links make that observable on every test host.
 ln "$app/MacOS/silkide" "$tmp/previous-ide"
@@ -71,6 +81,11 @@ if PATH="$tmp/fail-move:$PATH" bash "$root/scripts/package-silkide-branding.sh" 
 assert_copy "$out/silkide" "$app/MacOS/silkide"
 assert_copy "$out/tools/gopls" "$app/MacOS/tools/gopls"
 grep -q '<key>CFBundleShortVersionString</key><string>0.1.4</string>' "$app/Info.plist"
+# A subsequent tools-free package must not keep a stale or dangling alias.
+mv "$out/tools" "$tmp/saved-tools"
+bash "$root/scripts/package-silkide-branding.sh" darwin "$out" 0.1.6
+[[ ! -e "$app/MacOS/tools" && ! -L "$app/MacOS/tools" && ! -e "$app/Resources/tools" ]]
+mv "$tmp/saved-tools" "$out/tools"
 bash "$root/scripts/package-silkide-branding.sh" linux "$out"
 assert_copy "$tmp/assets/silkide-256.png" "$out/share/icons/hicolor/256x256/apps/silkide.png"
 XDG_DATA_HOME="$tmp/desktop-data" bash "$out/install-desktop-entry.sh" "$out" > "$tmp/install.log"

@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — tolerate short Windows save sharing conflicts
+
+- The atomic writer retries short-lived Windows sharing violations without
+  re-encoding or deleting the destination. It revalidates the original file
+  before every replacement and stops if another process changed it. A lock
+  that outlasts the retry window still reports an error.
+
+## Unreleased — start the Go language service on demand
+
+- Welcome and design-only sessions do not launch or index with gopls at
+  startup. The first Go editor, explicit workspace command or Restart LSP
+  starts the pinned server in the background.
+- The workspace symbol dialog can open while the service is starting and
+  resumes its latest query when the server connects.
+
+## Unreleased — preserve locks during grid and form drops
+
+- A palette drop or an in-layout move now checks whether reflow would move a
+  position-locked control or resize a size-locked one, including nested
+  controls. Rejected drops leave the form and undo history unchanged. The
+  detached check runs on release, not on pointer movement.
+
+## Unreleased — relocatable macOS language tools
+
+- Keep the bundled language-server payload under `Contents/Resources`, with an
+  executable-relative link for existing tool discovery. Versioned license
+  directories no longer prevent signing a development copy of the app.
+- The macOS release job tests ad-hoc signing on a relocated copy extracted
+  from its archive and rechecks the pinned tool manifest. Release archives
+  remain unsigned by Developer ID and are not notarized.
+
+## Unreleased — move individual controls out of layouts
+
+- Drag a single managed control directly into free placement on the form or in
+  a free-positioned container. The outline shows the final bounds, preserving
+  the grab point and size with grid snap and clipping correction.
+- Retain source grid cells and restore the exact owner, index, geometry and
+  layout metadata in one undo. Reject unsafe destinations rather than losing
+  controls behind a container title or edge.
+
 ## Unreleased — large-file diagnostic updates
 
 - Resolve Go diagnostic columns against the affected lines of the live buffer

@@ -400,8 +400,8 @@ func (this *GedView) OnDrop(x, y float64, dnd gui.IDndContext) {
 	item.Layout()
 	if placement.cell.valid {
 		parent := placement.parent.(*FakeWidget)
-		if !this.tabularReleaseFits(parent, item, placement.cell, true) {
-			this.showStatus(i18n.T(dropCellClipped))
+		if reason := this.tabularReleaseFailure(parent, item, placement.cell, true); reason != "" {
+			this.showStatus(i18n.T(reason))
 			return
 		}
 		item.layoutCell = placement.cell.cell
@@ -2643,7 +2643,7 @@ func (this *GedView) Draw(g paint.Painter) {
 	wantGrid := this.showGrid && grid.Visible && grid.Pitch > 0
 	manual := this.activeGuides()
 	wantGuides := !manual.isEmpty() || this.guideDrag.active
-	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid || !this.paletteDrop.cell.span.IsEmpty() || this.managedHint.insertion.valid || !this.managedHint.cell.span.IsEmpty() {
+	if wantGrid || wantGuides || len(this.alignGuides) > 0 || this.dropContainer != nil || this.paletteDrop.valid || !this.paletteDrop.cell.span.IsEmpty() || this.managedHint.insertion.valid || !this.managedHint.cell.span.IsEmpty() || (this.managedHint.freeMove && this.managedHint.valid) {
 		// Clip to the page area so neither the grid nor the guides bleed into
 		// the padding region, then re-enter scene-mm coordinate space (the
 		// same transform GraphView.Draw uses for the scene) so every overlay

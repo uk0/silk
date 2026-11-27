@@ -38,11 +38,14 @@ case "$platform" in
     chmod +x "$app/MacOS/silkide"
     cp "$assets/silkide.icns" "$app/Resources/silkide.icns"
     if [[ -d "$out/icon" ]]; then cp -R "$out/icon" "$app/Resources/"; fi
-    # Keep executable-relative tools inside the .app; copying only the app must
-    # not strand gopls in an external staging folder. Release verifies both.
+    # Seal the immutable tool payload (binary, manifest and licenses) together
+    # as resources. MacOS is a code directory: versioned license directories
+    # there can be mistaken for malformed nested bundles by codesign.
+    # Keep the existing executable-relative lookup after moving the app.
     if [[ -d "$out/tools" ]]; then
-      mkdir -p "$app/MacOS/tools"
-      cp -R "$out/tools/." "$app/MacOS/tools/"
+      mkdir -p "$app/Resources/tools"
+      cp -R "$out/tools/." "$app/Resources/tools/"
+      ln -s ../Resources/tools "$app/MacOS/tools"
     fi
     cat > "$app/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

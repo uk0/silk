@@ -99,11 +99,10 @@ func main() {
 	refreshPackages(designCanvas)
 	refreshGitChanges(designCanvas)
 	refreshGitLog(designCanvas)
-	// Launch gopls in the background so subsequent .go file opens can
-	// push DidOpen notifications at it. Goroutine-bounded LookPath +
-	// initialize; a missing/damaged bundle or unavailable Go SDK produces
-	// a recoverable diagnostic while the editor remains usable.
-	startLSPBackground(projectDir(designCanvas))
+	// Welcome and Designer users need no language-server process. Restoring
+	// or opening the first Go editor will request startup, without blocking
+	// UI initialization or using an unrelated process working directory.
+	setLSPActivityPhase(lspStandby)
 	buildToolBar(frame, editorTabs, designCanvas)
 	statusBar := buildStatusBar(frame)
 	registerShortcuts(editorTabs, designCanvas)
@@ -4168,9 +4167,15 @@ func startLSPBackground(projectDir string) {
 	lspStartCancel = cancel
 	lspSessionGeneration++
 	epoch := lspSessionGeneration
-	lspActivityPhase = "starting"
-	refreshLSPActivity()
+	setLSPActivityPhase("starting")
 	go func() {
+		rootURI := ""
+		if projectDir != "" {
+			rootURI = fileURIOf(enclosingGoProject(projectDir))
+		}
+		if ctx.Err() != nil {
+			return
+		}
 		client, err := launchIDELanguageServer()
 		if err != nil {
 			gui.Post(func() {
@@ -4183,10 +4188,6 @@ func startLSPBackground(projectDir string) {
 		}
 		abort := context.AfterFunc(ctx, func() { _ = client.Close() })
 		progress := client.WorkProgressUpdates() // opt in before advertising the capability
-		rootURI := ""
-		if projectDir != "" {
-			rootURI = fileURIOf(projectDir)
-		}
 		if _, initErr := client.Initialize(core.LSPInitializeParams{
 			ProcessID:    os.Getpid(),
 			RootURI:      rootURI,
@@ -4219,8 +4220,7 @@ func startLSPBackground(projectDir string) {
 			lspStartCancel = nil
 			cancel()
 			globalLSP = client
-			lspActivityPhase = "connected"
-			refreshLSPActivity()
+			setLSPActivityPhase("connected")
 			watchLSPActivity(client, epoch, progress)
 			core.Log("silkide: gopls ready (rootURI=", rootURI, ")")
 			logEvent(ged.LogInfo, "gopls started")
@@ -4275,6 +4275,9 @@ func startLSPBackground(projectDir string) {
 // to launch; non-.go paths are skipped (gopls would reject them, and
 // .silkui has no language server here).
 func lspDidOpenFile(path string, text string) {
+	if !fileRenameAffects(path) {
+		demandLSPForEditor(path, startLSPBackground)
+	}
 	openLSPDocument(path, text)
 }
 

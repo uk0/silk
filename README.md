@@ -17,6 +17,11 @@ Windows system/per-monitor DPI scaling remains incomplete and may still blur the
 whole window. macOS packages require external Cairo and are not Developer ID
 signed/notarized standalone apps.
 
+On the development branch, moving the whole macOS `SilkIDE.app` keeps its
+bundled `gopls`, manifest and licenses together; it does not need the adjacent
+`tools/` folder. The release job verifies this on a relocated, ad-hoc-signed
+test copy, not on a Developer ID build.
+
 ---
 
 ## Drag controls into a layout slot (development branch)
@@ -38,6 +43,9 @@ Drag from the palette into an empty cell. Move an existing control within the
 same layout, or drop it onto a compatible occupied cell to swap the two.
 The designer highlights the solved cell, and refuses occupied spans, locked
 controls and drops that would clip a control out of view.
+On release it also checks layout reflow: an empty cell can still be rejected
+if placing a control there would move or resize a locked control, including
+one inside a nested container. The status bar explains the rejection.
 
 ![Native Wayland Designer highlighting the empty field cell in row 1 of the form layout](docs/images/designer-tabular-placement-wayland.png)
 
@@ -69,6 +77,11 @@ fills the form's client area and follows window resizing, both in the preview
 and in applications built from the generated Go or loaded with `gui.LoadForm`.
 Other layouts created from a selection still use the controls' bounding box.
 Choose **Break Layout** to return to free placement.
+
+To free just one control, drag its body out of the managed layout onto the
+form background or a free-positioned container. The outline previews the
+entire landing rectangle. The source layout remains active; one undo restores
+the original owner, position and layout slot.
 
 You can also select a **Card** or **GroupBox** and apply any of the four
 layouts. The controls follow the container's content area without covering
@@ -2390,7 +2403,10 @@ See [the bundle audit and native recovery QA](GOPLS_AUDIT_QA_20261024.md).
   automatic startup downloads, or machine PATH modifications are performed.
 - **Tools → Toolchain Status** reports selected paths, versions and live LSP
   connection state, and distinguishes Go/gopls from optional Git/Delve.
-  **Tools → Restart LSP** restarts after configuration changes.
+  **gopls: standby** means no server is running yet. Opening a Go file (including
+  a restored tab), explicitly opening a project or searching workspace symbols
+  starts it in the background. **Tools → Restart LSP** starts or restarts it
+  after configuration changes.
 - `bash scripts/test-bundled-gopls.sh bin` requires actual bundled-server
   completion/formatting, unsaved Unicode navigation, and rename integration.
   Release checks fail on a missing binary, bad manifest, wrong architecture,

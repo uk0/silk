@@ -200,21 +200,22 @@ func (c *tabularMoveCommand) apply(a, b layoutPlacement) {
 	c.parent.Layout()
 }
 
-// Reflow can change row/column measurements. Prove the selected cell actually
-// fits and still leaves nearby existing widgets visible before touching the
-// document. This builds detached runtime widgets once on release, never on
-// the steady-state pointer-move path.
-func (view *GedView) tabularReleaseFits(parent, item *FakeWidget, plan tabularDropPlan, add bool) bool {
+// Reflow can affect any control in the grid or form, even if its cell is not
+// the drop target. Check the detached result on release, not on every motion.
+func (view *GedView) tabularReleaseFailure(parent, item *FakeWidget, plan tabularDropPlan, add bool) string {
 	scene := view.Scene()
 	if scene == nil || parent.Scene() != scene || (!add && item.Parent() != parent) {
-		return false
+		return dropCellClipped
 	}
 	page := scene.MapRectToScene1(scene.Bounds1())
 	clip := designDropArea(page, parent)
 	if clip.IsEmpty() {
-		return false
+		return dropCellClipped
 	}
-	trial := &layoutTrial{children: make(map[*FakeWidget]gui.IWidget)}
+	trial := &layoutTrial{
+		children: make(map[*FakeWidget]gui.IWidget),
+		orders:   make(map[*FakeWidget][]graph.IItem),
+	}
 	if !add {
 		trial.cells = map[*FakeWidget]layoutPlacement{item: plan.cell}
 		if plan.swap != nil {
@@ -224,34 +225,72 @@ func (view *GedView) tabularReleaseFits(parent, item *FakeWidget, plan tabularDr
 	runtime := parent.generate(trial)
 	layouter, hasLayout := runtime.(interface{ Layout() })
 	if !hasLayout {
-		return false
+		return dropCellClipped
 	}
 	if add {
 		adder, ok := runtime.(layoutWidgetAdder)
 		if !ok {
-			return false
+			return dropCellClipped
 		}
 		proposed := item.Generate()
 		if proposed == nil {
-			return false
+			return dropCellClipped
 		}
 		adder.AddLayoutWidget(proposed, plan.cell.Row, plan.cell.Column, plan.cell.RowSpan, plan.cell.ColumnSpan)
 		trial.children[item] = proposed
 	}
 	layouter.Layout()
 	origin := parent.MapRectToScene1(parent.Bounds1())
+	var baseline *layoutTrial
+	var baselineRoot gui.IWidget
 	for actual, proposed := range trial.children {
-		required := actual == item || actual == plan.swap
-		if !required && (!proposed.IsVisible() || actual.MapRectToScene1(actual.Bounds1()).IntersectCopy(clip).IsEmpty()) {
+		if actual == parent {
 			continue
 		}
-		x, y, w, h := proposed.Bounds()
-		rect := geom.Rect{X: origin.X + gui.PixelToMm(x), Y: origin.Y + gui.PixelToMm(y), Width: gui.PixelToMm(w), Height: gui.PixelToMm(h)}
-		if proposed.Parent() != runtime || !proposed.IsVisible() || rect.IntersectCopy(clip).IsEmpty() {
-			return false
+		rect, visible := transferTrialBounds(proposed, runtime, origin, clip)
+		if actual == item || actual == plan.swap {
+			if proposed.Parent() != runtime || !visible {
+				return dropCellClipped
+			}
+		}
+		if actual == item && add {
+			continue
+		}
+		oldRect := actual.MapRectToScene1(actual.Bounds1())
+		wasVisible := actual.Widget().IsVisible() && !oldRect.IntersectCopy(designDropArea(page, actual.Parent())).IsEmpty()
+		if wasVisible && !visible {
+			return dropCellClipped
+		}
+		if !tabularLockAllows(actual, oldRect, rect) {
+			// Free descendants can be authored at subpixel coordinates.
+			// Compare with the same solver before the edit to distinguish
+			// a real reflow from rounding on projection into runtime pixels.
+			if baseline == nil {
+				baseline = &layoutTrial{
+					children: make(map[*FakeWidget]gui.IWidget),
+					orders:   make(map[*FakeWidget][]graph.IItem),
+				}
+				baselineRoot = parent.generate(baseline)
+			}
+			old := baseline.children[actual]
+			if old == nil || baselineRoot == nil {
+				return dropCellLockedGeometry
+			}
+			before, _ := transferTrialBounds(old, baselineRoot, origin, clip)
+			if !tabularLockAllows(actual, before, rect) {
+				return dropCellLockedGeometry
+			}
 		}
 	}
-	return trial.children[item] != nil && (plan.swap == nil || trial.children[plan.swap] != nil)
+	if trial.children[item] == nil || (plan.swap != nil && trial.children[plan.swap] == nil) {
+		return dropCellClipped
+	}
+	return ""
+}
+
+func tabularLockAllows(item *FakeWidget, before, after geom.Rect) bool {
+	return (!item.IsLockPos() || nearTransferPoint(before.X, before.Y, after.X, after.Y)) &&
+		(!item.IsLockSize() || nearTransferPoint(before.Width, before.Height, after.Width, after.Height))
 }
 
 func (view *GedView) tabularGestureAt(x, y float64) tabularDropPlan {
@@ -298,10 +337,10 @@ func (view *GedView) canCommitTabularDrop() bool {
 
 func (view *GedView) commitManagedDrag(x, y float64) {
 	arm := view.layoutReorder
-	if transfer := view.managedTransferAt(x, y); transfer.target != nil {
+	if transfer := view.managedTransferAt(x, y); transfer.destination() != nil {
 		if transfer.valid() && view.canCommitTabularDrop() {
 			next := view.managedTransferAt(x, y)
-			if next.target == transfer.target {
+			if next.destination() == transfer.destination() && (next.freeParent != nil) == (transfer.freeParent != nil) {
 				transfer = next
 			} else {
 				transfer = layoutTransferPlan{}
@@ -328,8 +367,8 @@ func (view *GedView) commitManagedDrag(x, y float64) {
 		if !cell.valid {
 			return
 		}
-		if !view.tabularReleaseFits(arm.parent, arm.item, cell, false) {
-			view.showStatus(i18n.T(dropCellClipped))
+		if reason := view.tabularReleaseFailure(arm.parent, arm.item, cell, false); reason != "" {
+			view.showStatus(i18n.T(reason))
 			return
 		}
 		cmd := &tabularMoveCommand{parent: arm.parent, item: arm.item, other: cell.swap,

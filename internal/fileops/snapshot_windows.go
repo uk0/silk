@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -63,6 +64,17 @@ func ReplaceSnapshotFile(from, to string) error {
 	}
 	return nil
 }
+
+// At most five short waits (460ms total, plus filesystem time). Only the
+// guarded atomic writer uses this schedule; raw renames still fail promptly.
+func atomicSharingDelay(err error, attempt int) time.Duration {
+	waits := [...]time.Duration{20, 40, 80, 120, 200}
+	if attempt >= len(waits) || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		return 0
+	}
+	return waits[attempt] * time.Millisecond
+}
+
 func replaceSnapshotWindows(from, to string) error {
 	src, err := snapshotWindowsPath(from)
 	if err != nil {

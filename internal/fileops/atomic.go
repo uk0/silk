@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ErrChanged means the destination changed during preparation. The caller must
@@ -188,12 +189,22 @@ func writeAtomicGuarded(path string, mode os.FileMode, encode func(io.Writer) er
 	if err != nil {
 		return err
 	}
-	after, err := inspectAtomicTarget(path)
-	if err != nil {
-		return err
+	// A Windows reader without delete sharing can race the final rename.
+	// Retry only a transient sharing violation, never re-encode or delete the
+	// target, and revalidate against the original fingerprint before every
+	// replacement. A real external edit must not become retry permission.
+	for attempt := 0; ; attempt++ {
+		after, err := inspectAtomicTarget(path)
+		if err == nil {
+			if !sameAtomicTarget(before, after) {
+				return fmt.Errorf("%w: %s", ErrChanged, path)
+			}
+			err = replace(temp, path)
+		}
+		wait := atomicSharingDelay(err, attempt)
+		if wait == 0 {
+			return err
+		}
+		time.Sleep(wait)
 	}
-	if !sameAtomicTarget(before, after) {
-		return fmt.Errorf("%w: %s", ErrChanged, path)
-	}
-	return replace(temp, path)
 }

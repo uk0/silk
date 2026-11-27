@@ -17,6 +17,7 @@ import (
 type paletteDropFeedback struct {
 	active, valid bool
 	autoLayout    bool
+	freeMove      bool
 	factoryName   string
 	container     graph.IItem
 	parent        graph.IItem
@@ -138,7 +139,8 @@ func (view *GedView) clearPaletteDrop() {
 
 func (view *GedView) drawPaletteDropBounds(g paint.Painter) {
 	p := view.paletteDrop
-	if !p.active && (view.managedHint.insertion.valid || !view.managedHint.cell.span.IsEmpty()) {
+	if !p.active && (view.managedHint.insertion.valid || !view.managedHint.cell.span.IsEmpty() ||
+		view.managedHint.freeMove && view.managedHint.valid) {
 		p = view.managedHint
 	}
 	hasCell := !p.cell.span.IsEmpty()
@@ -212,6 +214,8 @@ func (view *GedView) drawPaletteDropHint(g paint.Painter) {
 	switch {
 	case reorder:
 		drawReorderArrows(g, x+15, y+13, p.insertion.valid && p.insertion.marker.Height == 0)
+	case p.valid && p.freeMove:
+		drawReorderArrows(g, x+15, y+13, false)
 	case p.valid:
 		g.MoveTo(x+9, y+13)
 		g.LineTo(x+21, y+13)

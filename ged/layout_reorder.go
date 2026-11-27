@@ -11,6 +11,7 @@ import (
 type layoutReorderGesture struct {
 	item, parent *FakeWidget
 	moved        bool
+	grabX, grabY float64
 }
 
 func (view *GedView) managedReorderPress(x, y float64) layoutReorderGesture {
@@ -30,7 +31,13 @@ func (view *GedView) managedReorderPress(x, y float64) layoutReorderGesture {
 		(!isTabularLayout(parent) && !canReorderLinearLayout(parent)) {
 		return layoutReorderGesture{}
 	}
-	return layoutReorderGesture{item: item, parent: parent}
+	r := item.MapRectToScene1(item.Bounds1())
+	if r.IsEmpty() {
+		return layoutReorderGesture{}
+	}
+	return layoutReorderGesture{item: item, parent: parent,
+		grabX: min(1, max(0, (sx-r.X)/r.Width)),
+		grabY: min(1, max(0, (sy-r.Y)/r.Height))}
 }
 
 func canReorderLinearLayout(parent *FakeWidget) bool {
@@ -88,7 +95,7 @@ func (view *GedView) updateManagedPress(x, y float64) {
 	if !view.layoutReorder.moved {
 		return
 	}
-	if transfer := view.managedTransferAt(x, y); transfer.target != nil {
+	if transfer := view.managedTransferAt(x, y); transfer.destination() != nil {
 		view.showLayoutTransfer(transfer, x, y)
 		return
 	}

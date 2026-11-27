@@ -44,8 +44,7 @@ func finishLSPConnection(client *core.LSPClient, epoch uint64) {
 	}
 	cause := client.Err()
 	globalLSP = nil
-	lspActivityPhase = "offline"
-	refreshLSPActivity()
+	setLSPActivityPhase("offline")
 	retireLSPDocuments()
 	if cause != nil {
 		reportLSPRequestError(i18n.T("Language service disconnected"), "", cause)
@@ -57,8 +56,7 @@ func reportLSPStartFailure(epoch uint64, cause error) {
 	if epoch != lspSessionGeneration {
 		return
 	}
-	lspActivityPhase = "offline"
-	refreshLSPActivity()
+	setLSPActivityPhase("offline")
 	if lspStartCancel != nil {
 		lspStartCancel()
 		lspStartCancel = nil

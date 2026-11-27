@@ -101,7 +101,7 @@ func TestManagedLinearChildReorderUsesReleaseSlotAndOneUndo(t *testing.T) {
 }
 
 func TestManagedLinearChildReorderRejectsNoopLockExitAndCancellation(t *testing.T) {
-	for _, scenario := range []string{"no-motion", "same-slot", "move-locked", "cross-locked", "parent-locked", "outside", "escape", "pointer-cancel", "mixed-selection", "handle"} {
+	for _, scenario := range []string{"no-motion", "same-slot", "move-locked", "cross-locked", "parent-locked", "outside-form", "escape", "pointer-cancel", "mixed-selection", "handle"} {
 		t.Run(scenario, func(t *testing.T) {
 			v, parent, items := reorderLayoutFixture(t, LayoutVertical)
 			before := parent.Children()
@@ -126,8 +126,8 @@ func TestManagedLinearChildReorderRejectsNoopLockExitAndCancellation(t *testing.
 			if scenario == "same-slot" {
 				gx, gy = layoutBodyPoint(v, items[0], LayoutVertical, .25)
 			}
-			if scenario == "outside" {
-				gx, gy = v.MapFromScene(160, 130)
+			if scenario == "outside-form" {
+				gx, gy = v.MapFromScene(v.Scene().Width()+5, 130)
 			}
 			if scenario != "no-motion" {
 				v.OnMouseMove(gx, gy)

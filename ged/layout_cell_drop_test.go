@@ -171,10 +171,20 @@ func TestTabularMovePreservesSpanAndNeverDisplacesLockedCell(t *testing.T) {
 		t.Fatal("empty span does not preserve geometry")
 	}
 	fromX, fromY := centerOfTabularCell(t, p, 0, 0)
+	lockedBounds := items[1].Bounds1()
+	if reason := v.tabularReleaseFailure(p, items[0], plan, false); reason != dropCellLockedGeometry {
+		t.Fatalf("moving to a vacant span would still reflow its locked neighbor; got %q", reason)
+	}
+	dragOnCanvas(v, fromX, fromY, x, y)
+	if items[0].layoutCell != cell(0, 0, 1, 2) || items[1].Bounds1() != lockedBounds ||
+		v.Scene().UndoStack().CanUndo() {
+		t.Fatal("span move changed locked geometry or history")
+	}
+	items[1].SetLockPos(false)
 	dragOnCanvas(v, fromX, fromY, x, y)
 	if items[0].layoutCell != plan.cell || items[1].layoutCell != cell(1, 3, 1, 1) ||
-		items[0].Parent() != graph.IItem(p) {
-		t.Fatal("drag did not preserve span and owner")
+		items[1].Bounds1() == lockedBounds || items[0].Parent() != graph.IItem(p) {
+		t.Fatal("unlocked drag did not reflow while preserving span and owner")
 	}
 }
 
@@ -187,7 +197,7 @@ func TestTabularReleaseRefusesRowsThatWouldVanish(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := tabularDropPlan{cell: cell(1, 1, 1, 1), valid: true}
-	if v.tabularReleaseFits(p, added, plan, true) || len(p.Children()) != 1 || v.Scene().UndoStack().CanUndo() {
+	if v.tabularReleaseFailure(p, added, plan, true) != dropCellClipped || len(p.Children()) != 1 || v.Scene().UndoStack().CanUndo() {
 		t.Fatal("trial accepted a row fully clipped out of its container")
 	}
 }

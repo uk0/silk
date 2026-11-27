@@ -10,14 +10,24 @@ import (
 )
 
 type layoutTransferPlan struct {
-	target *FakeWidget
-	slot   linearPaletteInsertion
-	cell   tabularDropPlan
-	reject string
+	target     *FakeWidget
+	freeParent graph.IItem
+	freeBounds geom.Rect
+	slot       linearPaletteInsertion
+	cell       tabularDropPlan
+	reject     string
+}
+
+func (p layoutTransferPlan) destination() graph.IItem {
+	if p.target != nil {
+		return p.target
+	}
+	return p.freeParent
 }
 
 func (p layoutTransferPlan) valid() bool {
-	return p.target != nil && p.reject == "" && (p.slot.valid || p.cell.valid)
+	return p.reject == "" && (p.target != nil && (p.slot.valid || p.cell.valid) ||
+		p.freeParent != nil && !p.freeBounds.IsEmpty())
 }
 
 func managedLayoutTarget(item graph.IItem) *FakeWidget {
@@ -83,11 +93,23 @@ func (view *GedView) managedTransferAt(x, y float64) layoutTransferPlan {
 		return layoutTransferPlan{}
 	}
 	target := nearestDropContainer(view.Scene().FindItemAt(sx, sy, nil), func(it graph.IItem) bool { return it == arm.item })
-	return view.layoutTransferAt(arm.item, managedLayoutTarget(target), sx, sy)
+	if box := managedLayoutTarget(target); box != nil {
+		return view.layoutTransferAt(arm.item, box, sx, sy)
+	}
+	return view.layoutDetachAt(arm, target, sx, sy)
 }
 
 func (view *GedView) showLayoutTransfer(p layoutTransferPlan, x, y float64) {
 	hint := i18n.T(p.reject)
+	if p.freeParent != nil {
+		if p.valid() {
+			hint = i18n.Tf(dropTransferFreeHint, freeDropTargetName(p.freeParent))
+		}
+		view.managedHint = paletteDropFeedback{active: true, valid: p.valid(), freeMove: true,
+			x: x, y: y, bounds: p.freeBounds, hint: hint}
+		view.Self().Update()
+		return
+	}
 	if p.valid() {
 		target := p.target.WidgetName()
 		if target == "" {
@@ -121,6 +143,10 @@ type layoutTransferCommand struct {
 	before           []layoutSnapshot
 	roots            []*FakeWidget
 	implicitSource   map[*FakeWidget]layoutPlacement
+	freeParent       graph.IItem
+	freeBounds       geom.Rect
+	freeContentHost  *FakeWidget
+	oldContentMode   contentPlacementMode
 }
 
 func transferRoots(source, target *FakeWidget) []*FakeWidget {
@@ -141,7 +167,7 @@ func transferRoots(source, target *FakeWidget) []*FakeWidget {
 }
 
 func (view *GedView) buildLayoutTransfer(item *FakeWidget, plan layoutTransferPlan) gui.ICommand {
-	if !plan.valid() || item == nil || item.Parent() == nil || item.Parent() == plan.target {
+	if !plan.valid() || item == nil || item.Parent() == nil || item.Parent() == plan.destination() {
 		return nil
 	}
 	cmd := &layoutTransferCommand{view: view, item: item, source: item.Parent(), target: plan.target,
@@ -152,7 +178,19 @@ func (view *GedView) buildLayoutTransfer(item *FakeWidget, plan layoutTransferPl
 		cmd.cell = plan.cell.cell
 	}
 	srcLayout := managedLayoutTarget(cmd.source)
-	cmd.roots = transferRoots(srcLayout, cmd.target)
+	if plan.freeParent != nil {
+		if srcLayout == nil || !unlockedDetachSubtree(item) {
+			view.showStatus(i18n.T(dropLayoutLocked))
+			return nil
+		}
+		cmd.freeParent, cmd.freeBounds = plan.freeParent, plan.freeBounds
+		cmd.roots = []*FakeWidget{srcLayout}
+		if host, ok := cmd.freeParent.(*FakeWidget); ok && host.supportsContentLayout() {
+			cmd.freeContentHost, cmd.oldContentMode = host, host.contentPlacement
+		}
+	} else {
+		cmd.roots = transferRoots(srcLayout, cmd.target)
+	}
 	if srcLayout != nil && isTabularLayout(srcLayout) {
 		cmd.implicitSource = make(map[*FakeWidget]layoutPlacement)
 		for i, node := range srcLayout.Children() {
@@ -208,15 +246,17 @@ func (c *layoutTransferCommand) trialFits(source *FakeWidget) bool {
 		}
 		trial.orders[source] = order
 	}
-	dst := c.target.Children()
-	insert := c.newSlot
-	if insert < 0 {
-		insert = len(dst)
+	if c.target != nil {
+		dst := c.target.Children()
+		insert := c.newSlot
+		if insert < 0 {
+			insert = len(dst)
+		}
+		order := make([]graph.IItem, 0, len(dst)+1)
+		order = append(order, dst[:insert]...)
+		order = append(order, c.item)
+		trial.orders[c.target] = append(order, dst[insert:]...)
 	}
-	order := make([]graph.IItem, 0, len(dst)+1)
-	order = append(order, dst[:insert]...)
-	order = append(order, c.item)
-	trial.orders[c.target] = append(order, dst[insert:]...)
 
 	page := c.view.Scene().MapRectToScene1(c.view.Scene().Bounds1())
 	found := false
@@ -239,6 +279,13 @@ func (c *layoutTransferCommand) trialFits(source *FakeWidget) bool {
 			box, visible := transferTrialBounds(w, runtime, rootRect, rootClip)
 			oldRect := f.MapRectToScene1(f.Bounds1())
 			wasVisible := f.Widget().IsVisible() && !oldRect.IntersectCopy(designDropArea(page, f.Parent())).IsEmpty()
+			// A free destination under the source can itself be moved or
+			// resized by reflow. Never drop into a rectangle that disappears
+			// from the point we just previewed.
+			if f == c.freeParent && (!visible || !nearTransferPoint(box.X, box.Y, oldRect.X, oldRect.Y) ||
+				!nearTransferPoint(box.Width, box.Height, oldRect.Width, oldRect.Height)) {
+				return false
+			}
 			if f == c.item {
 				found = visible && w.Parent() == trial.children[c.target]
 				if !found {
@@ -253,7 +300,7 @@ func (c *layoutTransferCommand) trialFits(source *FakeWidget) bool {
 			}
 		}
 	}
-	return found
+	return found || c.freeParent != nil
 }
 
 func nearTransferPoint(x, y, x0, y0 float64) bool {
@@ -280,7 +327,12 @@ func transferTrialBounds(w, root gui.IWidget, rootRect, clip geom.Rect) (geom.Re
 	return box, visible && !clip.IsEmpty()
 }
 
-func (c *layoutTransferCommand) Text() string { return i18n.T(dropTransferCommand) }
+func (c *layoutTransferCommand) Text() string {
+	if c.freeParent != nil {
+		return i18n.T(dropTransferFreeCommand)
+	}
+	return i18n.T(dropTransferCommand)
+}
 
 func (c *layoutTransferCommand) Redo() {
 	c.keepSelection(func() {
@@ -288,6 +340,14 @@ func (c *layoutTransferCommand) Redo() {
 			item.layoutCell = p
 		}
 		c.item.layoutCell = c.cell
+		if c.freeParent != nil {
+			if c.freeContentHost != nil {
+				c.freeContentHost.contentPlacement = contentFree
+			}
+			moveSubtreeToFreeBounds(c.item, c.freeParent, c.freeBounds)
+			c.roots[0].Layout()
+			return
+		}
 		x, y := c.item.Pos()
 		tx, ty := graph.TranslateBetweenParents(c.source, c.target, x, y)
 		c.item.SetParentAt(c.target, c.newSlot)
@@ -312,6 +372,9 @@ func (c *layoutTransferCommand) Redo() {
 func (c *layoutTransferCommand) Undo() {
 	c.keepSelection(func() {
 		c.item.SetParentAt(c.source, c.oldSlot)
+		if c.freeContentHost != nil {
+			c.freeContentHost.contentPlacement = c.oldContentMode
+		}
 		for _, point := range c.before {
 			point.item.layoutCell = point.placement
 		}

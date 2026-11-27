@@ -13,6 +13,9 @@ import (
 
 const symbolFinderLimit = 500
 
+// Owned by showSymbolFinder only while its modal is open, on the UI thread.
+var activeSymbolFinder *symbolFinder
+
 // UI-thread-owned dialog state; all RPC work and coalescing live in worker.
 type symbolFinder struct {
 	dialog              *gui.Dialog
@@ -29,14 +32,24 @@ func showSymbolFinder(parent gui.IWidget, tabs *gui.TabWidget) {
 	if parent == nil {
 		return
 	}
-	if globalLSP == nil {
+	if globalLSP == nil && lspActivityPhase == lspStandby {
+		startStandbyLSP(lspWorkspaceHint(), startLSPBackground)
+	}
+	if globalLSP == nil && lspActivityPhase != "starting" {
 		reportLSPUnavailable()
 		return
 	}
 	finder := newSymbolFinder(parent, func(ctx context.Context, q symbolSearchQuery) ([]core.LSPWorkspaceSymbol, error) {
 		return q.client.WorkspaceSymbolContext(ctx, q.text)
 	}, gui.Post)
-	defer finder.close()
+	previous := activeSymbolFinder
+	activeSymbolFinder = finder
+	defer func() {
+		finder.close()
+		if activeSymbolFinder == finder {
+			activeSymbolFinder = previous
+		}
+	}()
 	result := finder.dialog.ShowModal()
 	finder.close()
 	if reportDialogFailure(finder.dialog.LastError()) {
@@ -118,6 +131,11 @@ func (f *symbolFinder) query(q string) {
 	gui.SetToolTip(f.status, "")
 	f.worker.update(globalLSP, q)
 	if globalLSP == nil {
+		if lspActivityPhase == "starting" {
+			f.unavailable = false
+			f.status.SetText(i18n.T("Starting the language service; editor input remains available."))
+			return
+		}
 		f.status.SetText(fmt.Sprintf("[%s] %s", diagnostic.LSPUnavailable, i18n.T("LSP not running")))
 		if !f.unavailable {
 			reportLSPUnavailable()
@@ -127,6 +145,14 @@ func (f *symbolFinder) query(q string) {
 		f.unavailable = false
 		f.status.SetText(i18n.T("Searching symbols..."))
 	}
+}
+
+func (f *symbolFinder) languageSessionChanged() {
+	if !f.closed && globalLSP == nil && lspActivityPhase == "offline" {
+		// The failed/disconnected session already presents its own explanation.
+		f.unavailable = true
+	}
+	f.query(f.input.Text())
 }
 
 func (f *symbolFinder) choose(idx int) {

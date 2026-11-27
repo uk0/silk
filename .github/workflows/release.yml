@@ -197,6 +197,21 @@ jobs:
           EOF
           cd dist && tar czf silk-${{ matrix.label }}.tar.gz silk-${{ matrix.label }}
 
+      - name: Verify relocated macOS bundle accepts code signing
+        if: runner.os == 'macOS'
+        run: |
+          # QA only: sign a throwaway copy from the actual release archive.
+          # The published archive is unchanged and is not notarized.
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          app='silk-${{ matrix.label }}/SilkIDE.app'
+          tar -xzf 'dist/silk-${{ matrix.label }}.tar.gz' -C "$tmp" "$app"
+          tools="$tmp/$app/Contents/MacOS/tools"
+          test "$(readlink "$tools")" = ../Resources/tools
+          /usr/bin/codesign --force --sign - "$tmp/$app"
+          /usr/bin/codesign --verify --deep --strict "$tmp/$app"
+          go run ./cmd/silktools -verify -out "$tools"
+
       # Runs in the MSYS2 shell so /ucrt64 resolves wherever setup-msys2 put it,
       # and resolves the DLL set with ldd instead of a hand-written list. The
       # old list was both hardcoded to C:\msys64 AND swallowed every failure

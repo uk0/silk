@@ -14,6 +14,16 @@ import (
 var statusBarLSPButton *gui.Button
 var lspActivityPhase = "offline" // UI-thread owned; handshake is not indexing completion.
 
+func setLSPActivityPhase(phase string) {
+	lspActivityPhase = phase
+	refreshLSPActivity()
+	// A symbol dialog can wait for a handshake; progress-only notifications
+	// must not reset its query or displayed result.
+	if f := activeSymbolFinder; f != nil {
+		f.languageSessionChanged()
+	}
+}
+
 // One queued UI callback per client, irrespective of a progress-report burst.
 // Clear pending before applying: an update arriving during apply must schedule
 // one more drain, rather than silently losing the final work-done/end state.
@@ -76,6 +86,9 @@ func lspActivityText(s string, limit int) string {
 func lspActivityPresentation(phase string, s core.LSPWorkProgressSnapshot) (string, string) {
 	label := i18n.T("gopls: offline")
 	detail := i18n.T("Open toolchain status for paths and recovery actions.")
+	if phase == lspStandby {
+		return i18n.T("gopls: standby"), i18n.T("The language service starts on demand for Go files and Go commands.")
+	}
 	if phase == "starting" {
 		return i18n.T("gopls: starting"), i18n.T("Starting the language service; editor input remains available.")
 	}
