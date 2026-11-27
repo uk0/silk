@@ -57,7 +57,7 @@ func (l completionLayout) hit(x, y float64, scroll int) (row int, inside bool) {
 	return scroll + r, true
 }
 
-func (p *CompletionPopup) layout(ed *CodeEditor) completionLayout {
+func (p *CompletionPopup) geometry(ed *CodeEditor) completionLayout {
 	if !p.visible || len(p.filtered) == 0 {
 		return completionLayout{}
 	}
@@ -66,7 +66,14 @@ func (p *CompletionPopup) layout(ed *CodeEditor) completionLayout {
 	x, y := ed.caretLocalXY() // same folded-row coordinate system as the caret
 	left, right := ed.gutterW+5, w-ed.minimapWidth()-5
 	top, bottom := ed.topOffset(), h-ed.statusBarHeight
-	l := fitCompletionLayout(x, y, fe.Height+2, fe.Height+6, math.Max(300, fe.Height*20), left, top, right, bottom, min(p.maxVisible, len(p.filtered)))
+	return fitCompletionLayout(x, y, fe.Height+2, fe.Height+6, math.Max(300, fe.Height*20), left, top, right, bottom, min(p.maxVisible, len(p.filtered)))
+}
+
+func (p *CompletionPopup) layout(ed *CodeEditor) completionLayout {
+	if !p.visible || len(p.filtered) == 0 {
+		return completionLayout{}
+	}
+	l := p.geometry(ed)
 	p.pageRows = l.rows
 	if l.rows > 0 {
 		p.selectIndex(p.selectedIdx)

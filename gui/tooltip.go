@@ -20,7 +20,8 @@ func init() {
 // for compatibility; runtime hints never attach this widget to a window.
 type tooltipWindow struct {
 	Widget
-	text string
+	text      string
+	signature *signatureTipLayout
 }
 
 func newTooltipWindow(text string) *tooltipWindow {
@@ -49,6 +50,11 @@ func (this *tooltipWindow) Draw(g paint.Painter) {
 	g.SetPen1(paint.Color{55, 60, 66, 255}, 1)
 	g.Stroke()
 
+	if this.signature != nil {
+		this.signature.draw(g)
+		return
+	}
+
 	// White text on dark background, smaller font
 	t := Theme()
 	tipFont := paint.NewFont(t.Font.Family(), 12, false, false)
@@ -63,6 +69,9 @@ func (this *tooltipWindow) Draw(g paint.Painter) {
 }
 
 func (this *tooltipWindow) SizeHints() SizeHints {
+	if this.signature != nil {
+		return this.signature.size
+	}
 	t := Theme()
 	tipFont := paint.NewFont(t.Font.Family(), 12, false, false)
 	fe := tipFont.FontExtents()
@@ -132,6 +141,10 @@ func ShowToolTip(xg, yg float64, text string) {
 // coordinates are converted by the owner's current window and clipped to it.
 // Call on the UI thread. A nil owner retains ShowToolTip's hit-tested behavior.
 func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
+	showToolTipFor(owner, xg, yg, text, nil)
+}
+
+func showToolTipFor(owner IWidget, xg, yg float64, text string, signature *signatureTipSpan) {
 	dismissRegisteredToolTip(nil)
 	if text == "" {
 		replaceExplicitToolTip(nil)
@@ -150,7 +163,17 @@ func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
 		return
 	}
 	x, y := win.mapFromGlobal(xg, yg)
-	replaceExplicitToolTip(newOwnedToolTip(hoverToolTipAnchor{win, x, y}, owner, text))
+	label := newTooltipWindow(text)
+	if signature != nil {
+		w, h := win.Widget().Size()
+		label.signature = layoutSignatureTip(text, *signature, w, h)
+	}
+	tip := newOwnedToolTipLabel(hoverToolTipAnchor{win, x, y}, owner, label)
+	if tip != nil && signature != nil {
+		tip.avoidCompletion = true
+		tip.bounds = tip.signatureBounds()
+	}
+	replaceExplicitToolTip(tip)
 }
 
 // HideToolTip retires both explicit and automatic hints.

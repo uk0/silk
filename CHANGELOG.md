@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — active call parameter
+
+- Highlight the active parameter in the editor's signature hint and dismiss it
+  when the closing parenthesis is entered. Both UTF-16 parameter ranges and
+  unambiguous text labels from language servers are supported.
+- Keep the existing SDK signature-help interfaces available for callers that
+  only need plain text.
+- Keep signature help current during burst typing by requesting the latest
+  synchronized caret. Obsolete requests are cancelled; completion does not wait
+  for a slower signature response.
+- Keep signature help beside, rather than on top of, the completion list.
+  Typing over the existing call closer closes both without editing the file.
+
 ## Unreleased — owned editor hints
 
 - Keep editor diagnostics, LSP hover documentation and call signatures

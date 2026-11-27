@@ -937,6 +937,20 @@ shows the verified CPU fallback, **not** a Windows GPU performance claim.
 
 ## Editor and language-service fixes (development)
 
+### Active parameter highlighting
+
+Type `(` in a call to open the signature hint. Enter a comma to highlight the
+next argument; type the closing `)` or press Escape to dismiss. The hint is
+drawn inside the editor rather than in a separate window, without taking focus.
+
+![SilkIDE on native Wayland: the second call parameter is highlighted after a comma](docs/images/editor-active-parameter-wayland.png)
+
+While you continue typing, the hint follows the latest arguments. When the
+completion list is open, the signature moves out of its way. Typing over the
+closing parenthesis dismisses both without inserting a duplicate.
+
+![SilkIDE on native Wayland: the active parameter above the source line and the unobstructed completion list below](docs/images/editor-signature-completion-wayland.png)
+
 ### Typed UI dispatch and cancellable SDK updates
 
 - `Invoke` / `InvokeValue` marshal short worker calls to the UI and return results;

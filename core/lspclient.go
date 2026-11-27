@@ -1474,63 +1474,6 @@ func (c *LSPClient) WorkspaceSymbolContext(ctx context.Context, query string) ([
 	return out, nil
 }
 
-// SignatureHelp 请求 textDocument/signatureHelp 并压平成 LSPSignatureHelp
-// params 是跟 hover/completion 同形的 TextDocumentPositionParams. 响应:
-//
-//	SignatureHelp{signatures []SignatureInformation, activeSignature, activeParameter}
-//
-// 其中每条 SignatureInformation 的 documentation 跟 hover.contents 同样是
-//
-//	string | MarkupContent | []MarkedString 多态, 直接复用 stringifyHoverContents.
-//
-// 形参 documentation 当前不暴露 (UI 只展 label), 真要时在 LSPSignature 上扩字段即可.
-// server 返回 null (光标不在调用实参里) 时返回 (nil, nil), 不当错误.
-// 受默认 10s SendRequest 超时约束.
-func (c *LSPClient) SignatureHelp(uri string, line, character int) (*LSPSignatureHelp, error) {
-	resp, err := c.SendRequest("textDocument/signatureHelp", textDocumentPositionParams(uri, line, character))
-	if err != nil {
-		return nil, err
-	}
-	if len(resp.Result) == 0 || string(resp.Result) == "null" {
-		return nil, nil
-	}
-	var sh struct {
-		Signatures []struct {
-			Label         string          `json:"label"`
-			Documentation json.RawMessage `json:"documentation"`
-			Parameters    []struct {
-				Label string `json:"label"`
-			} `json:"parameters"`
-		} `json:"signatures"`
-		ActiveSignature int `json:"activeSignature"`
-		ActiveParameter int `json:"activeParameter"`
-	}
-	if err := json.Unmarshal(resp.Result, &sh); err != nil {
-		return nil, fmt.Errorf("lspclient: decode signatureHelp result: %w", err)
-	}
-	out := &LSPSignatureHelp{
-		ActiveSignature: sh.ActiveSignature,
-		ActiveParameter: sh.ActiveParameter,
-	}
-	out.Signatures = make([]LSPSignature, 0, len(sh.Signatures))
-	for _, s := range sh.Signatures {
-		sig := LSPSignature{Label: s.Label}
-		if len(s.Documentation) > 0 && string(s.Documentation) != "null" {
-			doc, err := stringifyHoverContents(s.Documentation)
-			if err != nil {
-				return nil, fmt.Errorf("lspclient: decode signature documentation: %w", err)
-			}
-			sig.Documentation = doc
-		}
-		sig.Parameters = make([]string, 0, len(s.Parameters))
-		for _, p := range s.Parameters {
-			sig.Parameters = append(sig.Parameters, p.Label)
-		}
-		out.Signatures = append(out.Signatures, sig)
-	}
-	return out, nil
-}
-
 // LSPTextEdit 是一处文本编辑: 在 Range 区间上用 NewText 替换
 // formatting/rename 都用它当返回单元 -- LSP 的 TextEdit 就是 {range, newText}.
 type LSPTextEdit struct {

@@ -135,7 +135,16 @@ func (e *CodeEditor) SymbolsRevision() uint64 {
 // signature responses after input, navigation, focus loss or pointer departure.
 func (e *CodeEditor) LanguageHintRevision() uint64 { return e.languageHintRevision }
 
+// SignatureHelpIntent reports whether automatic call help is active and its
+// UI-thread retirement token. Typing more of an argument leaves the intent
+// active; dismissing it, changing the editing target or leaving the call does not.
+func (e *CodeEditor) SignatureHelpIntent() (epoch uint64, active bool) {
+	return e.signatureHelpEpoch, e.signatureHelpActive
+}
+
 func (e *CodeEditor) DismissLanguageHints() {
+	e.signatureHelpActive = false
+	e.signatureHelpEpoch++
 	e.signatureHintVisible = false
 	e.invalidateHoverHint()
 }
@@ -164,8 +173,15 @@ func (e *CodeEditor) invalidateHoverHint() {
 // ShowSignatureHint distinguishes call help from short-lived hover tooltips.
 // UI-thread only; hosts must first reject stale asynchronous responses.
 func (e *CodeEditor) ShowSignatureHint(x, y float64, text string) {
+	e.ShowSignatureHintRange(x, y, text, 0, 0)
+}
+
+// ShowSignatureHintRange highlights the byte range [parameterStart,
+// parameterEnd) in text. Invalid ranges display the signature without an
+// emphasis. Like ShowSignatureHint, call only on the UI thread.
+func (e *CodeEditor) ShowSignatureHintRange(x, y float64, text string, parameterStart, parameterEnd int) {
 	e.signatureHintVisible = text != ""
-	ShowToolTipFor(e.Self(), x, y, text)
+	showToolTipFor(e.Self(), x, y, text, &signatureTipSpan{parameterStart, parameterEnd})
 }
 
 func (e *CodeEditor) OnFocusChanged(newFocusWidget, oldFocusWidget IWidget) {

@@ -337,7 +337,8 @@ type CodeEditor struct {
 	externalCompletions                           []ExternalCompletion
 	externalCompletionRevision                    uint64
 	externalCompletionLine, externalCompletionCol int
-	signatureHintVisible                          bool
+	signatureHintVisible, signatureHelpActive     bool
+	signatureHelpEpoch                            uint64
 
 	// --- Symbol Navigation ---
 	symbolPopup *SymbolPopup
@@ -1007,6 +1008,7 @@ func (this *CodeEditor) SigWidgetClicked(fn func(string)) {
 func (this *CodeEditor) SetFilePath(path string) {
 	oldLanguage := this.Language()
 	if this.filePath != path {
+		this.DismissLanguageHints()
 		this.CancelFormat()
 		this.CancelGitStatus()
 		this.gitStatus = nil
@@ -4167,11 +4169,13 @@ func (this *CodeEditor) OnTextInput(s string) {
 		column := textPositionInLine(line, this.cursorCol).ByteColumn
 		if strings.HasPrefix(line[column:], s) {
 			this.cursorCol++
+			// No text change means no LSP refresh. Do not keep choices belonging
+			// to the caret before the skipped call closer.
+			if s == ")" && this.completion != nil {
+				this.completion.Dismiss()
+			}
 			this.ensureCursorVisible()
 			this.Self().Update()
-			if s == ")" {
-				HideToolTip()
-			}
 			return
 		}
 	}
@@ -4182,6 +4186,7 @@ func (this *CodeEditor) OnTextInput(s string) {
 		this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: string(open) + string(closer)})
 		this.insertTextAtCursor(string(open) + string(closer))
 		this.cursorCol-- // caret between the pair
+		this.signatureHelpActive = this.signatureHelpActive || isSignatureTrigger(s)
 		this.rebuildText()
 		this.ensureCursorVisible()
 		this.Self().Update()
@@ -4195,6 +4200,7 @@ func (this *CodeEditor) OnTextInput(s string) {
 	this.pushUndo(editAction{kind: 0, line: this.cursorLine, col: this.cursorCol, text: s, typing: editorTypingInput(s)})
 
 	this.insertRawText(s)
+	this.signatureHelpActive = this.signatureHelpActive || isSignatureTrigger(s)
 
 	this.rebuildText()
 	this.ensureCursorVisible()
@@ -4203,17 +4209,10 @@ func (this *CodeEditor) OnTextInput(s string) {
 	// Trigger completion after typing
 	this.tryTriggerCompletion(s)
 
-	// LSP signature-help signal: on a "(" or "," trigger, report the cursor
-	// position (already advanced past the insert) so the host runs the async
-	// SignatureHelp RPC and shows it. Typing ")" closes the function call, so we
-	// dismiss any shown help here; Esc dismissal is left to the host. The editor
-	// never fetches signature text itself.
-	if isSignatureTrigger(s) {
-		if this.cbSignatureRequested != nil {
-			this.cbSignatureRequested(this.cursorLine, this.cursorCol)
-		}
-	} else if s == ")" {
-		HideToolTip()
+	// Keep the SDK's immediate punctuation hook. The host can instead read
+	// the call intent with the synchronized latest document snapshot.
+	if isSignatureTrigger(s) && this.cbSignatureRequested != nil {
+		this.cbSignatureRequested(this.cursorLine, this.cursorCol)
 	}
 }
 

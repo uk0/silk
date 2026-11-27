@@ -23,6 +23,11 @@ func ideLSPCapabilities() json.RawMessage {
 	td := c["textDocument"].(map[string]any)
 	td["completion"].(map[string]any)["completionItem"].(map[string]any)["snippetSupport"] = false
 	td["hover"].(map[string]any)["contentFormat"] = []string{"plaintext"}
+	td["signatureHelp"] = map[string]any{"signatureInformation": map[string]any{
+		"parameterInformation":   map[string]any{"labelOffsetSupport": true},
+		"activeParameterSupport": true,
+	}}
+
 	return mustLSPJSON(c)
 }
 func mustLSPJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
@@ -47,7 +52,7 @@ func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
 	ed := openEditors[path]
 	epoch := lspSessionGeneration
 	var doc *lspDocument
-	doc = newLSPDocument(client, fileURIOf(path), text, previous, func(s lspSnapshot, items []core.LSPCompletionItem, err error) {
+	doc = newLSPDocumentWithSignatures(client, fileURIOf(path), text, previous, func(s lspSnapshot, items []core.LSPCompletionItem, err error) {
 		gui.Post(func() {
 			if globalLSP != client || lspSessionGeneration != epoch || lspDocuments[path] != doc || openEditors[path] != ed || ed == nil || lspVersions[path] != s.version || ed.CursorLine() != s.line || ed.CursorUTF16Col() != s.col {
 				return
@@ -75,6 +80,18 @@ func openLSPDocumentAfter(path, text string, previous <-chan struct{}) {
 			refreshLSPCompletionItems(ed, out)
 			documentHighlightViaLSP(ed, path, s.line, s.col)
 		})
+	}, func(s lspSnapshot, hint core.LSPActiveSignature) {
+		gui.Post(func() {
+			if globalLSP != client || lspSessionGeneration != epoch || lspDocuments[path] != doc || !currentSignatureRequest(path, ed, s) {
+				return
+			}
+			if hint.Label == "" {
+				ed.DismissLanguageHints()
+				return
+			}
+			x, y := ed.CaretGlobalXY()
+			ed.ShowSignatureHintRange(x, y, hint.Label, hint.ParameterStart, hint.ParameterEnd)
+		})
 	})
 	lspDocuments[path] = doc
 }
@@ -91,7 +108,6 @@ func updateLSPDocument(path string, ed *gui.CodeEditor, text string) {
 	s := lspSnapshot{text: text, version: lspVersions[path]}
 	if ed != nil {
 		lspHoverGen++
-		lspSigGen++
 		lspHighlightGen[path]++
 		ed.SetOccurrenceHighlights(nil)
 		ed.ClearExternalCompletions()
@@ -101,6 +117,7 @@ func updateLSPDocument(path string, ed *gui.CodeEditor, text string) {
 		if ed.Text() == text {
 			if p, ok := ed.CursorTextPosition(); ok {
 				s.line, s.col = p.Line, p.UTF16Column
+				s.signatureEpoch, s.signature = ed.SignatureHelpIntent()
 				// Newline/paste/undo still synchronize. Automatic popup policy stays in
 				// the editor; no document split or whole-line rune copy on this hot path.
 				ch := p.PreviousRune
@@ -113,6 +130,15 @@ func updateLSPDocument(path string, ed *gui.CodeEditor, text string) {
 	}
 	d.update(s)
 }
+func currentSignatureRequest(path string, ed *gui.CodeEditor, s lspSnapshot) bool {
+	if ed == nil || openEditors[path] != ed || ed.FilePath() != path || fileRenameAffects(path) ||
+		lspVersions[path] != s.version || !ed.IsVisible() || !ed.IsAllAncentorsVisible() {
+		return false
+	}
+	epoch, active := ed.SignatureHelpIntent()
+	return active && epoch == s.signatureEpoch && ed.CursorLine() == s.line && ed.CursorUTF16Col() == s.col
+}
+
 func flushLSPDocument(d *lspDocument) bool {
 	if d == nil {
 		return true
@@ -135,7 +161,6 @@ func closeLSPDocument(path string) {
 	}
 	delete(lspCompletionGen, path)
 	lspHoverGen++
-	lspSigGen++
 }
 func retireLSPDocuments() {
 	symbolNavigation.stop()
@@ -147,9 +172,9 @@ func retireLSPDocuments() {
 		delete(lspDocuments, path)
 	}
 	lspHoverGen++
-	lspSigGen++
 	for _, ed := range openEditors {
 		if ed != nil {
+			ed.DismissLanguageHints()
 			ed.ClearExternalCompletions()
 			ed.SetErrors(nil)
 			ed.SetOccurrenceHighlights(nil)

@@ -18,9 +18,10 @@ type hoverToolTipAnchor struct {
 
 type hoverToolTipOverlay struct {
 	hoverToolTipAnchor
-	owner  IWidget
-	label  *tooltipWindow
-	bounds geom.Rect
+	owner           IWidget
+	label           *tooltipWindow
+	bounds          geom.Rect
+	avoidCompletion bool
 }
 
 var (
@@ -72,7 +73,7 @@ func unpaintRegisteredToolTip() {
 }
 
 func (tip *hoverToolTipOverlay) invalidate() {
-	if tip.win != nil && tip.win.IsValid() {
+	if tip.win != nil && tip.win.IsValid() && validPopupArea(tip.bounds) {
 		r := tip.bounds
 		// Include a pixel on each side for antialiased strokes and the
 		// conversion of fractional coordinates into a native damage region.
@@ -177,17 +178,20 @@ func paintRegisteredToolTip(anchor hoverToolTipAnchor) {
 }
 
 func newOwnedToolTip(anchor hoverToolTipAnchor, owner IWidget, text string) *hoverToolTipOverlay {
+	return newOwnedToolTipLabel(anchor, owner, newTooltipWindow(text))
+}
+
+func newOwnedToolTipLabel(anchor hoverToolTipAnchor, owner IWidget, label *tooltipWindow) *hoverToolTipOverlay {
 	w, h := anchor.win.Widget().Size()
-	if w <= 0 || h <= 0 || text == "" {
+	if w <= 0 || h <= 0 || label.text == "" {
 		return nil
 	}
-	label := newTooltipWindow(text)
 	bounds := registeredToolTipBounds(w, h, anchor.x, anchor.y, label.SizeHints())
 	if !validPopupArea(bounds) {
 		return nil
 	}
 	label.NakedWidget().w, label.NakedWidget().h = bounds.Width, bounds.Height
-	return &hoverToolTipOverlay{anchor, owner, label, bounds}
+	return &hoverToolTipOverlay{hoverToolTipAnchor: anchor, owner: owner, label: label, bounds: bounds}
 }
 
 func registeredToolTipBounds(width, height, x, y float64, hint SizeHints) geom.Rect {
@@ -233,6 +237,17 @@ func ownedToolTipFor(win *Window) *hoverToolTipOverlay {
 // rect is client-local, including on the partial Win32 back-buffer path.
 func drawOwnedToolTip(win *Window, g paint.Painter, damage geom.Rect) {
 	if tip := ownedToolTipFor(win); tip != nil {
+		if tip.avoidCompletion && tip.owner.IsAllAncentorsVisible() && tip.owner.OwnerWindow() == win {
+			if bounds := tip.signatureBounds(); bounds != tip.bounds {
+				// Rendering re-evaluates only cheap geometry: a completion may appear
+				// after the signature, or change height as provider results arrive.
+				// Replace atomically and damage both positions exactly once.
+				next := *tip
+				next.bounds = bounds
+				replaceExplicitToolTip(&next)
+				tip = &next
+			}
+		}
 		tip.draw(g, damage)
 	}
 }

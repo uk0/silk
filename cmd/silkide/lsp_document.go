@@ -20,13 +20,19 @@ type lspIncrementalDocumentTransport interface {
 	DidChangeFrom(string, int, string, string) error
 }
 
-type lspSnapshot struct {
-	text               string
-	version, line, col int
-	complete           bool
+type lspSignatureTransport interface {
+	SignatureHintContext(context.Context, string, int, int) (core.LSPActiveSignature, error)
 }
 
-// One worker per open document, one latest snapshot, one in-flight completion.
+type lspSnapshot struct {
+	text                string
+	version, line, col  int
+	complete, signature bool
+	signatureEpoch      uint64
+}
+
+// One worker per open document with one latest snapshot. At most one
+// completion and one signature request from that snapshot are in flight.
 // No UI objects are read from the worker. All wire operations share wireMu,
 // including explicit-command flushes, so didChange can never precede didOpen
 // or arrive after didClose. Superseded snapshots are intentionally coalesced.
@@ -44,10 +50,15 @@ type lspDocument struct {
 	wake, stop, done chan struct{}
 	previous         <-chan struct{}
 	deliver          func(lspSnapshot, []core.LSPCompletionItem, error)
+	deliverSignature func(lspSnapshot, core.LSPActiveSignature)
 }
 
 func newLSPDocument(c lspDocumentTransport, uri, text string, previous <-chan struct{}, deliver func(lspSnapshot, []core.LSPCompletionItem, error)) *lspDocument {
-	d := &lspDocument{client: c, uri: uri, latest: lspSnapshot{text: text, version: 1}, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), previous: previous, deliver: deliver}
+	return newLSPDocumentWithSignatures(c, uri, text, previous, deliver, nil)
+}
+
+func newLSPDocumentWithSignatures(c lspDocumentTransport, uri, text string, previous <-chan struct{}, deliver func(lspSnapshot, []core.LSPCompletionItem, error), deliverSignature func(lspSnapshot, core.LSPActiveSignature)) *lspDocument {
+	d := &lspDocument{client: c, uri: uri, latest: lspSnapshot{text: text, version: 1}, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), previous: previous, deliver: deliver, deliverSignature: deliverSignature}
 	go d.run()
 	return d
 }
@@ -125,6 +136,7 @@ func (d *lspDocument) run() {
 		d.mu.Lock()
 		d.latest.text = ""
 		d.deliver = nil
+		d.deliverSignature = nil
 		d.mu.Unlock()
 	}()
 	select {
@@ -157,37 +169,76 @@ func (d *lspDocument) run() {
 			}
 		}
 		s, err := d.sync()
-		if !s.complete {
-			continue
-		}
-		if err != nil {
-			d.finish(s, nil, err)
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		d.mu.Lock()
-		if d.closed || d.latest.version != s.version {
-			d.mu.Unlock()
-			cancel()
-			continue
-		}
-		d.cancel = cancel
-		d.mu.Unlock()
-		items, err := d.client.CompletionContext(ctx, d.uri, s.line, s.col)
-		cancel()
-		d.finish(s, items, err)
+		d.fetch(s, err)
 	}
 }
 
-// finish never reports a cancelled/superseded snapshot and never calls UI code
-// while holding mu. Hosts still recheck identity/version on their UI queue.
-func (d *lspDocument) finish(s lspSnapshot, items []core.LSPCompletionItem, err error) {
+// Completion and signature help are independently useful. A slow server
+// response for one does not hold back delivery of the other, and a newer
+// snapshot cancels both before the worker admits another request.
+func (d *lspDocument) fetch(s lspSnapshot, syncErr error) {
+	signatureClient, supportsSignature := d.client.(lspSignatureTransport)
+	wantSignature := s.signature && supportsSignature && d.deliverSignature != nil
+	if !s.complete && !wantSignature {
+		return
+	}
+	if syncErr != nil {
+		if s.complete {
+			d.finish(s, nil, syncErr)
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	d.mu.Lock()
-	current := !d.closed && d.latest.version == s.version
-	deliver := d.deliver
-	d.cancel = nil
+	if d.closed || d.latest.version != s.version {
+		d.mu.Unlock()
+		cancel()
+		return
+	}
+	d.cancel = cancel
 	d.mu.Unlock()
-	if current && deliver != nil {
-		deliver(s, items, err)
+	defer func() {
+		cancel()
+		d.mu.Lock()
+		d.cancel = nil
+		d.mu.Unlock()
+	}()
+
+	getSignature := func() {
+		hint, err := signatureClient.SignatureHintContext(ctx, d.uri, s.line, s.col)
+		if err == nil && ctx.Err() == nil && d.current(s) {
+			d.deliverSignature(s, hint)
+		}
+	}
+	if !s.complete {
+		getSignature()
+		return
+	}
+	var signatureDone chan struct{}
+	if wantSignature {
+		signatureDone = make(chan struct{})
+		go func() {
+			defer close(signatureDone)
+			getSignature()
+		}()
+	}
+	items, err := d.client.CompletionContext(ctx, d.uri, s.line, s.col)
+	d.finish(s, items, err)
+	if signatureDone != nil {
+		<-signatureDone
+	}
+}
+
+func (d *lspDocument) current(s lspSnapshot) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.closed && d.latest.version == s.version
+}
+
+// Never calls host code while holding mu. Hosts also check editor identity,
+// cursor and version on the UI queue before any rendering.
+func (d *lspDocument) finish(s lspSnapshot, items []core.LSPCompletionItem, err error) {
+	if d.deliver != nil && d.current(s) {
+		d.deliver(s, items, err)
 	}
 }

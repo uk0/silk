@@ -3614,9 +3614,8 @@ func attachFileInEditor(tabs *gui.TabWidget, path string, data []byte, replace g
 		lspOnEditorChanged(path, ed, text)
 		updateMacroEditor(tabs, path, ed)
 	})
-	// LSP hover + signature help: the editor fires position events; silkide
-	// fetches gopls hints on a worker and applies current results on the UI
-	// thread. Hover carries the pointer anchor; call help uses the caret.
+	// Pointer hover carries its own anchor. Signature help instead travels with
+	// the latest synchronized editor snapshot, so fast edits cannot orphan it.
 	ed.SigCompletionRequested(func() {
 		path := ed.FilePath()
 		if openEditors[path] != ed || fileRenameAffects(path) {
@@ -3632,13 +3631,6 @@ func attachFileInEditor(tabs *gui.TabWidget, path string, data []byte, replace g
 			return
 		}
 		hoverViaLSP(path, line, col, gx, gy)
-	})
-	ed.SigSignatureRequested(func(line, col int) {
-		path := ed.FilePath()
-		if openEditors[path] != ed || fileRenameAffects(path) {
-			return
-		}
-		signatureHelpViaLSP(ed, path, line, col)
 	})
 	// Keep a live dlv session in step with the gutter: runProjectInDebugger
 	// only snapshots the breakpoints that existed at launch, so without this a
@@ -4404,10 +4396,9 @@ func referenceSourceLine(path string, line0 int) string {
 	return ""
 }
 
-// lspHoverGen / lspSigGen drop stale async hover/signature results: only
+// lspHoverGen drops stale async hover results: only
 // the latest request for the editor is allowed to display.
 var lspHoverGen int
-var lspSigGen int
 
 // hoverViaLSP fetches gopls hover docs for the identifier the mouse is over
 // and shows them in a tooltip at the editor-provided global anchor.
@@ -4443,60 +4434,6 @@ func hoverViaLSP(path string, line, col int, gx, gy float64) {
 			gui.ShowToolTipFor(ed, gx, gy, h.Contents)
 		})
 	}()
-}
-
-// signatureHelpViaLSP fetches the call's active parameter signature and
-// displays it under the current caret inside this editor's owner window.
-func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
-	if globalLSP == nil || ed == nil || !isGoFile(path) {
-		return
-	}
-	lspSigGen++
-	gen := lspSigGen
-	hint := captureEditorHint(ed, path)
-	uri := fileURIOf(path)
-	lsp := globalLSP
-	// Signature help fires on the caret (after typing '(' / ','); use the
-	// UTF-16 column so non-BMP text on the line doesn't skew the position.
-	line = ed.CursorLine()
-	col = ed.CursorUTF16Col()
-	doc := lspDocuments[path]
-	go func() {
-		if !flushLSPDocument(doc) {
-			return
-		}
-		sh, err := lsp.SignatureHelp(uri, line, col)
-		if err != nil || sh == nil || len(sh.Signatures) == 0 {
-			return
-		}
-		text := formatSignature(sh)
-		if text == "" {
-			return
-		}
-		gui.Post(func() {
-			if globalLSP != lsp || (doc != nil && lspDocuments[path] != doc) {
-				return
-			}
-
-			if lspSigGen != gen || !hint.current() {
-				return
-			}
-			// Anchor the hint just under the caret (CaretGlobalXY returns the
-			// line's bottom), not the crude editor top-left.
-			gx, gy := ed.CaretGlobalXY()
-			ed.ShowSignatureHint(gx, gy, text)
-		})
-	}()
-}
-
-// formatSignature renders the active signature's label (the parameter list)
-// for the tooltip. ActiveParameter highlighting is a follow-up.
-func formatSignature(sh *core.LSPSignatureHelp) string {
-	idx := sh.ActiveSignature
-	if idx < 0 || idx >= len(sh.Signatures) {
-		idx = 0
-	}
-	return sh.Signatures[idx].Label
 }
 
 // codeActionsViaLSP asks gopls for quick-fixes / refactors at the caret and

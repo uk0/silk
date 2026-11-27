@@ -13,7 +13,7 @@ import (
 func installLSPSnapshotProbe(tb testing.TB, path string) *lspDocument {
 	tb.Helper()
 	client, docs, versions, highlights := globalLSP, lspDocuments, lspVersions, lspHighlightGen
-	hover, sig := lspHoverGen, lspSigGen
+	hover := lspHoverGen
 	globalLSP = &core.LSPClient{}
 	d := &lspDocument{wake: make(chan struct{}, 1)}
 	lspDocuments = map[string]*lspDocument{path: d}
@@ -21,7 +21,7 @@ func installLSPSnapshotProbe(tb testing.TB, path string) *lspDocument {
 	lspHighlightGen = map[string]int{}
 	tb.Cleanup(func() {
 		globalLSP, lspDocuments, lspVersions, lspHighlightGen = client, docs, versions, highlights
-		lspHoverGen, lspSigGen = hover, sig
+		lspHoverGen = hover
 	})
 	return d
 }
