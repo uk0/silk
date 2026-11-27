@@ -44,6 +44,9 @@
 
 ## Unreleased — designer SVG/PDF export
 
+- Prefer the desktop file chooser portal on Linux/X11 when available.
+  The chooser receives an owner window, format filter and suggested save
+  name; minimal desktops still use Zenity.
 - Choose SVG or PDF before opening the native save panel, so the filter and
   suggested extension match the export rather than the SilkUI design file.
 - Export canvas dimensions in millimetres instead of interpreting them as

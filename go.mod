@@ -9,6 +9,7 @@ require (
 	github.com/gen2brain/beeep v0.11.2
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260406072232-3ac4aa2bb164
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/gopcua/opcua v0.9.0
 	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/mochi-mqtt/server/v2 v2.7.9
@@ -24,7 +25,6 @@ require (
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goburrow/serial v0.1.0 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect

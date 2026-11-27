@@ -47,18 +47,8 @@ func runDialogCmd(name string, args ...string) string {
 
 	// Modal semantics: keep repainting, but don't let a second shortcut open
 	// another chooser or mutate the document being saved underneath this one.
-	enabled := make(map[*Window]bool)
-	for _, win := range winMap {
-		if win != nil {
-			enabled[win] = win.IsEnabled()
-			win.SetEnabled(false)
-		}
-	}
-	defer func() {
-		for win, wasEnabled := range enabled {
-			win.SetEnabled(wasEnabled)
-		}
-	}()
+	enable := disableForExternalFileDialog()
+	defer enable()
 	for {
 		select {
 		case err := <-done:
@@ -77,6 +67,25 @@ func runDialogCmd(name string, args ...string) string {
 				return ""
 			}
 			nativeDialogFrame()
+		}
+	}
+}
+
+// Re-enable only native windows from the original snapshot that are still
+// registered; UI work during a dialog can close or replace a window.
+func disableForExternalFileDialog() func() {
+	enabled := make(map[*Window]bool)
+	for _, win := range winMap {
+		if win != nil {
+			enabled[win] = win.IsEnabled()
+			win.SetEnabled(false)
+		}
+	}
+	return func() {
+		for _, win := range winMap {
+			if wasEnabled, ok := enabled[win]; ok {
+				win.SetEnabled(wasEnabled)
+			}
 		}
 	}
 }

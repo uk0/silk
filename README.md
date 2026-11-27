@@ -31,6 +31,10 @@ This is an actual Linux ARM64/X11 capture from the Designer. The same session
 reopened the design, canceled without writing, and exported both formats. Both
 files retained the 280 × 115 mm page and authored button positions.
 
+On Linux/X11, a desktop file chooser portal can attach the save panel to
+the Designer and prefill the selected format's filename. See the
+[real GTK save-panel capture and verification record](docs/LINUX-FILE-PORTAL-QA.md).
+
 ## Bounded obstacle-aware process pipes (development branch)
 
 New process connections can avoid equipment instead of drawing through it.
