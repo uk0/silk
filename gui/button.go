@@ -387,16 +387,7 @@ func (this *Button) ShowSubPopup() {
 		this.subPopup.SetSize(0, 0)
 		this.subPopup.SetSize(hints.Width, hints.Height)
 	}
-	x, y := this.MapToGlobal(0, 0)
-	w, h := this.Size()
-	popupVertical := !this.IsInPopupMenu()
-	var overlap float64
-	if popupVertical {
-		overlap = 1
-	} else {
-		overlap = 3
-	}
-	LayoutPopup(this.subPopup, x, y, w, h, popupVertical, overlap)
+	layoutButtonPopup(this, this.subPopup, nil)
 	this.subPopup.Show()
 	this.subPopup.PushCapture()
 	if menu, ok := this.subPopup.(*Menu); ok {

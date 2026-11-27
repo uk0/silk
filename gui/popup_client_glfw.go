@@ -79,11 +79,15 @@ func (win *Window) setClientPopupPosition(x, y float64) {
 	if !finite(x) || !finite(y) {
 		return
 	}
+	moved := win.clientPopupX != x || win.clientPopupY != y
 	win.clientPopupX, win.clientPopupY = x, y
 	if parent := win.widget.Parent(); parent != nil {
 		x, y = parent.MapFromGlobal(x, y)
 	}
 	win.widget.NakedWidget().setPos(x, y)
+	if moved {
+		win.queuePopupSurfacePlacement()
+	}
 	if win.clientPopupVisible {
 		win.clientPopupHost.MarkFullDirty()
 	}

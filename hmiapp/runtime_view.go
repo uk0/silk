@@ -153,12 +153,16 @@ func (v *RuntimeView) OnResize() {
 	v.status.SetBounds(8, max(0, h-24), max(0, w-16), 22)
 	v.Diagram.FitToView()
 }
-func (v *RuntimeView) setStatus(text string) {
+func (v *RuntimeView) statusText(text string) string {
 	label := i18n.T(text)
 	if v.source != "" {
-		label = v.source + " · " + label
+		return v.source + " · " + label
 	}
-	v.status.SetText(label)
+	return label
+}
+
+func (v *RuntimeView) setStatus(text string) {
+	v.status.SetText(v.statusText(text))
 }
 
 // SetSnapshot stages an independent validated project. It never opens its store.
@@ -417,6 +421,7 @@ func (v *RuntimeView) Start() {
 				if v.closed || v.session != s {
 					return
 				}
+				s.unwatchDiagnostics()
 				_ = v.bindRuntime(nil)
 				v.session = nil
 				if err == nil {
@@ -451,7 +456,11 @@ func (v *RuntimeView) Start() {
 			if v.closed || s.stopping {
 				return
 			}
-			v.setStatus("Running frozen source snapshot")
+			s.watchDiagnostics(post, func(d hmi.RuntimeDiagnostics) {
+				if !v.closed && v.session == s && !s.stopping {
+					setRuntimeDiagnosticStatus(v.status, v.statusText("Running frozen source snapshot"), d)
+				}
+			})
 			v.refreshControls()
 			v.notify(s, rt)
 		})
@@ -463,6 +472,7 @@ func (v *RuntimeView) Stop() {
 		return
 	}
 	s.stopping = true
+	s.unwatchDiagnostics()
 	_ = v.bindRuntime(nil)
 	s.cancel()
 	v.setStatus("Stopping process runtime…")

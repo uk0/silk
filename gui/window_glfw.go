@@ -888,7 +888,7 @@ func (this *Window) SetPos(x, y float64) {
 	}
 	if this.widget != nil {
 		if oldX, oldY := this.widget.Pos(); oldX != x || oldY != y {
-			this.dismissOwnedPopups()
+			this.retirePopupsForGeometryChange()
 		}
 	}
 	xg, yg := x, y
@@ -907,6 +907,7 @@ func (this *Window) SetPos(x, y float64) {
 	// In Win32, SetWindowPos triggers WM_MOVE which calls widget.setPos().
 	// Keep local state synchronous; the position callback can arrive later.
 	this.widget.NakedWidget().setPos(x, y)
+	this.queuePopupSurfacePlacement()
 }
 
 func (this *Window) FrameMargin() (ret Padding) {
@@ -922,7 +923,7 @@ func (this *Window) FrameMargin() (ret Padding) {
 
 func (this *Window) SetSize(w, h float64) {
 	if this.widget != nil && (this.widget.Width() != w || this.widget.Height() != h) {
-		this.dismissOwnedPopups()
+		this.retirePopupsForGeometryChange()
 	}
 	if this.clientPopupHost != nil {
 		this.widget.NakedWidget().setSize(w, h)
@@ -985,6 +986,10 @@ func (this *Window) Update() {
 	this.dirty = true
 	this.fullDirty = true
 	this.dirtyRegion = geom.Rect{}
+}
+
+func (this *Window) markGeometryDamage(r geom.Rect) {
+	this.MarkDirtyRect(r.X, r.Y, r.Width, r.Height)
 }
 
 func (this *Window) UpdateRect(x, y, width, height float64) {
@@ -1904,7 +1909,7 @@ func onWindowResize(gw *glfw.Window, width, height int) {
 		return
 	}
 	if win.widget.Width() != float64(width) || win.widget.Height() != float64(height) {
-		win.dismissOwnedPopups()
+		win.retirePopupsForGeometryChange()
 	}
 	win.widget.NakedWidget().setSize(float64(width), float64(height))
 	win.dirty = true
@@ -1934,9 +1939,10 @@ func onWindowMove(gw *glfw.Window, xpos, ypos int) {
 		x, y = xg, yg
 	}
 	if oldX, oldY := win.widget.Pos(); oldX != x || oldY != y {
-		win.dismissOwnedPopups()
+		win.retirePopupsForGeometryChange()
 	}
 	win.widget.NakedWidget().setPos(x, y)
+	win.queuePopupSurfacePlacement()
 }
 
 func onWindowIconify(gw *glfw.Window, iconified bool) {

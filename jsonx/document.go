@@ -195,6 +195,9 @@ func SplitPointer(pointer string) ([]string, error) {
 	}
 	parts := strings.Split(pointer[1:], "/")
 	for j, part := range parts {
+		if !strings.Contains(part, "~") {
+			continue
+		}
 		var b strings.Builder
 		for i := 0; i < len(part); i++ {
 			if part[i] != '~' {
@@ -269,23 +272,47 @@ func (n Node) Children(offset, limit int) ([]Node, error) {
 	}
 	return out, nil
 }
-func (d *Document) Lookup(pointer string) (Node, error) {
+
+// CompiledPointer is an immutable RFC 6901 pointer. Compile once to look
+// up the same field in successive documents. The zero value points to the root.
+type CompiledPointer struct {
+	raw    string
+	tokens []string
+}
+
+// CompilePointer validates RFC 6901 string syntax before the document is known.
+func CompilePointer(pointer string) (CompiledPointer, error) {
 	tokens, err := SplitPointer(pointer)
 	if err != nil {
-		return Node{}, err
+		return CompiledPointer{}, err
 	}
+	return CompiledPointer{raw: pointer, tokens: tokens}, nil
+}
+
+// Lookup resolves p without rebuilding prefixes or decoding the path again.
+func (p CompiledPointer) Lookup(d *Document) (Node, error) {
 	n := d.Root()
 	if !n.Valid() {
 		return Node{}, ErrNotFound
 	}
-	for _, token := range tokens {
+	for _, token := range p.tokens {
 		i, err := n.ChildIndex(token)
 		if err != nil {
 			return Node{}, err
 		}
-		n, _ = n.Child(i)
+		n.e = n.e.children[i]
+		n.key = token
 	}
+	n.pointer = p.raw
 	return n, nil
+}
+
+func (d *Document) Lookup(pointer string) (Node, error) {
+	p, err := CompilePointer(pointer)
+	if err != nil {
+		return Node{}, err
+	}
+	return p.Lookup(d)
 }
 func (n Node) Value() any {
 	if !n.Valid() {

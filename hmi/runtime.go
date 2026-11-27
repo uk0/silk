@@ -3,33 +3,52 @@ package hmi
 import (
 	"context"
 	"fmt"
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/httpx"
-	"github.com/uk0/silk/point"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/httpx"
+	"github.com/uk0/silk/point"
 )
 
 type Store interface {
 	point.SampleStore
 	Define(context.Context, point.Definition) error
 }
+
+type stalePoint struct {
+	name string
+	age  time.Duration
+}
+
+// RuntimeDiagnostics is an owned snapshot of active runtime faults. HTTP
+// source IDs and storage retention faults are in separate namespaces.
+type RuntimeDiagnostics struct {
+	Sources        map[string]string
+	RetentionError string
+	retentionKey   string
+}
+
 type Runtime struct {
-	Tags            *core.TagDB
-	project         Project
-	store           Store
-	pointIndex      map[string]int
-	writers         map[string]string
-	sources         []*point.HTTPSource
-	configs         []Source
-	alarms          *alarmMonitor
-	mu              sync.Mutex
-	publishMu       sync.Mutex
-	errors          map[string]string
-	cancel          context.CancelFunc
-	done            chan struct{}
-	started, closed bool
+	Tags                *core.TagDB
+	project             Project
+	store               Store
+	pointIndex          map[string]int
+	writers             map[string]string
+	sources             []*point.HTTPSource
+	configs             []Source
+	alarms              *alarmMonitor
+	stalePoints         []stalePoint
+	mu                  sync.Mutex
+	publishMu           sync.Mutex
+	sourceErrors        map[string]string
+	retentionError      string
+	retentionErrorKey   string
+	diagnosticObservers map[*diagnosticObserver]struct{}
+	cancel              context.CancelFunc
+	done                chan struct{}
+	started, closed     bool
 }
 
 // NewRuntime is explicit setup, not a deserializer: optional Store definitions
@@ -47,9 +66,16 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 	if e != nil {
 		return nil, e
 	}
-	r := &Runtime{Tags: core.NewTagDB(), project: p, store: store, errors: map[string]string{}, pointIndex: make(map[string]int, len(p.Points)), writers: map[string]string{}}
+	r := &Runtime{
+		Tags: core.NewTagDB(), project: p, store: store,
+		sourceErrors: make(map[string]string), retentionErrorKey: retentionDiagnosticKey(p.Sources),
+		pointIndex: make(map[string]int, len(p.Points)), writers: make(map[string]string),
+	}
 	for i, d := range p.Points {
 		r.pointIndex[d.Name] = i
+		if d.StaleMS > 0 {
+			r.stalePoints = append(r.stalePoints, stalePoint{d.Name, time.Duration(d.StaleMS) * time.Millisecond})
+		}
 		if store != nil {
 			if e = store.Define(ctx, d.Definition); e != nil {
 				return nil, e
@@ -79,7 +105,7 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 				return nil, err
 			}
 			if found {
-				value, err = normalizePointSample(stored, d.Kind)
+				value, err = point.NormalizeSample(stored, d.Kind)
 				if err != nil {
 					return nil, fmt.Errorf("hmi: restored point %q: %w", d.Name, err)
 				}
@@ -130,8 +156,8 @@ func NewRuntime(ctx context.Context, p Project, store Store, headers func(string
 // HTTP-owned targets reject a second writer. Calls are serialized; persistence
 // succeeds before live notification. Do not call Stop from a point callback.
 func (r *Runtime) Publish(ctx context.Context, name string, v core.Value) error {
-	if ctx == nil {
-		return fmt.Errorf("hmi: nil context")
+	if r == nil || ctx == nil {
+		return fmt.Errorf("hmi: invalid runtime/context")
 	}
 	r.publishMu.Lock()
 	defer r.publishMu.Unlock()
@@ -162,15 +188,9 @@ func (r *Runtime) publishLocked(ctx context.Context, name string, v core.Value, 
 			return ErrPointConflict
 		}
 	}
-	if kind == "" || v.Quality > core.QualityGood || v.Time.IsZero() {
-		return fmt.Errorf("hmi: invalid point/sample")
-	}
-	if v.Raw != nil || v.Quality == core.QualityGood {
-		raw, err := point.Convert(v.Raw, kind)
-		if err != nil {
-			return err
-		}
-		v.Raw = raw
+	v, err := point.NormalizeSample(v, kind)
+	if err != nil {
+		return fmt.Errorf("hmi: point %q: %w", name, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -183,6 +203,9 @@ func (r *Runtime) publishLocked(ctx context.Context, name string, v core.Value, 
 	tag.Observe(v)
 	return nil
 }
+
+const runtimeServiceInterval = 100 * time.Millisecond
+
 func (r *Runtime) Start(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("hmi: nil context")
@@ -203,38 +226,22 @@ func (r *Runtime) Start(ctx context.Context) error {
 			go func(s *point.HTTPSource, c Source) {
 				defer wg.Done()
 				_ = s.RunObserved(ctx, time.Duration(c.IntervalMS)*time.Millisecond, c.RepeatWrites, func(e error) {
-					r.mu.Lock()
-					if e == nil {
-						delete(r.errors, c.ID)
-					} else {
-						r.errors[c.ID] = e.Error()
-					}
-					r.mu.Unlock()
+					r.setSourceDiagnostic(c.ID, e)
 				})
 			}(s, cfg)
 		}
-		nextPrune := time.Time{}
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
+		if pruner, ok := r.store.(pointPruner); ok && r.project.RetentionDays > 0 {
+			wg.Go(func() { r.runRetention(ctx, pruner) })
+		}
+		var ticks <-chan time.Time
+		if ticker := r.newServiceTicker(); ticker != nil {
+			defer ticker.Stop()
+			ticks = ticker.C
+		}
 		for {
 			select {
-			case now := <-ticker.C:
+			case now := <-ticks:
 				r.Tick(now)
-				if r.project.RetentionDays > 0 && !now.Before(nextPrune) {
-					nextPrune = now.Add(time.Minute)
-					if store, ok := r.store.(interface {
-						Prune(context.Context, time.Time, int) (int64, error)
-					}); ok {
-						_, e := store.Prune(ctx, now.Add(-time.Duration(r.project.RetentionDays)*24*time.Hour), 10000)
-						r.mu.Lock()
-						if e != nil {
-							r.errors["storage"] = e.Error()
-						} else {
-							delete(r.errors, "storage")
-						}
-						r.mu.Unlock()
-					}
-				}
 			case <-ctx.Done():
 				wg.Wait()
 				close(r.done)
@@ -245,30 +252,123 @@ func (r *Runtime) Start(ctx context.Context) error {
 	return nil
 }
 
-// Tick marks aged samples Uncertain atomically. A single runtime clock serves
-// all points, not one timer per widget. No sources means only this bounded clock.
-func (r *Runtime) Tick(now time.Time) {
-	for _, d := range r.project.Points {
-		if d.StaleMS > 0 {
-			if t, ok := r.Tags.Get(d.Name); ok {
-				t.MarkStale(now.Add(-time.Duration(d.StaleMS) * time.Millisecond))
+func (r *Runtime) newServiceTicker() *time.Ticker {
+	if len(r.stalePoints) == 0 && r.alarms == nil {
+		return nil
+	}
+	return time.NewTicker(runtimeServiceInterval)
+}
+
+type pointPruner interface {
+	Prune(context.Context, time.Time, int) (int64, error)
+}
+
+// Retention is independent of the freshness/alarm clock. A slow storage
+// operation cannot delay time-sensitive point quality or alarm transitions.
+func (r *Runtime) runRetention(ctx context.Context, pruner pointPruner) {
+	age := time.Duration(r.project.RetentionDays) * 24 * time.Hour
+	due := time.NewTimer(runtimeServiceInterval)
+	defer due.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-due.C:
+			if ctx.Err() != nil {
+				return
 			}
+			_, err := pruner.Prune(ctx, now.Add(-age), 10000)
+			if ctx.Err() != nil {
+				return
+			}
+			r.setRetentionDiagnostic(err)
+			// Avoid catch-up executions if the previous prune was slow.
+			due.Reset(time.Minute)
+		}
+	}
+}
+
+// Tick marks aged samples Uncertain atomically. A single runtime clock serves
+// the configured freshness policies and alarm dwell; no timer per widget.
+func (r *Runtime) Tick(now time.Time) {
+	for _, d := range r.stalePoints {
+		if t, ok := r.Tags.Get(d.name); ok {
+			t.MarkStale(now.Add(-d.age))
 		}
 	}
 	r.alarms.tick(now)
 }
-func (r *Runtime) Errors() map[string]string {
+
+// Diagnostics returns the current faults; caller mutations do not affect the
+// runtime. RetentionError is empty when storage retention has no active fault.
+func (r *Runtime) Diagnostics() RuntimeDiagnostics {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := map[string]string{}
-	for k, v := range r.errors {
+	out := make(map[string]string, len(r.sourceErrors))
+	for k, v := range r.sourceErrors {
 		out[k] = v
 	}
+	return RuntimeDiagnostics{Sources: out, RetentionError: r.retentionError, retentionKey: r.retentionErrorKey}
+}
+
+// Errors retains the flat diagnostics view for existing clients. Source keys
+// are always their configured IDs. The retention key is "storage" unless a
+// configured enabled source has that ID; in that case it uses a distinct, stable
+// display key. Use Diagnostics when processing specific categories.
+func (r *Runtime) Errors() map[string]string {
+	diagnostics := r.Diagnostics()
+	return diagnostics.withRetention(diagnostics.Sources)
+}
+
+// ErrorMap returns the flat compatibility view of this same diagnostic
+// snapshot without modifying Sources. This avoids taking a second snapshot
+// when an application needs both categorized and legacy diagnostics.
+func (d RuntimeDiagnostics) ErrorMap() map[string]string {
+	out := make(map[string]string, len(d.Sources)+1)
+	for key, value := range d.Sources {
+		out[key] = value
+	}
+	return d.withRetention(out)
+}
+
+func (d RuntimeDiagnostics) withRetention(out map[string]string) map[string]string {
+	if d.RetentionError != "" {
+		key := d.retentionKey
+		if key == "" {
+			key = "storage"
+		}
+		out[key] = d.RetentionError
+	}
 	return out
+}
+
+func retentionDiagnosticKey(sources []Source) string {
+	used := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		if source.Enabled {
+			used[source.ID] = true
+		}
+	}
+	if !used["storage"] {
+		return "storage"
+	}
+	if !used["storage (retention)"] {
+		return "storage (retention)"
+	}
+	for i := 2; ; i++ {
+		key := fmt.Sprintf("storage (retention %d)", i)
+		if !used[key] {
+			return key
+		}
+	}
 }
 func (r *Runtime) Stop() {
 	r.mu.Lock()
 	r.closed = true
+	for observer := range r.diagnosticObservers {
+		observer.fn.Store(nil)
+	}
+	r.diagnosticObservers = nil
 	cancel, done := r.cancel, r.done
 	r.mu.Unlock()
 	r.alarms.close()

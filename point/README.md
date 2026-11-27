@@ -5,7 +5,14 @@ historian. `point/sqlite.Store` persists definitions plus exact typed latest/his
 `TagDB` is the live UI subscription bus. DI/AI/BI are configurable categories,
 not inferred types. Supported scalar kinds: `bool`, `int` (int64), `float`
 (finite float64), and `string`. Malformed numbers, fractional integers and
-out-of-range conversions fail explicitly. String/JSON-to-int accepts exact integer
+out-of-range conversions fail explicitly. Typed point ingestion checks quality,
+signed nanosecond timestamps and valid UTF-8 text up to 1 MiB before
+publishing. The same checks apply to HTTP and SDK writes, even without SQLite.
+An invalid HTTP field keeps the last valid payload as Bad while valid sibling
+fields continue to publish. Use `core.Value.Int()` to read a typed integer
+without routing it through float64.
+
+String/JSON-to-int accepts exact integer
 syntax only (no decimal point or exponent); request explicit float-then-int
 steps if that rounding behavior is intended. SQLite storage requires CGO;
 conversion/expression/HTTP APIs also work without CGO. GUI imports only the
@@ -39,6 +46,11 @@ then delivered to TagDB. Invalid fields retain the preceding value with Bad
 quality. Valid sibling fields may update: a response is **not** an atomic PLC
 scan, and persistence across different points is not a shared transaction.
 
+The response path is compiled when the mapping is accepted. Invalid RFC 6901
+escapes fail before polling. For example, use `/line~11/~0temp/0` to select the
+first reading in the `line/1` object's `~temp` array. A syntactically valid
+path missing from a particular response is still a per-sample Bad reading.
+
 ```go
 store, err := pointsql.Open("points.db")
 if err != nil { return err }
@@ -58,15 +70,20 @@ return source.Run(ctx, time.Second, true, reportError)
 ```
 
 Do not persist credentials in designs: inject them into request headers at
-runtime. `Poll` performs one request and no retries; `Run` polls with fixed delay
-and bounded failure backoff (no overlapping requests). Cancellation interrupts
-an outstanding request. Store failures return to the caller before that point's
-live update; do not hide them behind an error callback that discards everything.
+runtime. `Poll` performs one request and no retries. `Run` keeps the configured
+delay if a poll delivers any Good sample, even when another field fails. Polls
+that deliver no Good samples use bounded backoff. Requests never overlap and
+cancellation interrupts an outstanding request. Field and store errors are
+still reported; a failed write does not update that point in live memory.
 
 `Tag.Observe` updates acquisition time for unchanged samples without notifying
 UI subscribers. It leaves the legacy Publish contract unchanged. Store records
-observations including unchanged values. History reads are limited to 10,000
-rows and 16 MiB of encoded payloads; invalid timestamp ranges are rejected. Poll failures mark samples Bad;
+observations including unchanged values. Both range and recent-history reads
+are limited to 10,000 rows and 16 MiB of SQLite JSON payloads. The HMI runtime
+also rejects more than 16 MiB of decoded point strings from custom readers.
+On an oversized result, ErrHistoryPayloadLimit is returned with no partial
+history; request fewer records or a shorter time range. Invalid timestamp
+ranges are rejected. Poll failures mark samples Bad;
 `hmi.Runtime` supplies a shared TTL/staleness watchdog when configured.
 
 ## Designer / dynamic display

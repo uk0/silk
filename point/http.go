@@ -21,8 +21,34 @@ type Mapping struct {
 	Steps   []Step `json:"steps,omitempty"`
 }
 type compiledMapping struct {
-	Mapping
+	name     string
+	kind     Kind
+	path     jsonx.CompiledPointer
 	pipeline *Pipeline
+}
+
+// Validate checks a response mapping before its source can issue any requests.
+func (m Mapping) Validate() error {
+	_, err := m.compile()
+	return err
+}
+
+func (m Mapping) compile() (compiledMapping, error) {
+	if err := (Definition{Name: m.Name, Kind: m.Kind}).Validate(); err != nil {
+		return compiledMapping{}, err
+	}
+	if len(m.Pointer) > 4096 {
+		return compiledMapping{}, fmt.Errorf("point: JSON pointer exceeds 4096 bytes: %w", jsonx.ErrPointer)
+	}
+	path, err := jsonx.CompilePointer(m.Pointer)
+	if err != nil {
+		return compiledMapping{}, fmt.Errorf("point: response path: %w", err)
+	}
+	pipeline, err := NewPipeline(m.Steps)
+	if err != nil {
+		return compiledMapping{}, err
+	}
+	return compiledMapping{name: m.Name, kind: m.Kind, path: path, pipeline: pipeline}, nil
 }
 
 // HTTPSource is inert until Poll or Run. One response feeds all mappings. A
@@ -62,22 +88,15 @@ func NewHTTPSource(client *httpx.Client, req httpx.Request, mappings []Mapping, 
 	s := &HTTPSource{client: client, request: req, tags: tags, store: store}
 	names := map[string]bool{}
 	for _, m := range mappings {
-		if e := (Definition{Name: m.Name, Kind: m.Kind}).Validate(); e != nil {
-			return nil, e
-		}
 		if names[m.Name] {
 			return nil, fmt.Errorf("point: duplicate HTTP target")
 		}
+		compiled, err := m.compile()
+		if err != nil {
+			return nil, err
+		}
 		names[m.Name] = true
-		if len(m.Pointer) > 4096 || m.Pointer != "" && !strings.HasPrefix(m.Pointer, "/") {
-			return nil, fmt.Errorf("point: invalid JSON pointer")
-		}
-		p, e := NewPipeline(m.Steps)
-		if e != nil {
-			return nil, e
-		}
-		m.Steps = append([]Step(nil), m.Steps...)
-		s.mappings = append(s.mappings, compiledMapping{m, p})
+		s.mappings = append(s.mappings, compiled)
 	}
 	return s, nil
 }
@@ -86,11 +105,11 @@ func (s *HTTPSource) deliver(ctx context.Context, m compiledMapping, v core.Valu
 		return e
 	}
 	if s.store != nil {
-		if e := s.store.Publish(ctx, m.Name, v); e != nil {
+		if e := s.store.Publish(ctx, m.name, v); e != nil {
 			return e
 		}
 	}
-	s.tags.GetOrCreate(m.Name, core.Meta{}).Observe(v)
+	s.tags.GetOrCreate(m.name, core.Meta{}).Observe(v)
 	return nil
 }
 
@@ -99,12 +118,19 @@ func (s *HTTPSource) deliver(ctx context.Context, m compiledMapping, v core.Valu
 // retain the last payload, never manufacture a normal zero. Storage errors are
 // returned before updating the corresponding live point.
 func (s *HTTPSource) Poll(ctx context.Context) error {
+	_, err := s.poll(ctx)
+	return err
+}
+
+// poll also reports whether a Good sample reached its destination. HTTP status
+// alone is not enough: parsing, conversion or all writes can still fail.
+func (s *HTTPSource) poll(ctx context.Context) (hasGood bool, err error) {
 	if ctx == nil {
-		return fmt.Errorf("point: nil context")
+		return false, fmt.Errorf("point: nil context")
 	}
 	response, requestErr := s.client.Do(ctx, s.request)
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 	var doc *jsonx.Document
 	if requestErr == nil {
@@ -117,7 +143,7 @@ func (s *HTTPSource) Poll(ctx context.Context) error {
 		e := requestErr
 		if e == nil {
 			var node jsonx.Node
-			node, e = doc.Lookup(m.Pointer)
+			node, e = m.path.Lookup(doc)
 			if e == nil {
 				v = node.Value()
 			}
@@ -125,27 +151,39 @@ func (s *HTTPSource) Poll(ctx context.Context) error {
 		if e == nil {
 			v, e = m.pipeline.Apply(v)
 		}
-		if e == nil {
-			v, e = Convert(v, m.Kind)
-		}
 		sample := core.Value{Raw: v, Quality: core.QualityGood, Time: now}
+		if e == nil {
+			sample, e = NormalizeSample(sample, m.kind)
+		}
 		if e != nil {
-			sample.Raw = s.tags.GetOrCreate(m.Name, core.Meta{}).Value().Raw
-			sample.Quality = core.QualityBad
+			sample = core.Value{Quality: core.QualityBad, Time: now}
+			last := s.tags.GetOrCreate(m.name, core.Meta{}).Value().Raw
+			if last != nil {
+				retained := sample
+				retained.Raw = last
+				if normalized, err := NormalizeSample(retained, m.kind); err == nil {
+					sample = normalized
+				}
+			}
 			if first == nil {
-				first = fmt.Errorf("point: source field %s failed: %w", m.Name, e)
+				first = fmt.Errorf("point: source field %s failed: %w", m.name, e)
 			}
 		}
-		if e = s.deliver(ctx, m, sample); e != nil && first == nil {
-			first = e
+		if e = s.deliver(ctx, m, sample); e != nil {
+			if first == nil {
+				first = e
+			}
+		} else if sample.Quality == core.QualityGood {
+			hasGood = true
 		}
 	}
-	return first
+	return hasGood, first
 }
 
 // Run is blocking: start it in an application-owned worker. Fixed delay after
-// completion prevents overlapping requests. Errors are reported then polling
-// continues, with bounded exponential backoff. POST/etc require explicit repeat
+// completion prevents overlapping requests. Errors are reported on partial
+// failures without slowing healthy mappings; polls delivering no Good samples
+// back off exponentially within a bound. POST/etc require explicit repeat
 // consent; read-style POST endpoints may opt in. Cancellation is joined by Run's
 // return; no goroutines or queued completions survive it. onError must not block.
 func (s *HTTPSource) Run(ctx context.Context, interval time.Duration, repeatWrites bool, onError func(error)) error {
@@ -170,14 +208,14 @@ func (s *HTTPSource) RunObserved(ctx context.Context, interval time.Duration, re
 		if e := ctx.Err(); e != nil {
 			return e
 		}
-		e := s.Poll(ctx)
+		hasGood, e := s.poll(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if observe != nil {
 			observe(e)
 		}
-		if e != nil {
+		if e != nil && !hasGood {
 			delay = min(max(interval, 30*time.Second), max(interval, delay*2))
 		} else {
 			delay = interval

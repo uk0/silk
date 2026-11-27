@@ -593,7 +593,7 @@ func (this *Window) SetBounds(x, y, width, height float64) {
 
 func (this *Window) SetPos(x, y float64) {
 	if oldX, oldY := this.widget.Pos(); oldX != x || oldY != y {
-		this.dismissOwnedPopups()
+		this.retirePopupsForGeometryChange()
 	}
 	// 完整数据流程参见Widget.SetPos
 	// 此方法负责把坐标传给系统API, 不能反过来调用Widget.SetPos
@@ -655,7 +655,7 @@ func (this *Window) FrameMargin() (ret Padding) {
 
 func (this *Window) SetSize(w, h float64) {
 	if this.widget.Width() != w || this.widget.Height() != h {
-		this.dismissOwnedPopups()
+		this.retirePopupsForGeometryChange()
 	}
 	// 完整数据流程参见Widget.SetSize
 	// 此方法负责把坐标传给系统API, 不能反过来调用Windeget.SetSize
@@ -681,7 +681,7 @@ func (win *Window) on_WM_SIZE(msg uint32, wParam, lParam uintptr) (ret uintptr) 
 	w := float64(win32.LOWORD(uint32(lParam)))
 	h := float64(win32.HIWORD(uint32(lParam)))
 	if win.widget.Width() != w || win.widget.Height() != h {
-		win.dismissOwnedPopups()
+		win.retirePopupsForGeometryChange()
 	}
 	win.widget.NakedWidget().setSize(w, h)
 	win.Update()
@@ -713,14 +713,19 @@ func (win *Window) on_WM_MOVE(msg uint32, wParam, lParam uintptr) (ret uintptr) 
 	}
 
 	if oldX, oldY := win.widget.Pos(); oldX != x || oldY != y {
-		win.dismissOwnedPopups()
+		win.retirePopupsForGeometryChange()
 	}
 	win.widget.NakedWidget().setPos(x, y)
+	win.queuePopupSurfacePlacement()
 	return 0
 }
 
 func (this *Window) Update() {
 	this.requestRepaint(geom.Rect{}, true)
+}
+
+func (this *Window) markGeometryDamage(r geom.Rect) {
+	this.requestRepaint(r, false)
 }
 
 func (this *Window) UpdateRect(x, y, width, height float64) {

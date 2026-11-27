@@ -90,9 +90,12 @@ authoring tools hidden rather than covering the live viewport.
    write. If another managed writer changed the sample, reopen and review it;
    the old dialog cannot overwrite it or automatically retry. HTTP-owned points
    remain read-only while their source is enabled.
-3. **Recent history...** explicitly queries at most 200 newest observations on a
-   cancellable worker, including quality. It is not an automatic trend poll or
-   lossless alarm/event stream. Closing or stopping retires owned dialogs.
+3. **Recent history...** requests up to 200 newest observations on a cancellable
+   worker, including quality. If the result exceeds the 16 MiB payload budget,
+   no partial rows are shown. Enter a smaller limit (1–200) and choose
+   **Read history** to retry the same point. Changing the limit does not query
+   storage. It is not an automatic trend poll or lossless alarm/event stream.
+   Closing the dialog or stopping the runtime cancels its owned read.
 
 Writes are committed to the configured store before live publication. A
 cancelled/failed operation is not a rollback guarantee: verify current value and

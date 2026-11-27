@@ -5,6 +5,26 @@
 HTTP, SQL, timers or drivers. Runtime construction/start are explicit operations.
 See the [workbench guide](../docs/HMI-WORKBENCH.md) for acquisition and rendering.
 
+## Runtime diagnostics
+
+`Runtime.Diagnostics()` returns a snapshot with HTTP source errors indexed by
+their configured IDs and a separate `RetentionError` for storage maintenance.
+Either fault clears only when its own operation recovers. Source IDs such as
+`storage` remain valid.
+
+`Runtime.Errors()` still returns a flat map for existing clients. It preserves
+every source key and uses `storage` for the retention fault unless that key is
+already an enabled source ID, in which case it chooses a distinct display key.
+Use the typed snapshot rather than parsing the fallback display key. Call
+`ErrorMap()` on that snapshot to get the same legacy view without re-reading
+the runtime.
+
+For a live status view, call `SubscribeDiagnosticChanges` before reading the
+initial snapshot. This callback only tells you that the latest snapshot may
+have changed; repeated identical errors or healthy polls don't notify.
+Post UI work to the owning thread, and cancel the subscription when the view
+detaches. Do not stop the runtime synchronously inside a callback.
+
 ## Atomic authored edits
 
 ```go

@@ -99,14 +99,14 @@ func (s *Store) Definitions(ctx context.Context) ([]point.Definition, error) {
 // Publish stores one observation, including unchanged values and quality/time.
 // Nil is only allowed for Bad/Uncertain samples before a first successful read.
 func (s *Store) Publish(ctx context.Context, name string, v core.Value) error {
-	if v.Quality > core.QualityGood || v.Time.IsZero() {
-		return fmt.Errorf("point: invalid quality or missing timestamp")
+	if ctx == nil {
+		return fmt.Errorf("point: nil publish context")
 	}
-	// UnixNano is only reversible inside its signed nanosecond range.
+	// Check the timestamp and quality before taking a database connection.
+	if err := point.ValidateSampleMetadata(v); err != nil {
+		return err
+	}
 	ns := v.Time.UnixNano()
-	if !time.Unix(0, ns).Equal(v.Time) {
-		return fmt.Errorf("point: timestamp out of range")
-	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -116,17 +116,11 @@ func (s *Store) Publish(ctx context.Context, name string, v core.Value) error {
 	if e = tx.QueryRowContext(ctx, `SELECT kind FROM point_definitions WHERE name=?`, name).Scan(&kind); e != nil {
 		return e
 	}
-	var raw any
-	if v.Raw != nil || v.Quality == core.QualityGood {
-		raw, e = point.Convert(v.Raw, kind)
-		if e != nil {
-			return e
-		}
+	normalized, e := point.NormalizeSample(v, kind)
+	if e != nil {
+		return e
 	}
-	if text, ok := raw.(string); ok && len(text) > 1<<20 {
-		return fmt.Errorf("point: string sample exceeds 1 MiB")
-	}
-	data, e := json.Marshal(raw)
+	data, e := json.Marshal(normalized.Raw)
 	if e != nil {
 		return e
 	}
@@ -146,16 +140,14 @@ func decodeSample(name, payload string, q int, ts int64, kind point.Kind) (Store
 	if e != nil {
 		return StoredSample{}, e
 	}
-	if raw != nil {
-		raw, e = point.Convert(raw, kind)
-		if e != nil {
-			return StoredSample{}, e
-		}
-	}
 	if q < 0 || q > int(core.QualityGood) {
 		return StoredSample{}, fmt.Errorf("point: corrupted quality")
 	}
-	return StoredSample{name, core.Value{Raw: raw, Quality: core.Quality(q), Time: time.Unix(0, ts).UTC()}}, nil
+	v, err := point.NormalizeSample(core.Value{Raw: raw, Quality: core.Quality(q), Time: time.Unix(0, ts).UTC()}, kind)
+	if err != nil {
+		return StoredSample{}, fmt.Errorf("point: invalid stored sample: %w", err)
+	}
+	return StoredSample{name, v}, nil
 }
 func (s *Store) Latest(ctx context.Context, name string) (StoredSample, error) {
 	var p string
@@ -172,35 +164,10 @@ func (s *Store) Latest(ctx context.Context, name string) (StoredSample, error) {
 // History is bounded, ordered by timestamp then insertion order. No implicit
 // deletion: retention/compaction policies belong to the application in this version.
 func (s *Store) History(ctx context.Context, name string, from, to time.Time, limit int) ([]StoredSample, error) {
-	if from.After(to) || limit < 1 || limit > 10000 || !time.Unix(0, from.UnixNano()).Equal(from) || !time.Unix(0, to.UnixNano()).Equal(to) {
-		return nil, fmt.Errorf("point: invalid history range/limit")
+	if ctx == nil || from.After(to) || limit < 1 || limit > 10000 || !time.Unix(0, from.UnixNano()).Equal(from) || !time.Unix(0, to.UnixNano()).Equal(to) {
+		return nil, fmt.Errorf("point: invalid history context/range/limit")
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT h.payload,h.quality,h.ts,d.kind FROM point_history h JOIN point_definitions d ON d.name=h.name WHERE h.name=? AND h.ts BETWEEN ? AND ? ORDER BY h.ts,h.seq LIMIT ?`, name, from.UnixNano(), to.UnixNano(), limit)
-	if e != nil {
-		return nil, e
-	}
-	defer rows.Close()
-	out := []StoredSample{}
-	bytes := 0
-	for rows.Next() {
-		var p string
-		var q int
-		var ts int64
-		var k point.Kind
-		if e = rows.Scan(&p, &q, &ts, &k); e != nil {
-			return nil, e
-		}
-		bytes += len(p)
-		if bytes > 16<<20 {
-			return nil, fmt.Errorf("point: history exceeds 16 MiB payload budget")
-		}
-		v, e := decodeSample(name, p, q, ts, k)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return s.readHistoryRows(ctx, name, `SELECT h.payload,h.quality,h.ts,d.kind FROM point_history h JOIN point_definitions d ON d.name=h.name WHERE h.name=? AND h.ts BETWEEN ? AND ? ORDER BY h.ts,h.seq LIMIT ?`, name, from.UnixNano(), to.UnixNano(), limit)
 }
 
 // Prune deletes at most limit old history rows; definitions/latest remain intact.

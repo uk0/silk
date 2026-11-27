@@ -32,6 +32,7 @@ type session struct {
 	cancel              context.CancelFunc
 	done                chan struct{}
 	runtime             *hmi.Runtime
+	stopDiagnostics     func()
 	available, stopping bool
 }
 type Workbench struct {
@@ -186,7 +187,11 @@ func (f *Workbench) StartRuntime() {
 					f.status.SetText(e.Error())
 					s.cancel()
 				} else {
-					f.status.SetText("Running · shared points / bounded HTTP / quality / staleness")
+					s.watchDiagnostics(gui.Post, func(d hmi.RuntimeDiagnostics) {
+						if !f.closed && f.session == s && !s.stopping {
+							setRuntimeDiagnosticStatus(f.status, i18n.T("Running · shared points / bounded HTTP / quality / staleness"), d)
+						}
+					})
 					f.notifyRuntime(s, runtime)
 				}
 			}
@@ -198,6 +203,7 @@ func (f *Workbench) finish(s *session, e error) {
 		if f.closed || f.session != s {
 			return
 		}
+		s.unwatchDiagnostics()
 		f.Editor.Diagram.UnbindTags()
 		f.Points.SetRuntime(nil)
 		f.Alarms.SetRuntime(nil)
@@ -214,6 +220,7 @@ func (f *Workbench) finish(s *session, e error) {
 func (f *Workbench) StopRuntime() {
 	if f.session != nil && !f.session.stopping {
 		f.session.stopping = true
+		f.session.unwatchDiagnostics()
 		f.Points.SetRuntime(nil)
 		f.Alarms.SetRuntime(nil)
 		f.session.cancel()
@@ -339,22 +346,22 @@ func (f *Workbench) ExportGo() {
 func (f *Workbench) Snapshot() {
 	p := f.Editor.Diagram.Project()
 	mode := "editor"
-	errors := map[string]string{}
+	var diagnostics hmi.RuntimeDiagnostics
 	samples := map[string]core.Value{}
 	if f.session != nil {
 		mode = "starting"
 		if f.session.runtime != nil {
 			mode = "running"
-			errors = f.session.runtime.Errors()
-			for _, pt := range p.Points {
-				tag, _ := f.session.runtime.Tags.Get(pt.Name)
-				samples[pt.Name] = tag.Value()
+			diagnostics = f.session.runtime.Diagnostics()
+			for _, point := range f.session.runtime.PointStates() {
+				samples[point.Definition.Name] = point.Value
 			}
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"mode": mode, "nodes": len(p.Nodes), "links": len(p.Links), "points": len(p.Points), "selected": f.Editor.Diagram.SelectedNode(), "selected_nodes": f.Editor.Diagram.SelectedNodes(), "selected_pipe": f.Editor.Diagram.SelectedLink(), "errors": errors, "samples": samples})
+	b, _ := json.Marshal(map[string]any{"mode": mode, "nodes": len(p.Nodes), "links": len(p.Links), "points": len(p.Points), "selected": f.Editor.Diagram.SelectedNode(), "selected_nodes": f.Editor.Diagram.SelectedNodes(), "selected_pipe": f.Editor.Diagram.SelectedLink(), "errors": diagnostics.ErrorMap(), "samples": samples})
 	fmt.Println("HMI_STATE " + string(b))
-	f.status.SetText(fmt.Sprintf("%s · %d devices · %d pipes · %d points · %d source errors", mode, len(p.Nodes), len(p.Links), len(p.Points), len(errors)))
+	status := fmt.Sprintf("%s · %d devices · %d pipes · %d points", mode, len(p.Nodes), len(p.Links), len(p.Points))
+	f.status.SetText(runtimeDiagnosticStatusText(status, diagnostics, true))
 }
 func (f *Workbench) Close() {
 	if f.closed {

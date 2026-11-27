@@ -146,6 +146,19 @@ func LayoutPopup1(popup IWidget, xref, yref float64) {
 }
 
 func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, overlap float64) {
+	layoutPopup(popup, xref, yref, wref, href, vertical, overlap, nil)
+}
+
+func layoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, overlap float64, stillOpen func() bool) {
+	var before geom.Rect
+	var surface *Window
+	if stillOpen != nil {
+		surface = popup.Window()
+		if surface != nil {
+			before.X, before.Y = popup.MapToGlobal(0, 0)
+			before.Width, before.Height = popup.Size()
+		}
+	}
 	area := popupWorkAreaFor(popup, xref, yref)
 	if menu, ok := popup.(*Menu); ok && menu.IsPopup() {
 		menu.fitPopupWorkArea(area)
@@ -160,7 +173,22 @@ func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, o
 	// Previously this did MapFromGlobal + SetPos which triggered
 	// Window.SetPos doing MapToGlobal again - the double conversion
 	// corrupted position on repeated open/close.
+	if stillOpen != nil {
+		// Sizing may run widget callbacks that close or reparent the popup.
+		if !stillOpen() {
+			return
+		}
+		if gx, gy := popup.MapToGlobal(0, 0); gx == x && gy == y {
+			if before.Width != pw || before.Height != ph {
+				damagePopupUnderlay(surface, before)
+			}
+			return
+		}
+	}
 	setPopupGlobalPos(popup, x, y)
+	if stillOpen != nil && stillOpen() {
+		damagePopupUnderlay(surface, before)
+	}
 }
 
 var appIcon paint.Icon

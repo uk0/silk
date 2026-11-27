@@ -12,6 +12,7 @@ children, err := node.Children(0, 64) // 对象键稳定排序；只取直接子
 ```
 
 - `Document.Root/Lookup/NodeCount/Str/Int/Float/Bool`：解析一次，重复查询。
+- `CompilePointer`：预先校验路径，用同一个只读指针查询不同响应的文档。编译后的零值表示根节点。
 - `Node.Kind/Key/Pointer/Len/Child/ChildIndex/Children`：只读树与分页访问。
 - `Node.Value/JSON` 返回独立 Go 值或 JSON 字节；修改它们不影响原文档。
 - `Node.Preview(n)`：有界显示摘要，不保证是合法 JSON。容器只显示数量，长字符串先截短再转义。

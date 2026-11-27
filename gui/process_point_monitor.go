@@ -63,6 +63,7 @@ func (v *ProcessPointMonitor) Init(self IWidget) {
 	v.table.SetParent(self)
 	v.table.SetModel(v.model)
 	v.table.SetCellsEditable(false)
+	v.table.SetClipCellText(true)
 	v.table.SetSelectionChangedCallback(func(interface{}, int) { v.selectCurrent() })
 	v.table.SigSortChanged(func(int, bool) { v.restoreSelection() })
 	add := func(text string, fn func()) *Button {

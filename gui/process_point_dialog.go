@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,12 +15,26 @@ import (
 
 var showProcessPointDialog = (*Dialog).ShowModal
 
+func init() {
+	i18n.AddMany("zh", map[string]string{
+		"Newest observations first. Select a row limit, then read history.": "按采样时间从新到旧。选择行数上限，再读取历史。",
+		" rows":                            " 行",
+		"Read history":                     "读取历史",
+		"Enter a row limit from 1 to 200.": "请输入 1 至 200 的行数上限。",
+		"Reading recent history…":          "正在读取最近历史…",
+		"History exceeds 16 MiB. Lower the row limit and read again.": "历史数据超过 16 MiB。请减少行数后重新读取。",
+		"%d observations · at most %d requested":                      "%d 条观测 · 本次最多读取 %d 条",
+	})
+}
+
 type processPointDialogBody struct {
 	Widget
 	summary *Label
 	input   *Edit
 	status  *Label
 	table   *processConfigTable
+	limit   *SpinBox
+	read    *Button
 }
 
 func newProcessPointDialogBody() *processPointDialogBody {
@@ -48,8 +63,18 @@ func (b *processPointDialogBody) OnResize() {
 		b.input.SetBounds(8, 68, max(0, w-16), 32)
 		b.status.SetBounds(8, 108, max(0, w-16), max(0, h-116))
 	} else if b.table != nil {
-		b.table.SetBounds(8, 66, max(0, w-16), max(0, h-108))
-		b.status.SetBounds(8, max(66, h-36), max(0, w-16), 30)
+		width := max(0, w-16)
+		y := 66.
+		if b.limit != nil && b.read != nil {
+			gap := min(8., width)
+			inputWidth := min(120., (width-gap)/2)
+			b.limit.SetBounds(8, y, inputWidth, 32)
+			b.read.SetBounds(8+inputWidth+gap, y, min(160., width-inputWidth-gap), 32)
+			y += 40
+		}
+		bottom := max(y, h-44)
+		b.table.SetBounds(8, y, width, max(0, bottom-y-4))
+		b.status.SetBounds(8, bottom, width, max(0, h-bottom-6))
 	}
 }
 
@@ -163,44 +188,86 @@ func (v *ProcessPointMonitor) ShowHistory() {
 		return
 	}
 	body := newProcessPointDialogBody()
-	body.summary.SetText(name + " · newest observations first · at most 200 rows\nDatabase query starts only from this explicit action.")
-	model := NewSimpleTableModel([]string{"Observed (UTC)", "Value", "Quality"})
-	model.SetColumnWidth(0, 220)
-	model.SetColumnWidth(1, 260)
-	model.SetColumnWidth(2, 120)
+	body.summary.SetText(name + "\n" + i18n.T("Newest observations first. Select a row limit, then read history."))
 	body.table = new(processConfigTable)
 	body.table.Init(body.table)
 	body.table.SetParent(body)
-	body.table.SetModel(model)
 	body.table.SetCellsEditable(false)
-	body.status.SetText("Reading bounded recent history…")
+	body.table.SetClipCellText(true)
+	newModel := func() *SimpleTableModel {
+		m := NewSimpleTableModel([]string{i18n.T("Observed") + " (UTC)", i18n.T("Value"), i18n.T("Quality")})
+		m.SetColumnWidth(0, 220)
+		m.SetColumnWidth(1, 260)
+		m.SetColumnWidth(2, 120)
+		return m
+	}
+	body.table.SetModel(newModel())
+	body.limit = NewSpinBox()
+	body.limit.SetRange(1, 200)
+	body.limit.SetValue(200)
+	body.limit.SetSuffix(i18n.T(" rows"))
+	body.limit.SetParent(body)
+	body.read = NewButton1(i18n.T("Read history"), nil)
+	body.read.SetParent(body)
+
 	dlg := NewDialog(i18n.T("Recent history..."), v)
 	dlg.SetContent(body)
 	dlg.AddButton(i18n.T("Close"), DialogCancel)
 	closed := false
 	v.closeDialog = func() { dlg.onBtnClick(dialogResultKey(DialogCancel)) }
 	v.dialog = dlg
-	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
 	var future *async.Future[[]point.SampleRecord]
+	var cancelRead context.CancelFunc
 	defer func() {
 		closed = true
 		if v.dialog == dlg {
 			v.dialog = nil
 			v.closeDialog = nil
 		}
-		cancel()
+		if cancelRead != nil {
+			cancelRead()
+		}
 		if future != nil {
 			future.Cancel()
 		}
 	}()
-	future, err := async.Submit(ctx, v.jobs, func(ctx context.Context) ([]point.SampleRecord, error) {
-		return c.runtime.RecentHistory(ctx, name, 200)
-	})
-	if err != nil {
-		body.status.SetText(err.Error())
-	} else {
-		_ = future.OnComplete(v.post, func(rows []point.SampleRecord, err error) {
-			if closed || v.closed || v.connection != c {
+
+	setControls := func(enabled bool) {
+		body.limit.SetEnabled(enabled)
+		body.read.SetEnabled(enabled)
+	}
+	load := func() {
+		if closed || v.closed || v.connection != c || future != nil || c.ctx.Err() != nil {
+			return
+		}
+		if !body.limit.Commit() {
+			body.status.SetText(i18n.T("Enter a row limit from 1 to 200."))
+			return
+		}
+		limit := body.limit.Value()
+		model := newModel()
+		body.table.SetModel(model)
+		ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+		job, err := async.Submit(ctx, v.jobs, func(ctx context.Context) ([]point.SampleRecord, error) {
+			return c.runtime.RecentHistory(ctx, name, limit)
+		})
+		if err != nil {
+			cancel()
+			body.status.SetText(err.Error())
+			return
+		}
+		future, cancelRead = job, cancel
+		setControls(false)
+		body.status.SetText(i18n.T("Reading recent history…"))
+		err = job.OnComplete(v.post, func(rows []point.SampleRecord, err error) {
+			if closed || v.closed || v.connection != c || future != job {
+				return
+			}
+			future, cancelRead = nil, nil
+			cancel()
+			setControls(true)
+			if errors.Is(err, point.ErrHistoryPayloadLimit) {
+				body.status.SetText(i18n.T("History exceeds 16 MiB. Lower the row limit and read again."))
 				return
 			}
 			if err != nil {
@@ -213,10 +280,19 @@ func (v *ProcessPointMonitor) ShowHistory() {
 			}
 			body.table.SetModel(model)
 			body.table.Update()
-			body.status.SetText(fmt.Sprintf("%d observations · live values remain independent", len(rows)))
+			body.status.SetText(fmt.Sprintf(i18n.T("%d observations · at most %d requested"), len(rows), limit))
 		})
+		if err != nil {
+			cancel()
+			job.Cancel()
+			future, cancelRead = nil, nil
+			setControls(true)
+			body.status.SetText(err.Error())
+		}
 	}
-	dlg.SetSize(740, 460)
+	body.read.Action().BindFunc0(load)
+	dlg.SetSize(740, 480)
 	dlg.SetInitialFocus(body.table)
+	load()
 	_ = showProcessPointDialog(dlg)
 }

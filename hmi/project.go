@@ -182,17 +182,17 @@ func (p Project) Validate() error {
 				return bad("duplicate source mapping")
 			}
 			mapped[m.Name] = true
-			if pts[m.Name] == "" || pts[m.Name] != m.Kind || len(m.Pointer) > 4096 || m.Pointer != "" && !strings.HasPrefix(m.Pointer, "/") {
-				return bad("source target/type/pointer mismatch")
+			if pts[m.Name] == "" || pts[m.Name] != m.Kind {
+				return bad("source target/type mismatch")
+			}
+			if err := m.Validate(); err != nil {
+				return fmt.Errorf("hmi: source %s mapping %s: %w", s.ID, m.Name, err)
 			}
 			if s.Enabled && writers[m.Name] {
 				return bad("multiple enabled sources write the same point")
 			}
 			if s.Enabled {
 				writers[m.Name] = true
-			}
-			if _, e := point.NewPipeline(m.Steps); e != nil {
-				return e
 			}
 		}
 	}

@@ -121,31 +121,11 @@ func (r *Runtime) WritePoint(ctx context.Context, name string, expected PointTok
 	}
 	r.publishMu.Lock()
 	defer r.publishMu.Unlock()
-	if text, ok := raw.(string); ok && len(text) > 1<<20 {
-		return PointState{}, fmt.Errorf("hmi: string sample exceeds 1 MiB")
-	}
 	err := r.publishLocked(ctx, name, core.Value{Raw: raw, Quality: core.QualityGood, Time: time.Now()}, &expected)
 	if err != nil {
 		return PointState{}, err
 	}
 	return r.PointState(name)
-}
-
-func normalizePointSample(v core.Value, kind point.Kind) (core.Value, error) {
-	if v.Quality > core.QualityGood || v.Time.IsZero() || !time.Unix(0, v.Time.UnixNano()).Equal(v.Time) {
-		return core.Value{}, fmt.Errorf("hmi: invalid point sample quality/time")
-	}
-	if v.Raw != nil || v.Quality == core.QualityGood {
-		raw, err := point.Convert(v.Raw, kind)
-		if err != nil {
-			return core.Value{}, err
-		}
-		v.Raw = raw
-	}
-	if text, ok := v.Raw.(string); ok && len(text) > 1<<20 {
-		return core.Value{}, fmt.Errorf("hmi: string sample exceeds 1 MiB")
-	}
-	return v, nil
 }
 
 func (r *Runtime) SupportsHistory() bool {
@@ -220,6 +200,7 @@ func (r *Runtime) checkHistory(ctx context.Context, name string, rows []point.Sa
 		return nil, fmt.Errorf("hmi: history reader exceeded requested limit")
 	}
 	out := make([]point.SampleRecord, len(rows))
+	remaining := point.MaxHistoryPayloadBytes
 	kind := r.project.Points[r.pointIndex[name]].Kind
 	for i, row := range rows {
 		if i&63 == 0 {
@@ -230,7 +211,7 @@ func (r *Runtime) checkHistory(ctx context.Context, name string, rows []point.Sa
 		if row.Name != name {
 			return nil, fmt.Errorf("hmi: history returned another point")
 		}
-		v, err := normalizePointSample(row.Value, kind)
+		v, err := point.NormalizeSample(row.Value, kind)
 		if err != nil {
 			return nil, err
 		}
@@ -242,6 +223,12 @@ func (r *Runtime) checkHistory(ctx context.Context, name string, rows []point.Sa
 			if (descending && v.Time.After(previous)) || (!descending && v.Time.Before(previous)) {
 				return nil, fmt.Errorf("hmi: history returned unordered observations")
 			}
+		}
+		if text, ok := v.Raw.(string); ok {
+			if len(text) > remaining {
+				return nil, point.ErrHistoryPayloadLimit
+			}
+			remaining -= len(text)
 		}
 		out[i] = point.SampleRecord{Name: name, Value: v}
 	}

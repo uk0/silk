@@ -1,5 +1,79 @@
 # Changelog
 
+## Unreleased — keep runtime faults visible in narrow panes
+
+- Source and storage warnings lead the status line so a long source name
+  or snapshot summary cannot hide them when the runtime pane is narrow.
+
+## Unreleased — live process runtime diagnostics
+
+- The process workbench and embedded runtime pane update HTTP and storage
+  warnings automatically, without clicking Snapshot. Stable poll results
+  don't wake the UI; stopping the runtime retires any pending update.
+
+## Unreleased — prevent process runtime diagnostics from overwriting each other
+
+- An HTTP source named `storage` can fail and recover independently of history
+  retention. Runtime diagnostics report each category separately without
+  changing source IDs or the existing flat error API.
+- The process workbench snapshot reports storage maintenance separately from
+  source failures and reads samples from the running project, not its draft.
+
+## Unreleased — keep valid HTTP points updating after partial failures
+
+- A malformed or unavailable field no longer slows the other points in the
+  same HTTP response. Errors and Bad quality remain visible; bounded backoff
+  still applies when a poll cannot deliver any Good point.
+
+
+## Unreleased — keep process supervision responsive during storage maintenance
+
+- Process runtimes without freshness deadlines or alarm rules no longer run
+  an idle supervision ticker. With freshness enabled, ticks visit only the
+  configured points.
+- Retention runs separately from freshness and alarm dwell. Slow storage
+  cannot stall these transitions or schedule overlapping prune operations.
+
+
+## Unreleased — keep typed point samples consistent through storage and UI
+
+- Validate timestamp range and bounded UTF-8 text consistently before point
+  ingestion, optional persistence and runtime reads. Invalid HTTP fields
+  keep their last valid payload as Bad without dropping valid sibling fields.
+- Reading an int64 sample through Value.Int preserves its exact value.
+
+
+## Unreleased — bound recent industrial point history
+
+- Range and newest-first history queries now share the 16 MiB payload
+  budget. Oversized reads return an explicit error without a partial trend;
+  custom history readers are checked before passing results to the monitor.
+- The live-point history dialog can retry with an explicit 1–200 row limit
+  without leaving the selected point. A failed read never fills the table
+  with partial data.
+- Live and historical point tables clip long text to its own column, so
+  a text value cannot overpaint a neighbouring Quality cell.
+
+
+## Unreleased — validate process HTTP mappings before polling
+
+- Reject malformed response JSON Pointers in the process editor and point SDK
+  before issuing requests. Invalid edits leave the saved mapping and undo
+  history intact; valid escaped keys and nested array fields still work.
+- Compile response paths once per source and reuse them for successive samples.
+
+## Unreleased — repaint the regions exposed by layout changes
+
+- Inline widget moves and resizes repaint their old and new clipped
+  footprints. Moving an open menu also invalidates its exposed underlay,
+  without treating an ordinary layout change as a full-window refresh.
+
+## Unreleased — keep an open menu aligned with its control
+
+- Open button-anchored menus and drop-down lists now follow their controls
+  during layout changes within a window. Nested menus follow their mapped
+  parent surface; unrelated layouts do not wake or reposition open menus.
+
 ## Unreleased — keep popups attached during layout moves
 
 - Moving an inline panel into a hidden container, another native window, or

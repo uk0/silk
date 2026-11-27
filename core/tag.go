@@ -73,8 +73,18 @@ func (v Value) Bool() bool {
 	return v.Float() != 0
 }
 
-// Int coerces the payload to int64.
-func (v Value) Int() int64 { return int64(v.Float()) }
+// Int preserves native integer payloads; non-integers keep the legacy
+// narrowing behavior. Going through Float would round integers past 2^53.
+func (v Value) Int() int64 {
+	switch x := v.Raw.(type) {
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	default:
+		return int64(v.Float())
+	}
+}
 
 // String renders the payload for text/label widgets.
 func (v Value) String() string { return fmt.Sprint(v.Raw) }

@@ -641,6 +641,42 @@ go run ./cmd/silkhmi -project plant.silkhmi -db plant-points.db
   reuse and one-step insertion Undo. Save/load catalogs explicitly; templates
   never duplicate acquisition sources. [SDK example and limits](examples/processlibrary/README.md).
 
+<details>
+<summary>Live HTTP points after a single field fails (macOS)</summary>
+
+A loopback POST supplies a reactor temperature, a pump feedback signal and an
+exact 64-bit cycle count. When the pump field becomes invalid, its card goes
+grey; healthy values keep updating and the temperature rule turns red.
+SQLite stores the pump sample as Bad with its last valid payload.
+
+![Native Silk HMI: temperature shows 120.0 °C in red, pump feedback is grey, and the exact counter continues](docs/images/hmi-http-partial-field-macos.png)
+
+When the field recovers, all three points are Good again. These are native
+Cocoa captures using synthetic data and no plant network or I/O.
+
+![Native Silk HMI after recovery: 71.0 °C, pump running and exact counter](docs/images/hmi-http-partial-field-macos-recovered.png)
+
+</details>
+
+<details>
+<summary>Automatic source warnings and recovery (native macOS)</summary>
+
+The **Run** action starts the local sample source. An HTTP 503 changes the
+point quality to Bad and puts the source warning first in the bottom status
+bar, so it remains visible in a narrow pane.
+No Snapshot action is needed. The diagram withholds the Bad value while
+the live table keeps the last payload visible beside its quality.
+
+![Silk workbench after an HTTP fault: the temperature card is unavailable, the point is Bad, and the status bar reports one source error](docs/images/hmi-live-source-warning-macos.png)
+
+When the source recovers, the warning clears and the latest Good value
+returns to the diagram and SQLite history. These are native captures of a
+loopback-only demo, not plant data.
+
+![Silk workbench after HTTP recovery: 42.5 °C is Good and the source warning has cleared](docs/images/hmi-live-source-restored-macos.png)
+
+</details>
+
 [Workflow, screenshots, SDK and limitations](docs/HMI-WORKBENCH.md) ·
 [Typed point SDK](point/README.md) ·
 [Local synthetic HTTP demo](examples/process2d/README.md) ·

@@ -282,6 +282,7 @@ func (this *Widget) SetParent(parent IWidget) {
 	if checkPopups {
 		dismissReparentedPopups(this.Self(), previousOwner)
 	}
+	queueButtonPopupPlacement(this)
 }
 
 func (this *Widget) X() float64 {
@@ -322,8 +323,10 @@ func (this *Widget) Pos() (x, y float64) {
 
 func (this *Widget) setPos(x, y float64) {
 	if this.x != x || this.y != y {
+		this.damageInlineGeometry(geom.Rect{X: x, Y: y, Width: this.w, Height: this.h})
 		this.x, this.y = x, y
 		this.Self().(IWidgetEvent).OnMove()
+		queueButtonPopupPlacement(this)
 	}
 }
 
@@ -353,11 +356,13 @@ func (this *Widget) Size() (width, height float64) {
 
 func (this *Widget) setSize(width, height float64) {
 	if this.w != width || this.h != height {
+		this.damageInlineGeometry(geom.Rect{X: this.x, Y: this.y, Width: width, Height: height})
 		this.w, this.h = width, height
 		this.Self().(IWidgetEvent).OnResize()
 		if this.toastManager != nil {
 			this.toastManager.layoutToasts(this.Self())
 		}
+		queueButtonPopupPlacement(this)
 	}
 }
 
