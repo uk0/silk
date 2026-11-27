@@ -91,6 +91,9 @@ jobs:
       - name: Verify race-free scheduling, progress delivery and rendering
         run: go test -race -p 1 -short -count=1 ./purecairo/ ./paint/ ./gui/ ./cmd/silkide/ ./ide/taskrunner/ ./win32/
 
+      - name: Verify HMI runtime, live HTTP recovery and SQLite
+        run: bash scripts/test-hmi-runtime.sh hmi-runtime-test.log
+
       # 2. Package init under the race detector, which also enables checkptr.
       #    gui's init calls registerWndClasses(), where faking a resource
       #    ordinal as a pointer used to abort the process before main. Scoped to
@@ -113,6 +116,7 @@ jobs:
           go build -v -o design.exe design.go
           go build -v -o demo.exe demo.go
           go build -v -ldflags="-X github.com/uk0/silk/internal/idetools.RequireBundle=1" -o silkide.exe ./cmd/silkide/
+          go build -v -o silkhmi.exe ./cmd/silkhmi/
           mkdir -p tools
           cp -R bin/tools/. tools/
           go run ./cmd/silktools -verify -out tools
@@ -130,6 +134,9 @@ jobs:
       - name: Run silkide.exe
         run: ./.github/scripts/windows-run-smoke.sh ./silkide.exe
 
+      - name: Run silkhmi.exe
+        run: ./.github/scripts/windows-run-smoke.sh ./silkhmi.exe
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -137,4 +144,5 @@ jobs:
           name: windows-runtime-logs
           path: |
             *.smoke.log
+            hmi-runtime-test.log
           if-no-files-found: ignore

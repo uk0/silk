@@ -677,6 +677,12 @@ loopback-only demo, not plant data.
 
 </details>
 
+The standalone workbench uses bilingual captions and theme-aware toolbar
+icons. It measures rows from the font and icons so common commands stay
+readable when the window is narrow.
+
+![Native macOS workbench toolbar in Chinese and dark theme, with Run, Save, Load, Fit and Snapshot icons](docs/images/hmi-workbench-toolbar-macos.png)
+
 [Workflow, screenshots, SDK and limitations](docs/HMI-WORKBENCH.md) ·
 [Typed point SDK](point/README.md) ·
 [Local synthetic HTTP demo](examples/process2d/README.md) ·

@@ -84,6 +84,7 @@ var proceduralFallbacks = map[string]proceduralIconDrawer{
 	"edit":                 drawFunctionBraces,
 	"minimize":             drawMinimizeLine,
 	"maximize":             drawMaximizeWindow,
+	"fit-content":          drawFitContent,
 	"restore":              drawRestoreWindow,
 	"close":                drawCloseX,
 	"error":                drawErrorCircle,
@@ -519,6 +520,26 @@ func drawTerminal(size int, cc *cairo.Context) {
 	// Underscore cursor to the right of the prompt.
 	cc.MoveTo(w*0.48, w*0.62)
 	cc.LineTo(w*0.66, w*0.62)
+	cc.Stroke()
+}
+
+// drawFitContent uses a viewfinder rather than the window-maximize glyph:
+// fitting a diagram changes its camera, not the size of its native window.
+func drawFitContent(size int, cc *cairo.Context) {
+	w := float64(size)
+	setIconStroke(cc, size)
+	setIconColor(cc, currentIconPalette.Accent)
+	for _, c := range [4][4]float64{
+		{.19, .19, 1, 1}, {.81, .19, -1, 1}, {.19, .81, 1, -1}, {.81, .81, -1, -1},
+	} {
+		x, y := w*c[0], w*c[1]
+		cc.MoveTo(x+w*.16*c[2], y)
+		cc.LineTo(x, y)
+		cc.LineTo(x, y+w*.16*c[3])
+	}
+	cc.Stroke()
+	setIconColor(cc, currentIconPalette.Foreground)
+	roundedRect(cc, w*.37, w*.39, w*.26, w*.22, w*.04)
 	cc.Stroke()
 }
 

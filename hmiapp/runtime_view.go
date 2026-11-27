@@ -108,7 +108,7 @@ func NewRuntimeView(options RuntimeViewOptions) *RuntimeView {
 	add("Stop runtime", "stop", v.Stop)
 	add("Live diagram", "preview", func() { v.SetPointsMode(false) })
 	add("Live points", "tree-view", func() { v.SetPointsMode(true) })
-	add("Fit diagram", "maximize", func() { v.Diagram.FitToView() })
+	add("Fit diagram", "fit-content", func() { v.Diagram.FitToView() })
 	add("Go to source", "document", v.goToSource)
 	add("Live alarms", "notifications", v.SetAlarmMode)
 	v.status = gui.NewLabel("")

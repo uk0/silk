@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — clarify the process workbench toolbar
+
+- The standalone workbench keeps bilingual captions beside its command icons,
+  including distinct fit-to-content and runtime snapshot glyphs. The toolbar
+  sizes its rows from actual font and icon measurements.
+
 ## Unreleased — keep runtime faults visible in narrow panes
 
 - Source and storage warnings lead the status line so a long source name

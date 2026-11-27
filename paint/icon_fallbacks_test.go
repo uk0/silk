@@ -105,6 +105,7 @@ var newIconNames = []string{
 	"gear",
 	"settings",
 	"folder-open",
+	"fit-content",
 }
 
 // TestNewFallbacksRegistered: every new name is present in the

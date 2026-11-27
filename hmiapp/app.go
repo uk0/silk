@@ -53,6 +53,13 @@ type Workbench struct {
 	generation   uint64
 }
 
+func init() {
+	i18n.AddMany("zh", map[string]string{
+		"Run": "运行", "Stop": "停止", "Save": "保存", "Load": "加载",
+		"Generate Go": "生成 Go", "Fit": "适应画布", "Snapshot": "快照",
+	})
+}
+
 func New(c Config) (*Workbench, error) {
 	f := new(Workbench)
 	f.Form.Init(f)
@@ -81,21 +88,22 @@ func New(c Config) (*Workbench, error) {
 	f.Alarms = gui.NewProcessAlarmMonitor()
 	f.Alarms.SetParent(f)
 	f.Alarms.SetVisible(false)
-	add := func(text string, fn func()) {
-		b := gui.NewButton1(text, nil)
+	add := func(text, icon string, fn func()) {
+		b := gui.NewButton1(i18n.T(text), gui.LoadIcon(icon))
+		b.SetTextVisible(true)
 		b.SetParent(f)
 		b.Action().BindFunc0(fn)
 		f.buttons = append(f.buttons, b)
 	}
-	add("Run", f.StartRuntime)
-	add("Stop", f.StopRuntime)
-	add("Save", f.Save)
-	add("Load", f.Load)
-	add("Generate Go", f.ExportGo)
-	add("Fit", f.Fit)
-	add("Snapshot", f.Snapshot)
-	add("Live points", f.TogglePoints)
-	add(i18n.T("Live alarms"), f.ToggleAlarms)
+	add("Run", "run", f.StartRuntime)
+	add("Stop", "stop", f.StopRuntime)
+	add("Save", "save", f.Save)
+	add("Load", "folder-open", f.Load)
+	add("Generate Go", "go-file", f.ExportGo)
+	add("Fit", "fit-content", f.Fit)
+	add("Snapshot", "log", f.Snapshot)
+	add("Live points", "tree-view", f.TogglePoints)
+	add("Live alarms", "notifications", f.ToggleAlarms)
 	f.status = gui.NewLabel("Editor · no I/O until Run / Save / Load · blue ports connect pipes")
 	f.status.SetParent(f)
 	f.refreshControls()
@@ -103,13 +111,21 @@ func New(c Config) (*Workbench, error) {
 }
 func (f *Workbench) OnResize() {
 	w, h := f.Size()
-	columns := max(1, min(len(f.buttons), int(max(0, w-16)/128)))
-	bw := (w - 16) / float64(columns)
+	usable := max(0, w-16)
+	minSlot, buttonHeight := 128.0, 30.0
+	for _, b := range f.buttons {
+		hint := b.SizeHints()
+		minSlot = max(minSlot, hint.Width+5)
+		buttonHeight = max(buttonHeight, hint.Height)
+	}
+	columns := max(1, min(len(f.buttons), int(usable/minSlot)))
+	bw := usable / float64(columns)
+	row := buttonHeight + 6
 	rows := (len(f.buttons) + columns - 1) / columns
 	for i, b := range f.buttons {
-		b.SetBounds(8+float64(i%columns)*bw, 8+float64(i/columns)*36, max(0, bw-5), 30)
+		b.SetBounds(8+float64(i%columns)*bw, 8+float64(i/columns)*row, max(0, bw-5), buttonHeight)
 	}
-	top := 16 + float64(rows)*36
+	top := 16 + float64(rows)*row
 	available := max(0, h-top-30)
 	pointHeight := 0.0
 	if f.showPoints || f.showAlarms {
