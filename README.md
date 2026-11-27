@@ -288,6 +288,13 @@ reopen the menu automatically. An explicit reopen reuses the native window.
 *Exact SDK output captured under X11/Openbox. The reopened menu has the same
 native window ID, and its label is visible.*
 
+On X11 without a window manager, the reopened menu now stays above its owner
+without stealing focus or requesting global always-on-top.
+
+![Native Linux X11 comparison: the menu is no longer covered when reopened](docs/images/native-submenu-stacking-x11.png)
+
+*Actual SDK captures without a window manager, not screenshots of SilkIDE.*
+
 
 ## Coherent inspector categories and bilingual search (development branch)
 
