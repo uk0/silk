@@ -122,18 +122,21 @@ func (this *GroupBox) SigToggled(fn func(bool)) {
 	this.cbToggled = fn
 }
 
-// IsChildEnabled gates only the currently owned content, leaving the header
-// interactive and preserving every child's explicit enabled flag.
+// IsChildEnabled gates managed content and free children alike. The
+// GroupBox paints and handles the header itself, so it stays interactive.
+// The gate never rewrites a child's explicit enabled flag.
 func (this *GroupBox) IsChildEnabled(child IWidget) bool {
 	if child == nil {
 		return false
 	}
-	return !this.checkable || this.checked || child != this.content || child.Parent() != this.Self()
+	return !this.checkable || this.checked || child.Parent() != this.Self()
 }
 
 func (this *GroupBox) applyEnabled() {
-	if this.content != nil && this.content.Parent() == this.Self() {
-		this.content.NakedWidget().InvalidateEnabledState()
+	for _, child := range this.Children() {
+		if child.Parent() == this.Self() {
+			child.NakedWidget().InvalidateEnabledState()
+		}
 	}
 }
 

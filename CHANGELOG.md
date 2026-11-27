@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — container child ownership
+
+- Retain all directly placed Card and GroupBox controls in Designer previews,
+  loaded forms, and generated Go. Attaching another free child no longer
+  replaces the preceding one. Unchecking a GroupBox gates its free controls
+  without overwriting their individual enabled settings.
+
 ## Unreleased — active call parameter
 
 - Highlight the active parameter in the editor's signature hint and dismiss it

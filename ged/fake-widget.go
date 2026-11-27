@@ -814,14 +814,9 @@ func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 	}
 	fake.widget.SetBounds(x, y, w, h)
 
-	// Recurse into nested children so the live preview matches the
-	// generated code (GenerateCode). Children of a simple-AddWidget
-	// container (VBox/HBox/Card/GroupBox) are added via AddWidget so the
-	// container arranges them; children of any other parent are reparented
-	// and keep their absolute bounds. Without this the preview showed an
-	// empty container while the emitted source had its children.
+	// Match GenerateCode's containment policy, using the projected child
+	// count when previewing a drag that changes the children.
 	adder, hasAdd := fake.widget.(interface{ AddWidget(gui.IWidget) })
-	useAdd := hasAdd && isSimpleAddContainer(this.factoryName) && (!isDesignerLayoutFactory(this.factoryName) || this.layoutManaged)
 	items := this.Children()
 	if trial != nil && trial.orders != nil {
 		trial.children[this] = fake.widget
@@ -829,6 +824,7 @@ func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 			items = virtual
 		}
 	}
+	useAdd := hasAdd && this.usesAddWidget(len(items))
 	for childIndex, c := range items {
 		cf, ok := c.(*FakeWidget)
 		if !ok {

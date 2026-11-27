@@ -70,6 +70,8 @@ and in applications built from the generated Go or loaded with `gui.LoadForm`.
 Other layouts created from a selection still use the controls' bounding box.
 Choose **Break Layout** to return to free placement.
 
+![Native Wayland preview resized with the Designer’s two-by-two grid filling the form client area](docs/images/designer-responsive-form-wayland.png)
+
 ## Designer export menus and captions (development branch)
 
 Choose SVG or PDF from **File → Export** or the toolbar before opening the

@@ -90,7 +90,7 @@ func attachFormLayoutRoot(form, child interface{}, node *Node) bool {
 
 // attachLayoutChild registers actual Grid/Form cells and invokes container
 // adders. Plain SetParent does not establish private cell/content ownership.
-func attachLayoutChild(parent, child interface{}, parentType string, node *Node, index int) bool {
+func attachLayoutChild(parent, child interface{}, parentType string, node *Node, index int, singleContent bool) bool {
 	if manager, ok := parent.(interface{ LayoutEnabled() bool }); ok && !manager.LayoutEnabled() {
 		return false
 	}
@@ -122,7 +122,12 @@ func attachLayoutChild(parent, child interface{}, parentType string, node *Node,
 		for _, n := range values {
 			args = append(args, reflect.ValueOf(n))
 		}
-	case "gui.HBox", "gui.VBox", "gui.GroupBox":
+	case "gui.GroupBox":
+		if !singleContent {
+			return false
+		}
+		fallthrough
+	case "gui.HBox", "gui.VBox":
 		method = "AddWidget"
 		args = []reflect.Value{reflect.ValueOf(child)}
 	default:
