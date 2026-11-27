@@ -269,6 +269,17 @@ last split after a normal quit; it is not stored in the form.
 *Original Windows 10 capture after a normal quit and relaunch.*
 
 
+### Submenus stay with their owners
+
+Silk checks that a submenu's anchor and its containing widgets are visible
+before opening it. It checks again after menu population, since a callback
+can hide the owner. This also applies when an SDK app opens a menu programmatically.
+
+![Native Linux X11 test: the old SDK shows a floating menu after its owner hides; the fixed SDK does not](docs/images/native-submenu-ownership-x11.png)
+
+*Same native SDK test fixture in two builds, not a SilkIDE screenshot.*
+
+
 ## Coherent inspector categories and bilingual search (development branch)
 
 Persisted Chinese and English property IDs now share consistent Layout,
