@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — owned editor hints
+
+- Keep editor diagnostics, LSP hover documentation and call signatures
+  inside the editor's owner window, without allocating a popup or changing
+  keyboard focus. Retiring one editor cannot hide another editor's hint.
+
 ## Unreleased — passive control tooltips
 
 - Show registered control hints after the existing pointer idle delay. Paint

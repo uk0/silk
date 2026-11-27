@@ -27,11 +27,7 @@ func TestSignatureHelpSurvivesArgumentInputAndModifiers(t *testing.T) {
 	e.SetText("fn(")
 	e.cursorCol = 3
 	// No native window in package tests; model the visible owner/state directly.
-	tip := newTooltipWindow("fn(value string)")
-	tip.owner = e
-	tooltipMu.Lock()
-	currentTooltip = tip
-	tooltipMu.Unlock()
+	replaceExplicitToolTip(&hoverToolTipOverlay{owner: e, label: newTooltipWindow("fn(value string)")})
 	e.signatureHintVisible = true
 	defer HideToolTip()
 	for _, key := range []int{KeyShift, 'X'} {

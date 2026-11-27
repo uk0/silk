@@ -11,13 +11,15 @@ import (
 func isolatePopupState(t *testing.T) {
 	t.Helper()
 	oldMap, oldCapture, oldFocus := winMap, captureStack, focusWidget
-	oldHover, oldMouse, oldTooltip := mouseHoverWidget, lastMouseWidget, currentTooltip
+	oldHover, oldMouse, oldTooltip := mouseHoverWidget, lastMouseWidget, currentTooltip.Load()
 	oldActive, oldPointer := activeForm, pointerWindow
 	winMap = make(map[*glfw.Window]*Window)
-	captureStack, focusWidget, mouseHoverWidget, lastMouseWidget, currentTooltip = nil, nil, nil, nil, nil
+	captureStack, focusWidget, mouseHoverWidget, lastMouseWidget = nil, nil, nil, nil
+	currentTooltip.Store(nil)
 	t.Cleanup(func() {
 		winMap, captureStack, focusWidget = oldMap, oldCapture, oldFocus
-		mouseHoverWidget, lastMouseWidget, currentTooltip = oldHover, oldMouse, oldTooltip
+		mouseHoverWidget, lastMouseWidget = oldHover, oldMouse
+		currentTooltip.Store(oldTooltip)
 		activeForm, pointerWindow = oldActive, oldPointer
 	})
 }
@@ -128,17 +130,19 @@ func TestUnchangedOwnerGeometryDoesNotDismissPopup(t *testing.T) {
 func TestOwnerDismissClearsTooltipReferenceWithoutLayoutChild(t *testing.T) {
 	isolatePopupState(t)
 	owner := NewLabel("owner")
+	owner.SetSize(240, 100)
 	_, main := testPopupWindow(owner, WtForm, nil)
-	tip := newTooltipWindow("hint")
-	tip.owner = owner
-	testPopupWindow(tip, WtPopup, main)
-	currentTooltip = tip
-	if len(owner.Children()) != 0 || tip.Parent() != owner {
+	tip := newOwnedToolTip(hoverToolTipAnchor{main, 50, 50}, owner, "hint")
+	if tip == nil {
+		t.Fatal("missing owner-local tooltip")
+	}
+	replaceExplicitToolTip(tip)
+	if len(owner.Children()) != 0 || tip.owner != owner || tip.label.Window() != nil || tip.label.Parent() != nil {
 		t.Fatal("tooltip either lacks an owner or entered the owner's layout children")
 	}
 	main.dismissOwnedPopups()
-	if currentTooltip != nil || tip.IsVisible() || tip.Window() != nil || tip.Parent() != nil {
-		t.Fatal("owner dismissal retained a tooltip window/reference")
+	if currentTooltip.Load() != nil || IsToolTipVisible() {
+		t.Fatal("owner dismissal retained a tooltip reference")
 	}
 }
 

@@ -1488,7 +1488,7 @@ func (win *Window) on_WM_PAINT(msg uint32, wParam, lParam uintptr) (ret uintptr)
 		damage = geom.Rect{Width: width, Height: height}
 	}
 	DrawWidgetAll(win.widget, backPainter, 0, 0, damage.X, damage.Y, damage.Width, damage.Height)
-	drawRegisteredToolTip(win, backPainter, damage)
+	drawOwnedToolTip(win, backPainter, damage)
 	if GlobalPerfStats.IsVisible() {
 		GlobalPerfStats.SetWidgetCount(CountWidgets(win.widget))
 		GlobalPerfStats.Draw(backPainter, width, height)

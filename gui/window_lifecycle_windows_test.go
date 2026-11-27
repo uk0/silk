@@ -17,12 +17,14 @@ func isolateWindowsPopupState(t *testing.T) {
 	uiThreadOwner = func() bool { return win32.GetCurrentThreadId() == thread }
 	t.Cleanup(func() { uiThreadOwner = oldOwner; runtime.UnlockOSThread() })
 	oldMap, oldCapture, oldFocus := winMap, captureStack, focusWidget
-	oldHover, oldMouse, oldTooltip, oldActive := mouseHoverWidget, lastMouseWidget, currentTooltip, activeForm
+	oldHover, oldMouse, oldTooltip, oldActive := mouseHoverWidget, lastMouseWidget, currentTooltip.Load(), activeForm
 	winMap = make(map[win32.HWND]*Window)
-	captureStack, focusWidget, mouseHoverWidget, lastMouseWidget, currentTooltip = nil, nil, nil, nil, nil
+	captureStack, focusWidget, mouseHoverWidget, lastMouseWidget = nil, nil, nil, nil
+	currentTooltip.Store(nil)
 	t.Cleanup(func() {
 		winMap, captureStack, focusWidget = oldMap, oldCapture, oldFocus
-		mouseHoverWidget, lastMouseWidget, currentTooltip, activeForm = oldHover, oldMouse, oldTooltip, oldActive
+		mouseHoverWidget, lastMouseWidget, activeForm = oldHover, oldMouse, oldActive
+		currentTooltip.Store(oldTooltip)
 	})
 }
 

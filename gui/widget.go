@@ -218,7 +218,7 @@ func (this *Widget) SetParent(parent IWidget) {
 			return
 		}
 	}
-	dismissRegisteredToolTipIn(this.Self())
+	dismissOwnedToolTipsIn(this.Self())
 	this.cancelQueuedLayouts()
 	cancelClipboardPastes(this.Self())
 
@@ -782,7 +782,7 @@ func (this *Widget) setVisible(b bool) {
 	this.hidden = !b
 
 	if this.hidden {
-		dismissRegisteredToolTipIn(this.Self())
+		dismissOwnedToolTipsIn(this.Self())
 		this.cancelQueuedLayouts()
 		cancelClipboardPastes(this.Self())
 		dismissOwnedToasts(this.Self())

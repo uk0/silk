@@ -3615,9 +3615,8 @@ func attachFileInEditor(tabs *gui.TabWidget, path string, data []byte, replace g
 		updateMacroEditor(tabs, path, ed)
 	})
 	// LSP hover + signature help: the editor fires position events; silkide
-	// does the async gopls fetch + ShowToolTip off the main thread. Hover
-	// carries a precise global anchor; signature help anchors near the
-	// editor (precise caret anchoring is a follow-up).
+	// fetches gopls hints on a worker and applies current results on the UI
+	// thread. Hover carries the pointer anchor; call help uses the caret.
 	ed.SigCompletionRequested(func() {
 		path := ed.FilePath()
 		if openEditors[path] != ed || fileRenameAffects(path) {
@@ -4441,15 +4440,13 @@ func hoverViaLSP(path string, line, col int, gx, gy float64) {
 			if lspHoverGen != gen || !hint.current() {
 				return // a newer hover superseded this one
 			}
-			gui.ShowToolTip(gx, gy, h.Contents)
+			gui.ShowToolTipFor(ed, gx, gy, h.Contents)
 		})
 	}()
 }
 
-// signatureHelpViaLSP fetches the call's parameter hints and shows the
-// active signature in a tooltip. Anchored near the editor's top-left
-// (precise caret anchoring needs a caret-global-coord editor API — a
-// follow-up); the value here is seeing the signature + active parameter.
+// signatureHelpViaLSP fetches the call's active parameter signature and
+// displays it under the current caret inside this editor's owner window.
 func signatureHelpViaLSP(ed *gui.CodeEditor, path string, line, col int) {
 	if globalLSP == nil || ed == nil || !isGoFile(path) {
 		return

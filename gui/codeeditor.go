@@ -3818,18 +3818,18 @@ func (this *CodeEditor) OnMouseMove(x, y float64) {
 				this.DismissLanguageHints()
 				this.hoverErrorLine = line
 				gx, gy := this.MapToGlobal(x, y)
-				ShowToolTip(gx, gy, msg)
+				ShowToolTipFor(this.Self(), gx, gy, msg)
 			}
 			return // diagnostics own this hover; an LSP response must not replace it
 		} else {
 			if this.hoverErrorLine >= 0 {
 				this.hoverErrorLine = -1
-				HideToolTip()
+				HideToolTipFor(this.Self())
 			}
 		}
 	} else if this.hoverErrorLine >= 0 {
 		this.hoverErrorLine = -1
-		HideToolTip()
+		HideToolTipFor(this.Self())
 	}
 
 	// LSP hover signal: report to the host when the mouse settles over a NEW

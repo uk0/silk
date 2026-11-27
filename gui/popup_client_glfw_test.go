@@ -25,7 +25,12 @@ func TestGLFWClientPopupUsesTopmostLocalCoordinates(t *testing.T) {
 	host := &Window{wt: WtForm, enabled: true, widget: NewForm()}
 	base := testClientLayer(host, host, NewPopupMenu(), 38, 24)
 	nested := testClientLayer(host, base, NewPopupMenu(), 72, 53)
-	tip := testClientLayer(host, base, newTooltipWindow("pass-through tooltip"), 72, 53)
+	tip := newOwnedToolTip(hoverToolTipAnchor{base, 41, 29}, base.widget, "pass-through tooltip")
+	replaceExplicitToolTip(tip)
+	t.Cleanup(func() { replaceExplicitToolTip(nil) })
+	if tip == nil || tip.label.Window() != nil || len(host.clientPopupLayers) != 2 {
+		t.Fatal("passive hint was attached as a popup layer")
+	}
 	if got := host.clientPopupAt(80, 66); got != nested {
 		t.Fatal("upper interactive menu was not the hit target")
 	}
@@ -40,7 +45,7 @@ func TestGLFWClientPopupUsesTopmostLocalCoordinates(t *testing.T) {
 		t.Fatalf("round trip %v, %v", gx, gy)
 	}
 	nested.unlinkClientPopup()
-	if !host.fullDirty || len(host.clientPopupLayers) != 2 || host.clientPopupLayers[1] != tip ||
+	if !host.fullDirty || len(host.clientPopupLayers) != 1 || host.clientPopupLayers[0] != base ||
 		host.clientPopupAt(80, 66) != base || nested.clientPopupVisible {
 		t.Fatal("closing a layer did not repaint its old area or restore picking")
 	}

@@ -1,32 +1,27 @@
 package gui
 
 import (
-	"github.com/uk0/silk/core"
-	"github.com/uk0/silk/paint"
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/uk0/silk/core"
+	"github.com/uk0/silk/paint"
 )
 
-// Global tooltip state
-var (
-	tooltipMu      sync.Mutex
-	currentTooltip *tooltipWindow
-)
+// Protects only worker-readable registrations; the paint path never takes it.
+var tooltipMu sync.Mutex
 
 func init() {
 	core.RegisterFactory("gui.tooltipWindow", core.TypeOf((*tooltipWindow)(nil)))
 }
 
-// tooltipWindow is a small popup that displays tooltip text.
+// tooltipWindow paints hint contents. The registered factory name is kept
+// for compatibility; runtime hints never attach this widget to a window.
 type tooltipWindow struct {
 	Widget
-	text  string
-	owner IWidget
+	text string
 }
-
-// A tooltip has an owner but is not a layout/serialized child of that widget.
-func (this *tooltipWindow) Parent() IWidget { return this.owner }
 
 func newTooltipWindow(text string) *tooltipWindow {
 	p := new(tooltipWindow)
@@ -133,60 +128,35 @@ func ShowToolTip(xg, yg float64, text string) {
 }
 
 // ShowToolTipFor gives asynchronous hints an explicit owner. A caret anchor at
-// the viewport edge must not accidentally assign the popup to another panel.
-// Nil owner preserves ShowToolTip's hit-tested behavior.
+// the viewport edge must not assign the hint to another panel. Screen
+// coordinates are converted by the owner's current window and clipped to it.
+// Call on the UI thread. A nil owner retains ShowToolTip's hit-tested behavior.
 func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
 	dismissRegisteredToolTip(nil)
-	tooltipMu.Lock()
-	defer tooltipMu.Unlock()
-	hideToolTipLocked()
-
 	if text == "" {
+		replaceExplicitToolTip(nil)
 		return
 	}
 	if owner == nil {
 		owner = FindWidgetGlobal(xg, yg)
 	}
-	if owner == nil || owner.OwnerWindow() == nil || !owner.IsAllAncentorsVisible() {
+	if owner == nil || !owner.IsAllAncentorsVisible() {
+		replaceExplicitToolTip(nil)
 		return
 	}
-
-	tip := newTooltipWindow(text)
-	tip.owner = owner
-	tip.SetVisible(false)
-
-	hints := tip.SizeHints()
-	tip.SetSize(0, 0)
-	tip.SetSize(hints.Width, hints.Height)
-	tip.AttachWindow(WtPopup)
-
-	// Use the cursor's monitor, not the primary monitor or the offset tip.
-	area := popupWorkAreaFor(tip, xg, yg)
-	tx, ty := tooltipPositionInWorkArea(area, xg, yg, hints.Width, hints.Height)
-	setPopupGlobalPos(tip, tx, ty)
-	tip.Show()
-
-	currentTooltip = tip
-}
-
-// hideToolTipLocked hides and destroys the current tooltip.
-// Caller must hold tooltipMu.
-func hideToolTipLocked() {
-	if currentTooltip != nil {
-		currentTooltip.Hide()
-		currentTooltip.DetachWindow()
-		currentTooltip.Detach()
-		currentTooltip.owner = nil
-		currentTooltip = nil
+	win := owner.OwnerWindow()
+	if win == nil || !win.IsValid() || !win.IsVisible() || !win.IsEnabled() || win.Widget() == nil {
+		replaceExplicitToolTip(nil)
+		return
 	}
+	x, y := win.mapFromGlobal(xg, yg)
+	replaceExplicitToolTip(newOwnedToolTip(hoverToolTipAnchor{win, x, y}, owner, text))
 }
 
-// HideToolTip hides and destroys the current tooltip if any.
+// HideToolTip retires both explicit and automatic hints.
 func HideToolTip() {
 	dismissRegisteredToolTip(nil)
-	tooltipMu.Lock()
-	defer tooltipMu.Unlock()
-	hideToolTipLocked()
+	replaceExplicitToolTip(nil)
 }
 
 // HideToolTipFor dismisses only this owner's hint; a background editor update
@@ -195,18 +165,12 @@ func HideToolTipFor(owner IWidget) {
 	if current := visibleHoverToolTip; current != nil && current.owner == owner {
 		dismissRegisteredToolTip(current.win)
 	}
-	tooltipMu.Lock()
-	defer tooltipMu.Unlock()
-	if currentTooltip != nil && currentTooltip.owner == owner {
-		hideToolTipLocked()
-	}
+	dismissExplicitToolTip(func(tip *hoverToolTipOverlay) bool { return tip.owner == owner })
 }
 
 // IsToolTipVisible returns true if a tooltip is currently shown.
 func IsToolTipVisible() bool {
-	tooltipMu.Lock()
-	defer tooltipMu.Unlock()
-	return currentTooltip != nil || activeHoverToolTipOwner.Load() != nil
+	return currentTooltip.Load() != nil || activeHoverToolTipOwner.Load() != nil
 }
 
 // CheckToolTip explicitly shows the nearest registered hint at screen

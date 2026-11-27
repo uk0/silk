@@ -63,7 +63,7 @@ func widgetWithinPopups(widget IWidget, popups map[IWidget]bool) bool {
 // their widget visibility/capture state. Explicit Hide keeps reopening and
 // keyboard routing consistent and also handles move/resize/deactivation.
 func (win *Window) dismissOwnedPopups() {
-	dismissRegisteredToolTip(win)
+	dismissOwnedToolTips(win)
 	popups := make(map[IWidget]bool)
 	for _, candidate := range winMap {
 		if candidate != win && candidate.widget != nil && popupOwnedBy(candidate, win) {
@@ -79,9 +79,6 @@ func (win *Window) dismissOwnedPopups() {
 		for p := focusWidget.OwnerWindow(); p != nil && popupOwnedBy(p, win); p = p.popupOwner {
 			restore = p.popupRestoreFocus
 		}
-	}
-	if currentTooltip != nil && popups[currentTooltip] {
-		HideToolTip()
 	}
 	for popup := range popups {
 		if popup.IsVisible() {

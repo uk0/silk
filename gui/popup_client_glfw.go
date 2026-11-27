@@ -14,12 +14,9 @@ import (
 // logical owner so nested menus keep the usual focus and capture hierarchy.
 func (win *Window) configureClientPopup(owner *Window) error {
 	if owner == nil {
-		// Context menus and tooltips can have no widget parent. Select their
-		// actual active window, not an arbitrary window from the registry.
-		if tip, ok := win.widget.(*tooltipWindow); ok && tip.owner != nil {
-			owner = tip.owner.OwnerWindow()
-		}
-		if owner == nil && focusWidget != nil {
+		// A context menu can have no widget parent. Select its actual
+		// active window, not an arbitrary window from the registry.
+		if focusWidget != nil {
 			owner = focusWidget.OwnerWindow()
 			if owner == win || owner == nil || !owner.IsVisible() {
 				owner = nil
@@ -145,24 +142,21 @@ func (win *Window) drawClientPopups(g paint.Painter, width, height float64) {
 		cx, cy, cw, ch := intersectRect(0, 0, width, height, x, y, pw, ph)
 		// DrawWidgetAll clips before applying the layer translation.
 		DrawWidgetAll(layer.widget, g, x, y, cx, cy, cw, ch)
-		if current := visibleHoverToolTip; current != nil && current.win == layer {
+		if tip := ownedToolTipFor(layer); tip != nil {
 			g.Save()
 			g.Translate(x, y)
-			drawRegisteredToolTip(layer, g, geom.Rect{X: cx - x, Y: cy - y, Width: cw, Height: ch})
+			tip.draw(g, geom.Rect{X: cx - x, Y: cy - y, Width: cw, Height: ch})
 			g.Restore()
 		}
 	}
 }
 
-// Return a popup for a client-local hit only when it shares this form. A
-// tooltip's body must not consume input destined for the control below.
+// Return a popup for a client-local hit only when it shares this form.
+// Tooltip overlays never enter this interactive layer list.
 func (win *Window) clientPopupAt(x, y float64) *Window {
 	for i := len(win.clientPopupLayers) - 1; i >= 0; i-- {
 		p := win.clientPopupLayers[i]
 		if p.clientPopupHost != win || !p.clientPopupVisible || p.widget == nil || !p.widget.IsVisible() || !p.IsEnabled() {
-			continue
-		}
-		if _, ok := p.widget.(*tooltipWindow); ok {
 			continue
 		}
 		px, py := x-p.clientPopupX, y-p.clientPopupY

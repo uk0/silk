@@ -648,7 +648,7 @@ func (this *Window) paint() {
 		}()
 		DrawWidgetAll(this.widget, treePainter, 0, 0, 0, 0, width, height)
 		this.drawClientPopups(treePainter, width, height)
-		drawRegisteredToolTip(this, treePainter, geom.Rect{Width: width, Height: height})
+		drawOwnedToolTip(this, treePainter, geom.Rect{Width: width, Height: height})
 	}()
 	GlobalPerfStats.RecordPaint(time.Since(paintStart))
 
@@ -1485,7 +1485,7 @@ func widgetWithinPopups(widget IWidget, popups map[IWidget]bool) bool {
 // closeOnHide) rather than destroying reusable ComboBox/Button popup objects.
 // Snapshot before callbacks because hiding can remove windows from winMap.
 func (this *Window) dismissOwnedPopups() {
-	dismissRegisteredToolTip(this)
+	dismissOwnedToolTips(this)
 	var popups map[IWidget]bool
 	for _, candidate := range winMap {
 		if candidate != this && candidate.widget != nil && popupOwnedBy(candidate, this) {
@@ -1517,9 +1517,6 @@ func (this *Window) dismissOwnedPopups() {
 		for p := focusWidget.OwnerWindow(); p != nil && popupOwnedBy(p, this); p = p.popupOwner {
 			restore = p.popupRestoreFocus
 		}
-	}
-	if currentTooltip != nil && popups[currentTooltip] {
-		HideToolTip()
 	}
 	for popup := range popups {
 		if popup.IsVisible() {

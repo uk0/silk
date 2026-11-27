@@ -73,7 +73,7 @@ func TestRegisteredToolTipPaintsOnlyDamageAndNeverInterceptsInput(t *testing.T) 
 	g := pix.NewPainter()
 	defer paint.ClosePainter(g)
 	// Draw only a subset of the hint (as in a Win32 partial repaint).
-	drawRegisteredToolTip(win, g, geom.Rect{X: 140, Y: 76, Width: 30, Height: 16})
+	drawOwnedToolTip(win, g, geom.Rect{X: 140, Y: 76, Width: 30, Height: 16})
 	pix.Flush()
 	img, err := pix.Image()
 	if err != nil {

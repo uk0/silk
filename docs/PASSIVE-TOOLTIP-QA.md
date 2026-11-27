@@ -5,8 +5,9 @@ feedback. The nearest registration within the current window wins. Use an
 empty string to clear the hint. Registration can be updated from a worker:
 visible text refreshes on the UI thread. No extra native window, layout
 child, click target or per-tooltip repeating timer is created.
-Programmatic `ShowToolTipFor` (e.g. editor LSP documentation) retains its
-existing explicit-anchor behavior.
+Programmatic `ShowToolTipFor` retains its explicit-anchor API. The anchor
+is mapped to the selected owner's client; editor documentation, diagnostics
+and call signatures are never separate popup windows.
 
 ![An actual tooltip replacing its text during native Wayland hover](images/passive-tooltip-wayland.png)
 
@@ -31,3 +32,16 @@ The cases check ancestor fallback and independent window boundaries,
 placement at the lower edge, damage clipping, pass-through hit testing
 and owner lifecycle. The native capture does not certify all compositors
 or Windows/macOS desktop interaction.
+
+
+## Explicit editor hints on X11
+
+![Actual owner-drawn signature hint in the SDK editor on X11](images/explicit-editor-tooltip-x11.png)
+
+The same source-built editor fixture exercised ShowSignatureHint in two
+private X11 sessions. The earlier build had one application window before
+the hint, two while it was open, and one after hiding the editor. With the
+owner-drawn implementation, all three states used one window, the hint
+painted at the editor-provided anchor and disappeared on hide, and the
+editor kept focus. Both apps exited normally. The fixture supplies a
+representative signature and does not itself run a language server.
