@@ -333,6 +333,10 @@ their limits are recorded in the report, not presented as an FPS guarantee.
 
 ## GUI layout and diagnostic readability (development branch)
 
+Control hints registered with `gui.SetToolTip(widget, text)` appear on pointer
+idle inside the owning window. They do not become controls or block clicks.
+See [tooltip verification and reproduction](docs/PASSIVE-TOOLTIP-QA.md).
+
 The current working source adds pure width-dependent SDK measurement, so a
 wrapped label's first layout can reserve every visual row before drawing.
 Common box/form/grid/group/flow containers share that geometry; warning/error

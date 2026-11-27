@@ -875,6 +875,7 @@ func pushCapture(w IWidget) bool {
 	if cur == w {
 		return false
 	}
+	dismissRegisteredToolTip(nil)
 	if cur != nil {
 		//core.MoreDebug("pushCapture: cur != nil")
 		for p := w.Parent(); p != nil; p = p.Parent() {
@@ -1363,6 +1364,10 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		return win.on_WM_MBUTTONDOWN(msg, wParam, lParam)
 	case win32.WM_MOUSEMOVE:
 		return win.on_WM_MOUSEMOVE(msg, wParam, lParam)
+	case win32.WM_MOUSELEAVE:
+		win.mouseEntered = false
+		dismissRegisteredToolTip(win)
+		return 0
 	case win32.WM_MOUSEWHEEL:
 		return win.on_WM_MOUSEWHEEL(msg, wParam, lParam)
 	case win32.WM_ERASEBKGND:
@@ -1385,6 +1390,7 @@ func wndProcFunc(hWnd win32.HWND, msg uint32, wParam, lParam uintptr) (ret uintp
 		win.cancelPointerGestures()
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
 	case win32.WM_KILLFOCUS:
+		dismissRegisteredToolTip(win)
 		win.cancelPointerGestures()
 		win.textInput.reset()
 		return win32.DefWindowProc(hWnd, msg, wParam, lParam)
@@ -1477,11 +1483,12 @@ func (win *Window) on_WM_PAINT(msg uint32, wParam, lParam uintptr) (ret uintptr)
 	backPainter.SetPen(paint.NewPen(paint.Color{0, 0, 0, 255}, 1))
 	backPainter.SetBrush(nil)
 	backPainter.Save()
+	damage := geom.Rect{X: float64(rc.Left), Y: float64(rc.Top), Width: float64(rc.Right - rc.Left), Height: float64(rc.Bottom - rc.Top)}
 	if fresh {
-		DrawWidgetAll(win.widget, backPainter, 0, 0, 0, 0, width, height)
-	} else {
-		DrawWidgetAll(win.widget, backPainter, 0, 0, float64(rc.Left), float64(rc.Top), float64(rc.Right-rc.Left), float64(rc.Bottom-rc.Top))
+		damage = geom.Rect{Width: width, Height: height}
 	}
+	DrawWidgetAll(win.widget, backPainter, 0, 0, damage.X, damage.Y, damage.Width, damage.Height)
+	drawRegisteredToolTip(win, backPainter, damage)
 	if GlobalPerfStats.IsVisible() {
 		GlobalPerfStats.SetWidgetCount(CountWidgets(win.widget))
 		GlobalPerfStats.Draw(backPainter, width, height)
@@ -1515,6 +1522,7 @@ func (win *Window) on_WM_SHOWWINDOW(msg uint32, wParam, lParam uintptr) (ret uin
 }
 
 func (win *Window) on_WM_LBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	dismissRegisteredToolTip(nil)
 	lastMouseTime = time.Now()
 	win.toCapture = false
 	x, y := posFromLParam(lParam)
@@ -1574,6 +1582,7 @@ func (win *Window) on_WM_LBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 }
 
 func (win *Window) on_WM_RBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	dismissRegisteredToolTip(nil)
 	lastMouseTime = time.Now()
 	win.toCapture = false
 	x, y := posFromLParam(lParam)
@@ -1636,6 +1645,7 @@ func (win *Window) on_WM_RBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 // and arming win.toCapture without a matching release path would strand the
 // capture on the pressed widget.
 func (win *Window) on_WM_MBUTTONDOWN(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	dismissRegisteredToolTip(nil)
 	lastMouseTime = time.Now()
 	x, y := posFromLParam(lParam)
 	if curCapture() == nil {
@@ -1664,6 +1674,7 @@ func (win *Window) on_WM_MBUTTONUP(msg uint32, wParam, lParam uintptr) (ret uint
 }
 
 func (win *Window) on_WM_MOUSEWHEEL(msg uint32, wParam, lParam uintptr) (ret uintptr) {
+	dismissRegisteredToolTip(nil)
 	lastMouseTime = time.Now()
 	if win.widget != nil {
 		x, y := posFromLParam(lParam)
@@ -1692,7 +1703,16 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 
 	_, _, ww, wh := win.widget.Bounds()
 	inClient := x >= 0 && y >= 0 && x < ww && y < wh
-	win.mouseEntered = inClient
+	if inClient && !win.mouseEntered {
+		// Subscribe once per client entry; leave can occur with no later
+		// WM_MOUSEMOVE (e.g. moving into the caption or another process).
+		tme := win32.TRACKMOUSEEVENT{DwFlags: win32.TME_LEAVE, HwndTrack: win.hWnd}
+		tme.CbSize = uint32(unsafe.Sizeof(tme))
+		win.mouseEntered = win32.TrackMouseEvent(&tme)
+	} else if !inClient {
+		win.mouseEntered = false
+		dismissRegisteredToolTip(win)
+	}
 	var capWin *Window
 	capWidget := curCapture()
 	if capWidget != nil {
@@ -1739,6 +1759,7 @@ func (win *Window) on_WM_MOUSEMOVE(msg uint32, wParam, lParam uintptr) (ret uint
 	} else if inClient {
 
 		p := win.widget.FindWidgetAt(x, y)
+		trackRegisteredToolTip(win, p, x, y)
 		//core.MoreDebug("inClient ", x, y)
 		setMouseHoverWidget(p)
 		lastMouseWidget = p
@@ -1798,6 +1819,7 @@ func onMouseTimer() {
 	}
 	lastMouseTime = time.Now()
 	mouseMoving = false
+	settleRegisteredToolTip()
 	if lastMouseWidget == nil {
 		return
 	}

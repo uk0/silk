@@ -11,9 +11,7 @@ import (
 // Global tooltip state
 var (
 	tooltipMu      sync.Mutex
-	tooltipMap     = make(map[IWidget]string)
 	currentTooltip *tooltipWindow
-	tooltipTimer   Timer
 )
 
 func init() {
@@ -89,20 +87,44 @@ func (this *tooltipWindow) SizeHints() SizeHints {
 // SetToolTip associates tooltip text with a widget.
 // Pass an empty string to remove the tooltip.
 func SetToolTip(w IWidget, text string) {
+	if w == nil {
+		return
+	}
+	base := w.NakedWidget()
 	tooltipMu.Lock()
-	defer tooltipMu.Unlock()
-	if text == "" {
-		delete(tooltipMap, w)
-	} else {
-		tooltipMap[w] = text
+	changed := base.registeredToolTip != text
+	base.registeredToolTip = text
+	tooltipMu.Unlock()
+	if changed && activeHoverToolTipOwner.Load() == base {
+		queueRegisteredToolTipRefresh()
 	}
 }
 
-// GetToolTip returns the tooltip text for a widget, or "".
+// GetToolTip returns the text registered directly on w, or "".
 func GetToolTip(w IWidget) string {
+	if w == nil {
+		return ""
+	}
 	tooltipMu.Lock()
 	defer tooltipMu.Unlock()
-	return tooltipMap[w]
+	return w.NakedWidget().registeredToolTip
+}
+
+// Resolve the nearest registration without crossing a native/logical window
+// boundary. Registrations live on widgets rather than retaining dead forms in
+// a process-wide widget map.
+func registeredToolTip(w IWidget) (IWidget, string) {
+	tooltipMu.Lock()
+	defer tooltipMu.Unlock()
+	for p := w; p != nil; p = p.Parent() {
+		if text := p.NakedWidget().registeredToolTip; text != "" {
+			return p, text
+		}
+		if p.Window() != nil {
+			break
+		}
+	}
+	return nil, ""
 }
 
 // ShowToolTip displays a tooltip at global coordinates (xg, yg).
@@ -114,6 +136,7 @@ func ShowToolTip(xg, yg float64, text string) {
 // the viewport edge must not accidentally assign the popup to another panel.
 // Nil owner preserves ShowToolTip's hit-tested behavior.
 func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
+	dismissRegisteredToolTip(nil)
 	tooltipMu.Lock()
 	defer tooltipMu.Unlock()
 	hideToolTipLocked()
@@ -149,7 +172,6 @@ func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
 // hideToolTipLocked hides and destroys the current tooltip.
 // Caller must hold tooltipMu.
 func hideToolTipLocked() {
-	tooltipTimer.Stop()
 	if currentTooltip != nil {
 		currentTooltip.Hide()
 		currentTooltip.DetachWindow()
@@ -161,6 +183,7 @@ func hideToolTipLocked() {
 
 // HideToolTip hides and destroys the current tooltip if any.
 func HideToolTip() {
+	dismissRegisteredToolTip(nil)
 	tooltipMu.Lock()
 	defer tooltipMu.Unlock()
 	hideToolTipLocked()
@@ -169,6 +192,9 @@ func HideToolTip() {
 // HideToolTipFor dismisses only this owner's hint; a background editor update
 // must not remove a tooltip belonging to another editor or toolbar button.
 func HideToolTipFor(owner IWidget) {
+	if current := visibleHoverToolTip; current != nil && current.owner == owner {
+		dismissRegisteredToolTip(current.win)
+	}
 	tooltipMu.Lock()
 	defer tooltipMu.Unlock()
 	if currentTooltip != nil && currentTooltip.owner == owner {
@@ -180,36 +206,18 @@ func HideToolTipFor(owner IWidget) {
 func IsToolTipVisible() bool {
 	tooltipMu.Lock()
 	defer tooltipMu.Unlock()
-	return currentTooltip != nil
+	return currentTooltip != nil || activeHoverToolTipOwner.Load() != nil
 }
 
-// CheckToolTip is intended to be called from a mouse idle/stop handler.
-// It checks whether the widget under the mouse has a tooltip and shows it.
-// xg, yg are global (screen) coordinates of the mouse cursor.
+// CheckToolTip explicitly shows the nearest registered hint at screen
+// coordinates. Native automatic hover uses the event's actual client window.
 func CheckToolTip(xg, yg float64) {
-	w := FindWidgetGlobal(xg, yg)
-	if w == nil {
+	owner, text := registeredToolTip(FindWidgetGlobal(xg, yg))
+	if owner == nil {
 		HideToolTip()
 		return
 	}
-
-	// walk up the widget tree to find a tooltip
-	tooltipMu.Lock()
-	text := ""
-	for p := w; p != nil; p = p.Parent() {
-		if t, ok := tooltipMap[p]; ok {
-			text = t
-			break
-		}
-	}
-	tooltipMu.Unlock()
-
-	if text == "" {
-		HideToolTip()
-		return
-	}
-
-	ShowToolTip(xg, yg, text)
+	ShowToolTipFor(owner, xg, yg, text)
 }
 
 // OnMouseMoveToolTip should be called when the mouse moves to hide the tooltip.

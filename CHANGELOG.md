@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — passive control tooltips
+
+- Show registered control hints after the existing pointer idle delay. Paint
+  the hint inside its owning client without changing focus, hit-testing or
+  layout; dismiss it on leave, click, scroll, capture, or owner changes.
+- Refresh or remove a visible hint when its registration changes, without
+  a separate native window or a repeating tooltip timer.
+
 ## Unreleased — native Wayland
 
 - Paint a newly configured GLFW window even if its widget has not received

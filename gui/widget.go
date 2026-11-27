@@ -124,7 +124,8 @@ type IWidget interface {
 }
 
 type Widget struct {
-	dockTitle string // optional host-owned dock caption; independent of content
+	registeredToolTip string // protected by tooltipMu
+	dockTitle         string // optional host-owned dock caption; independent of content
 	//	core.Obj
 	self       IWidget
 	x, y, w, h float64
@@ -217,6 +218,7 @@ func (this *Widget) SetParent(parent IWidget) {
 			return
 		}
 	}
+	dismissRegisteredToolTipIn(this.Self())
 	this.cancelQueuedLayouts()
 	cancelClipboardPastes(this.Self())
 
@@ -780,6 +782,7 @@ func (this *Widget) setVisible(b bool) {
 	this.hidden = !b
 
 	if this.hidden {
+		dismissRegisteredToolTipIn(this.Self())
 		this.cancelQueuedLayouts()
 		cancelClipboardPastes(this.Self())
 		dismissOwnedToasts(this.Self())

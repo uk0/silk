@@ -145,6 +145,12 @@ func (win *Window) drawClientPopups(g paint.Painter, width, height float64) {
 		cx, cy, cw, ch := intersectRect(0, 0, width, height, x, y, pw, ph)
 		// DrawWidgetAll clips before applying the layer translation.
 		DrawWidgetAll(layer.widget, g, x, y, cx, cy, cw, ch)
+		if current := visibleHoverToolTip; current != nil && current.win == layer {
+			g.Save()
+			g.Translate(x, y)
+			drawRegisteredToolTip(layer, g, geom.Rect{X: cx - x, Y: cy - y, Width: cw, Height: ch})
+			g.Restore()
+		}
 	}
 }
 

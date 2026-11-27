@@ -648,6 +648,7 @@ func (this *Window) paint() {
 		}()
 		DrawWidgetAll(this.widget, treePainter, 0, 0, 0, 0, width, height)
 		this.drawClientPopups(treePainter, width, height)
+		drawRegisteredToolTip(this, treePainter, geom.Rect{Width: width, Height: height})
 	}()
 	GlobalPerfStats.RecordPaint(time.Since(paintStart))
 
@@ -1146,6 +1147,7 @@ func pushCapture(w IWidget) bool {
 	if cur == w {
 		return false
 	}
+	dismissRegisteredToolTip(nil)
 	if cur != nil {
 		for p := w.Parent(); p != nil; p = p.Parent() {
 			if p == cur {
@@ -1483,6 +1485,7 @@ func widgetWithinPopups(widget IWidget, popups map[IWidget]bool) bool {
 // closeOnHide) rather than destroying reusable ComboBox/Button popup objects.
 // Snapshot before callbacks because hiding can remove windows from winMap.
 func (this *Window) dismissOwnedPopups() {
+	dismissRegisteredToolTip(this)
 	var popups map[IWidget]bool
 	for _, candidate := range winMap {
 		if candidate != this && candidate.widget != nil && popupOwnedBy(candidate, this) {
@@ -1959,6 +1962,9 @@ func onWindowFocus(gw *glfw.Window, focused bool) {
 		core.Debug("focus-return native-event: window=", focusReturnWindowTag(win), ", focused=", focused,
 			", generation=", transientFocusGeneration, ", teardown-depth=", transientTeardownDepth)
 	}
+	if !focused {
+		dismissRegisteredToolTip(win)
+	}
 	if focused {
 		if win.wt == WtForm {
 			activeForm = win
@@ -2026,6 +2032,7 @@ func onWindowClose(gw *glfw.Window) {
 }
 
 func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
+	dismissRegisteredToolTip(nil)
 	noteUIInteraction(time.Now())
 	previousMods := eventModifiers
 	eventModifiers = &mods
@@ -2216,6 +2223,9 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 	// ordinary widget mouse dispatch is suspended.
 	win.pointer = pointerEventState{x: xpos, y: ypos, valid: true}
 	pointerWindow = win
+	if dndActive || !win.enabled || curCapture() != nil {
+		dismissRegisteredToolTip(nil)
+	}
 	if dndActive || !win.enabled {
 		return
 	}
@@ -2293,6 +2303,7 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 			x, y = x-popup.clientPopupX, y-popup.clientPopupY
 		}
 		p := target.widget.FindWidgetAt(x, y)
+		trackRegisteredToolTip(target, p, x, y)
 		setMouseHoverWidget(p)
 		lastMouseWidget = p
 		if p != nil {
@@ -2358,6 +2369,7 @@ func deliverCapturedMouseMove(capWidget IWidget, capWin *Window, winX, winY floa
 }
 
 func onScroll(gw *glfw.Window, xoff, yoff float64) {
+	dismissRegisteredToolTip(nil)
 	noteUIInteraction(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
@@ -2541,6 +2553,10 @@ func onCursorEnter(gw *glfw.Window, entered bool) {
 		return
 	}
 	if !entered {
+		dismissRegisteredToolTip(win)
+		if current := visibleHoverToolTip; current != nil && current.win.clientPopupHost == win {
+			dismissRegisteredToolTip(current.win)
+		}
 		win.pointer.valid = false
 		win.mouseEntered = false
 		// When a capture is active, do NOT clear the hover widget on window
@@ -2613,6 +2629,7 @@ func onMouseTimer() {
 	}
 	lastMouseTime = time.Now()
 	mouseMoving = false
+	settleRegisteredToolTip()
 	if lastMouseWidget == nil {
 		return
 	}
