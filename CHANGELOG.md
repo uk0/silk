@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — hide already-open menus with their panels
+
+- Hiding an inline panel dismisses the submenus already opened by its
+  descendants. The menus remain reusable. Standalone forms and popups
+  moved away by a hide handler are not dismissed by a stale snapshot.
+
 ## Unreleased — keep submenus attached to visible owners
 
 - Do not open a submenu for a hidden anchor or a hidden containing panel.

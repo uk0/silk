@@ -787,6 +787,7 @@ func (this *Widget) setVisible(b bool) {
 	this.hidden = !b
 
 	if this.hidden {
+		dismissAnchoredPopups(this.Self())
 		dismissOwnedToolTipsIn(this.Self())
 		this.cancelQueuedLayouts()
 		cancelClipboardPastes(this.Self())
