@@ -2,6 +2,29 @@ package graph
 
 import "testing"
 
+func TestReparentCommandKeepsReplacementAtTargetIndex(t *testing.T) {
+	root, left, old, right, replacement := NewRectItem(), NewRectItem(), NewRectItem(), NewRectItem(), NewRectItem()
+	left.SetParent(root)
+	old.SetParent(root)
+	right.SetParent(root)
+	cmd := NewReparentCommand("Replace")
+	cmd.Add(old, root, nil)
+	cmd.AddAt(replacement, nil, root, old.IndexInParent())
+	check := func(mid IItem) {
+		t.Helper()
+		kids := root.Children()
+		if len(kids) != 3 || kids[0] != left || kids[1] != mid || kids[2] != right {
+			t.Fatalf("replacement moved siblings: %v", kids)
+		}
+	}
+	cmd.Redo()
+	check(replacement)
+	cmd.Undo()
+	check(old)
+	cmd.Redo()
+	check(replacement)
+}
+
 // TestReparentCommandRedoUndo exercises the command in isolation: it
 // models a "Lay Out" (attach a new container under the root, then move
 // two existing children into it) and verifies Redo applies the whole

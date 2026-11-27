@@ -23,6 +23,7 @@ type reparentRecord struct {
 	item      IItem
 	from, to  IItem
 	fromIndex int
+	toIndex   int
 
 	moved                  bool
 	fromX, fromY, toX, toY float64
@@ -66,8 +67,8 @@ func TranslateBetweenParents(from, to IItem, x, y float64) (x1, y1 float64) {
 // operations, both of which are pure reparenting once the container item
 // exists.
 //
-// Redo replays the moves in insertion order, tail-appending each item into
-// its target (the operations' natural behaviour). Undo restores every item
+// Redo replays the moves in insertion order, normally appending, or using
+// an explicit target index where the caller registered one. Undo restores every item
 // to its original parent AT ITS ORIGINAL INDEX (reparentRecord.fromIndex),
 // so a Redo followed by an Undo returns the tree to byte-identical sibling
 // order.
@@ -105,11 +106,19 @@ func NewReparentCommand(label string) *ReparentCommand {
 // IndexInParent(), which at this point is its position inside `from`, so
 // Undo can later restore that exact slot.
 func (cmd *ReparentCommand) Add(item, from, to IItem) {
+	cmd.AddAt(item, from, to, -1)
+}
+
+// AddAt records a move that inserts at a target sibling index on Redo. The
+// index is interpreted against the target after any earlier recorded moves.
+// A value of -1 appends; Undo always restores the captured source slot.
+func (cmd *ReparentCommand) AddAt(item, from, to IItem, index int) {
 	cmd.records = append(cmd.records, reparentRecord{
 		item:      item,
 		from:      from,
 		to:        to,
 		fromIndex: item.IndexInParent(),
+		toIndex:   index,
 	})
 }
 
@@ -128,6 +137,7 @@ func (cmd *ReparentCommand) AddMoved(item, from, to IItem, toX, toY float64) {
 		from:      from,
 		to:        to,
 		fromIndex: item.IndexInParent(),
+		toIndex:   -1,
 		moved:     true,
 		fromX:     x,
 		fromY:     y,
@@ -145,7 +155,11 @@ func (cmd *ReparentCommand) Redo() {
 	}
 	for i := 0; i < len(cmd.records); i++ {
 		r := &cmd.records[i]
-		r.item.SetParent(r.to)
+		if r.toIndex == -1 {
+			r.item.SetParent(r.to)
+		} else {
+			r.item.SetParentAt(r.to, r.toIndex)
+		}
 		if r.moved {
 			// After the attach: the position is expressed in the new parent's
 			// child coordinate space.

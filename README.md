@@ -74,6 +74,11 @@ You can also select a **Card** or **GroupBox** and apply any of the four
 layouts. The controls follow the container's content area without covering
 its title. **Break Layout** keeps the controls inside the original container.
 
+Select an existing layout or its owner and choose another type to switch it
+in place. The designer keeps the controls, spacing and padding, and records
+the switch as one undo step. A grid with spanning controls cannot be switched
+to a layout that cannot represent them.
+
 ![Native Wayland preview resized with the Designer’s two-by-two grid filling the form client area](docs/images/designer-responsive-form-wayland.png)
 
 ## Designer export menus and captions (development branch)

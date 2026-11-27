@@ -48,6 +48,9 @@ func (v *GedView) CanLayoutSelection(kind LayoutKind) bool {
 	if !isDesignerLayoutFactory(string(kind)) {
 		return false
 	}
+	if box := v.selectedManagedLayout(); box != nil {
+		return canConvertLayout(box, kind)
+	}
 	if scene := v.selectedFormForLayout(); scene != nil {
 		return scene.canApplyFormLayout()
 	}
@@ -244,6 +247,9 @@ func (c *layoutSelectionCommand) Undo() {
 func (v *GedView) LayoutSelection(kind LayoutKind) bool {
 	if !v.CanLayoutSelection(kind) {
 		return false
+	}
+	if box := v.selectedManagedLayout(); box != nil {
+		return v.convertManagedLayout(box, kind)
 	}
 	if scene := v.selectedFormForLayout(); scene != nil {
 		return v.applyFormLayout(scene, kind)

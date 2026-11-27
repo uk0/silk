@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — change layout type
+
+- Select an existing managed layout or its owner, then choose a different
+  layout type. Switching preserves its parent, sibling slot, widget names
+  and common spacing/padding. Undo restores the original type and geometry.
+- Grid/Form conversion follows row and column order rather than insertion
+  history. Conversions that would discard grid spans or move locked
+  descendants are disabled.
+
 ## Unreleased — responsive content layouts
 
 - Apply horizontal, vertical, grid or form layouts directly to a Card or
