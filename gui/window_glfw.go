@@ -136,9 +136,13 @@ type Window struct {
 	// GLFW's shared GL context is not a native owner relationship. Keep the
 	// actual popup owner so transient windows cannot outlive its geometry or
 	// visibility, and remember logical focus for keyboard routing on dismiss.
-	popupOwner             *Window
-	popupRestoreFocus      IWidget
-	popupFocusCheckPending bool
+	popupOwner                 *Window
+	popupRestoreFocus          IWidget
+	popupFocusCheckPending     bool
+	clientPopupHost            *Window
+	clientPopupLayers          []*Window
+	clientPopupVisible         bool
+	clientPopupX, clientPopupY float64
 
 	// pendingPopupPos stores the global screen position set by
 	// setPopupGlobalPos before the window is shown. On macOS,
@@ -299,6 +303,9 @@ func (this *Window) create(p *Window, wt WindowType) error {
 	if this.glfwWin != nil {
 		return core.StrErr("win seems already inited.")
 	}
+	if clientPopups && wt == WtPopup {
+		return this.configureClientPopup(p)
+	}
 	if wt == WtPopup {
 		this.popupOwner = p
 		if p == this {
@@ -424,6 +431,7 @@ func (this *Window) destroy() {
 		this.destroyAfterPaint = true
 		return
 	}
+	this.unlinkClientPopup()
 	closeWindowSceneGPUDevice(this)
 	this.sceneComposition.layers = nil
 	this.releaseNativeKeyRouting()
@@ -462,6 +470,7 @@ func (this *Window) destroy() {
 	this.releaseBackBuffer()
 	this.icon = nil
 	this.widget = nil
+	this.clientPopupHost = nil
 	if pointerWindow == this {
 		pointerWindow = nil
 	}
@@ -638,6 +647,7 @@ func (this *Window) paint() {
 			}
 		}()
 		DrawWidgetAll(this.widget, treePainter, 0, 0, 0, 0, width, height)
+		this.drawClientPopups(treePainter, width, height)
 	}()
 	GlobalPerfStats.RecordPaint(time.Since(paintStart))
 
@@ -868,6 +878,13 @@ func (this *Window) SetBounds(x, y, width, height float64) {
 }
 
 func (this *Window) SetPos(x, y float64) {
+	if this.clientPopupHost != nil {
+		if p := this.widget.Parent(); p != nil {
+			x, y = p.MapToGlobal(x, y)
+		}
+		this.setClientPopupPosition(x, y)
+		return
+	}
 	if this.widget != nil {
 		if oldX, oldY := this.widget.Pos(); oldX != x || oldY != y {
 			this.dismissOwnedPopups()
@@ -906,6 +923,11 @@ func (this *Window) SetSize(w, h float64) {
 	if this.widget != nil && (this.widget.Width() != w || this.widget.Height() != h) {
 		this.dismissOwnedPopups()
 	}
+	if this.clientPopupHost != nil {
+		this.widget.NakedWidget().setSize(w, h)
+		this.Update()
+		return
+	}
 	if this.glfwWin != nil {
 		width, height := int(w), int(h)
 		this.glfwWin.SetSize(width, height)
@@ -929,6 +951,10 @@ func (this *Window) SetSize(w, h float64) {
 // then resize + reposition after Show in the same frame.
 func setPopupGlobalPos(popup IWidget, gx, gy float64) {
 	win := popup.Window()
+	if win != nil && win.clientPopupHost != nil {
+		win.setClientPopupPosition(gx, gy)
+		return
+	}
 	if win != nil && win.NakedWindow().glfwWin != nil {
 		nw := win.NakedWindow()
 		nw.pendingPopupPos = [2]float64{gx, gy}
@@ -946,12 +972,24 @@ func setPopupGlobalPos(popup IWidget, gx, gy float64) {
 }
 
 func (this *Window) Update() {
+	if this.clientPopupHost != nil {
+		if this.clientPopupVisible {
+			this.clientPopupHost.MarkFullDirty()
+		}
+		return
+	}
 	this.dirty = true
 	this.fullDirty = true
 	this.dirtyRegion = geom.Rect{}
 }
 
 func (this *Window) UpdateRect(x, y, width, height float64) {
+	if this.clientPopupHost != nil {
+		if this.clientPopupVisible {
+			this.clientPopupHost.MarkFullDirty()
+		}
+		return
+	}
 	// Per task spec: keep full-redraw semantics for the legacy Widget.Update
 	// path. Callers wanting partial-region invalidation should call
 	// MarkDirtyRect directly. This avoids regressing widgets whose visual
@@ -969,6 +1007,12 @@ func (this *Window) UpdateRect(x, y, width, height float64) {
 // Coordinates are window-root logical pixels, NOT child-local Bounds().
 // Map child bounds to the window first. The paint pass applies content scale.
 func (this *Window) MarkDirtyRect(x, y, w, h float64) {
+	if this.clientPopupHost != nil {
+		if this.clientPopupVisible {
+			this.clientPopupHost.MarkDirtyRect(x+this.clientPopupX, y+this.clientPopupY, w, h)
+		}
+		return
+	}
 	if w <= 0 || h <= 0 || !finite(x) || !finite(y) || !finite(w) || !finite(h) {
 		return
 	}
@@ -988,13 +1032,22 @@ func (this *Window) MarkDirtyRect(x, y, w, h float64) {
 // accumulated partial dirty rect. Used when a global change (theme,
 // resize, scroll) invalidates everything.
 func (this *Window) MarkFullDirty() {
+	if this.clientPopupHost != nil {
+		if this.clientPopupVisible {
+			this.clientPopupHost.MarkFullDirty()
+		}
+		return
+	}
 	this.dirty = true
 	this.fullDirty = true
 	this.dirtyRegion = geom.Rect{}
 }
 
 func (this *Window) mapFromGlobal(x, y float64) (x1, y1 float64) {
-	if this.glfwWin == nil {
+	if this.clientPopupHost != nil {
+		return x - this.clientPopupX, y - this.clientPopupY
+	}
+	if clientPopups || this.glfwWin == nil {
 		return x, y
 	}
 	// GLFW GetPos() returns the content area position (below title bar,
@@ -1007,7 +1060,10 @@ func (this *Window) mapFromGlobal(x, y float64) (x1, y1 float64) {
 }
 
 func (this *Window) mapToGlobal(x, y float64) (x1, y1 float64) {
-	if this.glfwWin == nil {
+	if this.clientPopupHost != nil {
+		return x + this.clientPopupX, y + this.clientPopupY
+	}
+	if clientPopups || this.glfwWin == nil {
 		return x, y
 	}
 	// GLFW GetPos() returns the content area position (below title bar,
@@ -1020,7 +1076,7 @@ func (this *Window) mapToGlobal(x, y float64) (x1, y1 float64) {
 }
 
 func (this *Window) IsValid() bool {
-	return this.glfwWin != nil
+	return this.glfwWin != nil || this.clientPopupHost != nil && this.clientPopupHost.glfwWin != nil
 }
 
 func (this *Window) Title() string {
@@ -1248,6 +1304,9 @@ func DrawWidgetAll(ic IWidget, g paint.Painter, tx, ty, cx1, cy1, cw1, ch1 float
 }
 
 func (this *Window) IsVisible() bool {
+	if this.clientPopupHost != nil {
+		return this.clientPopupVisible && this.clientPopupHost.IsVisible()
+	}
 	if this.glfwWin == nil {
 		return false
 	}
@@ -1255,6 +1314,10 @@ func (this *Window) IsVisible() bool {
 }
 
 func (this *Window) setVisible(b bool) {
+	if this.clientPopupHost != nil {
+		this.setClientPopupVisible(b)
+		return
+	}
 	var focusReturn *transientFocusReturn
 	if !b {
 		if this.wt == WtPopup && this.widget != nil && widgetWithinPopups(focusWidget, map[IWidget]bool{this.widget: true}) {
@@ -1429,6 +1492,18 @@ func (this *Window) dismissOwnedPopups() {
 			popups[candidate.widget] = true
 		}
 	}
+	host := this.clientPopupHost
+	if host == nil {
+		host = this
+	}
+	for _, candidate := range host.clientPopupLayers {
+		if candidate.widget != nil && popupOwnedBy(candidate, this) {
+			if popups == nil {
+				popups = make(map[IWidget]bool)
+			}
+			popups[candidate.widget] = true
+		}
+	}
 	if len(popups) == 0 {
 		return
 	}
@@ -1499,6 +1574,9 @@ func MousePosition() (x, y float64) {
 	for gw, win := range winMap {
 		if win.IsVisible() {
 			cx, cy := gw.GetCursorPos()
+			if clientPopups {
+				return cx, cy
+			}
 			wx, wy := gw.GetPos()
 			m := win.FrameMargin()
 			return float64(wx) + m.L + cx, float64(wy) + m.T + cy
@@ -1518,6 +1596,10 @@ func FindTopWindow(xg, yg float64) *Window {
 	return findGLFWPointerWindow(winMap, func(win *Window) bool {
 		if !win.IsVisible() || win.glfwWin == nil {
 			return false
+		}
+		if clientPopups {
+			w, h := win.widget.Size()
+			return xg >= 0 && yg >= 0 && xg < w && yg < h
 		}
 		wx, wy := win.glfwWin.GetPos()
 		m := win.FrameMargin()
@@ -1777,6 +1859,7 @@ func MainLoop() {
 	SetUIWakeup(nil)
 	glfwWakeup.stop() // join producers that already copied the old hook
 	closeSceneGPUDevice()
+	closeLinuxFilePortalDisplay()
 	glfwReady = false
 	glfw.Terminate()
 }
@@ -1981,10 +2064,23 @@ func onMouseButton(gw *glfw.Window, button glfw.MouseButton, action glfw.Action,
 	capWidget := curCapture()
 	capWin := getCaptureWin()
 	if capWidget != nil && capWin != nil && capWin != win {
+		if capWin.clientPopupHost != nil && capWin.clientPopupHost != win {
+			// Wayland has no coordinates for translating input across forms.
+			if action == glfw.Press {
+				capWin.clientPopupHost.dismissOwnedPopups()
+			}
+			return
+		}
 		mx, my := win.mapToGlobal(x, y)
 		tx, ty := capWin.mapFromGlobal(mx, my)
 		deliverCapturedMouseButton(capWin, button, action, tx, ty)
 		return
+	}
+	if capWidget == nil {
+		if popup := win.clientPopupAt(x, y); popup != nil {
+			dispatchMouseButtonAt(popup, button, action, x-popup.clientPopupX, y-popup.clientPopupY)
+			return
+		}
 	}
 	dispatchMouseButtonAt(win, button, action, x, y)
 }
@@ -2151,6 +2247,9 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 	// different GLFW window, translate coordinates via global position and
 	// deliver the event to the captured widget's window instead.
 	if capWidget != nil && capWin != nil && capWin != win {
+		if capWin.clientPopupHost != nil && capWin.clientPopupHost != win {
+			return
+		}
 		mx, my := win.mapToGlobal(x, y)
 		cx, cy := capWin.mapFromGlobal(mx, my)
 		deliverCapturedMouseMove(capWidget, capWin, cx, cy)
@@ -2188,7 +2287,12 @@ func onCursorPos(gw *glfw.Window, xpos, ypos float64) {
 			}
 		}
 	} else if inClient {
-		p := win.widget.FindWidgetAt(x, y)
+		target := win
+		if popup := win.clientPopupAt(x, y); popup != nil {
+			target = popup
+			x, y = x-popup.clientPopupX, y-popup.clientPopupY
+		}
+		p := target.widget.FindWidgetAt(x, y)
 		setMouseHoverWidget(p)
 		lastMouseWidget = p
 		if p != nil {
@@ -2275,6 +2379,15 @@ func onScroll(gw *glfw.Window, xoff, yoff float64) {
 	}
 
 	gx, gy := win.widget.MapToGlobal(cx, cy)
+	if clientPopups {
+		if capWin := getCaptureWin(); capWin != nil && capWin.clientPopupHost != nil && capWin.clientPopupHost != win {
+			return
+		}
+		if popup := win.clientPopupAt(cx, cy); popup != nil {
+			dispatchMouseWheel(popup.widget, gx, gy, yoff)
+			return
+		}
+	}
 	dispatchMouseWheel(win.widget, gx, gy, yoff)
 }
 
@@ -2456,7 +2569,10 @@ func onDrop(gw *glfw.Window, names []string) {
 	}
 
 	cx, cy := gw.GetCursorPos()
-	widget := win.widget.FindWidgetAt(cx, cy)
+	widget := win.clientPopupHit(cx, cy)
+	if widget == nil {
+		widget = win.widget.FindWidgetAt(cx, cy)
+	}
 	if widget == nil {
 		return
 	}
@@ -2665,7 +2781,7 @@ func (this *Window) SetEnabled(b bool) {
 }
 
 func (this *Window) IsEnabled() bool {
-	return this.enabled
+	return this.enabled && (this.clientPopupHost == nil || this.clientPopupHost.enabled)
 }
 
 func (this *Window) MoveToCenter() {

@@ -138,7 +138,7 @@ func ShowToolTipFor(owner IWidget, xg, yg float64, text string) {
 	tip.AttachWindow(WtPopup)
 
 	// Use the cursor's monitor, not the primary monitor or the offset tip.
-	area := popupWorkAreaAt(xg, yg)
+	area := popupWorkAreaFor(tip, xg, yg)
 	tx, ty := tooltipPositionInWorkArea(area, xg, yg, hints.Width, hints.Height)
 	setPopupGlobalPos(tip, tx, ty)
 	tip.Show()

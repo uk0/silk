@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — native Wayland
+
+- Paint a newly configured GLFW window even if its widget has not received
+  logical bounds yet; reconcile geometry against the valid native drawable.
+- In native Wayland builds, use an xdg-foreign owner for the GTK file chooser
+  and release it on cancel or completion. Keep the existing X11 route.
+- Draw owned Wayland popups inside their form. Menus retain their anchors,
+  nesting, logical input capture and viewport clipping without a second
+  top-level surface. X11, Cocoa and Win32 keep their existing popup routes.
+
 ## Unreleased — Gantt interaction
 
 - Reduce allocations and latency when dragging large Gantt plans: validate

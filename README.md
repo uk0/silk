@@ -35,6 +35,14 @@ On Linux/X11, a desktop file chooser portal can attach the save panel to
 the Designer and prefill the selected format's filename. See the
 [real GTK save-panel capture and verification record](docs/LINUX-FILE-PORTAL-QA.md).
 
+The opt-in native Wayland build also opens the GTK file picker as a child of
+the Designer on supported compositors. See the [Wayland capture and test
+scope](docs/LINUX-FILE-PORTAL-QA.md#native-wayland-open-and-cancel).
+
+For native Wayland, menus and submenus now stay inside their owner instead of
+opening separate top-level windows. The [anchored export test](docs/LINUX-FILE-PORTAL-QA.md#native-wayland-menus-and-export)
+covers the SVG/PDF format menus and GTK save panels in Sway.
+
 ## Bounded obstacle-aware process pipes (development branch)
 
 New process connections can avoid equipment instead of drawing through it.

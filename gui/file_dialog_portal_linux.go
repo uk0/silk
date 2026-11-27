@@ -1,11 +1,11 @@
-//go:build linux && !wayland
+//go:build linux
 
 package gui
 
 import (
 	"context"
 	"errors"
-	"fmt"
+	"os"
 	"strings"
 
 	"github.com/uk0/silk/core"
@@ -19,24 +19,33 @@ func desktopFilePortal(save bool, ext string) (string, bool) {
 		return "", true
 	}
 	owner := linuxFilePortalOwner()
-	if owner == nil {
+	if owner == nil || os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
 		return "", false
 	}
 	window := owner.glfwWin
-	xid := window.GetX11Window()
-	if xid == 0 {
-		return "", false
+	alive := func() bool {
+		return !shouldQuit && owner.glfwWin == window && owner.IsVisible()
 	}
-	parent := fmt.Sprintf("x11:%x", uint64(xid))
-	options := linuxFilePortalOptions(save, ext)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	filePortalActive = true
 	defer func() { filePortalActive = false }()
 	owner.dismissOwnedPopups()
 	enable := disableForExternalFileDialog()
 	defer enable()
+
+	parent, release := linuxFilePortalParent(window, alive)
+	if release != nil {
+		defer release()
+	}
+	if !alive() {
+		return "", true // a retired owner must not start a fallback chooser
+	}
+	if parent == "" {
+		return "", false
+	}
+	options := linuxFilePortalOptions(save, ext)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	type choice struct {
 		path    string
@@ -50,7 +59,7 @@ func desktopFilePortal(save bool, ext string) (string, bool) {
 	}()
 
 	for {
-		if shouldQuit || owner.glfwWin != window || !owner.IsVisible() {
+		if !alive() {
 			// The background request uses no widget state; cancel closes only
 			// this dialog and the worker can finish after the owner retires.
 			return "", true

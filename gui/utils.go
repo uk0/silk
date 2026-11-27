@@ -128,12 +128,25 @@ func PromptSaveClose(parent IWidget, a interface{}) bool {
 	return true
 }
 
+// The Wayland host's client size bounds popups. Other native backends
+// continue to choose the monitor containing the anchor.
+func popupWorkAreaFor(popup IWidget, x, y float64) geom.Rect {
+	if win := popup.Window(); win != nil {
+		if w, ok := any(win).(interface{ clientPopupWorkArea() (geom.Rect, bool) }); ok {
+			if area, ok := w.clientPopupWorkArea(); ok {
+				return area
+			}
+		}
+	}
+	return popupWorkAreaAt(x, y)
+}
+
 func LayoutPopup1(popup IWidget, xref, yref float64) {
 	LayoutPopup(popup, xref, yref, 0, 0, false, 0)
 }
 
 func LayoutPopup(popup IWidget, xref, yref, wref, href float64, vertical bool, overlap float64) {
-	area := popupWorkAreaAt(xref, yref)
+	area := popupWorkAreaFor(popup, xref, yref)
 	if menu, ok := popup.(*Menu); ok && menu.IsPopup() {
 		menu.fitPopupWorkArea(area)
 	}

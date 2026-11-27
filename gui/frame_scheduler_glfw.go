@@ -10,7 +10,17 @@ import (
 var glfwAnimationPacer framePacer
 
 func (win *Window) canRenderFrame() bool {
-	return win != nil && win.widget != nil && validRenderSize(win.widget.Width(), win.widget.Height()) && win.glfwWin != nil && !win.iconified && win.IsVisible()
+	if win == nil || win.widget == nil || win.glfwWin == nil || win.iconified || !win.IsVisible() {
+		return false
+	}
+	if validRenderSize(win.widget.Width(), win.widget.Height()) {
+		return true
+	}
+	// Some compositors configure a new top-level without sending a resize
+	// when the configured size already matches the drawable. The first
+	// paint then has to seed widget geometry from the native client size.
+	width, height := win.glfwWin.GetSize()
+	return validRenderSize(float64(width), float64(height))
 }
 func hasRenderableGLFWWindow() bool {
 	for _, win := range winMap {

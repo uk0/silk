@@ -951,6 +951,13 @@ func FindWidgetGlobal(xg, yg float64) IWidget {
 	}
 	widget := win.Widget()
 	x, y := widget.MapFromGlobal(xg, yg)
+	if host, ok := any(win).(interface {
+		clientPopupHit(float64, float64) IWidget
+	}); ok {
+		if hit := host.clientPopupHit(x, y); hit != nil {
+			return hit
+		}
+	}
 	return widget.FindWidgetAt(x, y)
 }
 
