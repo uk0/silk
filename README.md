@@ -279,6 +279,15 @@ can hide the owner. This also applies when an SDK app opens a menu programmatica
 
 *Same native SDK test fixture in two builds, not a SilkIDE screenshot.*
 
+If the owner hides **after** the submenu has opened, Silk now closes the
+submenu without affecting independent forms. Showing the panel does not
+reopen the menu automatically. An explicit reopen reuses the native window.
+
+![Native Linux X11 test: the menu closes with its panel and displays again when reopened](docs/images/native-submenu-lifecycle-x11.png)
+
+*Exact SDK output captured under X11/Openbox. The reopened menu has the same
+native window ID, and its label is visible.*
+
 
 ## Coherent inspector categories and bilingual search (development branch)
 
