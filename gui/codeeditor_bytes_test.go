@@ -14,6 +14,9 @@ func assertEditorBytes(t *testing.T, e *CodeEditor, want string) {
 	if got := strings.Join(e.lines, "\n"); got != want {
 		t.Fatalf("line model = %x, want %x", got, want)
 	}
+	if got, count := e.textRuneCount, utf8.RuneCountInString(want); got != count {
+		t.Fatalf("status rune count for %x = %d, want %d", want, got, count)
+	}
 }
 
 func TestEditorByteExactEditUndoRedo(t *testing.T) {
@@ -411,9 +414,15 @@ func FuzzEditorByteRange(f *testing.F) {
 		if p.col < 0 || p.col > utf8.RuneCountInString(e.lines[p.line]) {
 			t.Fatalf("caret %v", p)
 		}
+		if delta := utf8.RuneCountInString(want) - utf8.RuneCountInString(original); !e.runeDeltaUnknown && e.pendingRuneDelta != delta {
+			t.Fatalf("splice rune delta = %d, want %d", e.pendingRuneDelta, delta)
+		}
 		e.replaceByteRange(line, column, len(insert), original[start:end])
 		if got := strings.Join(e.lines, "\n"); got != original {
 			t.Fatalf("inverse bytes %x want %x", got, original)
+		}
+		if !e.runeDeltaUnknown && e.pendingRuneDelta != 0 {
+			t.Fatalf("inverse rune delta = %d, want 0", e.pendingRuneDelta)
 		}
 	})
 }

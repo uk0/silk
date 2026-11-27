@@ -255,6 +255,10 @@ type CodeEditor struct {
 	formatWork         func(context.Context, string, string, EditorFormatOptions) (string, error)
 	textRevision       uint64
 	textRuneCount      int
+	pendingRuneDelta   int  // relative to the published textRuneCount
+	runeDeltaUnknown   bool // a bulk edit needs the full-buffer count
+	pendingGoEdit      goLineEdit
+	textSnapshot       editorTextSnapshot
 	modifiedRevision   uint64
 	modified           bool
 	symbolCache        codeSymbolCache
@@ -526,6 +530,7 @@ type CodeEditor struct {
 	foldRegionsValid bool
 	visLineCache     []int
 	visLineValid     bool
+	visLineIdentity  bool
 }
 
 // Incoming lexical state is part of the key: earlier delimiter edits recolor
@@ -710,7 +715,7 @@ func (this *CodeEditor) SetText(s string) {
 // cached string; they do not concatenate the document again.
 func (this *CodeEditor) Text() string {
 	if this.textDirty {
-		this.cacheText(strings.Join(this.lines, "\n"))
+		this.syncEditedText()
 	}
 	return this.text
 }
@@ -726,7 +731,18 @@ func (this *CodeEditor) TextRevision() uint64 {
 // cacheText publishes a complete buffer without emitting edit notifications.
 // Keep the old string on equality so no-op edits preserve the cached storage.
 func (this *CodeEditor) cacheText(text string) {
-	changed := text != this.text
+	this.pendingGoEdit = goLineEdit{}
+	this.textSnapshot.reset(this.lines)
+	this.cacheTextWithRuneDelta(text, text != this.text, false)
+}
+
+func (this *CodeEditor) syncEditedText() {
+	text, changed := this.textSnapshot.publish(this.text, this.lines)
+	this.cacheTextWithRuneDelta(text, changed, this.textDirty && !this.runeDeltaUnknown && this.textRevision != 0)
+}
+
+func (this *CodeEditor) cacheTextWithRuneDelta(text string, changed, haveDelta bool) {
+	runeDelta := this.pendingRuneDelta
 	var symbolProjection *goSymbolProjection
 	if changed && this.symbolCache.valid && this.symbolCache.key.revision == this.textRevision &&
 		this.symbolCache.projection != nil && this.symbolCache.projection.text == this.text {
@@ -763,12 +779,20 @@ func (this *CodeEditor) cacheText(text string) {
 		}
 		this.invalidateHoverHint()
 		this.ClearExternalCompletions()
-		this.textRuneCount = utf8.RuneCountInString(text)
+		if haveDelta {
+			this.textRuneCount += runeDelta
+		} else {
+			this.textRuneCount = utf8.RuneCountInString(text)
+		}
 		this.cacheLineEndings(text)
 	}
 	this.textDirty = false
+	this.pendingRuneDelta = 0
+	this.runeDeltaUnknown = false
+	goEdit := this.pendingGoEdit
+	this.pendingGoEdit = goLineEdit{}
+	this.syncGoLineStates(goEdit)
 	this.publishBookmarks(changed)
-	this.updateGoLineStates()
 	this.updateGutterWidth()
 	if changed {
 		this.notifySymbolsChanged()
@@ -808,6 +832,7 @@ func (this *CodeEditor) replaceAllText(s string, after *cursorPos) {
 	this.snippetSess = nil
 	saveLine, saveCol := this.cursorLine, this.cursorCol
 	this.pushUndo(editAction{kind: 3, line: saveLine, col: saveCol, text: s, oldText: oldFull, redoCursor: after})
+	this.markUntrackedLineEdit()
 	this.lines = strings.Split(s, "\n")
 	if len(this.lines) == 0 {
 		this.lines = []string{""}
@@ -1592,6 +1617,18 @@ func (this *CodeEditor) selectNextOccurrence() {
 	this.Self().Update()
 }
 
+func (e *CodeEditor) markLineEdit(row int, before, after []string) {
+	e.textSnapshot.note(e.lines, row, before, after)
+	e.pendingGoEdit.add(row, len(before), len(after))
+	e.trackLineRuneDelta(before, after)
+}
+
+func (e *CodeEditor) markUntrackedLineEdit() {
+	e.textSnapshot.markBulk()
+	e.pendingGoEdit.bulk = true
+	e.runeDeltaUnknown = true
+}
+
 // rebuildText syncs this.text from this.lines.
 //
 // This is the funnel every mutation path eventually hits, so it doubles as
@@ -1604,7 +1641,7 @@ func (this *CodeEditor) selectNextOccurrence() {
 //     tokenizeLineCached detects the byte change and recomputes that
 //     single entry on its next Draw.
 func (this *CodeEditor) rebuildText() {
-	this.cacheText(strings.Join(this.lines, "\n"))
+	this.syncEditedText()
 	if len(this.lines) != this.tokenCacheLineCt {
 		this.clearTokenCache()
 		this.tokenCacheLineCt = len(this.lines)
@@ -1786,6 +1823,7 @@ func (this *CodeEditor) undo() {
 		this.cursorCol = a.col
 		this.redoStack = append(this.redoStack, a)
 	case 3: // undo full text replace (rename refactoring)
+		this.markUntrackedLineEdit()
 		this.lines = strings.Split(a.oldText, "\n")
 		if len(this.lines) == 0 {
 			this.lines = []string{""}
@@ -1807,6 +1845,7 @@ func (this *CodeEditor) undo() {
 			this.mapMoveBookmarks(a.lineMoves[i], true)
 			a.lineMoves[i].apply(this.lines, true)
 		}
+		this.markUntrackedLineEdit()
 		this.restoreEditCursors(a.beforeCursors)
 		this.redoStack = append(this.redoStack, a)
 	case 4:
@@ -1863,6 +1902,7 @@ func (this *CodeEditor) redo() {
 		this.cursorLine, this.cursorCol = p.line, p.col
 		this.undoStack = append(this.undoStack, a)
 	case 3: // redo full text replace (rename refactoring)
+		this.markUntrackedLineEdit()
 		this.lines = strings.Split(a.text, "\n")
 		if len(this.lines) == 0 {
 			this.lines = []string{""}
@@ -1887,6 +1927,7 @@ func (this *CodeEditor) redo() {
 			this.mapMoveBookmarks(m, false)
 			m.apply(this.lines, false)
 		}
+		this.markUntrackedLineEdit()
 		this.restoreEditCursors(a.afterCursors)
 		this.undoStack = append(this.undoStack, a)
 	case 4:
@@ -2276,6 +2317,7 @@ func (this *CodeEditor) JoinLines() {
 		return
 	}
 	this.pushUndo(editAction{kind: 3, line: this.cursorLine, col: this.cursorCol, text: newFull, oldText: oldFull})
+	this.markUntrackedLineEdit()
 	this.lines = newLines
 	this.clearSelection()
 	this.cursorLine = from
@@ -2403,6 +2445,7 @@ func (this *CodeEditor) ToggleLineComment() {
 	hadSelection := this.hasSelection
 
 	transformed := toggleComment(this.lines[startLine:endLine+1], commentPrefix)
+	this.markLineEdit(startLine, this.lines[startLine:endLine+1], transformed)
 	copy(this.lines[startLine:endLine+1], transformed)
 
 	if hadSelection {
@@ -5943,14 +5986,26 @@ func (this *CodeEditor) HighlightReferencesAtCursor() {
 
 // visibleLineIndices returns the ordered line indices currently drawn, honoring
 // the active folds. It is the bridge between the pure visibleLines helper and
-// the editor's live state. The result (O(all lines) to build) is memoized in
-// visLineCache and reused until a text change or a fold toggle invalidates it;
-// callers only read the slice, so sharing it is safe.
+// the editor's live state. A completely unfolded mapping depends only on the
+// line count. Keep that identity slice across same-count edits; don't scan
+// brace regions or allocate a document-sized hidden bitmap for it.
+// Callers only read the returned slice.
 func (this *CodeEditor) visibleLineIndices() []int {
 	if this.visLineValid {
 		return this.visLineCache
 	}
-	this.visLineCache = visibleLines(len(this.lines), this.foldedLines, this.FoldRegions())
+	if len(this.foldedLines) == 0 {
+		if !this.visLineIdentity || len(this.visLineCache) != len(this.lines) {
+			this.visLineCache = make([]int, len(this.lines))
+			for i := range this.visLineCache {
+				this.visLineCache[i] = i
+			}
+		}
+		this.visLineIdentity = true
+	} else {
+		this.visLineCache = visibleLines(len(this.lines), this.foldedLines, this.FoldRegions())
+		this.visLineIdentity = false
+	}
 	this.visLineValid = true
 	return this.visLineCache
 }
@@ -5960,6 +6015,9 @@ func (this *CodeEditor) visibleLineIndices() []int {
 // preceding visible line is returned so cursor math lands on the fold header.
 func (this *CodeEditor) lineToVisualRow(line int) int {
 	vis := this.visibleLineIndices()
+	if this.visLineIdentity {
+		return max(0, min(line, len(vis)-1))
+	}
 	// The cached visible lines are ordered. Pointer hit testing and caret
 	// painting must not walk the whole file on every input event.
 	i := sort.SearchInts(vis, line)
@@ -5977,24 +6035,12 @@ func (this *CodeEditor) clampCursorVisible() {
 	if len(vis) == 0 {
 		return
 	}
-	visset := make(map[int]bool, len(vis))
-	for _, ln := range vis {
-		visset[ln] = true
-	}
-	if visset[this.cursorLine] {
+	row := this.lineToVisualRow(this.cursorLine)
+	if vis[row] == this.cursorLine {
 		return
 	}
-	// Walk back to the nearest visible line at or above the cursor (the fold
-	// header that now stands in for the hidden body).
-	target := vis[0]
-	for _, ln := range vis {
-		if ln <= this.cursorLine {
-			target = ln
-		} else {
-			break
-		}
-	}
-	this.cursorLine = target
+	// lineToVisualRow already returns the last visible line before a fold.
+	this.cursorLine = vis[row]
 	this.clampCursor()
 }
 

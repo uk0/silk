@@ -12,7 +12,7 @@ import (
 )
 
 // FloatEdit keeps the complete float32/float64 value in its editable text.
-// Only the unfocused paint is compact (7/10 significant digits); neither
+// Only the unfocused paint is compact; neither
 // displaying, focusing nor leaving the field rounds the bound property.
 // Invalid intermediate input is not committed. Enter/blur restores the real
 // value; Up/Down step it by one, sharing the property's selection/undo path.
@@ -39,6 +39,22 @@ func compactPropertyFloat(v float64, bits int) string {
 	return strconv.FormatFloat(v, 'g', precision, bits)
 }
 
+// Geometry is measured in millimetres. In the collapsed editor, three
+// decimal places communicate useful placement precision without long binary
+// float tails. Keep tiny/large values legible with the generic format.
+func compactInspectorFloat(id string, v float64, bits int) string {
+	switch id {
+	case "X 位置 (mm)", "Y 位置 (mm)", "宽度 (mm)", "高度 (mm)":
+		switch magnitude := math.Abs(v); {
+		case magnitude >= 1e6:
+			return strconv.FormatFloat(v, 'g', 6, bits)
+		case magnitude >= 0.001:
+			return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(v, 'f', 3, bits), "0"), ".")
+		}
+	}
+	return compactPropertyFloat(v, bits)
+}
+
 func (e *FloatEdit) updatePresentation() {
 	e.compact = ""
 	if e.item == nil {
@@ -53,7 +69,7 @@ func (e *FloatEdit) updatePresentation() {
 		return
 	}
 	exact := strconv.FormatFloat(value.Float(), 'g', -1, value.Type().Bits())
-	e.compact = compactPropertyFloat(value.Float(), value.Type().Bits())
+	e.compact = compactInspectorFloat(e.item.Id(), value.Float(), value.Type().Bits())
 	gui.SetToolTip(e.Self(), e.item.Label()+"\n"+exact)
 }
 

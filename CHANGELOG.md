@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased — clearer Designer geometry and option labels
+
+- The inactive geometry fields show up to three decimal places in millimetres.
+  Focused editing, tooltips, saved values and undo keep full precision.
+- Localized the button's **Text with Icon** option without changing its
+  document key. Added a native Windows drag-preview capture to the README.
+
+## Unreleased — materialize large editor snapshots without joining every row
+
+- Inline edits to a large buffer now rebuild the immutable editor snapshot
+  from its unchanged prefix and suffix. Bulk edits still rebuild from the
+  line model; full change callbacks and exact undo/redo bytes are unchanged.
+
+## Unreleased — update Go highlighting from edited rows
+
+- Go highlighting updates the changed rows and follows raw-string and block
+  comment state only until it converges. Ordinary typing no longer compares
+  every line in the document. Whole-buffer and row-count changes still use
+  full cache reconciliation.
+
+## Unreleased — update editor character counts from changed lines
+
+- Small editor edits update the status-bar character count from the affected
+  lines instead of decoding the whole file on every keystroke. Undo, CRLF
+  conversion, and malformed UTF-8 retain the same count as a full decode.
+  Large replacements still use the full-buffer count.
+
+## Unreleased — cheaper viewport updates while typing
+
+- Reuse the uncollapsed line index when an edit keeps the same row count.
+  Caret and viewport mapping no longer allocate a document-sized hidden-row
+  bitmap in this case. With collapsed folds, a binary search locates the
+  nearest visible header without building a second per-line map.
+
 ## Unreleased — tolerate short Windows save sharing conflicts
 
 - The atomic writer retries short-lived Windows sharing violations without

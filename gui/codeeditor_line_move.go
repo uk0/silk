@@ -136,6 +136,7 @@ func (e *CodeEditor) moveLines(down bool) {
 		e.mapMoveBookmarks(moves[i], false)
 		moves[i].apply(e.lines, false)
 	}
+	e.markUntrackedLineEdit()
 	after := make([]cursorPos, len(before))
 	for i, p := range before {
 		p.line = movedLine(p.line, moves)

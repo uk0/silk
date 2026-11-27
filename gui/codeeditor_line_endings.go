@@ -157,13 +157,17 @@ func (e *CodeEditor) applyLineEndingHistory(h *editorLineEndingHistory, reverse 
 		}
 		current := strings.HasSuffix(s, "\r")
 		if current && !crlf {
+			e.pendingRuneDelta--
 			e.lines[i] = s[:len(s)-1]
 		}
 		if !current && crlf {
+			e.pendingRuneDelta++
 			e.lines[i] = s + "\r"
 		}
 	}
 	e.textDirty = true
+	e.textSnapshot.markBulk()
+	e.pendingGoEdit.bulk = true
 	e.clearTokenCache()
 }
 func (e *CodeEditor) finishLineEndingChange(h *editorLineEndingHistory) {

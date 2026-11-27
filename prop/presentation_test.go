@@ -182,3 +182,43 @@ func TestGroupBoxPropertyLabelsKeepCanonicalIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeButtonIconTextOptionLocalizedWithoutRenaming(t *testing.T) {
+	old := i18n.Locale()
+	t.Cleanup(func() { i18n.SetLocale(old) })
+	b := gui.NewButton()
+	sheet := bindSheet([]interface{}{b}, &recordingOwner{})
+	const key = "有图标时显示文字"
+	item := sheet.propMap[key]
+	if item == nil || item.Id() != key {
+		t.Fatal("the persisted Button property key was lost")
+	}
+	for locale, want := range map[string]string{"en": "Text with Icon", "zh-CN": key} {
+		i18n.SetLocale(locale)
+		if item.Label() != want || !propMatchesFilter(item.Label(), key, want) {
+			t.Fatalf("%s: label=%q want=%q", locale, item.Label(), want)
+		}
+	}
+}
+
+func TestNativeButtonIconTextLabelFitsDefaultInspector(t *testing.T) {
+	old := i18n.Locale()
+	t.Cleanup(func() { i18n.SetLocale(old) })
+	b := gui.NewButton()
+	sheet := bindSheet([]interface{}{b}, &recordingOwner{})
+	sheet.SetSize(240, 500)
+	sheet.Layout()
+	item := sheet.propMap["有图标时显示文字"]
+	if item == nil {
+		t.Fatal("Button property was not available for the renderer")
+	}
+	for locale, want := range map[string]string{"en": "Text with Icon", "zh-CN": "有图标时显示文字"} {
+		i18n.SetLocale(locale)
+		pix := paint.NewPixmap(240, 500)
+		g := &propertyTextRecorder{Painter: pix.NewPainter()}
+		sheet.drawPropertyLabel(g, item)
+		if len(g.records) != 1 || g.records[0].text != want {
+			t.Fatalf("default Inspector elided the %s icon option: %+v", locale, g.records)
+		}
+	}
+}

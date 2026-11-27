@@ -85,6 +85,28 @@ type goLineState struct {
 
 type goLineStateCache struct{ lines []goLineState }
 
+// goLineEdit covers rows mutated in place since the previous publication.
+// Once rows move, the indices no longer describe the transaction; the cache
+// must reconcile the old and new models, even if the final row count matches.
+type goLineEdit struct {
+	from, to int // half-open; to == 0 means no precise hint
+	bulk     bool
+}
+
+func (w *goLineEdit) add(row, oldCount, newCount int) {
+	if oldCount != newCount {
+		w.bulk = true
+	}
+	if w.bulk || newCount == 0 {
+		return
+	}
+	if w.to == 0 {
+		w.from, w.to = row, row+newCount
+		return
+	}
+	w.from, w.to = min(w.from, row), max(w.to, row+newCount)
+}
+
 // update reuses the common prefix/suffix, rescanning changed lines and then
 // propagating until the incoming state converges. String comparisons remain
 // O(line count) per publication; stable Draw does no prefix work at all.
@@ -129,9 +151,47 @@ func (c *goLineStateCache) update(lines []string) int {
 	return scanned
 }
 
+// updateChangedRows starts at the first known edited row, rather than
+// comparing and rebinding the entire document. Untouched rows retain their
+// string storage. Once outside the window, only a differing incoming state
+// can affect the next row. The return value counts visited rows for tests.
+func (c *goLineStateCache) updateChangedRows(lines []string, from, to int) int {
+	state := goLexNormal
+	if from > 0 {
+		state = c.lines[from-1].out
+	}
+	i := from
+	for ; i < len(lines); i++ {
+		record := &c.lines[i]
+		if record.in == state {
+			if i >= to {
+				break
+			}
+			if record.text == lines[i] {
+				record.text = lines[i] // keep the new backing store
+				state = record.out
+				continue
+			}
+		}
+		next := scanGoLineState(lines[i], state)
+		*record = goLineState{text: lines[i], in: state, out: next}
+		state = next
+	}
+	return i - from
+}
+
 func (e *CodeEditor) updateGoLineStates() {
+	e.syncGoLineStates(goLineEdit{})
+}
+
+func (e *CodeEditor) syncGoLineStates(edit goLineEdit) {
 	if !e.usesGoSyntax() {
 		e.goLineStates = goLineStateCache{}
+		return
+	}
+	if !edit.bulk && edit.to > edit.from && edit.from >= 0 &&
+		edit.to <= len(e.lines) && len(e.goLineStates.lines) == len(e.lines) {
+		e.goLineStates.updateChangedRows(e.lines, edit.from, edit.to)
 		return
 	}
 	e.goLineStates.update(e.lines)

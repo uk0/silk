@@ -104,11 +104,11 @@ func (e *CodeEditor) applyLineSplices(changes []editorLineSplice, reverse bool) 
 	start := 0
 	for _, s := range steps {
 		lines = append(lines, e.lines[start:s.at]...)
+		e.markLineEdit(s.at, e.lines[s.at:s.at+s.remove], s.put)
 		lines = append(lines, s.put...)
 		start = s.at + s.remove
 	}
 	e.lines = append(lines, e.lines[start:]...)
-	e.textDirty = true
 }
 func (e *CodeEditor) commitLineSplices(changes []editorLineSplice, before, after []cursorPos, selection, next editorSelection) {
 	if len(changes) == 0 {

@@ -31,9 +31,9 @@ func (e *CodeEditor) replaceByteRange(line, column, count int, text string) curs
 	end += count
 	e.mapByteBookmarks(line, column, endLine, end, strings.Count(text, "\n"))
 	before, after := e.lines[line][:column], e.lines[endLine][end:]
-	e.textDirty = true
 	if endLine == line && !strings.Contains(text, "\n") {
 		updated := before + text + after
+		e.markLineEdit(line, e.lines[line:line+1], []string{updated})
 		e.lines[line] = updated
 		return cursorPos{line, runeColumnAtByte(updated, len(before)+len(text))}
 	}
@@ -49,6 +49,7 @@ func (e *CodeEditor) replaceByteRange(line, column, count int, text string) curs
 		}
 		replacement = append(replacement, part)
 	}
+	e.markLineEdit(line, e.lines[line:endLine+1], replacement[line:])
 	replacement = append(replacement, e.lines[endLine+1:]...)
 	e.lines = replacement
 	last := line + len(parts) - 1

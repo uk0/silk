@@ -83,6 +83,10 @@ form background or a free-positioned container. The outline previews the
 entire landing rectangle. The source layout remains active; one undo restores
 the original owner, position and layout slot.
 
+![Win32 SilkIDE showing the free-placement preview in Target tray while Start motor is dragged out of its grid](docs/images/designer-layout-detach-win32.png)
+
+*Windows: the outlined rectangle shows the landing position before the drop.*
+
 You can also select a **Card** or **GroupBox** and apply any of the four
 layouts. The controls follow the container's content area without covering
 its title. **Break Layout** keeps the controls inside the original container.

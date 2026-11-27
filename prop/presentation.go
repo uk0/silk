@@ -12,7 +12,8 @@ var legacyPropertyLabels = map[string]string{
 	"X 位置 (mm)": "X Position (mm)", "Y 位置 (mm)": "Y Position (mm)",
 	"宽度 (mm)": "Width (mm)", "高度 (mm)": "Height (mm)",
 	"锁定": "Locked", "可用": "Enabled", "可见": "Visible", "图标": "Icon", "文本": "Text",
-	"上边距": "Top Margin", "下边距": "Bottom Margin", "左边距": "Left Margin", "右边距": "Right Margin", "间距": "Spacing",
+	"有图标时显示文字": "Text with Icon",
+	"上边距":      "Top Margin", "下边距": "Bottom Margin", "左边距": "Left Margin", "右边距": "Right Margin", "间距": "Spacing",
 }
 
 var canonicalPropertyLabels = map[string]string{

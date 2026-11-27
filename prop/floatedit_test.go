@@ -155,3 +155,42 @@ func TestExplicitFloatPropertyControlMappingStillWins(t *testing.T) {
 		t.Fatalf("custom mapping ignored: %T", item.Control())
 	}
 }
+
+func TestDesignerGeometryCompactPaintPreservesExactEditing(t *testing.T) {
+	original := 45.18051554
+	value := original
+	id := "Y 位置 (mm)"
+	owner := &recordingOwner{}
+	obj := &fakeObj{enum: func(l IPropertyList) {
+		l.AddProperty(id, func() float64 { return value }, func(v float64) { value = v })
+	}}
+	sheet := bindSheet([]interface{}{obj}, owner)
+	item := sheet.propMap[id]
+	e := item.Control().(*FloatEdit)
+	if e.compact != "45.181" || e.Text() != "45.18051554" ||
+		!strings.Contains(gui.GetToolTip(e), "45.18051554") {
+		t.Fatalf("compact=%q editable=%q", e.compact, e.Text())
+	}
+	e.SetFocus()
+	gui.NewEdit().SetFocus()
+	e.Deactivate()
+	if math.Float64bits(value) != math.Float64bits(original) || len(owner.cmds) != 0 {
+		t.Fatal("display caused a geometry mutation or undo entry")
+	}
+
+	for _, tc := range []struct {
+		id   string
+		v    float64
+		want string
+	}{
+		{"X 位置 (mm)", -0.0000001, "-1e-07"},
+		{"宽度 (mm)", 140, "140"},
+		{"高度 (mm)", 44.71458333, "44.715"},
+		{"高度 (mm)", 1e9, "1e+09"},
+		{"measurement", original, "45.18051554"},
+	} {
+		if got := compactInspectorFloat(tc.id, tc.v, 64); got != tc.want {
+			t.Errorf("%s %g: got %q want %q", tc.id, tc.v, got, tc.want)
+		}
+	}
+}
