@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — keep popups attached during layout moves
+
+- Moving an inline panel into a hidden container, another native window, or
+  out of the widget tree closes its open menus and other anchored popups.
+  Moving the panel back does not reopen them; unrelated forms are unaffected.
+
 ## Unreleased — keep reused X11 menus above their owner
 
 - Native Linux X11 popups advertise their transient owner instead of

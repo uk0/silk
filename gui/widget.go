@@ -218,6 +218,13 @@ func (this *Widget) SetParent(parent IWidget) {
 			return
 		}
 	}
+	// Descendant popups keep their native windows across a logical move.
+	// Compare their inline branch's host on both sides of the mutation.
+	checkPopups := op != nil && this.wt == WtInherit && this.child != nil
+	var previousOwner *Window
+	if checkPopups {
+		previousOwner = this.OwnerWindow()
+	}
 	dismissOwnedToolTipsIn(this.Self())
 	this.cancelQueuedLayouts()
 	cancelClipboardPastes(this.Self())
@@ -271,6 +278,9 @@ func (this *Widget) SetParent(parent IWidget) {
 	if np != nil {
 		this.RequestLayout()
 		this.resumeDirtyLayouts()
+	}
+	if checkPopups {
+		dismissReparentedPopups(this.Self(), previousOwner)
 	}
 }
 

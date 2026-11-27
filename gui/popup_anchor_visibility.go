@@ -4,7 +4,19 @@ package gui
 // container is hidden. Hiding a native window already follows its own
 // platform dismissal path. Neither path crosses into an independent form.
 func dismissAnchoredPopups(root IWidget) {
-	if root == nil || root.Window() != nil {
+	dismissAnchoredPopupsWhile(root, func() bool { return !root.IsVisible() })
+}
+
+func dismissReparentedPopups(root IWidget, oldOwner *Window) {
+	dismissAnchoredPopupsWhile(root, func() bool {
+		return root.Parent() == nil || root.OwnerWindow() != oldOwner || !WidgetTreeVisible(root)
+	})
+}
+
+// Hold no child iterators during Hide: handlers may reparent widgets or restore
+// visibility. Revalidate both the branch and each popup after those callbacks.
+func dismissAnchoredPopupsWhile(root IWidget, invalidScope func() bool) {
+	if root == nil || root.Window() != nil || !invalidScope() {
 		return
 	}
 	var small [4]IWidget
@@ -27,8 +39,8 @@ func dismissAnchoredPopups(root IWidget) {
 	}
 	visit(root)
 	for _, popup := range targets {
-		if root.IsVisible() {
-			return // a hide callback made the original scope visible again
+		if !invalidScope() {
+			return
 		}
 		if !popup.IsVisible() {
 			continue
