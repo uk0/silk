@@ -69,6 +69,16 @@ cannot overwrite an occupied target cell or discard an incompatible span.
 
 ![Native Wayland Designer previewing a Pump control transfer from a vertical layout to the second column of a form](docs/images/designer-layout-transfer-wayland.png)
 
+### Make room inside an existing grid
+
+Select a grid control and choose **Insert Grid Row Above** or **Insert Grid
+Column Before** from the layout context menu or Command Palette. Later cells
+shift without losing their spans. The new track is a regular drop target and
+stays empty after reopening the form. Undo restores the original placements.
+
+![Native Windows Designer showing a button over a newly inserted grid cell](docs/images/designer-grid-track-win32.png)
+
+
 ### Apply a layout to the whole form
 
 Select the form in the **Objects** panel, or clear the selection on the
