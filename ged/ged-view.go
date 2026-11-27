@@ -489,7 +489,7 @@ func isContainerItem(item graph.IItem) bool {
 	case "gui.Form", "gui.Dialog":
 		return true
 	}
-	return layoutTypeLabel(name) != "" || isSimpleAddContainer(name)
+	return hasDesignContainerOutline(name) || isSimpleAddContainer(name)
 }
 
 // defaultSizeForWidget returns sensible default sizes (in mm) for dropped widgets.

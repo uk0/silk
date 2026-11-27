@@ -81,6 +81,8 @@ to a layout that cannot represent them.
 
 ![Native Wayland preview resized with the Designer’s two-by-two grid filling the form client area](docs/images/designer-responsive-form-wayland.png)
 
+![SilkIDE on Wayland with a Card converted to a vertical layout; the title remains visible above both buttons](docs/images/designer-card-layout-wayland.png)
+
 ## Designer export menus and captions (development branch)
 
 Choose SVG or PDF from **File → Export** or the toolbar before opening the

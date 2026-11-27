@@ -29,16 +29,13 @@ func lspReferenceLocation(path string, position core.LSPPosition, sourceLine str
 // An unavailable line has no trustworthy column: navigate to its start instead
 // of accidentally interpreting a UTF-16 offset as a rune column.
 func normalizeLSPProblemColumns(problems []ged.Problem, editor *gui.CodeEditor) {
-	var lines []string
-	if editor != nil {
-		lines = editor.Lines()
-	}
 	for i := range problems {
-		line := problems[i].Line - 1
-		if line >= 0 && line < len(lines) {
-			problems[i].Col = gui.RuneColumnFromUTF16(lines[line], problems[i].Col)
-		} else {
-			problems[i].Col = 0
+		if editor != nil && problems[i].Line > 0 {
+			if line, ok := editor.LineText(problems[i].Line - 1); ok {
+				problems[i].Col = gui.RuneColumnFromUTF16(line, problems[i].Col)
+				continue
+			}
 		}
+		problems[i].Col = 0
 	}
 }

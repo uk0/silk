@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — large-file diagnostic updates
+
+- Resolve Go diagnostic columns against the affected lines of the live buffer
+  without cloning the document line index. Unsaved Unicode positions remain
+  accurate; missing lines no longer contribute any document-sized work.
+
+## Unreleased — unclipped Designer container outlines
+
+- Keep canvas outlines inside the container and show the type in the inspector
+  rather than drawing a duplicate caption over Card titles and tab headers.
+- Batch the outline into one path; very large containers no longer create a
+  separate stroke for every dash.
+
 ## Unreleased — change layout type
 
 - Select an existing managed layout or its owner, then choose a different

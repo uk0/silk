@@ -328,70 +328,59 @@ func (this *FakeWidget) DrawSelf(g paint.Painter) {
 	g.Scale(scaleX, scaleY)
 	g.DrawPixmap(this.cachedPixmap)
 
-	// Draw layout container visual indicators (dashed border + type label)
-	if label := layoutTypeLabel(this.factoryName); label != "" {
-		g.Scale(1.0/scaleX, 1.0/scaleY) // back to mm space
-		w, h := this.Width(), this.Height()
-
-		// Draw dashed blue border using short line segments
-		dashLen := 1.5 // mm per dash
-		gapLen := 1.0  // mm per gap
-		g.SetPen1(paint.Color{66, 133, 244, 140}, 0.15)
-
-		// Top edge
-		for cx := 0.0; cx < w; cx += dashLen + gapLen {
-			end := cx + dashLen
-			if end > w {
-				end = w
-			}
-			g.MoveTo(cx, 0)
-			g.LineTo(end, 0)
-			g.Stroke()
-		}
-		// Bottom edge
-		for cx := 0.0; cx < w; cx += dashLen + gapLen {
-			end := cx + dashLen
-			if end > w {
-				end = w
-			}
-			g.MoveTo(cx, h)
-			g.LineTo(end, h)
-			g.Stroke()
-		}
-		// Left edge
-		for cy := 0.0; cy < h; cy += dashLen + gapLen {
-			end := cy + dashLen
-			if end > h {
-				end = h
-			}
-			g.MoveTo(0, cy)
-			g.LineTo(0, end)
-			g.Stroke()
-		}
-		// Right edge
-		for cy := 0.0; cy < h; cy += dashLen + gapLen {
-			end := cy + dashLen
-			if end > h {
-				end = h
-			}
-			g.MoveTo(w, cy)
-			g.LineTo(w, end)
-			g.Stroke()
-		}
-
-		// Draw type label at top-left
-		g.SetFont(paint.NewFont("", 6, true, false))
-		g.SetBrush1(paint.Color{66, 133, 244, 200})
-		g.DrawText1(0.5, 2.0, label)
-
-		g.Scale(scaleX, scaleY) // restore pixel space for subsequent drawing
+	// Keep design adornments in the container perimeter. A text caption here
+	// crosses the widget's own clip and competes with its title/tab header;
+	// exact type and name remain in the Object inspector and Properties.
+	outline := hasDesignContainerOutline(this.factoryName)
+	lx, ly, lockSize, locked := lockGlyphBox(this.IsLockPos(), this.IsLockSize(), this.Width(), this.Height())
+	if outline || locked {
+		g.Scale(1/scaleX, 1/scaleY) // back to scene millimeters
 	}
-
-	// Draw lock icon overlay if either lock is set
-	if lx, ly, lockSize, ok := lockGlyphBox(this.IsLockPos(), this.IsLockSize(), this.Width(), this.Height()); ok {
-		g.Scale(1.0/scaleX, 1.0/scaleY) // back to mm space
+	if outline {
+		drawDesignContainerOutline(g, this.Width(), this.Height())
+	}
+	if locked {
 		drawLockGlyph(g, lx, ly, lockSize, 0.15)
 	}
+}
+
+func hasDesignContainerOutline(factoryName string) bool {
+	switch factoryName {
+	case "gui.HBox", "gui.VBox", "gui.GridLayout", "gui.FormLayout",
+		"gui.Card", "gui.GroupBox", "gui.Accordion", "gui.StackedWidget",
+		"gui.TabWidget", "gui.Splitter", "gui.ScrollArea":
+		return true
+	default:
+		return false
+	}
+}
+
+func drawDesignContainerOutline(g paint.Painter, w, h float64) {
+	const inset = 0.35
+	if w <= 2*inset || h <= 2*inset {
+		return
+	}
+	// At normal sizes retain the short dashes. Bound vector work for very
+	// large containers without dropping or clipping a section of the border.
+	step := max(2.5, max(w, h)/256)
+	dash := step * 0.6
+	right, bottom := w-inset, h-inset
+	g.SetPen1(paint.Color{R: 66, G: 133, B: 244, A: 140}, 0.15)
+	for x := inset; x < right; x += step {
+		end := min(x+dash, right)
+		g.MoveTo(x, inset)
+		g.LineTo(end, inset)
+		g.MoveTo(x, bottom)
+		g.LineTo(end, bottom)
+	}
+	for y := inset; y < bottom; y += step {
+		end := min(y+dash, bottom)
+		g.MoveTo(inset, y)
+		g.LineTo(inset, end)
+		g.MoveTo(right, y)
+		g.LineTo(right, end)
+	}
+	g.Stroke()
 }
 
 // drawLockGlyph paints the designer's lock badge — an amber square with a
@@ -866,29 +855,3 @@ func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 // layoutTypeLabel returns a short label string for layout/container widgets,
 // or "" if the widget is not a layout type. Used to draw visual indicators
 // in the designer canvas.
-func layoutTypeLabel(factoryName string) string {
-	switch factoryName {
-	case "gui.HBox":
-		return "H"
-	case "gui.VBox":
-		return "V"
-	case "gui.GridLayout":
-		return "Grid"
-	case "gui.FormLayout":
-		return "Form"
-	case "gui.Card":
-		return "Card"
-	case "gui.Accordion":
-		return "Acc"
-	case "gui.StackedWidget":
-		return "Stack"
-	case "gui.TabWidget":
-		return "Tab"
-	case "gui.Splitter":
-		return "Split"
-	case "gui.ScrollArea":
-		return "Scroll"
-	default:
-		return ""
-	}
-}
