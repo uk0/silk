@@ -247,6 +247,18 @@ with twelve strict actual bundled-gopls cases; skips are recorded separately.
 This increment does not claim full editor virtualization, complete Qt Creator
 parity, or a new packaged release.
 
+### Adjust the Inspector columns
+
+Drag the divider between property names and values to make room for long
+labels or editors. Double-click to reset the split. With the divider focused,
+Left/Right adjust it and Home restores the default. SilkIDE restores your
+last split after a normal quit; it is not stored in the form.
+
+![Win32 SilkIDE after relaunch with a wider property-name column and the full Text with Icon label](docs/images/inspector-column-split-win32.png)
+
+*Original Windows 10 capture after a normal quit and relaunch.*
+
+
 ## Coherent inspector categories and bilingual search (development branch)
 
 Persisted Chinese and English property IDs now share consistent Layout,
