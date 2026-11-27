@@ -20,11 +20,6 @@ type tabularDropPlan struct {
 	failure        string
 }
 
-func blockedTabularCanvasTarget(target graph.IItem) bool {
-	f, ok := target.(*FakeWidget)
-	return ok && f.layoutManaged && isTabularLayout(f)
-}
-
 func isTabularLayout(f *FakeWidget) bool {
 	return f.factoryName == string(LayoutGrid) || f.factoryName == string(LayoutForm)
 }
@@ -73,6 +68,10 @@ func (f *FakeWidget) nextTabularRow() int {
 }
 
 func (view *GedView) tabularLayoutDrop(parent *FakeWidget, clip geom.Rect, x, y float64, moving *FakeWidget) tabularDropPlan {
+	return view.planTabularFootprint(parent, clip, x, y, moving, layoutPlacement{RowSpan: 1, ColumnSpan: 1})
+}
+
+func (view *GedView) planTabularFootprint(parent *FakeWidget, clip geom.Rect, x, y float64, moving *FakeWidget, from layoutPlacement) tabularDropPlan {
 	if !pointInDropRect(clip, x, y) {
 		return tabularDropPlan{failure: dropCellGap}
 	}
@@ -92,7 +91,6 @@ func (view *GedView) tabularLayoutDrop(parent *FakeWidget, clip geom.Rect, x, y 
 	if !colOK {
 		return tabularDropPlan{failure: dropCellGap}
 	}
-	from := layoutPlacement{RowSpan: 1, ColumnSpan: 1}
 	if moving != nil {
 		if moving.IsLockPos() || moving.Parent() != parent {
 			return tabularDropPlan{failure: dropLayoutLocked}
@@ -131,7 +129,7 @@ func (view *GedView) tabularLayoutDrop(parent *FakeWidget, clip geom.Rect, x, y 
 		return tabularDropPlan{failure: dropCellGap}
 	}
 	right, bottom := col.Start+col.Size, row.Start+row.Size
-	if from.RowSpan > 1 || from.ColumnSpan > 1 {
+	if (from.RowSpan > 1 || from.ColumnSpan > 1) && len(tracks.Rows) != 0 {
 		lastRow, validRow := trackByIndex(tracks.Rows, row.Index+from.RowSpan-1)
 		lastCol, validCol := trackByIndex(tracks.Columns, col.Index+from.ColumnSpan-1)
 		if !validRow || !validCol {
@@ -300,6 +298,23 @@ func (view *GedView) canCommitTabularDrop() bool {
 
 func (view *GedView) commitManagedDrag(x, y float64) {
 	arm := view.layoutReorder
+	if transfer := view.managedTransferAt(x, y); transfer.target != nil {
+		if transfer.valid() && view.canCommitTabularDrop() {
+			next := view.managedTransferAt(x, y)
+			if next.target == transfer.target {
+				transfer = next
+			} else {
+				transfer = layoutTransferPlan{}
+			}
+		} else {
+			transfer = layoutTransferPlan{}
+		}
+		view.finishManagedPress()
+		if cmd := view.buildLayoutTransfer(arm.item, transfer); cmd != nil {
+			view.Scene().PushCommand(cmd)
+		}
+		return
+	}
 	if arm.parent != nil && isTabularLayout(arm.parent) {
 		cell := view.tabularGestureAt(x, y)
 		if cell.valid {

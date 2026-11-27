@@ -765,10 +765,12 @@ func (this *FakeWidget) OnResize() {
 
 func (this *FakeWidget) Generate() gui.IWidget { return this.generate(nil) }
 
-// A layout trial changes only root-level registration in a detached runtime.
+// A layout trial changes registration in a detached runtime. A structural
+// trial supplies child order overrides and collects its generated subtree.
 type layoutTrial struct {
 	cells    map[*FakeWidget]layoutPlacement
 	children map[*FakeWidget]gui.IWidget
+	orders   map[*FakeWidget][]graph.IItem
 }
 
 func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
@@ -805,14 +807,28 @@ func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 	// empty container while the emitted source had its children.
 	adder, hasAdd := fake.widget.(interface{ AddWidget(gui.IWidget) })
 	useAdd := hasAdd && isSimpleAddContainer(this.factoryName) && (!isDesignerLayoutFactory(this.factoryName) || this.layoutManaged)
-	for childIndex, c := range this.Children() {
+	items := this.Children()
+	if trial != nil && trial.orders != nil {
+		trial.children[this] = fake.widget
+		if virtual, found := trial.orders[this]; found {
+			items = virtual
+		}
+	}
+	for childIndex, c := range items {
 		cf, ok := c.(*FakeWidget)
 		if !ok {
 			continue
 		}
-		cw := cf.Generate()
+		var childTrial *layoutTrial
+		if trial != nil && trial.orders != nil {
+			childTrial = trial
+		}
+		cw := cf.generate(childTrial)
 		if cw == nil {
 			continue
+		}
+		if trial != nil {
+			trial.children[cf] = cw
 		}
 		if layoutAdder, ok := fake.widget.(layoutWidgetAdder); ok && this.layoutManaged {
 			p := this.childPlacement(cf, childIndex)
@@ -820,7 +836,6 @@ func (this *FakeWidget) generate(trial *layoutTrial) gui.IWidget {
 				if next, found := trial.cells[cf]; found {
 					p = next
 				}
-				trial.children[cf] = cw
 			}
 			layoutAdder.AddLayoutWidget(cw, p.Row, p.Column, p.RowSpan, p.ColumnSpan)
 		} else if useAdd {

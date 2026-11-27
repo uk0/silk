@@ -52,6 +52,15 @@ ancestor, the canvas corrects only the direction that is out of bounds.
 
 </details>
 
+### Move between layouts
+
+Drag one existing control into another horizontal, vertical, grid or form
+layout. The blue line or highlighted cell marks the destination. Release to
+move it with one Undo; Escape cancels without changing the layout. A drop
+cannot overwrite an occupied target cell or discard an incompatible span.
+
+![Native Wayland Designer previewing a Pump control transfer from a vertical layout to the second column of a form](docs/images/designer-layout-transfer-wayland.png)
+
 ## Designer export menus and captions (development branch)
 
 Choose SVG or PDF from **File → Export** or the toolbar before opening the

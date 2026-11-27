@@ -29,6 +29,14 @@
 - Refresh or remove a visible hint when its registration changes, without
   a separate native window or a repeating tooltip timer.
 
+## Unreleased — transfer controls between layouts
+
+- Drag a single existing control into another managed horizontal, vertical,
+  grid, or form layout. Preview the destination slot. Refuse occupied cells,
+  unsupported spans or a reflow that would hide or displace a locked control.
+- Apply the new parent and the source/target layout updates as one Undo edit.
+  Preserve explicit spans and legacy implicit cell positions in the source.
+
 ## Unreleased — tabular layout editing
 
 - Drag palette controls into empty Grid/Form cells and move or swap existing

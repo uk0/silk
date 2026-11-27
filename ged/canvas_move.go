@@ -27,11 +27,20 @@ func (view *GedView) BuildMoveGestureCommand(move *graph.MoveCommand, x, y float
 	}
 	sel := view.Selection()
 	target := nearestDropContainer(scene.FindItemAt(x, y, nil), sel.Contains)
-	if blockedTabularCanvasTarget(target) {
-		// Free geometry cannot assign a tabular slot. The legacy fallback
-		// could register over an existing field using the child's index.
-		view.showStatus(i18n.T(dropTabularTransfer))
-		return nil
+	if layout := managedLayoutTarget(target); layout != nil {
+		item := singleTransferItem(sel)
+		plan := view.layoutTransferAt(item, layout, x, y)
+		if !plan.valid() {
+			view.showStatus(i18n.T(plan.reject))
+			return nil
+		}
+		if !view.canCommitTabularDrop() {
+			return nil
+		}
+		if nearestDropContainer(scene.FindItemAt(x, y, nil), sel.Contains) != layout || item != singleTransferItem(sel) {
+			return nil
+		}
+		return view.buildLayoutTransfer(item, view.layoutTransferAt(item, layout, x, y))
 	}
 	return &canvasMoveGesture{
 		move:      move,

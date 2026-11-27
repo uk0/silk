@@ -27,7 +27,7 @@ func (view *GedView) managedReorderPress(x, y float64) layoutReorderGesture {
 	}
 	parent, ok := item.Parent().(*FakeWidget)
 	if !ok || !parent.layoutManaged || !unlockedLayoutAncestors(parent) ||
-		(!isTabularLayout(parent) && (!canReorderLinearLayout(parent) || len(parent.Children()) < 2)) {
+		(!isTabularLayout(parent) && !canReorderLinearLayout(parent)) {
 		return layoutReorderGesture{}
 	}
 	return layoutReorderGesture{item: item, parent: parent}
@@ -58,7 +58,7 @@ func (view *GedView) layoutReorderSlot(x, y float64) (linearPaletteInsertion, in
 	}
 	siblings := arm.parent.Children()
 	from := arm.item.IndexInParent()
-	if from < 0 || from >= len(siblings) || siblings[from] != arm.item {
+	if len(siblings) < 2 || from < 0 || from >= len(siblings) || siblings[from] != arm.item {
 		return invalid, -1
 	}
 	slot := linearLayoutSlot(arm.parent, clip, sx, sy, siblings, arm.item)
@@ -86,6 +86,10 @@ func (view *GedView) updateManagedPress(x, y float64) {
 		view.layoutReorder.moved = true
 	}
 	if !view.layoutReorder.moved {
+		return
+	}
+	if transfer := view.managedTransferAt(x, y); transfer.target != nil {
+		view.showLayoutTransfer(transfer, x, y)
 		return
 	}
 	if isTabularLayout(view.layoutReorder.parent) {

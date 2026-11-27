@@ -2786,8 +2786,14 @@ func (this *GedView) OnMouseMove(x, y float64) {
 	if hit != nil && hit != this.Scene() {
 		this.dropContainer = nearestDropContainer(
 			this.Scene().FindItemAt(sx, sy, nil), sel.Contains)
-		if blockedTabularCanvasTarget(this.dropContainer) {
-			this.dropContainer = nil
+		if layout := managedLayoutTarget(this.dropContainer); layout != nil {
+			plan := this.layoutTransferAt(singleTransferItem(sel), layout, sx, sy)
+			if !plan.valid() {
+				this.dropContainer = nil
+			}
+			if plan.target != nil {
+				this.showLayoutTransfer(plan, x, y)
+			}
 		}
 	}
 }

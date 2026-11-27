@@ -53,8 +53,11 @@ func (view *GedView) managedGeometryAt(x, y float64) bool {
 func (view *GedView) showManagedGeometryHint(x, y float64) {
 	hint := i18n.T(managedGeometryMessage)
 	view.managedHint = paletteDropFeedback{active: true, x: x, y: y, hint: hint}
-	if frame := gui.FindOwnerFrame(view); frame != nil && frame.StatusBar() != nil {
-		frame.StatusBar().ShowMessage(hint)
+	// An armed drag can still reach another layout. Keep its short-lived
+	// feedback on the canvas instead of leaving a stale "break layout"
+	// warning in the status bar after the pointer finds a valid target.
+	if view.layoutReorder.item == nil {
+		view.showStatus(hint)
 	}
 	gui.SetOverrideCursor(nil)
 	view.Self().Update()
