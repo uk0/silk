@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — resize Inspector property columns
+
+- Drag the divider between names and values to read longer labels or give
+  editors more room. Double-click resets the split; the divider also
+  accepts arrow keys and Home when focused. SilkIDE restores the last split
+  after a normal quit without writing column widths to the design document.
+
+## Unreleased — remap dense multi-caret selections in one sweep
+
+- Large multi-caret edits now remap their byte positions without comparing
+  every caret against every edit. Exact cursor order and Undo/Redo are
+  preserved, including adjacent edits and CRLF boundaries.
+
+## Unreleased — reduce multi-caret position allocations in large files
+
+- Small groups of carets reuse a compact block index rather than allocating
+  byte offsets for every line before and after editing. Newline edits
+  reconcile that index and keep exact Unicode/CRLF cursor positions.
+
+## Unreleased — copy only changed rows when materializing sparse editor edits
+
+- Edits across a small set of rows (including typing at multiple carets)
+  reuse unchanged spans from the last immutable editor snapshot. Bulk and
+  structural edits still reconcile the full line model.
+
+## Unreleased — update editor line-ending status incrementally
+
+- Edits that keep row positions update LF/CRLF counts only for touched rows.
+  Structural and full-buffer edits still reconcile all separators. A trailing
+  standalone CR remains content, and ambiguous CRCRLF conversion remains
+  protected.
+
 ## Unreleased — clearer Designer geometry and option labels
 
 - The inactive geometry fields show up to three decimal places in millimetres.

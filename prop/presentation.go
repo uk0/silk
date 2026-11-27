@@ -79,7 +79,7 @@ func drawPropertyText(g paint.Painter, font paint.Font, color paint.Color, x, y,
 
 func (sheet *PropertySheet) drawPropertyLabel(g paint.Painter, p *PropertyItem) {
 	r := sheet.getItemRect(p, pitemLabel)
-	width := r.Width - 4
+	width := r.Width - columnDividerWidth
 	if isColorProperty(p) {
 		width -= 18
 	}

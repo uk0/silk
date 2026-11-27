@@ -633,8 +633,7 @@ func buildPanels(frame *gui.Frame) (*gui.TabWidget, *ged.GedView) {
 		// inject. Selecting a widget then shows its name, geometry and the
 		// embedded widget's own fields (text, value, ...); editing a value
 		// repaints the canvas through the mark-dirty property adapter.
-		propSheet := prop.NewPropertySheet()
-		propSheet.SetTitle(i18n.T("Properties"))
+		propSheet := newDesignerPropertySheet(frame, globalPrefs)
 		globalPropSheet = propSheet
 		rightDock.AddView(propSheet)
 		designCanvas.SetPropertyView(propSheet)

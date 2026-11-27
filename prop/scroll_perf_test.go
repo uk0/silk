@@ -128,6 +128,13 @@ func TestInspectorCachedGeometryChangesOnlyAtLayout(t *testing.T) {
 	}
 }
 
+func onlyDividerAndEditor(s *PropertySheet, editor gui.IWidget) bool {
+	children := s.body.Children()
+	return editor != nil && len(children) == 2 &&
+		(children[0] == s.columnDivider && children[1] == editor ||
+			children[1] == s.columnDivider && children[0] == editor)
+}
+
 func TestInspectorGeometryCallbackRebindAndFilter(t *testing.T) {
 	for _, change := range []string{"rebind", "filter", "scroll"} {
 		t.Run(change, func(t *testing.T) {
@@ -152,7 +159,7 @@ func TestInspectorGeometryCallbackRebindAndFilter(t *testing.T) {
 					t.Fatal("callback left stale/misaligned editors", change, p.Id(), p.control.Bounds1())
 				}
 			}
-			if change == "rebind" && (!old.retired || e.Parent() != nil || len(s.body.Children()) != 1 || s.vlist[0].Id() != "Replacement") {
+			if change == "rebind" && (!old.retired || e.Parent() != nil || len(s.vlist) != 1 || s.vlist[0].Id() != "Replacement" || !onlyDividerAndEditor(s, s.vlist[0].control)) {
 				t.Fatal("retired binding revived")
 			}
 			if change == "filter" && (len(s.vlist) != 1 || s.vlist[0].Id() != "Field29" || e.IsVisible()) {
@@ -194,7 +201,7 @@ func TestInspectorLayoutRebindRetiresSnapshot(t *testing.T) {
 	}
 	s.vertSplit = .4
 	s.Layout()
-	if !old.retired || e.Parent() != nil || len(s.vlist) != 1 || s.vlist[0].Id() != "NewOwner" || len(s.body.Children()) != 1 {
+	if !old.retired || e.Parent() != nil || len(s.vlist) != 1 || s.vlist[0].Id() != "NewOwner" || !onlyDividerAndEditor(s, s.vlist[0].control) {
 		t.Fatal("layout resumed a retired binding")
 	}
 	now := s.vlist[0]

@@ -989,7 +989,8 @@ type PropertySheet struct {
 
 	suspendLayout bool
 
-	vertSplit float64
+	vertSplit     float64
+	columnDivider *propertyColumnDivider
 
 	title string
 	icon  paint.Icon
@@ -1038,7 +1039,7 @@ type categoryLayoutEntry struct {
 func (this *PropertySheet) Init(iw gui.IWidget) {
 	this.ScrollArea.Init(iw)
 	this.propMap = make(map[string]*PropertyItem)
-	this.vertSplit = 0.5
+	this.vertSplit = defaultColumnSplit
 	this.categories = make(map[string]*propertyCategory)
 	for _, key := range categoryOrder {
 		this.categories[key] = &propertyCategory{
@@ -1058,6 +1059,12 @@ func (this *PropertySheet) Init(iw gui.IWidget) {
 	this.body.sheet = this
 	this.body.Init(this.body)
 	this.body.SetParent(iw)
+	this.columnDivider = &propertyColumnDivider{sheet: this}
+	this.columnDivider.Init(this.columnDivider)
+	this.columnDivider.SetFocusPolicy(gui.TabFocus)
+	this.columnDivider.SetParent(this.body)
+	this.columnDivider.SetVisible(false)
+	gui.SetToolTip(this.columnDivider, i18n.T(columnDividerHint))
 	this.VertScrollBar().SetVisible(false)
 	this.VertScrollBar().SetFocusPolicy(gui.NoFocus)
 }
@@ -1550,7 +1557,7 @@ func (this *PropertySheet) drawColorSwatch(g paint.Painter, p *PropertyItem, ite
 	// so the swatch is not covered by the child input control.
 	xedit := this.vertSplitPx()
 	const swatchSize = 14.0
-	const swatchPad = 4.0
+	const swatchPad = columnDividerWidth
 
 	sx := xedit - swatchSize - swatchPad
 	sy := p.ypos + (itemH-swatchSize)*0.5
@@ -1709,12 +1716,22 @@ func (this *PropertySheet) OnLeftDown(x, y float64) {
 	}
 }
 
+func (this *PropertySheet) OnHide() {
+	if this.columnDivider != nil {
+		this.columnDivider.OnPointerCancel()
+	}
+}
+
 func (this *PropertySheet) SaveSession() (doc *core.TDoc, err error) {
 	doc = core.NewTDoc()
-	return doc, nil
+	return doc, doc.WriteAttr("columnSplit", this.ColumnSplit())
 }
 
 func (this *PropertySheet) LoadSession(doc *core.TDoc) error {
+	var fraction float64
+	if doc != nil && doc.ReadAttr("columnSplit", &fraction) == nil {
+		this.SetColumnSplit(fraction)
+	}
 	return nil
 }
 

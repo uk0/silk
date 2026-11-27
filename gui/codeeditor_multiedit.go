@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -53,7 +54,26 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 		before[i] = p
 	}
 	before = dedupCursorsList(before)
-	starts := lineByteStarts(e.lines)
+	// Small groups in large files borrow the published block index when it
+	// is valid. Dense selection still benefits from a flat one-pass table.
+	const maxIndexedCarets = 256
+	// Two within-block lookups per caret should not dominate a flat scan
+	// when most carets are packed into a relatively short document.
+	sparseLimit := min(maxIndexedCarets, len(e.lines)/(editorLineByteBlockLines/2))
+	indexed := len(e.lines) >= editorSnapshotMinLines && len(before) <= sparseLimit
+	var starts []int
+	var index editorLineByteIndex
+	borrowed := false
+	if indexed {
+		snapshot := &e.textSnapshot
+		if !e.textDirty && !snapshot.edit.local && !snapshot.edit.bulk && snapshot.rows == len(e.lines) {
+			index, borrowed = snapshot.editorLineByteIndex, true
+		} else {
+			index.reset(e.lines)
+		}
+	} else {
+		starts = lineByteStarts(e.lines)
+	}
 	offsets := make([]int, len(before))
 	edits := make([]editorByteEdit, 0, len(before))
 	for i, p := range before {
@@ -63,7 +83,11 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 			column--
 			p.col-- // End can address after CR; insert before the existing CRLF.
 		}
-		offsets[i] = starts[p.line] + column
+		if indexed {
+			offsets[i] = index.lineStart(e.lines, p.line) + column
+		} else {
+			offsets[i] = starts[p.line] + column
+		}
 		edit := editorByteEdit{line: p.line, column: column, offset: offsets[i]}
 		switch mode {
 		case byteCursorInsert:
@@ -118,25 +142,47 @@ func (e *CodeEditor) editAtAllCursors(mode int, text string) {
 		}
 		edits = unique
 	}
+	// An inline transaction preserves row numbers and can update just the
+	// changed block lengths. Never mutate the published snapshot's index.
+	inline := indexed && mode != byteCursorEnter && (mode != byteCursorInsert || !strings.Contains(text, "\n"))
+	if inline {
+		for _, edit := range edits {
+			if strings.Contains(edit.before, "\n") {
+				inline = false
+				break
+			}
+		}
+	}
+	if inline {
+		if borrowed {
+			index.blocks = slices.Clone(index.blocks)
+		}
+		for _, edit := range edits {
+			index.applyRowByteDelta(edit.line, len(edit.after)-len(edit.before))
+		}
+	}
 	// Normalized/deduplicated carets produce disjoint rune/newline ranges.
 	for _, edit := range edits {
 		e.replaceByteRange(edit.line, edit.column, len(edit.before), edit.after)
 	}
-	afterStarts := lineByteStarts(e.lines)
-	after := make([]cursorPos, 0, len(before))
-	for _, offset := range offsets {
-		shifted := offset
-		for _, edit := range edits {
-			if offset < edit.offset {
-				continue
-			}
-			if offset <= edit.offset+len(edit.before) {
-				shifted += len(edit.after) - (offset - edit.offset)
-			} else {
-				shifted += len(edit.after) - len(edit.before)
-			}
+	if !indexed {
+		starts = lineByteStarts(e.lines)
+	} else if !inline {
+		if borrowed {
+			index = editorLineByteIndex{}
 		}
-		after = append(after, cursorAtByteOffset(e.lines, afterStarts, shifted))
+		index.reset(e.lines)
+	}
+	shiftEditorCaretOffsets(offsets, edits)
+	after := make([]cursorPos, 0, len(before))
+	for _, shifted := range offsets {
+		var p cursorPos
+		if indexed {
+			p = index.cursorAtOffset(e.lines, shifted)
+		} else {
+			p = cursorAtByteOffset(e.lines, starts, shifted)
+		}
+		after = append(after, p)
 	}
 	after = dedupCursorsList(after)
 	e.restoreEditCursors(after)

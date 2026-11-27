@@ -242,7 +242,8 @@ type CodeEditor struct {
 	readOnly                     bool
 	preferredLineEnding          EditorLineEnding
 	lineEndingLF, lineEndingCRLF int
-	ambiguousLineEndingCR        bool
+	lineEndingAmbiguousCRs       int
+	pendingLineEndings           editorLineEndingDelta
 	lineEndingObservers          []*editorLineEndingObserver
 	lastLineEndingInfo           EditorLineEndingInfo
 	Widget
@@ -732,6 +733,7 @@ func (this *CodeEditor) TextRevision() uint64 {
 // Keep the old string on equality so no-op edits preserve the cached storage.
 func (this *CodeEditor) cacheText(text string) {
 	this.pendingGoEdit = goLineEdit{}
+	this.pendingLineEndings = editorLineEndingDelta{}
 	this.textSnapshot.reset(this.lines)
 	this.cacheTextWithRuneDelta(text, text != this.text, false)
 }
@@ -784,10 +786,11 @@ func (this *CodeEditor) cacheTextWithRuneDelta(text string, changed, haveDelta b
 		} else {
 			this.textRuneCount = utf8.RuneCountInString(text)
 		}
-		this.cacheLineEndings(text)
+		this.syncLineEndingCounts()
 	}
 	this.textDirty = false
 	this.pendingRuneDelta = 0
+	this.pendingLineEndings = editorLineEndingDelta{}
 	this.runeDeltaUnknown = false
 	goEdit := this.pendingGoEdit
 	this.pendingGoEdit = goLineEdit{}
@@ -1620,11 +1623,13 @@ func (this *CodeEditor) selectNextOccurrence() {
 func (e *CodeEditor) markLineEdit(row int, before, after []string) {
 	e.textSnapshot.note(e.lines, row, before, after)
 	e.pendingGoEdit.add(row, len(before), len(after))
+	e.pendingLineEndings.note(len(e.lines), row, before, after)
 	e.trackLineRuneDelta(before, after)
 }
 
 func (e *CodeEditor) markUntrackedLineEdit() {
 	e.textSnapshot.markBulk()
+	e.pendingLineEndings.bulk = true
 	e.pendingGoEdit.bulk = true
 	e.runeDeltaUnknown = true
 }

@@ -50,9 +50,19 @@ func TestInspectorScrollFocusFilterResizeAndClear(t *testing.T) {
 	}
 	s.SetSize(320, 160)
 	s.SetScrollY(limit)
+	divider := s.columnDivider
+	divider.OnLeftDown(2, 20)
+	if !divider.HasCapture() {
+		t.Fatal("fixture failed to start a real divider capture")
+	}
+	t.Cleanup(divider.OnPointerCancel)
 	s.Clear(nil)
-	if s.ScrollY() != 0 || s.VertScrollBar().IsVisible() || len(s.body.Children()) != 0 {
+	children := s.body.Children()
+	if s.ScrollY() != 0 || s.VertScrollBar().IsVisible() || len(children) != 1 || children[0] != divider {
 		t.Fatal("clear retained old editors or scroll geometry")
+	}
+	if divider.IsVisible() || divider.HasCapture() || len(s.body.ChildFocusOrder()) != 0 {
+		t.Fatal("empty inspector kept an interactive divider")
 	}
 }
 
@@ -101,7 +111,7 @@ func TestInspectorHiddenEditorStaysLazyAndHidden(t *testing.T) {
 	s.SetFilter("Last")
 	s.SetFilter("")
 	order := s.body.ChildFocusOrder()
-	if len(order) != 2 || order[0] != p.control || order[1] != last.control {
+	if len(order) != 3 || order[0] != p.control || order[1] != last.control || order[2] != s.columnDivider {
 		t.Fatal("lazy materialization changed visual Tab order")
 	}
 }

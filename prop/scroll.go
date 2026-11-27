@@ -73,6 +73,10 @@ func (s *PropertySheet) layoutViewport() {
 	bar.SetRange(0, limit)
 	s.body.SetBounds(0, s.contentTop(), w, h)
 	s.body.SetVisible(w > 0 && h > 0)
+	s.positionColumnDivider()
+	if s.columnDivider != nil && s.columnDivider.IsVisible() {
+		s.body.focusOrder = append(s.body.focusOrder, s.columnDivider)
+	}
 	s.positionEditors()
 }
 

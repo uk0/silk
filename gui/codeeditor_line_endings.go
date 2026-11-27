@@ -52,10 +52,56 @@ func (e *CodeEditor) LineEndings() EditorLineEndingInfo {
 	e.Text()
 	return EditorLineEndingInfo{e.lineEndingLF, e.lineEndingCRLF, e.preferredLineEnding}
 }
-func (e *CodeEditor) cacheLineEndings(text string) {
-	e.lineEndingCRLF = strings.Count(text, "\r\n")
-	e.lineEndingLF = strings.Count(text, "\n") - e.lineEndingCRLF
-	e.ambiguousLineEndingCR = strings.Contains(text, "\r\r\n")
+
+// Line bodies exclude LF but retain any adjacent CR. The last row has
+// no separator, even if its body ends in a standalone CR.
+func lineEndingCRs(body string) (crlf, ambiguous int) {
+	if !strings.HasSuffix(body, "\r") {
+		return 0, 0
+	}
+	if strings.HasSuffix(body, "\r\r") {
+		return 1, 1
+	}
+	return 1, 0
+}
+
+type editorLineEndingDelta struct {
+	crlf, ambiguous int
+	local, bulk     bool
+}
+
+func (d *editorLineEndingDelta) note(rows, row int, before, after []string) {
+	if d.bulk {
+		return
+	}
+	if len(before) != len(after) {
+		d.bulk = true
+		return
+	}
+	d.local = true
+	for i := 0; i < min(len(before), rows-1-row); i++ {
+		oldCRLF, oldAmbiguous := lineEndingCRs(before[i])
+		newCRLF, newAmbiguous := lineEndingCRs(after[i])
+		d.crlf += newCRLF - oldCRLF
+		d.ambiguous += newAmbiguous - oldAmbiguous
+	}
+}
+
+func (e *CodeEditor) syncLineEndingCounts() {
+	d := e.pendingLineEndings
+	separators := max(0, len(e.lines)-1)
+	if d.local && !d.bulk {
+		e.lineEndingCRLF += d.crlf
+		e.lineEndingAmbiguousCRs += d.ambiguous
+	} else {
+		e.lineEndingCRLF, e.lineEndingAmbiguousCRs = 0, 0
+		for _, body := range e.lines[:separators] {
+			crlf, ambiguous := lineEndingCRs(body)
+			e.lineEndingCRLF += crlf
+			e.lineEndingAmbiguousCRs += ambiguous
+		}
+	}
+	e.lineEndingLF = separators - e.lineEndingCRLF
 }
 func (e *CodeEditor) detectPreferredLineEnding() {
 	e.preferredLineEnding = LineEndingLF
@@ -72,7 +118,7 @@ func (e *CodeEditor) CanConvertLineEndings(style EditorLineEnding) bool {
 		return false
 	}
 	e.Text()
-	if style == LineEndingLF && e.ambiguousLineEndingCR {
+	if style == LineEndingLF && e.lineEndingAmbiguousCRs > 0 {
 		return false
 	}
 	return style != e.preferredLineEnding || style == LineEndingLF && e.lineEndingCRLF > 0 || style == LineEndingCRLF && e.lineEndingLF > 0
@@ -105,7 +151,7 @@ func (e *CodeEditor) ConvertLineEndings(style EditorLineEnding) error {
 		return ErrEditorLineEnding
 	}
 	e.Text()
-	if style == LineEndingLF && e.ambiguousLineEndingCR {
+	if style == LineEndingLF && e.lineEndingAmbiguousCRs > 0 {
 		return ErrEditorAmbiguousCR
 	}
 	if !e.CanConvertLineEndings(style) {
@@ -168,6 +214,7 @@ func (e *CodeEditor) applyLineEndingHistory(h *editorLineEndingHistory, reverse 
 	e.textDirty = true
 	e.textSnapshot.markBulk()
 	e.pendingGoEdit.bulk = true
+	e.pendingLineEndings.bulk = true
 	e.clearTokenCache()
 }
 func (e *CodeEditor) finishLineEndingChange(h *editorLineEndingHistory) {
