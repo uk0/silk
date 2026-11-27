@@ -175,6 +175,7 @@ type GraphView struct {
 	cbZoomChanged      func(s interface{}, zoom float64)
 
 	needEmitSelectionChanged bool
+	selectionChangedQueued   bool
 
 	propertyView prop.IPropertyView
 
@@ -981,6 +982,7 @@ func (this *GraphView) Selection() *Selection {
 
 func (this *GraphView) emitItemSelected(item IItem) {
 	this.needEmitSelectionChanged = true
+	defer this.scheduleSelectionChanged()
 	var ds []IDecor
 	if this.cbGenDecors != nil {
 		ds = this.cbGenDecors(this.Self(), item)
@@ -1002,6 +1004,7 @@ func (this *GraphView) emitItemSelected(item IItem) {
 
 func (this *GraphView) emitItemDeselected(item IItem) {
 	this.needEmitSelectionChanged = true
+	defer this.scheduleSelectionChanged()
 	if this.cbItemDeselected != nil {
 		this.cbItemDeselected(this.Self(), item)
 	}
@@ -1030,6 +1033,54 @@ func (this *GraphView) emitItemDetached(item, parent IItem) {
 	if this.cbItemAttached != nil {
 		this.cbItemAttached(this.Self(), item, parent)
 	}
+}
+
+// Use the native UI queue rather than waiting for the next (potentially
+// throttled) idle tick. Selection is mutated on the UI thread. A single post
+// covers commands that clear and rebuild a selection or select many items.
+func (this *GraphView) scheduleSelectionChanged() {
+	if !this.needEmitSelectionChanged || this.selectionChangedQueued {
+		return
+	}
+	window := this.selectionEventWindow()
+	if window == nil {
+		// Detached/model-only graph views still deliver through OnIdle.
+		return
+	}
+	scene := this.Scene()
+	this.queueSelectionChanged(gui.Post, func() bool {
+		return this.Scene() == scene && this.selectionEventWindow() == window
+	})
+}
+
+// Match a live native client, not just the immediate ancestor's visibility.
+// A GraphView is usually nested inside several logical non-window widgets.
+func (this *GraphView) selectionEventWindow() *gui.Window {
+	for widget := this.Self(); widget != nil && widget.IsVisible(); widget = widget.Parent() {
+		if window := widget.Window(); window != nil {
+			if window.IsValid() {
+				return window
+			}
+			break
+		}
+	}
+	return nil
+}
+
+// post must defer the notification to the next UI-loop turn. The liveness
+// predicate prevents a delayed post from binding a shared Inspector after its
+// view has been hidden, reparented, or replaced.
+func (this *GraphView) queueSelectionChanged(post func(func()), stillCurrent func() bool) {
+	if this.selectionChangedQueued {
+		return
+	}
+	this.selectionChangedQueued = true
+	post(func() {
+		this.selectionChangedQueued = false
+		if this.needEmitSelectionChanged && stillCurrent() {
+			this.emitSelectionChanged()
+		}
+	})
 }
 
 func (this *GraphView) emitSelectionChanged() {

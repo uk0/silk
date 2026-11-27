@@ -13,7 +13,8 @@ var legacyPropertyLabels = map[string]string{
 	"宽度 (mm)": "Width (mm)", "高度 (mm)": "Height (mm)",
 	"锁定": "Locked", "可用": "Enabled", "可见": "Visible", "图标": "Icon", "文本": "Text",
 	"有图标时显示文字": "Text with Icon",
-	"上边距":      "Top Margin", "下边距": "Bottom Margin", "左边距": "Left Margin", "右边距": "Right Margin", "间距": "Spacing",
+	"布局行":      "Layout Row", "布局列": "Layout Column", "跨行数": "Row Span", "跨列数": "Column Span",
+	"上边距": "Top Margin", "下边距": "Bottom Margin", "左边距": "Left Margin", "右边距": "Right Margin", "间距": "Spacing",
 }
 
 var canonicalPropertyLabels = map[string]string{

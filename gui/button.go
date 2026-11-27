@@ -358,7 +358,7 @@ func (this *Button) SubPopup() IWidget {
 }
 
 func (this *Button) ShowSubPopup() {
-	if !this.IsEnabled() || !this.IsAllAncentorsVisible() || this.subPopup == nil || this.IsSubPopupVisible() {
+	if !this.IsEnabled() || !WidgetTreeVisible(this.Self()) || this.subPopup == nil || this.IsSubPopupVisible() {
 		return
 	}
 
@@ -370,7 +370,7 @@ func (this *Button) ShowSubPopup() {
 	if this.cbSubPopup != nil {
 		this.cbSubPopup(this.self.(IButton))
 	}
-	if !this.IsEnabled() || !this.IsAllAncentorsVisible() || this.subPopup == nil {
+	if !this.IsEnabled() || !WidgetTreeVisible(this.Self()) || this.subPopup == nil {
 		return
 	}
 

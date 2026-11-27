@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — keep submenus attached to visible owners
+
+- Do not open a submenu for a hidden anchor or a hidden containing panel.
+  If the population callback hides its owner, cancel before reparenting
+  or requesting a native popup window.
+
+## Unreleased — more responsive Designer selection feedback
+
+- Deliver visible canvas selection changes on the UI event queue instead of
+  waiting for a throttled idle tick. Multi-item edits refresh the Inspector
+  once per queue turn; stale work from hidden or detached views is skipped.
+- Translate grid placement labels and allow filtering in either built-in
+  language without changing document keys.
+
 ## Unreleased — show only actionable Designer resize handles
 
 - Layout-owned children stay selectable without misleading resize handles.
