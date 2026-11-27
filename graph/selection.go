@@ -12,11 +12,23 @@ type SelectNode struct {
 	decor IDecor
 }
 
+// OnDraw paints this selected item individually. Selection.OnDraw shares
+// the group-level policy across its entire traversal instead.
 func (p *SelectNode) OnDraw(g paint.Painter) {
+	var policy SelectionResizePolicy
+	if resize, ok := p.decor.(*ResizeDecor); ok {
+		policy = selectionResizePolicy(resize.View())
+	}
+	p.onDraw(g, policy, resizeGroupAllowed(policy))
+}
+
+func (p *SelectNode) onDraw(g paint.Painter, policy SelectionResizePolicy, groupAllowed bool) {
 
 	tx, ty := p.item.CoordOffset()
 	g.Translate(tx, ty)
-	if p.decor != nil {
+	if resize, ok := p.decor.(*ResizeDecor); ok {
+		resize.draw(g, policy, groupAllowed)
+	} else if p.decor != nil {
 		p.decor.OnDraw(g)
 	} else {
 		p.item.DrawOutline(g)
@@ -40,11 +52,12 @@ func newSelection(view *GraphView) *Selection {
 }
 
 type Selection struct {
-	view  *GraphView
-	first *SelectNode
-	last  *SelectNode
-	index map[IItem]*SelectNode
-	count int
+	view        *GraphView
+	first       *SelectNode
+	last        *SelectNode
+	index       map[IItem]*SelectNode
+	count       int
+	editVersion uint64 // membership changed while a pointer gesture was armed
 }
 
 func (s *Selection) findNode(a IItem) *SelectNode {
@@ -109,6 +122,7 @@ func (s *Selection) Add(a IItem) {
 	//	p.next = nil
 
 	s.count++
+	s.editVersion++
 	//	a.setSelected(true)
 
 	//	a.(_IEventSelect).OnSelect()
@@ -144,6 +158,7 @@ func (s *Selection) Remove(a IItem) {
 	}
 	delete(s.index, a)
 	s.count--
+	s.editVersion++
 
 	//a.setSelected(false)
 
@@ -177,6 +192,19 @@ func (s *Selection) ItemList() (ret []IItem) {
 	}
 	return
 }
+
+// Items visits the selected items in selection order without a snapshot
+// allocation. The UI-thread caller must not change membership during the walk.
+func (s *Selection) Items(yield func(IItem) bool) {
+	for p := s.first; p != nil; p = p.next {
+		if !yield(p.item) {
+			return
+		}
+	}
+}
+
+// Revision advances when selection membership changes on the UI thread.
+func (s *Selection) Revision() uint64 { return s.editVersion }
 
 func (s *Selection) Count() int {
 	return s.count
@@ -219,8 +247,13 @@ func (s *Selection) DebugDump() {
 }
 
 func (s *Selection) OnDraw(g paint.Painter) {
+	if s.IsEmpty() {
+		return
+	}
+	policy := selectionResizePolicy(s.view)
+	groupAllowed := resizeGroupAllowed(policy)
 	for p := s.first; p != nil; p = p.next {
-		p.OnDraw(g)
+		p.onDraw(g, policy, groupAllowed)
 	}
 }
 
@@ -452,14 +485,24 @@ func (s *Selection) GenerateSameSizeCommand(mode SameSizeMode, minSize float64) 
 }
 
 func (s *Selection) FindHandleAt(xMm, yMm float64) (decor IDecor, handle int) {
-	// 和绘图方向相反, 从后往前找
+	if s.IsEmpty() {
+		return nil, 0
+	}
+	policy := selectionResizePolicy(s.view)
+	groupAllowed := resizeGroupAllowed(policy)
+	// Reverse paint order: the topmost eligible handle owns the hit.
 	for p := s.last; p != nil; p = p.prev {
 		if p.decor == nil {
 			continue
 		}
 		dx, dy := p.item.CoordOffset()
 		x, y := xMm-dx, yMm-dy
-		h := p.decor.HandleAt(x, y)
+		var h int
+		if resize, ok := p.decor.(*ResizeDecor); ok {
+			h = resize.handleAt(x, y, policy, groupAllowed)
+		} else {
+			h = p.decor.HandleAt(x, y)
+		}
 		if h != 0 {
 			decor = p.decor
 			handle = h

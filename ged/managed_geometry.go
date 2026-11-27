@@ -21,7 +21,7 @@ func managedGeometryItem(item graph.IItem) bool {
 
 func (view *GedView) selectionHasManagedGeometry() bool {
 	sel := view.Selection()
-	for _, item := range sel.ItemList() {
+	for item := range sel.Items {
 		if !managedGeometryItem(item) {
 			continue
 		}
@@ -37,6 +37,26 @@ func (view *GedView) selectionHasManagedGeometry() bool {
 		}
 	}
 	return false
+}
+
+// CanResizeSelection is the shared paint, hit-test and commit guard for
+// a mixed selection. A layout-owned sibling is never resized indirectly.
+func (view *GedView) CanResizeSelection() bool {
+	return !view.selectionHasManagedGeometry()
+}
+
+// CanResizeItem leaves resize authority with the selected top-level item.
+// Any selected child of that item follows the owner's normal layout/reflow.
+func (view *GedView) CanResizeItem(item graph.IItem) bool {
+	if item == nil || view.Scene() == nil || item.Scene() != view.Scene() || managedGeometryItem(item) {
+		return false
+	}
+	for parent := item.Parent(); parent != nil; parent = parent.Parent() {
+		if view.Selection().Contains(parent) {
+			return false
+		}
+	}
+	return true
 }
 
 func (view *GedView) managedGeometryAt(x, y float64) bool {

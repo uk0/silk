@@ -184,6 +184,15 @@ func (this *GedView) Init(self gui.IWidget) {
 	this.AddStandardTools()
 	this.SetPropertyConfigName("ged")
 
+	// Keep one stable resize decor while selected. Its live policy handles
+	// lock/property/reparent changes without depending on re-selection.
+	this.SigGenDecors(func(_ interface{}, item graph.IItem) []graph.IDecor {
+		if _, ok := item.(*FakeWidget); ok {
+			return []graph.IDecor{graph.NewResizeDecor()}
+		}
+		return nil
+	})
+
 	// Notify embedded tools independently of whether a frame/status bar exists.
 	// Selection notifications are delivered by the GraphView idle heartbeat.
 	this.SigSelectionChanged(func(s interface{}, sel *graph.Selection) {
@@ -809,6 +818,7 @@ func (this *GedView) buildContextMenu(x, y float64) *gui.Menu {
 		breakBtn.Action().BindFunc0(func() {
 			this.BreakLayoutSelection()
 		})
+		this.addGridInsertionMenu(lMenu, fake)
 
 		menu.AddSeparator()
 
@@ -2824,11 +2834,12 @@ func (this *GedView) OnLeftUp(x, y float64) {
 	// MovePart submits the complete canvas transaction through the scene.
 	// DecorPart still uses the resize-specific snap after its own commit.
 	resized := this.resizeGestureItem()
-	stack := this.Scene().UndoStack()
-	historyBefore := stack.Current()
+	scene, selection := this.Scene(), this.Selection()
+	stack := scene.UndoStack()
+	historyBefore, selectionBefore := stack.Current(), selection.Revision()
 	this.GraphView.OnLeftUp(x, y)
-	if resized != nil && stack.Current() != historyBefore {
-		this.snapSelectionToGrid()
+	if resized != nil && this.Scene() == scene && selection.Revision() == selectionBefore && stack.Current() != historyBefore {
+		this.snapSelectionPositionToGrid(true)
 		this.snapSelectionSizeToGrid(resized)
 	}
 	this.isDragging = false
@@ -2900,7 +2911,9 @@ func groupWithPark(cmd *graph.ReparentCommand, park *parkStep) gui.ICommand {
 // drag delta is arbitrary but the snapped position is not, so a container drag
 // almost always ends with a correction, and without the subtree it would undo
 // the carrying the move command just did.
-func (this *GedView) snapSelectionToGrid() {
+func (this *GedView) snapSelectionToGrid() { this.snapSelectionPositionToGrid(false) }
+
+func (this *GedView) snapSelectionPositionToGrid(resizing bool) {
 	// grid.Snap is the one master switch for drop/nudge snapping; manual
 	// guides ride under it too, so 表单设置 turns every snap off in one place.
 	grid := this.gridModel()
@@ -2917,7 +2930,7 @@ func (this *GedView) snapSelectionToGrid() {
 		selSet[item] = true
 	}
 	for _, item := range items {
-		if item.IsLockPos() {
+		if item.IsLockPos() || resizing && (item.IsLockSize() || !this.CanResizeItem(item)) {
 			continue
 		}
 		// The correction below carries the subtree, so an item whose own

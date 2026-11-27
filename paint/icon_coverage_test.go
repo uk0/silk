@@ -133,6 +133,7 @@ var designerPanelIconNames = []string{
 	"error", "question", "help", "window", "form", "link", "keymap", "test-explorer",
 	"call-hierarchy", "type-hierarchy", "project", "diagram", "merge", "maximize", "restore",
 	"layout-horizontal", "layout-vertical", "layout-grid", "layout-form", "layout-break", "layout-adjust",
+	"layout-row-insert", "layout-column-insert",
 }
 
 func TestDesignerPanelIconsRenderExactPaletteAndDeviceScale(t *testing.T) {
@@ -153,7 +154,7 @@ func TestDesignerPanelIconsRenderExactPaletteAndDeviceScale(t *testing.T) {
 					semantic = palette.Danger
 				case "project", "layout-break":
 					semantic = palette.Warning
-				case "test-explorer":
+				case "test-explorer", "layout-row-insert", "layout-column-insert":
 					semantic = palette.Success
 				case "type-hierarchy", "merge":
 					semantic = palette.Violet

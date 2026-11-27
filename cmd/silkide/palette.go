@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/uk0/silk/ged"
+	"github.com/uk0/silk/graph"
 	"github.com/uk0/silk/gui"
 	"github.com/uk0/silk/i18n"
 )
@@ -273,6 +274,39 @@ func registerPaletteCommands(editorTabs *gui.TabWidget, designCanvas *ged.GedVie
 	for _, action := range designerActionSpecs(designCanvas) {
 		add(action.label, action.hint, action.run)
 		paletteCommands[len(paletteCommands)-1].Available = action.enabled
+	}
+	for _, op := range []struct {
+		label string
+		axis  ged.GridTrackAxis
+	}{{"Insert Grid Row Above", ged.GridRow}, {"Insert Grid Column Before", ged.GridColumn}} {
+		available := func() bool {
+			return designDocumentActive(editorTabs, designCanvas) && designCanvas.CanInsertGridTrack(op.axis)
+		}
+		run := func(check func() bool) func() {
+			return func() {
+				if check() {
+					designCanvas.InsertGridTrackBeforeSelection(op.axis)
+				}
+			}
+		}
+		add(op.label, "", run(available))
+		command := &paletteCommands[len(paletteCommands)-1]
+		command.Available = available
+		command.Bind = func() paletteCommand {
+			var target graph.IItem
+			var scene *ged.GedScene
+			if available() {
+				target = designCanvas.Selection().ItemList()[0]
+				scene = designCanvas.GedScene()
+			}
+			matches := func() bool {
+				if target == nil || !available() || scene != designCanvas.GedScene() {
+					return false
+				}
+				return designCanvas.Selection().ItemList()[0] == target
+			}
+			return paletteCommand{Name: i18n.T(op.label), Available: matches, Fn: run(matches)}
+		}
 	}
 	add("Refresh", "Cmd+R", func() {
 		if designCanvas != nil {

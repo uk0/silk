@@ -213,3 +213,66 @@ func TestDesignPaletteAvailabilityMatchesToolbar(t *testing.T) {
 		t.Fatal("disabled command closed palette")
 	}
 }
+
+func TestGridTrackPaletteDoesNotFollowNewSelectionOrHiddenDesigner(t *testing.T) {
+	w := testWorkbench(t)
+	w.activate(modeDesign)
+	canvas := w.canvas
+	canvas.GedScene().SetSize(185, 145)
+	for i := 0; i < 4; i++ {
+		f, err := ged.NewFakeWidgetFromFactory("gui.Button")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.SetBounds(float64(15+(i%2)*45), float64(15+(i/2)*36), 34, 24)
+		f.SetParent(canvas.GedScene())
+		canvas.Selection().Add(f)
+	}
+	if !canvas.LayoutSelection(ged.LayoutGrid) {
+		t.Fatal("could not build managed grid")
+	}
+	items := canvas.GedScene().Children()[0].Children()
+	pick := func(i int) {
+		canvas.Selection().Clear()
+		canvas.Selection().Add(items[i])
+	}
+	pick(3)
+	old := paletteCommands
+	t.Cleanup(func() { paletteCommands = old })
+	registerPaletteCommands(w.tabs, canvas)
+	find := func(name string) paletteCommand {
+		t.Helper()
+		for _, c := range bindPaletteCommands(paletteCommands) {
+			if c.Name == i18n.T(name) {
+				return c
+			}
+		}
+		t.Fatalf("no palette command %q", name)
+		return paletteCommand{}
+	}
+	row := find("Insert Grid Row Above")
+	col := find("Insert Grid Column Before")
+	if !row.available() || !col.available() {
+		t.Fatal("valid grid operations marked unavailable")
+	}
+	stack := canvas.GedScene().UndoStack()
+	count := stack.Count()
+	pick(0)
+	row.Fn()
+	if row.available() || stack.Count() != count {
+		t.Fatal("open palette retargeted a different selected widget")
+	}
+	pick(3)
+	row = find("Insert Grid Row Above")
+	w.activate(modeEdit)
+	row.Fn()
+	if row.available() || stack.Count() != count {
+		t.Fatal("open palette changed the hidden design")
+	}
+	w.activate(modeDesign)
+	fresh := find("Insert Grid Row Above")
+	fresh.Fn()
+	if stack.Count() != count+1 || !canvas.Selection().Contains(items[3]) {
+		t.Fatal("visible palette action did not apply one anchored operation")
+	}
+}

@@ -12,105 +12,107 @@ type proceduralIconDrawer func(size int, cc *cairo.Context)
 // glyphs instead of the red-X placeholder. Names match the strings
 // LoadIcon is called with elsewhere in the tree.
 var proceduralFallbacks = map[string]proceduralIconDrawer{
-	"whitespace-trim":    drawWhitespaceTrim,
-	"notifications":      drawNotificationBell,
-	"newline-insert":     drawNewlineInsert,
-	"cursor-add-above":   drawCaretCommand(-1),
-	"cursor-add-below":   drawCaretCommand(1),
-	"cursor-primary":     drawCaretCommand(0),
-	"line-duplicate":     drawLineChange(false),
-	"line-delete":        drawLineChange(true),
-	"line-move-up":       drawLineMove(-1),
-	"line-move-down":     drawLineMove(1),
-	"edit-copy":          drawCopyPages,
-	"edit-cut":           drawCutScissors,
-	"edit-paste":         drawPasteClipboard,
-	"edit-select-all":    drawSelectText,
-	"edit-undo":          drawUndoArrow,
-	"edit-redo":          drawRedoArrow,
-	"navigate-back":      drawNavigateBack,
-	"navigate-forward":   drawNavigateForward,
-	"close-btn":          drawCloseX,
-	"checkbox-checked":   drawCheckboxChecked,
-	"checkbox-unchecked": drawCheckboxUnchecked,
-	"expander-collapsed": drawExpanderCollapsed,
-	"expander-expanded":  drawExpanderExpanded,
-	"arrow-tool":         drawArrowTool,
-	"transform-move":     drawTransformMove,
-	"transform-rotate":   drawTransformRotate,
-	"transform-scale":    drawTransformScale,
-	"rect-tool":          drawRectTool,
-	"menu":               drawMenuBars,
-	"toolbar-overflow":   drawToolbarOverflow,
-	"refresh":            drawRefreshArrow,
-	"http-request":       drawHTTPExchange,
-	"json-view":          drawFunctionBraces,
-	"transfer-progress":  drawTransferProgress,
-	"plus":               drawPlus,
-	"search":             drawSearchGlass,
-	"build":              drawBuildWrench,
-	"debug":              drawDebugBug,
-	"stop":               drawStopSquare,
-	"continue":           drawPlayTriangle,
-	"play":               drawPlayTriangle, // alias of continue
-	"step-over":          drawStepOver,
-	"step-into":          drawStepInto,
-	"step-out":           drawStepOut,
-	"warning":            drawWarningTriangle,
-	"git-branch":         drawGitBranch,
-	"git":                drawGitBranch, // alias of git-branch
-	"terminal":           drawTerminal,
-	"go-file":            drawGoFile,
-	"file":               drawGoFile, // alias of go-file
-	"function":           drawFunctionBraces,
-	"gear":               drawGearCog,
-	"settings":           drawGearCog, // alias of gear
-	"folder-open":        drawFolderOpen,
-	"folder":             drawFolderOpen,
-	"document":           drawGoFile,
-	"run":                drawPlayTriangle,
-	"save":               drawSaveDisk,
-	"preview":            drawPreviewEye,
-	"propsheet":          drawOutlineList,
-	"outline":            drawOutlineList,
-	"tree-view":          drawOutlineList,
-	"packages":           drawFolderOpen,
-	"bookmarks":          drawBookmarkRibbon,
-	"references":         drawFunctionBraces,
-	"log":                drawTerminal,
-	"todo":               drawCheckboxChecked,
-	"silkide":            drawPanelLayout,
-	"design":             drawPanelLayout,
-	"edit":               drawFunctionBraces,
-	"minimize":           drawMinimizeLine,
-	"maximize":           drawMaximizeWindow,
-	"restore":            drawRestoreWindow,
-	"close":              drawCloseX,
-	"error":              drawErrorCircle,
-	"question":           drawHelpCircle,
-	"help":               drawHelpCircle,
-	"window":             drawWindowFrame,
-	"form":               drawFormFields,
-	"link":               drawLinkChain,
-	"keymap":             drawKeyboard,
-	"test-explorer":      drawTestChecklist,
-	"call-hierarchy":     drawCallHierarchy,
-	"type-hierarchy":     drawTypeHierarchy,
-	"project":            drawProjectCube,
-	"diagram":            drawDiagramNodes,
-	"merge":              drawMergeBranches,
-	"layout-horizontal":  drawLayoutCells(3, 1),
-	"layout-vertical":    drawLayoutCells(1, 3),
-	"layout-grid":        drawLayoutCells(2, 2),
-	"layout-form":        drawFormFields,
-	"layout-break":       drawBreakLayout,
-	"layout-adjust":      drawAdjustLayout,
-	"handle-0-normal":    drawResizeHandle(0, false),
-	"handle-0-active":    drawResizeHandle(0, true),
-	"handle-1-normal":    drawResizeHandle(1, false),
-	"handle-1-active":    drawResizeHandle(1, true),
-	"handle-2-normal":    drawResizeHandle(2, false),
-	"handle-2-active":    drawResizeHandle(2, true),
+	"whitespace-trim":      drawWhitespaceTrim,
+	"notifications":        drawNotificationBell,
+	"newline-insert":       drawNewlineInsert,
+	"cursor-add-above":     drawCaretCommand(-1),
+	"cursor-add-below":     drawCaretCommand(1),
+	"cursor-primary":       drawCaretCommand(0),
+	"line-duplicate":       drawLineChange(false),
+	"line-delete":          drawLineChange(true),
+	"line-move-up":         drawLineMove(-1),
+	"line-move-down":       drawLineMove(1),
+	"edit-copy":            drawCopyPages,
+	"edit-cut":             drawCutScissors,
+	"edit-paste":           drawPasteClipboard,
+	"edit-select-all":      drawSelectText,
+	"edit-undo":            drawUndoArrow,
+	"edit-redo":            drawRedoArrow,
+	"navigate-back":        drawNavigateBack,
+	"navigate-forward":     drawNavigateForward,
+	"close-btn":            drawCloseX,
+	"checkbox-checked":     drawCheckboxChecked,
+	"checkbox-unchecked":   drawCheckboxUnchecked,
+	"expander-collapsed":   drawExpanderCollapsed,
+	"expander-expanded":    drawExpanderExpanded,
+	"arrow-tool":           drawArrowTool,
+	"transform-move":       drawTransformMove,
+	"transform-rotate":     drawTransformRotate,
+	"transform-scale":      drawTransformScale,
+	"rect-tool":            drawRectTool,
+	"menu":                 drawMenuBars,
+	"toolbar-overflow":     drawToolbarOverflow,
+	"refresh":              drawRefreshArrow,
+	"http-request":         drawHTTPExchange,
+	"json-view":            drawFunctionBraces,
+	"transfer-progress":    drawTransferProgress,
+	"plus":                 drawPlus,
+	"search":               drawSearchGlass,
+	"build":                drawBuildWrench,
+	"debug":                drawDebugBug,
+	"stop":                 drawStopSquare,
+	"continue":             drawPlayTriangle,
+	"play":                 drawPlayTriangle, // alias of continue
+	"step-over":            drawStepOver,
+	"step-into":            drawStepInto,
+	"step-out":             drawStepOut,
+	"warning":              drawWarningTriangle,
+	"git-branch":           drawGitBranch,
+	"git":                  drawGitBranch, // alias of git-branch
+	"terminal":             drawTerminal,
+	"go-file":              drawGoFile,
+	"file":                 drawGoFile, // alias of go-file
+	"function":             drawFunctionBraces,
+	"gear":                 drawGearCog,
+	"settings":             drawGearCog, // alias of gear
+	"folder-open":          drawFolderOpen,
+	"folder":               drawFolderOpen,
+	"document":             drawGoFile,
+	"run":                  drawPlayTriangle,
+	"save":                 drawSaveDisk,
+	"preview":              drawPreviewEye,
+	"propsheet":            drawOutlineList,
+	"outline":              drawOutlineList,
+	"tree-view":            drawOutlineList,
+	"packages":             drawFolderOpen,
+	"bookmarks":            drawBookmarkRibbon,
+	"references":           drawFunctionBraces,
+	"log":                  drawTerminal,
+	"todo":                 drawCheckboxChecked,
+	"silkide":              drawPanelLayout,
+	"design":               drawPanelLayout,
+	"edit":                 drawFunctionBraces,
+	"minimize":             drawMinimizeLine,
+	"maximize":             drawMaximizeWindow,
+	"restore":              drawRestoreWindow,
+	"close":                drawCloseX,
+	"error":                drawErrorCircle,
+	"question":             drawHelpCircle,
+	"help":                 drawHelpCircle,
+	"window":               drawWindowFrame,
+	"form":                 drawFormFields,
+	"link":                 drawLinkChain,
+	"keymap":               drawKeyboard,
+	"test-explorer":        drawTestChecklist,
+	"call-hierarchy":       drawCallHierarchy,
+	"type-hierarchy":       drawTypeHierarchy,
+	"project":              drawProjectCube,
+	"diagram":              drawDiagramNodes,
+	"merge":                drawMergeBranches,
+	"layout-horizontal":    drawLayoutCells(3, 1),
+	"layout-vertical":      drawLayoutCells(1, 3),
+	"layout-grid":          drawLayoutCells(2, 2),
+	"layout-row-insert":    drawInsertGridTrack(false),
+	"layout-column-insert": drawInsertGridTrack(true),
+	"layout-form":          drawFormFields,
+	"layout-break":         drawBreakLayout,
+	"layout-adjust":        drawAdjustLayout,
+	"handle-0-normal":      drawResizeHandle(0, false),
+	"handle-0-active":      drawResizeHandle(0, true),
+	"handle-1-normal":      drawResizeHandle(1, false),
+	"handle-1-active":      drawResizeHandle(1, true),
+	"handle-2-normal":      drawResizeHandle(2, false),
+	"handle-2-active":      drawResizeHandle(2, true),
 }
 
 // A drawn double chevron avoids dependence on the text font's U+00BB glyph.
@@ -972,6 +974,37 @@ func drawLayoutCells(cols, rows int) proceduralIconDrawer {
 				cc.Rectangle(w*(pad+float64(col)*(cw+gap)), w*(pad+float64(row)*(ch+gap)), w*cw, w*ch)
 			}
 		}
+		cc.Stroke()
+	}
+}
+
+func drawInsertGridTrack(column bool) proceduralIconDrawer {
+	return func(size int, cc *cairo.Context) {
+		w := float64(size)
+		point := func(x, y float64) (float64, float64) {
+			if column {
+				x, y = y, x
+			}
+			return x * w, y * w
+		}
+		line := func(x1, y1, x2, y2 float64) {
+			cc.MoveTo(point(x1, y1))
+			cc.LineTo(point(x2, y2))
+		}
+		setIconStroke(cc, size)
+		setIconColor(cc, currentIconPalette.Accent)
+		x, y := point(.17, .38)
+		width, height := point(.66, .46)
+		cc.Rectangle(x, y, width, height)
+		line(.17, .61, .83, .61)
+		line(.5, .38, .5, .84)
+		cc.Stroke()
+
+		// Put the plus outside the original cells, on the insertion side.
+		// Transpose the motif rather than rotate it about a rounded center.
+		setIconColor(cc, currentIconPalette.Success)
+		line(.41, .18, .59, .18)
+		line(.5, .09, .5, .27)
 		cc.Stroke()
 	}
 }

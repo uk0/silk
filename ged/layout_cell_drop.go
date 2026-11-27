@@ -240,6 +240,10 @@ func (view *GedView) tabularReleaseFailure(parent, item *FakeWidget, plan tabula
 		trial.children[item] = proposed
 	}
 	layouter.Layout()
+	return tabularTrialFailure(parent, runtime, trial, page, clip, item, plan.swap, add)
+}
+
+func tabularTrialFailure(parent *FakeWidget, runtime gui.IWidget, trial *layoutTrial, page, clip geom.Rect, item, swap *FakeWidget, add bool) string {
 	origin := parent.MapRectToScene1(parent.Bounds1())
 	var baseline *layoutTrial
 	var baselineRoot gui.IWidget
@@ -248,7 +252,7 @@ func (view *GedView) tabularReleaseFailure(parent, item *FakeWidget, plan tabula
 			continue
 		}
 		rect, visible := transferTrialBounds(proposed, runtime, origin, clip)
-		if actual == item || actual == plan.swap {
+		if actual == item || actual == swap {
 			if proposed.Parent() != runtime || !visible {
 				return dropCellClipped
 			}
@@ -282,7 +286,7 @@ func (view *GedView) tabularReleaseFailure(parent, item *FakeWidget, plan tabula
 			}
 		}
 	}
-	if trial.children[item] == nil || (plan.swap != nil && trial.children[plan.swap] == nil) {
+	if trial.children[item] == nil || (swap != nil && trial.children[swap] == nil) {
 		return dropCellClipped
 	}
 	return ""

@@ -412,11 +412,46 @@ func resizeRect(org geom.Rect, handle direction, px, py float64, mode resizeRect
 	}
 }
 
+// SelectionResizePolicy is optionally implemented by the visual GraphView
+// host. It makes its built-in resize handles agree with domain constraints.
+// CanResizeSelection is evaluated once per draw or hit-test of the selection;
+// CanResizeItem can exclude a child that will follow an editable ancestor.
+type SelectionResizePolicy interface {
+	CanResizeSelection() bool
+	CanResizeItem(IItem) bool
+}
+
+func selectionResizePolicy(view IView) SelectionResizePolicy {
+	if view == nil {
+		return nil
+	}
+	p, _ := view.Self().(SelectionResizePolicy)
+	return p
+}
+
+func resizeGroupAllowed(policy SelectionResizePolicy) bool {
+	return policy == nil || policy.CanResizeSelection()
+}
+
+func resizeItemAllowed(item IItem, policy SelectionResizePolicy) bool {
+	return item != nil && !item.IsLockPos() && !item.IsLockSize() &&
+		(policy == nil || policy.CanResizeItem(item))
+}
+
+type resizeTarget struct {
+	item, parent IItem
+	bounds       geom.Rect
+}
+
 type ResizeDecor struct {
 	Decor
 	handlePos [9]geom.Vec2
 	curRect   geom.Rect
 	orgRect   geom.Rect
+	orgParent IItem
+	version   uint64
+	resizing  bool
+	others    []resizeTarget
 }
 
 func NewResizeDecor() *ResizeDecor {
@@ -436,6 +471,14 @@ func (this *ResizeDecor) calcHandlePos(rect geom.Rect) {
 }
 
 func (this *ResizeDecor) HandleAt(x, y float64) int {
+	policy := selectionResizePolicy(this.View())
+	return this.handleAt(x, y, policy, resizeGroupAllowed(policy))
+}
+
+func (this *ResizeDecor) handleAt(x, y float64, policy SelectionResizePolicy, groupAllowed bool) int {
+	if !groupAllowed || !resizeItemAllowed(this.item, policy) {
+		return 0
+	}
 	this.calcHandlePos(this.item.Bounds1())
 	for i := 8; i >= 1; i-- {
 		px := this.handlePos[i].X
@@ -451,13 +494,43 @@ func (this *ResizeDecor) HandleAt(x, y float64) int {
 //}
 
 func (this *ResizeDecor) OnBeginMoveHandle(handle int, x, y float64) {
+	this.resetResizeGesture()
+	policy := selectionResizePolicy(this.View())
+	if handle < 1 || handle > 8 || !resizeGroupAllowed(policy) || !resizeItemAllowed(this.item, policy) ||
+		this.View() == nil || this.item.Scene() != this.View().Scene() || !this.View().Selection().Contains(this.item) {
+		return
+	}
 	this.orgRect = this.item.Bounds1()
+	this.orgParent = this.item.Parent()
+	this.version = this.View().Selection().editVersion
 	this.curRect = this.orgRect
+	this.resizing = true
+	for item := range this.View().Selection().Items {
+		if item != this.item && resizeItemAllowed(item, policy) {
+			this.others = append(this.others, resizeTarget{item, item.Parent(), item.Bounds1()})
+		}
+	}
+}
 
+func (this *ResizeDecor) resetResizeGesture() {
+	this.resizing = false
+	this.curRect = geom.Rect{}
+	this.orgParent = nil
+	clear(this.others)
+	this.others = this.others[:0]
+}
+
+func (this *ResizeDecor) resizeGestureCurrent(policy SelectionResizePolicy, groupAllowed bool) bool {
+	return this.resizing && groupAllowed && resizeItemAllowed(this.item, policy) &&
+		this.item.Scene() != nil && this.item.Scene() == this.View().Scene() &&
+		this.item.Parent() == this.orgParent && this.item.Bounds1() == this.orgRect &&
+		this.View().Selection().editVersion == this.version
 }
 
 func (this *ResizeDecor) OnMoveHandle(handle int, x, y float64) {
-	if handle < 1 || handle > 8 {
+	policy := selectionResizePolicy(this.View())
+	if handle < 1 || handle > 8 || !this.resizeGestureCurrent(policy, resizeGroupAllowed(policy)) {
+		this.resetResizeGesture()
 		return
 	}
 	var resizeMode resizeRectMode
@@ -475,10 +548,11 @@ func (this *ResizeDecor) OnMoveHandle(handle int, x, y float64) {
 
 func (this *ResizeDecor) OnEndMoveHandle(handle int, x, y float64) {
 
-	defer func() { this.curRect.Width = 0; this.curRect.Height = 0 }()
+	defer this.resetResizeGesture()
+	policy := selectionResizePolicy(this.View())
 
-	if this.orgRect == this.curRect ||
-		handle < 1 || handle > 8 {
+	if this.orgRect == this.curRect || handle < 1 || handle > 8 ||
+		!this.resizeGestureCurrent(policy, resizeGroupAllowed(policy)) {
 		return
 	}
 
@@ -486,18 +560,13 @@ func (this *ResizeDecor) OnEndMoveHandle(handle int, x, y float64) {
 	//bool mirror = modifiers == Qt::ControlModifier;
 	mirr := gui.IsKeyDown(gui.KeyCtrl)
 
-	var list []IItem
-	for _, v := range this.View().Selection().ItemList() {
-		if v == this.Item() || /*v.Parent() == nil ||*/ v.IsLockSize() || v.IsLockPos() {
-			continue
+	for _, target := range this.others {
+		w := target.item
+		if w.Scene() != this.View().Scene() || w.Parent() != target.parent || w.Bounds1() != target.bounds ||
+			!resizeItemAllowed(w, policy) {
+			return // don't partially resize or retarget a changed group
 		}
-
-		list = append(list, v)
 	}
-
-	//	if len(list) == 0 {
-	//		return
-	//	}
 
 	cmd := NewResizeCommand()
 
@@ -515,8 +584,8 @@ func (this *ResizeDecor) OnEndMoveHandle(handle int, x, y float64) {
 		sy = this.curRect.Height / this.orgRect.Height
 	}
 
-	for _, w := range list {
-		rect0 := w.Bounds1()
+	for _, target := range this.others {
+		w, rect0 := target.item, target.bounds
 
 		w1 := rect0.Width * sx
 		h1 := rect0.Height * sy
@@ -629,9 +698,16 @@ func (this *ResizeDecor) HandleCursor(handle int) *gui.Cursor {
 }
 
 func (this *ResizeDecor) OnDraw(g paint.Painter) {
-	this.calcHandlePos(this.item.Bounds1())
-	this.item.DrawOutline(g)
+	policy := selectionResizePolicy(this.View())
+	this.draw(g, policy, resizeGroupAllowed(policy))
+}
 
+func (this *ResizeDecor) draw(g paint.Painter, policy SelectionResizePolicy, groupAllowed bool) {
+	this.item.DrawOutline(g)
+	if !groupAllowed || !resizeItemAllowed(this.item, policy) {
+		return
+	}
+	this.calcHandlePos(this.item.Bounds1())
 	activeHandle := this.ActiveHandle()
 
 	for i := 1; i < 9; i++ {
@@ -640,7 +716,7 @@ func (this *ResizeDecor) OnDraw(g paint.Painter) {
 		this.DrawDefaultHandle(g, px, py, 0, activeHandle == i)
 	}
 
-	if activeHandle != 0 && !this.curRect.IsEmpty() {
+	if activeHandle != 0 && this.resizeGestureCurrent(policy, groupAllowed) && !this.curRect.IsEmpty() {
 		g.SetPen1(gui.Theme().HighLightColor, 0)
 		g.Rectangle1(this.curRect)
 		g.Stroke()

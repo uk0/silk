@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — show only actionable Designer resize handles
+
+- Layout-owned children stay selectable without misleading resize handles.
+  Mixed selections cannot resize a layout-owned sibling through a free
+  widget's handle. Locks, ownership and selection are rechecked on release
+  so a drag cannot resume or retarget after the underlying selection changes.
+
+## Unreleased — insert empty grid tracks in the Designer
+
+- Select a widget in a managed grid to insert a row above it or a column
+  before it from the layout context menu or command palette. The insertion
+  preserves spans and shifts later cells as one undoable edit. A crossing span,
+  protected geometry, or insufficient visible space makes the operation
+  unavailable or rejects it without changing the grid.
+
 ## Unreleased — resize Inspector property columns
 
 - Drag the divider between names and values to read longer labels or give
